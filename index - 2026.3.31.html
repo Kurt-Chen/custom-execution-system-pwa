@@ -44,6 +44,58 @@
       padding-bottom: env(safe-area-inset-bottom, 0px);
     }
 
+    .cloud-sync-badge {
+      position: fixed;
+      left: max(8px, env(safe-area-inset-left, 0px));
+      right: auto;
+      bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+      z-index: 5000;
+      border-radius: 999px;
+      padding: 5px 11px;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.2;
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      color: #475569;
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.14);
+      pointer-events: auto;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    /* 手机全屏下给底部导航留出空间，避免遮挡 */
+    body.primary-module-fullscreen .cloud-sync-badge {
+      bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+    }
+
+    @media (max-width: 640px) {
+      .cloud-sync-badge {
+        left: max(10px, env(safe-area-inset-left, 0px));
+        bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+        padding: 6px 12px;
+        font-size: 12px;
+      }
+    }
+
+    .cloud-sync-badge.status-connected {
+      border-color: #86efac;
+      background: #f0fdf4;
+      color: #166534;
+    }
+
+    .cloud-sync-badge.status-syncing {
+      border-color: #93c5fd;
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+
+    .cloud-sync-badge.status-error {
+      border-color: #fecaca;
+      background: #fef2f2;
+      color: #b91c1c;
+    }
+
     body.app-locked .container {
       display: none;
     }
@@ -6119,11 +6171,20 @@
 
   </div>
 
+  <div id="cloudSyncStatusBadge" class="cloud-sync-badge" aria-live="polite">☁ 云同步未配置</div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
   <script>
     const STORAGE_KEY = "todo-app-data-v1";
+    const CLOUD_SYNC_CONFIG_KEY = "todo-app-firebase-config-v1";
+    const CLOUD_SYNC_ROOM_KEY = "todo-app-cloud-room-v1";
+    const CLOUD_SYNC_CLIENT_KEY = "todo-app-cloud-client-id-v1";
     const AUTH_PASSWORD_KEY = "todo-app-password-v1";
     const AUTH_SESSION_KEY = "todo-app-auth-session-v1";
     const IDLE_LOCK_MINUTES_KEY = "todo-app-idle-lock-minutes-v1";
+    const cloudSyncStatusBadge = document.getElementById("cloudSyncStatusBadge");
 
     const loginGate = document.getElementById("loginGate");
     const loginTitle = document.getElementById("loginTitle");
@@ -6490,6 +6551,20 @@
     let ageGoalsEditMode = false;
     let closedListCompleteAnimIds = new Set();
 
+    let cloudSyncReady = false;
+    let cloudSyncApplyingRemote = false;
+    let cloudSyncPushing = false;
+    let cloudSyncLastHash = "";
+    let cloudSyncPushTimer = null;
+    let cloudSyncClientId = localStorage.getItem(CLOUD_SYNC_CLIENT_KEY) || "";
+    let cloudSyncRoomId = localStorage.getItem(CLOUD_SYNC_ROOM_KEY) || "";
+    let cloudSyncRef = null;
+
+    if (!cloudSyncClientId) {
+      cloudSyncClientId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      localStorage.setItem(CLOUD_SYNC_CLIENT_KEY, cloudSyncClientId);
+    }
+
     let state = {
       stopDoing: [],
       notToDo: [],
@@ -6516,8 +6591,190 @@
       }
     };
 
+    function getCloudSyncConfig() {
+      const raw = localStorage.getItem(CLOUD_SYNC_CONFIG_KEY);
+      if (!raw) return null;
+      try {
+        const cfg = JSON.parse(raw);
+        if (!cfg || typeof cfg !== "object") return null;
+        if (!cfg.apiKey || !cfg.projectId || !cfg.databaseURL) return null;
+        return cfg;
+      } catch (_err) {
+        return null;
+      }
+    }
+
+    function setCloudSyncStatus(text, statusClass) {
+      if (!cloudSyncStatusBadge) return;
+      cloudSyncStatusBadge.textContent = "☁ " + text;
+      cloudSyncStatusBadge.classList.remove("status-connected", "status-syncing", "status-error");
+      if (statusClass) {
+        cloudSyncStatusBadge.classList.add(statusClass);
+      }
+    }
+
+    if (cloudSyncStatusBadge) {
+      cloudSyncStatusBadge.addEventListener("click", () => {
+        const cfg = getCloudSyncConfig();
+        if (!cfg) {
+          const configJson = window.prompt(
+            "粘贴 Firebase config JSON（包含 apiKey/projectId/databaseURL 等）"
+          );
+          if (!configJson) return;
+          const room =
+            window.prompt("输入同步房间ID（两端保持一致）", "kurt-main-room") ||
+            "kurt-main-room";
+          window.configureFirebaseCloudSync(configJson, room);
+          return;
+        }
+        const currentRoom = localStorage.getItem(CLOUD_SYNC_ROOM_KEY) || "default-room";
+        const action = window.prompt(
+          "云同步已配置。\n输入 1 查看房间\n输入 2 重新配置\n输入 3 关闭云同步",
+          "1"
+        );
+        if (action === "1") {
+          window.alert("当前 roomId: " + currentRoom + "\n提示：手机端和电脑端必须一致。");
+          return;
+        }
+        if (action === "2") {
+          const configJson = window.prompt(
+            "重新粘贴 Firebase config JSON",
+            JSON.stringify(cfg)
+          );
+          if (!configJson) return;
+          const room =
+            window.prompt("输入同步房间ID（两端保持一致）", currentRoom) || currentRoom;
+          window.configureFirebaseCloudSync(configJson, room);
+          return;
+        }
+        if (action === "3") {
+          const ok = window.confirm("确认关闭云同步并清除本机云同步配置？");
+          if (ok) window.disableFirebaseCloudSync();
+        }
+      });
+    }
+
+    function serializeStateForCloud() {
+      try {
+        return JSON.stringify(state);
+      } catch (_err) {
+        return "";
+      }
+    }
+
+    function setCloudSyncHashFromCurrentState() {
+      cloudSyncLastHash = serializeStateForCloud();
+    }
+
+    function scheduleCloudSyncPush() {
+      if (!cloudSyncReady || cloudSyncApplyingRemote || cloudSyncPushing || !cloudSyncRef) return;
+      if (cloudSyncPushTimer) clearTimeout(cloudSyncPushTimer);
+      cloudSyncPushTimer = setTimeout(() => {
+        pushStateToCloud();
+      }, 450);
+    }
+
+    function pushStateToCloud() {
+      if (!cloudSyncReady || cloudSyncApplyingRemote || !cloudSyncRef) return;
+      const nextHash = serializeStateForCloud();
+      if (!nextHash || nextHash === cloudSyncLastHash) return;
+      setCloudSyncStatus("云同步中...", "status-syncing");
+      cloudSyncPushing = true;
+      cloudSyncRef
+        .set({
+          state: state,
+          updatedAt: Date.now(),
+          updatedBy: cloudSyncClientId
+        })
+        .then(() => {
+          cloudSyncLastHash = nextHash;
+          setCloudSyncStatus("云同步已连接", "status-connected");
+        })
+        .catch((err) => {
+          console.warn("云同步写入失败:", err);
+          setCloudSyncStatus("云同步错误", "status-error");
+        })
+        .finally(() => {
+          cloudSyncPushing = false;
+        });
+    }
+
+    function applyRemoteState(remoteState) {
+      if (!remoteState || typeof remoteState !== "object") return;
+      const remoteRaw = JSON.stringify(remoteState);
+      if (!remoteRaw || remoteRaw === cloudSyncLastHash) return;
+      cloudSyncApplyingRemote = true;
+      localStorage.setItem(STORAGE_KEY, remoteRaw);
+      loadState();
+      cloudSyncLastHash = serializeStateForCloud();
+      cloudSyncApplyingRemote = false;
+      render();
+    }
+
+    async function initCloudSync() {
+      const cfg = getCloudSyncConfig();
+      if (!cfg) {
+        setCloudSyncStatus("云同步未配置", "");
+        return;
+      }
+      setCloudSyncStatus("云同步连接中...", "status-syncing");
+      if (!cloudSyncRoomId) {
+        cloudSyncRoomId = "default-room";
+        localStorage.setItem(CLOUD_SYNC_ROOM_KEY, cloudSyncRoomId);
+      }
+      try {
+        if (!window.firebase || !firebase.apps) return;
+        if (!firebase.apps.length) {
+          firebase.initializeApp(cfg);
+        }
+        await firebase.auth().signInAnonymously();
+        cloudSyncRef = firebase.database().ref("rooms/" + cloudSyncRoomId + "/state");
+        setCloudSyncHashFromCurrentState();
+        cloudSyncReady = true;
+        setCloudSyncStatus("云同步已连接", "status-connected");
+        cloudSyncRef.on("value", (snap) => {
+          const payload = snap.val();
+          if (!payload || !payload.state) return;
+          if (payload.updatedBy === cloudSyncClientId) return;
+          setCloudSyncStatus("云端更新中...", "status-syncing");
+          applyRemoteState(payload.state);
+          setCloudSyncStatus("云同步已连接", "status-connected");
+        });
+        pushStateToCloud();
+      } catch (err) {
+        console.warn("云同步初始化失败:", err);
+        setCloudSyncStatus("云同步错误", "status-error");
+      }
+    }
+
+    window.configureFirebaseCloudSync = function configureFirebaseCloudSync(configObjOrJson, roomId) {
+      try {
+        const cfg =
+          typeof configObjOrJson === "string"
+            ? JSON.parse(configObjOrJson)
+            : configObjOrJson;
+        if (!cfg || typeof cfg !== "object") {
+          throw new Error("Firebase 配置无效");
+        }
+        localStorage.setItem(CLOUD_SYNC_CONFIG_KEY, JSON.stringify(cfg));
+        if (roomId && String(roomId).trim()) {
+          localStorage.setItem(CLOUD_SYNC_ROOM_KEY, String(roomId).trim());
+        }
+        window.location.reload();
+      } catch (err) {
+        console.warn("设置 Firebase 云同步失败:", err);
+      }
+    };
+
+    window.disableFirebaseCloudSync = function disableFirebaseCloudSync() {
+      localStorage.removeItem(CLOUD_SYNC_CONFIG_KEY);
+      localStorage.removeItem(CLOUD_SYNC_ROOM_KEY);
+      window.location.reload();
+    };
+
     function saveState() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      scheduleCloudSyncPush();
     }
 
     function loadState() {
@@ -11845,6 +12102,7 @@
     setWeeklyPlanViewToSunday(weeklyPlanViewWeekKey);
 
     render();
+    initCloudSync();
 
     bindAnniversaryFutureStoryInputs();
     bindAnniversaryCollapsibles();
