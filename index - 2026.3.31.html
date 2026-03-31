@@ -6559,6 +6559,7 @@
     let cloudSyncClientId = localStorage.getItem(CLOUD_SYNC_CLIENT_KEY) || "";
     let cloudSyncRoomId = localStorage.getItem(CLOUD_SYNC_ROOM_KEY) || "";
     let cloudSyncRef = null;
+    let cloudSyncLastErrorMsg = "";
 
     if (!cloudSyncClientId) {
       cloudSyncClientId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -6611,6 +6612,24 @@
       if (statusClass) {
         cloudSyncStatusBadge.classList.add(statusClass);
       }
+      if (statusClass === "status-error" && cloudSyncLastErrorMsg) {
+        cloudSyncStatusBadge.title = cloudSyncLastErrorMsg;
+      } else {
+        cloudSyncStatusBadge.title = "点击配置云同步";
+      }
+    }
+
+    function formatCloudSyncError(err, fallbackText) {
+      if (!err) return fallbackText;
+      const code = typeof err.code === "string" ? err.code : "";
+      const message = typeof err.message === "string" ? err.message : String(err);
+      if (code) return code + ": " + message;
+      return message || fallbackText;
+    }
+
+    function setCloudSyncError(err, fallbackText) {
+      cloudSyncLastErrorMsg = formatCloudSyncError(err, fallbackText);
+      setCloudSyncStatus("同步错误", "status-error");
     }
 
     if (cloudSyncStatusBadge) {
@@ -6629,7 +6648,7 @@
         }
         const currentRoom = localStorage.getItem(CLOUD_SYNC_ROOM_KEY) || "default-room";
         const action = window.prompt(
-          "云同步已配置。\n输入 1 查看房间\n输入 2 重新配置\n输入 3 关闭云同步",
+          "云同步已配置。\n输入 1 查看房间\n输入 2 重新配置\n输入 3 关闭云同步\n输入 4 查看最后错误",
           "1"
         );
         if (action === "1") {
@@ -6650,6 +6669,10 @@
         if (action === "3") {
           const ok = window.confirm("确认关闭云同步并清除本机云同步配置？");
           if (ok) window.disableFirebaseCloudSync();
+          return;
+        }
+        if (action === "4") {
+          window.alert(cloudSyncLastErrorMsg || "当前没有记录到错误。");
         }
       });
     }
@@ -6688,11 +6711,12 @@
         })
         .then(() => {
           cloudSyncLastHash = nextHash;
+          cloudSyncLastErrorMsg = "";
           setCloudSyncStatus("已连接 ✓", "status-connected");
         })
         .catch((err) => {
           console.warn("云同步写入失败:", err);
-          setCloudSyncStatus("同步错误", "status-error");
+          setCloudSyncError(err, "写入云端失败");
         })
         .finally(() => {
           cloudSyncPushing = false;
@@ -6723,7 +6747,10 @@
         localStorage.setItem(CLOUD_SYNC_ROOM_KEY, cloudSyncRoomId);
       }
       try {
-        if (!window.firebase || !firebase.apps) return;
+        if (!window.firebase || !firebase.apps) {
+          setCloudSyncError(null, "Firebase SDK 未加载成功");
+          return;
+        }
         if (!firebase.apps.length) {
           firebase.initializeApp(cfg);
         }
@@ -6731,6 +6758,7 @@
         cloudSyncRef = firebase.database().ref("rooms/" + cloudSyncRoomId + "/state");
         setCloudSyncHashFromCurrentState();
         cloudSyncReady = true;
+        cloudSyncLastErrorMsg = "";
         setCloudSyncStatus("已连接 ✓", "status-connected");
         cloudSyncRef.on("value", (snap) => {
           const payload = snap.val();
@@ -6743,7 +6771,7 @@
         pushStateToCloud();
       } catch (err) {
         console.warn("云同步初始化失败:", err);
-        setCloudSyncStatus("同步错误", "status-error");
+        setCloudSyncError(err, "云同步初始化失败");
       }
     }
 
@@ -6763,6 +6791,7 @@
         window.location.reload();
       } catch (err) {
         console.warn("设置 Firebase 云同步失败:", err);
+        window.alert("Firebase 配置无效，请检查 JSON 格式。\n" + formatCloudSyncError(err, "解析失败"));
       }
     };
 
