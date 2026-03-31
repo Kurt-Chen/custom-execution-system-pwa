@@ -6762,6 +6762,33 @@
       setCloudSyncStatus("同步错误", "status-error");
     }
 
+    function validateRealtimeDatabaseUrl(databaseURL) {
+      const urlText = String(databaseURL || "").trim();
+      if (!urlText) {
+        return { ok: false, reason: "databaseURL 为空。" };
+      }
+      let parsed = null;
+      try {
+        parsed = new URL(urlText);
+      } catch (_err) {
+        return { ok: false, reason: "databaseURL 不是合法 URL。" };
+      }
+      if (parsed.protocol !== "https:") {
+        return { ok: false, reason: "databaseURL 必须是 https 地址。" };
+      }
+      const host = parsed.hostname.toLowerCase();
+      const looksLikeRtdb =
+        host.includes("firebasedatabase.app") ||
+        host.endsWith(".firebaseio.com");
+      if (!looksLikeRtdb) {
+        return {
+          ok: false,
+          reason: "databaseURL 看起来不是 Realtime Database 域名（应包含 firebasedatabase.app 或 firebaseio.com）。"
+        };
+      }
+      return { ok: true, reason: "" };
+    }
+
     function closeCloudSyncPanel() {
       if (!cloudSyncPanelOverlay) return;
       cloudSyncPanelOverlay.classList.add("hidden");
@@ -6803,6 +6830,11 @@
       }
       if (!cfg || !cfg.apiKey || !cfg.projectId || !cfg.databaseURL) {
         window.alert("Firebase 配置缺少必要字段：apiKey / projectId / databaseURL。");
+        return;
+      }
+      const dbUrlCheck = validateRealtimeDatabaseUrl(cfg.databaseURL);
+      if (!dbUrlCheck.ok) {
+        window.alert("databaseURL 校验失败：\n" + dbUrlCheck.reason);
         return;
       }
       localStorage.setItem(CLOUD_SYNC_CONFIG_KEY, JSON.stringify(cfg));
@@ -6865,6 +6897,11 @@
       const missing = requiredKeys.filter((key) => !cfg[key]);
       if (missing.length > 0) {
         window.alert("JSON 缺少必要字段：" + missing.join(" / "));
+        return;
+      }
+      const dbUrlCheck = validateRealtimeDatabaseUrl(cfg.databaseURL);
+      if (!dbUrlCheck.ok) {
+        window.alert("databaseURL 校验失败：\n" + dbUrlCheck.reason);
         return;
       }
       cloudSyncConfigInput.value = JSON.stringify(cfg, null, 2);
