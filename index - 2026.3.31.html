@@ -96,6 +96,104 @@
       color: #b91c1c;
     }
 
+    .cloud-sync-panel-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 7000;
+      background: rgba(15, 23, 42, 0.45);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+
+    .cloud-sync-panel {
+      width: min(560px, 100%);
+      max-height: 88vh;
+      overflow: auto;
+      background: #ffffff;
+      border: 1px solid #dbe3f5;
+      border-radius: 14px;
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.24);
+      padding: 14px;
+    }
+
+    .cloud-sync-panel h3 {
+      margin: 0 0 6px;
+      font-size: 17px;
+      color: #1e3a8a;
+    }
+
+    .cloud-sync-panel .cloud-sync-panel-meta {
+      margin: 0 0 10px;
+      font-size: 12px;
+      color: #64748b;
+    }
+
+    .cloud-sync-panel label {
+      display: block;
+      margin: 8px 0 4px;
+      font-size: 12px;
+      color: #334155;
+      font-weight: 600;
+    }
+
+    .cloud-sync-panel textarea,
+    .cloud-sync-panel input {
+      width: 100%;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-size: 13px;
+      font-family: "Consolas", "Menlo", "Monaco", monospace;
+      color: #0f172a;
+      background: #f8fafc;
+      box-sizing: border-box;
+    }
+
+    .cloud-sync-panel textarea {
+      min-height: 160px;
+      resize: vertical;
+      line-height: 1.45;
+    }
+
+    .cloud-sync-panel-actions {
+      margin-top: 10px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .cloud-sync-panel-actions .btn {
+      border: 1px solid #cbd5e1;
+      border-radius: 9px;
+      background: #ffffff;
+      color: #334155;
+      padding: 7px 11px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .cloud-sync-panel-actions .btn.btn-primary {
+      border-color: #2563eb;
+      background: #2563eb;
+      color: #ffffff;
+    }
+
+    .cloud-sync-panel-actions .btn.btn-danger {
+      border-color: #ef4444;
+      color: #b91c1c;
+      background: #fef2f2;
+    }
+
+    @media (max-width: 640px) {
+      .cloud-sync-panel {
+        padding: 12px;
+        border-radius: 12px;
+      }
+    }
+
     body.app-locked .container {
       display: none;
     }
@@ -6172,6 +6270,26 @@
   </div>
 
   <div id="cloudSyncStatusBadge" class="cloud-sync-badge" aria-live="polite">☁ 未同步</div>
+  <div id="cloudSyncPanelOverlay" class="cloud-sync-panel-overlay hidden" aria-hidden="true">
+    <div class="cloud-sync-panel" role="dialog" aria-modal="true" aria-labelledby="cloudSyncPanelTitle">
+      <h3 id="cloudSyncPanelTitle">云同步配置</h3>
+      <p id="cloudSyncPanelMeta" class="cloud-sync-panel-meta">未配置</p>
+      <label for="cloudSyncConfigInput">Firebase config JSON</label>
+      <textarea
+        id="cloudSyncConfigInput"
+        spellcheck="false"
+        placeholder='{"apiKey":"","projectId":"","databaseURL":""}'
+      ></textarea>
+      <label for="cloudSyncRoomInput">同步房间 ID（两端保持一致）</label>
+      <input id="cloudSyncRoomInput" type="text" placeholder="kurt-main-room" />
+      <div class="cloud-sync-panel-actions">
+        <button id="cloudSyncShowErrorBtn" class="btn" type="button">查看错误</button>
+        <button id="cloudSyncDisableBtn" class="btn btn-danger" type="button">关闭同步</button>
+        <button id="cloudSyncCancelBtn" class="btn" type="button">取消</button>
+        <button id="cloudSyncSaveBtn" class="btn btn-primary" type="button">保存并连接</button>
+      </div>
+    </div>
+  </div>
 
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
@@ -6185,6 +6303,14 @@
     const AUTH_SESSION_KEY = "todo-app-auth-session-v1";
     const IDLE_LOCK_MINUTES_KEY = "todo-app-idle-lock-minutes-v1";
     const cloudSyncStatusBadge = document.getElementById("cloudSyncStatusBadge");
+    const cloudSyncPanelOverlay = document.getElementById("cloudSyncPanelOverlay");
+    const cloudSyncPanelMeta = document.getElementById("cloudSyncPanelMeta");
+    const cloudSyncConfigInput = document.getElementById("cloudSyncConfigInput");
+    const cloudSyncRoomInput = document.getElementById("cloudSyncRoomInput");
+    const cloudSyncSaveBtn = document.getElementById("cloudSyncSaveBtn");
+    const cloudSyncCancelBtn = document.getElementById("cloudSyncCancelBtn");
+    const cloudSyncDisableBtn = document.getElementById("cloudSyncDisableBtn");
+    const cloudSyncShowErrorBtn = document.getElementById("cloudSyncShowErrorBtn");
 
     const loginGate = document.getElementById("loginGate");
     const loginTitle = document.getElementById("loginTitle");
@@ -6632,48 +6758,78 @@
       setCloudSyncStatus("同步错误", "status-error");
     }
 
+    function closeCloudSyncPanel() {
+      if (!cloudSyncPanelOverlay) return;
+      cloudSyncPanelOverlay.classList.add("hidden");
+      cloudSyncPanelOverlay.setAttribute("aria-hidden", "true");
+    }
+
+    function openCloudSyncPanel() {
+      if (!cloudSyncPanelOverlay || !cloudSyncConfigInput || !cloudSyncRoomInput) return;
+      const cfg = getCloudSyncConfig();
+      const room = localStorage.getItem(CLOUD_SYNC_ROOM_KEY) || "kurt-main-room";
+      cloudSyncConfigInput.value = cfg ? JSON.stringify(cfg, null, 2) : "";
+      cloudSyncRoomInput.value = room;
+      const statusLabel = cfg ? "已配置 Firebase" : "未配置 Firebase";
+      const errorLabel = cloudSyncLastErrorMsg ? "\n最后错误: " + cloudSyncLastErrorMsg : "";
+      cloudSyncPanelMeta.textContent = statusLabel + "\n当前 roomId: " + room + errorLabel;
+      cloudSyncPanelOverlay.classList.remove("hidden");
+      cloudSyncPanelOverlay.setAttribute("aria-hidden", "false");
+      setTimeout(() => cloudSyncConfigInput.focus(), 0);
+    }
+
+    function handleCloudSyncPanelSave() {
+      if (!cloudSyncConfigInput || !cloudSyncRoomInput) return;
+      const configRaw = String(cloudSyncConfigInput.value || "").trim();
+      const roomId = String(cloudSyncRoomInput.value || "").trim();
+      if (!configRaw) {
+        window.alert("请先粘贴 Firebase config JSON。");
+        return;
+      }
+      if (!roomId) {
+        window.alert("请填写同步房间 ID。");
+        return;
+      }
+      let cfg = null;
+      try {
+        cfg = JSON.parse(configRaw);
+      } catch (err) {
+        window.alert("Firebase 配置无效，请检查 JSON 格式。\n" + formatCloudSyncError(err, "解析失败"));
+        return;
+      }
+      if (!cfg || !cfg.apiKey || !cfg.projectId || !cfg.databaseURL) {
+        window.alert("Firebase 配置缺少必要字段：apiKey / projectId / databaseURL。");
+        return;
+      }
+      localStorage.setItem(CLOUD_SYNC_CONFIG_KEY, JSON.stringify(cfg));
+      localStorage.setItem(CLOUD_SYNC_ROOM_KEY, roomId);
+      window.location.reload();
+    }
+
     if (cloudSyncStatusBadge) {
-      cloudSyncStatusBadge.addEventListener("click", () => {
-        const cfg = getCloudSyncConfig();
-        if (!cfg) {
-          const configJson = window.prompt(
-            "粘贴 Firebase config JSON（包含 apiKey/projectId/databaseURL 等）"
-          );
-          if (!configJson) return;
-          const room =
-            window.prompt("输入同步房间ID（两端保持一致）", "kurt-main-room") ||
-            "kurt-main-room";
-          window.configureFirebaseCloudSync(configJson, room);
-          return;
-        }
-        const currentRoom = localStorage.getItem(CLOUD_SYNC_ROOM_KEY) || "default-room";
-        const action = window.prompt(
-          "云同步已配置。\n输入 1 查看房间\n输入 2 重新配置\n输入 3 关闭云同步\n输入 4 查看最后错误",
-          "1"
-        );
-        if (action === "1") {
-          window.alert("当前 roomId: " + currentRoom + "\n提示：手机端和电脑端必须一致。");
-          return;
-        }
-        if (action === "2") {
-          const configJson = window.prompt(
-            "重新粘贴 Firebase config JSON",
-            JSON.stringify(cfg)
-          );
-          if (!configJson) return;
-          const room =
-            window.prompt("输入同步房间ID（两端保持一致）", currentRoom) || currentRoom;
-          window.configureFirebaseCloudSync(configJson, room);
-          return;
-        }
-        if (action === "3") {
-          const ok = window.confirm("确认关闭云同步并清除本机云同步配置？");
-          if (ok) window.disableFirebaseCloudSync();
-          return;
-        }
-        if (action === "4") {
-          window.alert(cloudSyncLastErrorMsg || "当前没有记录到错误。");
-        }
+      cloudSyncStatusBadge.addEventListener("click", openCloudSyncPanel);
+    }
+
+    if (cloudSyncPanelOverlay) {
+      cloudSyncPanelOverlay.addEventListener("click", (event) => {
+        if (event.target === cloudSyncPanelOverlay) closeCloudSyncPanel();
+      });
+    }
+    if (cloudSyncCancelBtn) {
+      cloudSyncCancelBtn.addEventListener("click", closeCloudSyncPanel);
+    }
+    if (cloudSyncSaveBtn) {
+      cloudSyncSaveBtn.addEventListener("click", handleCloudSyncPanelSave);
+    }
+    if (cloudSyncDisableBtn) {
+      cloudSyncDisableBtn.addEventListener("click", () => {
+        const ok = window.confirm("确认关闭云同步并清除本机云同步配置？");
+        if (ok) window.disableFirebaseCloudSync();
+      });
+    }
+    if (cloudSyncShowErrorBtn) {
+      cloudSyncShowErrorBtn.addEventListener("click", () => {
+        window.alert(cloudSyncLastErrorMsg || "当前没有记录到错误。");
       });
     }
 
