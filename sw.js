@@ -1,6 +1,7 @@
 const CACHE_NAME = "exec-system-pwa-v1";
 const APP_SHELL = [
   "./",
+  "./index.html",
   "./index - 2026.3.31.html",
   "./manifest.webmanifest",
   "./icons/icon-192.svg",
@@ -41,6 +42,6 @@ self.addEventListener("fetch", (event) => {
         caches.open(CACHE_NAME).then((cache) => cache.put(req, cloned));
         return res;
       })
-      .catch(() => caches.match(req).then((cached) => cached || caches.match("./index - 2026.3.31.html")))
+      .catch(() => caches.match(req).then((cached) => cached || caches.match("./index.html")))
   );
 });
