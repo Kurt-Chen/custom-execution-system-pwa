@@ -1,4 +1,4 @@
-const CACHE_NAME = "exec-system-pwa-v2";
+const CACHE_NAME = "exec-system-pwa-v3";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -12,7 +12,6 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
   );
-  self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
@@ -44,4 +43,9 @@ self.addEventListener("fetch", (event) => {
       })
       .catch(() => caches.match(req).then((cached) => cached || caches.match("./index.html")))
   );
+});
+
+self.addEventListener("message", (event) => {
+  if (!event.data || event.data.type !== "SKIP_WAITING") return;
+  self.skipWaiting();
 });
