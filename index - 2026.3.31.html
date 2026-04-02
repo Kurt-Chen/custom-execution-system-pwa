@@ -136,6 +136,15 @@
       color: #b91c1c;
     }
 
+    /* 仅手机端：离线提示样式（由 JS 在窄屏且 navigator.onLine===false 时加上 status-offline） */
+    @media (max-width: 767px) {
+      .cloud-sync-badge.status-offline {
+        border-color: #fde68a;
+        background: #fffbeb;
+        color: #92400e;
+      }
+    }
+
     .app-version-badge {
       position: fixed;
       left: max(10px, env(safe-area-inset-left, 0px));
@@ -3250,11 +3259,12 @@
     }
 
     /* 十二周年 #020/#021 用自建折叠头，须排除，否则会连展开按钮一并隐藏 */
-    section.collapsed:not(.submodule-card):not(.goal-card):not(.anniversary-tw020-card) > *:not(.section-title) {
+    /* Kinetic 二级 Tab：面板用 .kinetic-tab-hidden 控制显隐；勿用「折叠」规则藏子节点，否则 .section-title 已被隐藏时会整片空白（手机端常见） */
+    section.collapsed:not(.submodule-card):not(.goal-card):not(.anniversary-tw020-card):not(.kinetic-tab-panel) > *:not(.section-title) {
       display: none !important;
     }
 
-    section.collapsed:not(.submodule-card):not(.goal-card):not(.anniversary-tw020-card) .section-title .count {
+    section.collapsed:not(.submodule-card):not(.goal-card):not(.anniversary-tw020-card):not(.kinetic-tab-panel) .section-title .count {
       display: none;
     }
 
@@ -7289,6 +7299,29 @@
       body.primary-module-fullscreen #habitRoutineModule.module-focus-active .daily-win-day-quota {
         font-size: 11px;
       }
+
+      /* Kinetic 横向 Tab：窄屏下避免被父级 overflow-x:clip 裁切，并允许横滑（原 touch-action:pan-y 会挡横向手势） */
+      #dynamicModule .kinetic-tabs {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        padding-bottom: 4px;
+      }
+
+      #dynamicModule .kinetic-tab-btn {
+        font-size: 12px;
+        padding: 5px 9px;
+      }
+
+      body.primary-module-fullscreen #dynamicModule.module-focus-active > .module-content {
+        overflow-x: visible;
+        touch-action: pan-x pan-y;
+      }
+
+      body.primary-module-fullscreen .module-stack > .card.module-focus-active#dynamicModule {
+        overflow-x: visible;
+      }
     }
 
     /* Tablet auto-fit: OPPO Pad / iPad class devices */
@@ -9024,6 +9057,7 @@
     let cloudSyncRoomId = localStorage.getItem(CLOUD_SYNC_ROOM_KEY) || "";
     let cloudSyncRef = null;
     let cloudSyncLastErrorMsg = "";
+    let cloudSyncStatusSnapshot = { text: "未同步", statusClass: "" };
 
     if (!cloudSyncClientId) {
       cloudSyncClientId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -9070,18 +9104,59 @@
       }
     }
 
-    function setCloudSyncStatus(text, statusClass) {
+    function paintCloudSyncStatusFromSnapshot() {
       if (!cloudSyncStatusBadge) return;
-      cloudSyncStatusBadge.textContent = "☁ " + text;
-      cloudSyncStatusBadge.classList.remove("status-connected", "status-syncing", "status-error");
-      if (statusClass) {
-        cloudSyncStatusBadge.classList.add(statusClass);
+      const s = cloudSyncStatusSnapshot;
+      cloudSyncStatusBadge.textContent = "☁ " + s.text;
+      cloudSyncStatusBadge.classList.remove("status-connected", "status-syncing", "status-error", "status-offline");
+      if (s.statusClass) {
+        cloudSyncStatusBadge.classList.add(s.statusClass);
       }
-      if (statusClass === "status-error" && cloudSyncLastErrorMsg) {
+      if (s.statusClass === "status-error" && cloudSyncLastErrorMsg) {
         cloudSyncStatusBadge.title = cloudSyncLastErrorMsg;
       } else {
         cloudSyncStatusBadge.title = "点击配置云同步";
       }
+    }
+
+    /** 仅手机端（max-width:767px）且离线时覆盖徽章文案；电脑端不受影响 */
+    function applyCloudSyncMobileOfflineUi() {
+      if (!cloudSyncStatusBadge) return;
+      const mobile = window.matchMedia("(max-width: 767px)").matches;
+      const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+      if (mobile && offline) {
+        cloudSyncStatusBadge.textContent = "☁ 离线 · 同步已暂停";
+        cloudSyncStatusBadge.classList.remove("status-connected", "status-syncing", "status-error");
+        cloudSyncStatusBadge.classList.add("status-offline");
+        cloudSyncStatusBadge.title = "当前无网络，恢复连接后将自动同步";
+        return;
+      }
+      cloudSyncStatusBadge.classList.remove("status-offline");
+      paintCloudSyncStatusFromSnapshot();
+    }
+
+    function initCloudSyncMobileOfflineHint() {
+      const refresh = () => applyCloudSyncMobileOfflineUi();
+      window.addEventListener("online", refresh);
+      window.addEventListener("offline", refresh);
+      let resizeTimer = null;
+      window.addEventListener("resize", () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(refresh, 150);
+      });
+      const mq = window.matchMedia("(max-width: 767px)");
+      if (mq && mq.addEventListener) {
+        mq.addEventListener("change", refresh);
+      } else if (mq && mq.addListener) {
+        mq.addListener(refresh);
+      }
+      refresh();
+    }
+
+    function setCloudSyncStatus(text, statusClass) {
+      if (!cloudSyncStatusBadge) return;
+      cloudSyncStatusSnapshot = { text: String(text || "未同步"), statusClass: statusClass || "" };
+      applyCloudSyncMobileOfflineUi();
     }
 
     function setAppVersionText(label) {
@@ -14791,6 +14866,13 @@
       renderAnniversaryTw021();
       renderAnniversaryTw022();
       refreshDynamicModuleLunarHints();
+      if (typeof activateKineticTab === "function") {
+        const activeKineticBtn = document.querySelector("#dynamicModule .kinetic-tab-btn[aria-selected='true']");
+        const kid = activeKineticBtn && activeKineticBtn.id && activeKineticBtn.id.indexOf("kineticTabBtn-") === 0
+          ? activeKineticBtn.id.slice("kineticTabBtn-".length)
+          : "";
+        if (kid) activateKineticTab(kid);
+      }
     }
 
     function renderFuelScore() {
@@ -15190,6 +15272,7 @@
     render();
     initAppVersionBadge();
     initCloudSync();
+    initCloudSyncMobileOfflineHint();
 
     bindAnniversaryFutureStoryInputs();
     bindAnniversaryCollapsibles();
@@ -15767,6 +15850,10 @@
     }
 
     function accordionCollapsePeerSections(expandedSectionEl) {
+      /* Kinetic：显隐由 activateKineticTab 管理；手风琴折叠会把当前 Tab 对应 section 也加上 collapsed，叠加全局折叠样式会导致内容区空白 */
+      if (expandedSectionEl && expandedSectionEl.closest("#dynamicModule .columns") && typeof activateKineticTab === "function") {
+        return;
+      }
       const cols = expandedSectionEl.closest(
         "#dynamicModule .columns, #habitRoutineModule .module-content > .columns"
       );
@@ -15810,6 +15897,7 @@
       titleEl.addEventListener("click", (event) => {
         if (event.target.closest("button")) return;
         if (sectionEl.classList.contains("module-tab-panel")) return;
+        if (sectionEl.classList.contains("kinetic-tab-panel")) return;
         toggleSection(sectionEl, btnEl);
       });
     }
