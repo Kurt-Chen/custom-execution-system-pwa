@@ -2817,7 +2817,7 @@
       padding: 0;
       border-radius: 0;
       white-space: nowrap;
-      min-width: 4.75ch;
+      min-width: 5.25ch;
       box-sizing: border-box;
       text-align: end;
     }
@@ -3561,6 +3561,8 @@
       display: block;
       overflow-x: clip;
       touch-action: pan-y;
+      /* 去掉顶栏与内容区之间继承的 margin-top（.module-content 默认 12px），避免平板等出现大块留白 */
+      margin-top: 0;
     }
 
     body.primary-module-fullscreen .module-stack > .card.module-focus-active .module-header {
@@ -3580,7 +3582,12 @@
       display: flex;
       align-items: center;
       border-radius: 16px 16px 0 0;
-      margin: 0 0 8px;
+      margin: 0;
+    }
+
+    /* Kinetic：Tab 行自带 padding，不再给 .module-content 顶部留白（否则蓝条与 Tab 之间出现白条） */
+    body.primary-module-fullscreen #dynamicModule.module-focus-active > .module-content {
+      padding-top: 0;
     }
 
     body.primary-module-fullscreen #dynamicModule.module-focus-active > .module-header .kinetic-header-top {
@@ -3726,10 +3733,14 @@
     /* 手机全屏下：Done 工具栏让输入框占更多宽度 */
     body.primary-module-fullscreen #dynamicModule.module-focus-active .kinetic-sub-done .done-toolbar-row {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 40px;
+      grid-template-columns: minmax(0, 1fr) minmax(40px, auto);
       gap: 8px;
       align-items: center;
       flex-wrap: nowrap;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
 
     body.primary-module-fullscreen #dynamicModule.module-focus-active #doneDateFilter {
@@ -6978,7 +6989,7 @@
       }
 
       body.primary-module-fullscreen #dynamicModule.module-focus-active .kinetic-sub-done .done-toolbar-row {
-        grid-template-columns: minmax(0, 1fr) 36px;
+        grid-template-columns: minmax(0, 1fr) minmax(40px, auto);
         gap: 6px;
       }
 
@@ -7181,6 +7192,37 @@
         box-sizing: border-box;
       }
 
+      /* 平板全屏 Done 行：与手机一致，时间列 + 删除热区留白 */
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item .done-compact-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) max-content;
+        column-gap: 8px;
+        align-items: center;
+        max-width: 100%;
+        box-sizing: border-box;
+        padding-right: max(52px, env(safe-area-inset-right, 0px));
+        padding-left: max(8px, env(safe-area-inset-left, 0px));
+      }
+
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .done-compact-text-wrap {
+        grid-column: 1;
+        grid-row: 1;
+        min-width: 0;
+      }
+
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .done-time-compact {
+        grid-column: 2;
+        grid-row: 1;
+        justify-self: end;
+        min-width: 5.25ch;
+      }
+
+      body.primary-module-fullscreen #dynamicModule.module-focus-active .columns > section.kinetic-tab-panel {
+        padding-left: max(10px, env(safe-area-inset-left, 0px));
+        padding-right: max(10px, env(safe-area-inset-right, 0px));
+        box-sizing: border-box;
+      }
+
       .more-page-shell,
       body.primary-module-fullscreen #morePageSkeleton.more-page-shell {
         left: 0 !important;
@@ -7283,7 +7325,8 @@
         flex: 1 1 auto;
         min-height: 0;
         overflow-y: auto;
-        overflow-x: clip;
+        /* clip 会阻断内层 Kinetic Tab 横向滚动；hidden 保留裁切但不挡子级 overflow-x: auto */
+        overflow-x: hidden;
         -webkit-overflow-scrolling: touch;
       }
 
@@ -7291,6 +7334,15 @@
         position: sticky;
         top: 0;
         z-index: 1160;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        overscroll-behavior-x: contain;
+        touch-action: pan-x;
       }
 
       /* 电脑版：非 Kinetic 主模块顶栏固定、仅 .module-content 滚动，子 Tab 在内容区内吸顶（与 Kinetic 一致） */
@@ -7314,7 +7366,7 @@
         flex: 1 1 auto;
         min-height: 0;
         overflow-y: auto;
-        overflow-x: clip;
+        overflow-x: hidden;
         -webkit-overflow-scrolling: touch;
       }
 
@@ -7322,6 +7374,66 @@
         position: sticky;
         top: 0;
         z-index: 1160;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        overscroll-behavior-x: contain;
+        touch-action: pan-x;
+      }
+
+      /* 底栏壳层勿用 overflow:hidden 挡住内部横向滚动 */
+      body.primary-module-fullscreen #morePageSkeleton.more-page-shell {
+        overflow: visible;
+      }
+
+      body.primary-module-fullscreen #primaryModuleBottomNav.more-page-bottom-nav {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        overflow-x: auto !important;
+        overflow-y: hidden;
+        overscroll-behavior-x: contain;
+        touch-action: pan-x;
+      }
+
+      /* 鼠标：显示细滚动条，便于发现顶栏/底栏可横滑 */
+      @media (pointer: fine) {
+        body.primary-module-fullscreen #dynamicModule.module-focus-active > .module-content > .kinetic-tabs,
+        body.primary-module-fullscreen
+          .module-stack
+          > .card.module-focus-active:not(#dynamicModule)
+          .module-content
+          .module-sub-tabs,
+        body.primary-module-fullscreen #primaryModuleBottomNav.more-page-bottom-nav {
+          scrollbar-width: thin;
+        }
+
+        body.primary-module-fullscreen #dynamicModule.module-focus-active > .module-content > .kinetic-tabs::-webkit-scrollbar,
+        body.primary-module-fullscreen
+          .module-stack
+          > .card.module-focus-active:not(#dynamicModule)
+          .module-content
+          .module-sub-tabs::-webkit-scrollbar,
+        body.primary-module-fullscreen #primaryModuleBottomNav.more-page-bottom-nav::-webkit-scrollbar {
+          display: block;
+          height: 6px;
+        }
+
+        body.primary-module-fullscreen #dynamicModule.module-focus-active > .module-content > .kinetic-tabs::-webkit-scrollbar-thumb,
+        body.primary-module-fullscreen
+          .module-stack
+          > .card.module-focus-active:not(#dynamicModule)
+          .module-content
+          .module-sub-tabs::-webkit-scrollbar-thumb,
+        body.primary-module-fullscreen #primaryModuleBottomNav.more-page-bottom-nav::-webkit-scrollbar-thumb {
+          background: rgba(148, 163, 184, 0.75);
+          border-radius: 999px;
+        }
       }
     }
 
@@ -7533,7 +7645,7 @@
         display: inline-flex !important;
         align-items: center;
         justify-content: flex-end;
-        min-width: 4.75ch;
+        min-width: 5.25ch;
         font-variant-numeric: tabular-nums;
       }
 
@@ -7679,6 +7791,34 @@
 
       body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item .done-compact-row {
         max-width: 100%;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) max-content;
+        column-gap: 8px;
+        align-items: center;
+        box-sizing: border-box;
+        /* 为右侧绝对定位的删除热区留白，避免时间戳被裁切 */
+        padding-right: max(52px, env(safe-area-inset-right, 0px));
+        padding-left: max(8px, env(safe-area-inset-left, 0px));
+      }
+
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .done-compact-text-wrap {
+        grid-column: 1;
+        grid-row: 1;
+        min-width: 0;
+      }
+
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .done-time-compact {
+        grid-column: 2;
+        grid-row: 1;
+        justify-self: end;
+        min-width: 5.25ch;
+      }
+
+      /* Kinetic 全屏：Tab 内容区左右尊重安全区，避免贴边被圆角/曲面裁切 */
+      body.primary-module-fullscreen #dynamicModule.module-focus-active .columns > section.kinetic-tab-panel {
+        padding-left: max(10px, env(safe-area-inset-left, 0px));
+        padding-right: max(10px, env(safe-area-inset-right, 0px));
+        box-sizing: border-box;
       }
 
       /* 顶栏不随内容滚动：由 flex 固定在卡片顶部（替代仅依赖 sticky + 外层误滚动） */
@@ -7740,9 +7880,6 @@
         box-shadow: 0 6px 14px rgba(15, 23, 42, 0.06);
       }
 
-      body.primary-module-fullscreen .module-stack > .card.module-focus-active .module-content {
-        margin-top: 0;
-      }
     }
 
     /* Tablet auto-fit: OPPO Pad / iPad class devices */
@@ -8037,7 +8174,7 @@
         transform: translateX(-52px);
       }
 
-      /* 覆盖 max-width:640px 内通用 button 40px，满足 48px 规范 */
+      /* 覆盖 max-width:640px 内通用 button 40px，满足 48px 规范（Done 添加钮除外，避免挤出网格） */
       button,
       .toggle-btn,
       .quick-filter-btn {
@@ -8046,18 +8183,26 @@
         touch-action: manipulation;
       }
 
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #addDoneManualBtn.btn-primary {
+        min-height: 40px !important;
+        height: 40px !important;
+        width: 40px !important;
+        min-width: 40px !important;
+        max-width: 44px !important;
+      }
+
       #doneList .actions button:not(.btn-icon-action) {
         min-height: 48px;
         padding: 0.375rem 0.625rem;
       }
     }
 
-    /* 所有设备：已完成任务行统一显示完成时间戳 */
+    /* 所有设备：已完成任务行统一显示完成时间戳（须容纳 HH:MM tabular，勿用 42px 覆盖 ch 宽度） */
     #doneList .done-time-compact {
       display: inline-flex !important;
       align-items: center;
       justify-content: flex-end;
-      min-width: 42px;
+      min-width: 5.25ch;
       font-variant-numeric: tabular-nums;
     }
 
