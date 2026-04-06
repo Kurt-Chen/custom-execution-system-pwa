@@ -41,6 +41,8 @@
       }
 
       #dynamicModule #doneList .done-time-block-head {
+        grid-column: 1 / -1 !important;
+        grid-row: 1 !important;
         display: grid !important;
         grid-template-columns: minmax(0, 1fr) auto !important;
         grid-template-rows: auto auto !important;
@@ -78,6 +80,45 @@
         align-self: center !important;
         justify-self: end !important;
         margin-left: 0 !important;
+      }
+    }
+
+    /* 平板/电脑足够宽：引文在时间段同一行、紧随其后（覆盖上方触控窄屏堆叠） */
+    @media (min-width: 768px) {
+      #dynamicModule #doneList .done-time-block-head:has(.done-time-block-mantra) {
+        grid-template-columns: auto minmax(0, 1fr) auto !important;
+        grid-template-rows: auto !important;
+        align-items: center !important;
+        row-gap: 0 !important;
+      }
+      #dynamicModule #doneList .done-time-block-head:not(:has(.done-time-block-mantra)) {
+        grid-template-columns: minmax(0, 1fr) auto !important;
+        grid-template-rows: auto !important;
+        align-items: center !important;
+        row-gap: 0 !important;
+      }
+      #dynamicModule #doneList .done-time-block-head-main {
+        grid-column: 1 !important;
+        grid-row: 1 !important;
+      }
+      #dynamicModule #doneList .done-time-block-mantra {
+        grid-column: 2 !important;
+        grid-row: 1 !important;
+        font-size: 12px !important;
+        line-height: 1.35 !important;
+        padding: 0 0 0 10px !important;
+        margin-top: 0 !important;
+        min-width: 0 !important;
+      }
+      #dynamicModule #doneList .done-time-block-badge {
+        grid-column: 3 !important;
+        grid-row: 1 !important;
+        align-self: center !important;
+        justify-self: end !important;
+      }
+      #dynamicModule #doneList .done-time-block-head:not(:has(.done-time-block-mantra)) .done-time-block-badge {
+        grid-column: 2 !important;
+        grid-row: 1 !important;
       }
     }
 
@@ -2945,6 +2986,92 @@
       color: #475569;
     }
 
+    #forgeModule .forge-sub-card-head--collapsible {
+      cursor: pointer;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      align-items: center;
+      border-radius: 10px;
+      margin: -2px -6px 8px;
+      padding: 4px 6px;
+      transition: background 0.15s ease;
+    }
+
+    #forgeModule .forge-sub-card-head--collapsible:hover {
+      background: rgba(148, 163, 184, 0.14);
+    }
+
+    #forgeModule .forge-sub-card-head--collapsible:focus {
+      outline: none;
+    }
+
+    #forgeModule .forge-sub-card-head--collapsible:focus-visible {
+      outline: 2px solid #2563eb;
+      outline-offset: 2px;
+    }
+
+    #forgeModule .forge-sub-card.is-collapsed .forge-sub-card-head--collapsible {
+      margin-bottom: 0;
+    }
+
+    #forgeModule .forge-body-card .forge-sub-card-head--collapsible {
+      margin-bottom: 10px;
+    }
+
+    #forgeModule .forge-body-card.is-collapsed .forge-sub-card-head--collapsible {
+      margin-bottom: 0;
+    }
+
+    #forgeModule .forge-sub-card-body {
+      min-height: 0;
+    }
+
+    #forgeModule .forge-sub-card.is-collapsed .forge-sub-card-body {
+      display: none;
+    }
+
+    .forge-sub-card-chevron {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.5em;
+      height: 1.5em;
+      flex-shrink: 0;
+      margin-left: 4px;
+      font-size: 10px;
+      line-height: 1;
+      transition: transform 0.2s ease;
+      color: #64748b;
+    }
+
+    #forgeModule .forge-sub-card.is-collapsed .forge-sub-card-chevron {
+      transform: rotate(-90deg);
+    }
+
+    /* FORGE Mind/Body 折叠：仅小屏；桌面端始终展开、不响应折叠 */
+    @media (min-width: 768px) {
+      #forgeModule .forge-sub-card.is-collapsed .forge-sub-card-body {
+        display: block !important;
+      }
+
+      #forgeModule .forge-sub-card .forge-sub-card-chevron {
+        display: none;
+      }
+
+      #forgeModule .forge-sub-card-head--collapsible {
+        cursor: default;
+        pointer-events: none;
+      }
+
+      #forgeModule .forge-sub-card-head--collapsible:hover {
+        background: transparent;
+      }
+
+      #forgeModule .forge-sub-card-head--collapsible:focus,
+      #forgeModule .forge-sub-card-head--collapsible:focus-visible {
+        outline: none;
+      }
+    }
 
     .forge-task-group {
       margin-bottom: 12px;
@@ -5069,7 +5196,12 @@
     }
 
     #doneList.done-time-block-list {
-      --done-axis-left: 20px;
+      --done-time-col-max: 3.25rem;
+      --done-axis-col-w: 18px;
+      /* 与 .done-compact-row 左内边距一致，用于把勾选圆心对准轴线中心 */
+      --done-compact-pl-start: 12px;
+      /* 折叠行：时间列与任务行共用纵向 padding，行内垂直居中（勿用 absolute 定位时间） */
+      --done-time-block-row-pad-y: 8px;
       padding-left: 0;
       list-style: none;
       display: flex;
@@ -5099,29 +5231,361 @@
       background: #ffffff;
       position: relative;
       z-index: 0;
+      /* 轴线颜色与顶栏表情圆环共用，供 .done-time-axis 与 .done-time-block-head 内图标继承 */
+      --axis-line-width: 2px;
+      --axis-line-color: #cccccc;
+      --axis-line-opacity: 1;
+      --axis-icon-border: #cccccc;
+      --axis-icon-bg: #ffffff;
     }
 
+    #doneList.done-time-block-list > li.done-time-block + li.done-time-block {
+      margin-top: -1px;
+    }
+
+    #doneList .done-time-block.done-time-block--evening {
+      --axis-line-color: #afa9ec;
+      --axis-icon-border: #afa9ec;
+      --axis-icon-bg: #eeedfe;
+    }
+
+    #doneList .done-time-block.done-time-block--day {
+      --axis-line-color: #85b7eb;
+      --axis-icon-border: #85b7eb;
+      --axis-icon-bg: #e6f1fb;
+    }
+
+    #doneList .done-time-block.done-time-block--morning {
+      --axis-line-color: #fac775;
+      --axis-icon-border: #fac775;
+      --axis-icon-bg: #faeeda;
+    }
+
+    #doneList .done-time-block.done-time-block--lateNight,
+    #doneList .done-time-block.done-time-block--dawn {
+      --axis-line-opacity: 0.4;
+      --axis-line-width: 0;
+      --axis-icon-border: #dddddd;
+      --axis-icon-bg: #f5f5f5;
+    }
+
+    /* 时段块：Grid 第 1 行横条、第 2 行「时间列 | 轴线列 | 内容列」；时间戳在左列文档流内，与右侧任务行按行等高（JS sync） */
     #doneList .done-time-block-body {
-      display: flex;
+      display: grid;
+      grid-template-rows: auto 1fr;
       align-items: stretch;
       min-height: 100%;
       min-width: 0;
       max-width: 100%;
+      box-sizing: border-box;
+      position: relative;
+      z-index: 0;
+    }
+
+    /* 贯穿该时段块的竖轴（与下方时间列对齐；块与块衔接成「全天」折线） */
+    #doneList .done-time-block-body::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      z-index: 0;
+      pointer-events: none;
+      width: var(--axis-line-width, 2px);
+      background: var(--axis-line-color);
+      opacity: var(--axis-line-opacity, 1);
+      border-radius: 1px;
+    }
+
+    /* 竖线在轴线列右缘，与内容列紧邻（避免线贴左、右侧大块留白） */
+    #doneList .done-time-block-body:has(.done-time-block-time-col)::before {
+      left: calc(
+        var(--done-time-col-max, 3.25rem) + var(--done-axis-col-w, 18px) - var(--axis-line-width, 2px)
+      );
+    }
+
+    /* 无任务时段没有左侧时间列，但竖线须与「有时间列」块同一 x，才能与全天轴线衔接 */
+    #doneList .done-time-block-body:not(:has(.done-time-block-time-col))::before {
+      left: calc(
+        var(--done-time-col-max, 3.25rem) + var(--done-axis-col-w, 18px) - var(--axis-line-width, 2px)
+      );
+    }
+
+    #doneList .done-time-block.done-time-block--lateNight .done-time-block-body::before,
+    #doneList .done-time-block.done-time-block--dawn .done-time-block-body::before {
+      width: 0;
+      background: transparent;
+      opacity: 0.4;
+      border-radius: 0;
+      border-left: 1.5px solid #cccccc;
+    }
+
+    /* 参考「节点在轴线正中」：实线贯穿轴线列中心，与各任务圆心对齐（仅 My Done 时间分块列表） */
+    #doneList.done-time-block-list > li.done-time-block > .done-time-block-body::before {
+      width: 0 !important;
+      background: transparent !important;
+      border-radius: 0 !important;
+      border: none !important;
+      border-left: 2px solid var(--axis-line-color, #cbd5e1) !important;
+      opacity: var(--axis-line-opacity, 1);
+      left: calc(
+        var(--done-time-col-max, 3.25rem) + var(--done-axis-col-w, 18px) / 2 - 1px
+      ) !important;
+    }
+
+    #doneList .done-time-block-body > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    /* 每行三列 flex：时间 | 轴线+圆点 | 任务；stretch + 轴列 flex:1 占位 + 整块 ::before 竖线不断开 */
+    #doneList .done-time-block-body.done-time-block-body--flex-axis {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      width: 100%;
+      min-width: 0;
+    }
+    /* 有任务列表时脊柱画在 .done-time-content，与全局轴线 x 对齐且不被斑马行背景盖住 */
+    #doneList .done-time-block-body.done-time-block-body--flex-axis:has(.done-time-content)::before {
+      display: none !important;
+      content: none !important;
+      border: none !important;
+      width: 0 !important;
+      height: 0 !important;
+      opacity: 0 !important;
+    }
+    #doneList .done-time-block-body.done-time-block-body--flex-axis .done-time-content {
+      width: 100%;
+      min-width: 0;
+      position: relative;
+      z-index: 0;
+    }
+    /* 连续竖线：伪元素贯穿任务列表区；行内轴线段仅 flex 占位、不绘色，圆点仍用 flex:1 居中 */
+    #doneList .done-time-block-body.done-time-block-body--flex-axis .done-time-content::before {
+      content: "";
+      position: absolute;
+      left: calc(44px + var(--done-axis-col-w, 18px) / 2 - 1px);
+      top: 0;
+      bottom: 0;
+      width: 0;
+      border-left: 2px solid var(--axis-line-color, #cbd5e1);
+      opacity: var(--axis-line-opacity, 1);
+      border-radius: 0;
+      z-index: 0;
+      pointer-events: none;
+      box-sizing: border-box;
+    }
+    #doneList .done-time-block.done-time-block--lateNight .done-time-block-body.done-time-block-body--flex-axis .done-time-content::before,
+    #doneList .done-time-block.done-time-block--dawn .done-time-block-body.done-time-block-body--flex-axis .done-time-content::before {
+      border-left-color: #cccccc;
+      opacity: 0.4;
+    }
+    #doneList .done-time-block-body.done-time-block-body--flex-axis .done-time-block-items {
+      position: relative;
+      z-index: 1;
+    }
+    #doneList .done-time-block-body.done-time-block-body--flex-axis .done-time-block-item--flex-row {
+      position: relative;
+      z-index: 1;
+    }
+    #doneList .done-time-block-body.done-time-block-body--flex-axis .done-time-block-row__axis {
+      position: relative;
+      z-index: 2;
+    }
+    #doneList .done-time-block-item--flex-row .done-time-block-row {
+      display: flex;
+      align-items: stretch;
+      min-height: 32px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    #doneList .done-time-block-item--flex-row.done-text-expanded .done-time-block-row {
+      min-height: 0;
+    }
+    #doneList .done-time-block-item--flex-row .done-time-block-row__time {
+      width: 44px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      text-align: right;
+      padding-right: 8px;
+      padding-top: 0;
+      box-sizing: border-box;
+    }
+    #doneList .done-time-block-item--flex-row .done-time-block-row__time .done-time-compact {
+      font-size: 10px;
+      color: #aaa;
+      line-height: 1.2;
+      font-variant-numeric: tabular-nums;
+    }
+    #doneList .done-time-block-item--flex-row .done-time-block-row__axis {
+      width: 16px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      align-self: stretch;
+      min-height: 0;
+      box-sizing: border-box;
+    }
+    #doneList .done-time-block-item--flex-row .done-time-block-row__axis-line {
+      width: 1.5px;
+      flex-shrink: 0;
+      background: transparent;
+      border-radius: 1px;
+    }
+    #doneList .done-time-block-item--flex-row .done-time-block-row__axis-line--top {
+      flex: 1 1 0;
+      min-height: 0;
+    }
+    #doneList .done-time-block-item--flex-row .done-time-block-row__axis-line--top.done-time-block-row__axis-line--hidden {
+      visibility: hidden;
+    }
+    #doneList .done-time-block-item--flex-row .done-time-block-row__dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: #3949ab;
+    }
+    #doneList .done-time-block-item--flex-row.done-time-block-item--day .done-time-block-row__dot {
+      background: #378add;
+    }
+    #doneList .done-time-block-item--evening.done-time-block-item--flex-row .done-time-block-row__dot {
+      background: #7f77dd;
+    }
+    #doneList .done-time-block-item--morning.done-time-block-item--flex-row .done-time-block-row__dot {
+      background: #ef9f27;
+    }
+    #doneList .done-time-block-item--lateNight.done-time-block-item--flex-row .done-time-block-row__dot,
+    #doneList .done-time-block-item--dawn.done-time-block-item--flex-row .done-time-block-row__dot {
+      background: #94a3b8;
+    }
+    #doneList .done-time-block-item--flex-row .done-time-block-row__axis-line--bottom {
+      flex: 1 1 0;
+      min-height: 0;
+    }
+    #doneList .done-time-block-item--flex-row .done-time-block-row__axis-line--bottom.done-time-block-row__axis-line--hidden {
+      visibility: hidden;
+    }
+    #doneList .done-time-block-item--flex-row .done-time-block-row__task {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      padding: 6px 12px 6px 8px;
+      box-sizing: border-box;
+    }
+    #doneList.done-time-block-list .done-time-block-item--flex-row:not(.done-text-expanded) .done-time-block-row__task .done-compact-row,
+    #doneList .done-time-block-item--flex-row:not(.done-text-expanded) .done-time-block-row__task .done-compact-row {
+      padding: 0 !important;
+      align-items: center !important;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    #doneList.done-time-block-list .done-time-block-item--flex-row.done-text-expanded .done-time-block-row__task .done-compact-row,
+    #doneList .done-time-block-item--flex-row.done-text-expanded .done-time-block-row__task .done-compact-row {
+      padding: 0 !important;
+      align-items: flex-start !important;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    #doneList .done-time-block-item--flex-row .done-time-block-row__task .task-text {
+      font-size: 13px;
+    }
+    #doneList.done-time-block-list .done-time-block-item--flex-row:not(.done-text-expanded) .done-compact-text-wrap {
+      align-items: center !important;
+    }
+    #doneList.done-time-block-list .done-time-block-item--flex-row.done-text-expanded .done-compact-text-wrap {
+      align-items: flex-start !important;
+    }
+    #doneList.done-time-block-list .done-time-block-item--flex-row:not(.done-text-expanded) .done-compact-row .actions {
+      align-self: center !important;
+    }
+    #doneList.done-time-block-list .done-time-block-item--flex-row.done-text-expanded .done-compact-row .actions {
+      align-self: flex-start !important;
+    }
+
+    /* 有左侧时间列：横条独占首行全宽；次行 时间 | 轴线 | 文案（竖线在轴线列右缘贴内容列） */
+    #doneList .done-time-block-body:has(.done-time-block-time-col) {
+      grid-template-columns: minmax(0, var(--done-time-col-max, 3.25rem))
+        minmax(16px, var(--done-axis-col-w, 18px)) minmax(0, 1fr);
+    }
+
+    /* 空时段：无时间列，横条全宽；次行 轴线 | 文案 */
+    #doneList .done-time-block-body:not(:has(.done-time-block-time-col)) {
+      grid-template-columns: minmax(16px, var(--done-axis-col-w, 18px)) minmax(0, 1fr);
+    }
+
+    #doneList .done-time-block-body:has(.done-time-block-time-col) .done-time-block-time-col {
+      grid-column: 1;
+      grid-row: 2;
+    }
+
+    #doneList .done-time-block-body:has(.done-time-block-time-col) .done-time-axis {
+      grid-column: 2;
+      grid-row: 2;
+    }
+
+    #doneList .done-time-block-body:has(.done-time-block-time-col) .done-time-content {
+      grid-column: 3;
+      grid-row: 2;
+    }
+
+    #doneList .done-time-block-body:not(:has(.done-time-block-time-col)) .done-time-axis {
+      grid-column: 1;
+      grid-row: 2;
+    }
+
+    #doneList .done-time-block-body:not(:has(.done-time-block-time-col)) .done-time-content {
+      grid-column: 2;
+      grid-row: 2;
+    }
+
+    #doneList .done-time-block-time-col {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+      min-width: 0;
+      max-width: var(--done-time-col-max, 3.25rem);
+      box-sizing: border-box;
+    }
+
+    #doneList .done-time-block-time-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+    }
+
+    #doneList .done-time-block-time-item {
+      display: flex;
+      align-items: stretch;
+      justify-content: flex-start;
+      box-sizing: border-box;
+      flex: 0 0 auto;
     }
 
     #doneList .done-time-axis {
       position: relative;
-      flex: 0 0 32px;
-      min-width: 32px;
-      --axis-left: 15px;
-      --axis-line-width: 2px;
-      --axis-line-color: #cccccc;
-      --axis-line-opacity: 1;
+      flex: 0 0 var(--done-axis-col-w, 18px);
+      min-width: var(--done-axis-col-w, 18px);
+      max-width: var(--done-axis-col-w, 18px);
+      /* 竖线贴近时间列一侧（轴线列左缘），缩小与时间戳的间距 */
+      --axis-left: 2px;
       --axis-line-style: solid;
-      --axis-icon-size: 22px;
-      --axis-icon-half: 11px;
-      --axis-icon-border: #cccccc;
-      --axis-icon-bg: #ffffff;
+    }
+
+    /* 与 body::before 贯穿线重复，隐藏以免双线 */
+    #doneList.done-time-block-list .done-time-axis-line {
+      opacity: 0 !important;
+      visibility: hidden !important;
+      pointer-events: none;
     }
 
     #doneList .done-time-axis-line {
@@ -5138,59 +5602,28 @@
       z-index: 1;
     }
 
-    #doneList .done-time-block.done-time-block--evening .done-time-axis {
-      --axis-line-color: #afa9ec;
-      --axis-icon-border: #afa9ec;
-      --axis-icon-bg: #eeedfe;
-    }
-
-    #doneList .done-time-block.done-time-block--day .done-time-axis {
-      --axis-line-color: #85b7eb;
-      --axis-icon-border: #85b7eb;
-      --axis-icon-bg: #e6f1fb;
-    }
-
-    #doneList .done-time-block.done-time-block--morning .done-time-axis {
-      --axis-line-color: #fac775;
-      --axis-icon-border: #fac775;
-      --axis-icon-bg: #faeeda;
-    }
-
-    #doneList .done-time-block.done-time-block--lateNight .done-time-axis,
-    #doneList .done-time-block.done-time-block--dawn .done-time-axis {
-      --axis-line-opacity: 0.4;
-      --axis-line-width: 0;
-      --axis-icon-border: #dddddd;
-      --axis-icon-bg: #f5f5f5;
-    }
-
     #doneList .done-time-axis-line.done-time-axis-line--lateNight,
     #doneList .done-time-axis-line.done-time-axis-line--dawn {
       width: 0;
-      border-left: 1.5px dashed #cccccc;
+      border-left: 1.5px solid #cccccc;
       background: transparent;
       opacity: 0.4;
       border-radius: 0;
     }
 
+    /* 轴线列若再挂图标时用（当前表情仅在横条内） */
     #doneList .done-time-axis-icon {
-      position: absolute;
-      left: var(--axis-left);
-      top: 18px;
-      transform: translate(-50%, -50%);
-      z-index: 2;
-      width: 22px;
-      height: 22px;
-      border-radius: 50%;
-      display: flex;
+      display: inline-flex;
       align-items: center;
       justify-content: center;
       flex-shrink: 0;
-      align-self: flex-start;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
       font-size: 12px;
       line-height: 1;
-      border: 1.5px solid var(--axis-icon-border);
-      background: var(--axis-icon-bg);
+      border: 1.5px solid var(--axis-icon-border, #cccccc);
+      background: var(--axis-icon-bg, #ffffff);
       box-sizing: border-box;
     }
 
@@ -5199,157 +5632,55 @@
       border: 1px solid #ddd;
     }
 
+    /* 横条内表情：纯文字，无圆环框 */
+    #doneList .done-time-block-head .done-time-axis-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: auto;
+      height: auto;
+      min-width: 0;
+      padding: 0;
+      margin: 0;
+      border: none !important;
+      background: transparent !important;
+      border-radius: 0;
+      font-size: 1.1em;
+      line-height: 1.2;
+    }
+
     #doneList .done-time-content {
       flex: 1;
       min-width: 0;
       max-width: 100%;
-      margin-left: 8px;
+      margin-left: 0;
       overflow-x: visible;
     }
 
     #doneList .done-time-block-head {
+      grid-column: 1 / -1;
+      grid-row: 1;
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       grid-template-rows: auto auto;
       align-items: start;
       column-gap: 8px;
       row-gap: 4px;
-      margin-left: -40px;
-      padding: 6px 10px 6px 40px;
-      border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+      margin: 0;
+      padding: 8px 10px 6px 10px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.22);
       font-size: 13px;
       font-weight: 600;
       color: #1e293b;
+      background: transparent;
       border-top-left-radius: 8px;
       border-bottom-left-radius: 8px;
       border-top-right-radius: 8px;
-      width: calc(100% + 40px);
+      width: auto;
+      max-width: none;
+      min-width: 0;
       box-sizing: border-box;
-    }
-
-    #doneList .done-time-block-head-main {
-      grid-column: 1;
-      grid-row: 1;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      min-width: 0;
-    }
-
-    #doneList .done-time-block-range {
-      font-variant-numeric: tabular-nums;
-      white-space: nowrap;
-    }
-
-    #doneList .done-time-block-badge {
-      grid-column: 2;
-      grid-row: 1 / -1;
-      align-self: center;
-      justify-self: end;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      border: 1px solid rgba(148, 163, 184, 0.45);
-      background: rgba(255, 255, 255, 0.85);
-      border-radius: 999px;
-      padding: 1px 8px;
-      font-size: 12px;
-      line-height: 1.3;
-      color: #334155;
-      white-space: nowrap;
-    }
-
-    #doneList .done-time-block-mantra {
-      grid-column: 1;
-      grid-row: 2;
-      min-width: 0;
-      display: block;
       text-align: left;
-      color: #334155;
-      font-size: 12px;
-      font-weight: 500;
-      line-height: 1.35;
-      white-space: normal;
-      overflow: visible;
-      word-break: break-word;
-      font-style: italic;
-      padding: 3px 10px;
-      border-radius: 999px;
-      border: 1px solid rgba(148, 163, 184, 0.28);
-      background: rgba(255, 255, 255, 0.7);
-    }
-
-    #doneList .done-time-block.done-time-block--evening .done-time-block-mantra {
-      color: #5a3eab;
-      background: #f3eeff;
-      border-color: rgba(90, 62, 171, 0.24);
-    }
-
-    #doneList .done-time-block.done-time-block--day .done-time-block-mantra {
-      color: #1d5ea8;
-      background: #edf5ff;
-      border-color: rgba(29, 94, 168, 0.24);
-    }
-
-    #doneList .done-time-block.done-time-block--morning .done-time-block-mantra {
-      color: #a35a00;
-      background: #fff4e6;
-      border-color: rgba(163, 90, 0, 0.24);
-    }
-
-    #doneList .done-time-block-items {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-      width: 100%;
-      max-width: 100%;
-      box-sizing: border-box;
-    }
-
-    /* 无任务时段：无「暂无…」占位；高度随标题区收缩，保留时间段 + 引言（mantra），不展示徽章与下列空白 */
-    #doneList .done-time-block--empty .done-time-block-body {
-      align-items: stretch;
-      min-height: 0;
-    }
-    #doneList .done-time-block--empty .done-time-axis {
-      align-self: stretch;
-      min-height: 0;
-    }
-    #doneList .done-time-block--empty .done-time-axis-line {
-      top: 8px;
-      bottom: 8px;
-    }
-    #doneList .done-time-block--empty .done-time-axis-icon {
-      top: 22px;
-    }
-    #doneList .done-time-block--empty .done-time-content {
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-    }
-    #doneList .done-time-block--empty .done-time-block-head {
-      margin-bottom: 0;
-      padding-top: 6px;
-      padding-bottom: 6px;
-      border-bottom: none;
-    }
-    #doneList .done-time-block--empty .done-time-block-badge {
-      display: none !important;
-    }
-    #doneList .done-time-block--empty-no-mantra .done-time-axis-icon {
-      top: 50%;
-    }
-
-    #doneList .done-time-block-empty {
-      margin: 0;
-      padding: 10px;
-      font-size: 12px;
-      color: #94a3b8;
-      text-align: center;
     }
 
     #doneList .done-time-block.done-time-block--lateNight .done-time-block-head,
@@ -5369,10 +5700,173 @@
       background: #fac775;
     }
 
+    #doneList .done-time-block-head-main {
+      grid-column: 1;
+      grid-row: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 6px;
+      min-width: 0;
+      text-align: left;
+    }
+
+    #doneList .done-time-block-range {
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    #doneList .done-time-block-badge {
+      grid-column: 2;
+      grid-row: 1 / -1;
+      align-self: center;
+      justify-self: end;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      border: none;
+      background: transparent;
+      border-radius: 0;
+      padding: 0;
+      font-size: 12px;
+      line-height: 1.3;
+      font-weight: 500;
+      color: #64748b;
+      white-space: nowrap;
+    }
+
+    #doneList .done-time-block-mantra {
+      grid-column: 1;
+      grid-row: 2;
+      min-width: 0;
+      display: block;
+      text-align: left;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1.35;
+      white-space: normal;
+      overflow: visible;
+      word-break: break-word;
+      font-style: italic;
+      padding: 2px 0 0 0;
+      margin: 0;
+      border: none;
+      background: transparent;
+      border-radius: 0;
+    }
+
+    #doneList .done-time-block.done-time-block--evening .done-time-block-mantra {
+      color: #5a3eab;
+    }
+
+    #doneList .done-time-block.done-time-block--day .done-time-block-mantra {
+      color: #1d5ea8;
+    }
+
+    #doneList .done-time-block.done-time-block--morning .done-time-block-mantra {
+      color: #a35a00;
+    }
+
+    /* 平板/电脑：时段标题内引文与时间范围同一行（手机保持两行，见 max-width 触控规则） */
+    @media (min-width: 768px) {
+      #doneList .done-time-block-head:has(.done-time-block-mantra) {
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        grid-template-rows: auto;
+        align-items: center;
+        row-gap: 0;
+      }
+      #doneList .done-time-block-head:not(:has(.done-time-block-mantra)) {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-rows: auto;
+        align-items: center;
+        row-gap: 0;
+      }
+      #doneList .done-time-block-head-main {
+        grid-column: 1;
+        grid-row: 1;
+      }
+      #doneList .done-time-block-mantra {
+        grid-column: 2;
+        grid-row: 1;
+        padding: 0 0 0 10px;
+        margin: 0;
+        min-width: 0;
+      }
+      #doneList .done-time-block-badge {
+        grid-column: 3;
+        grid-row: 1;
+        align-self: center;
+      }
+      #doneList .done-time-block-head:not(:has(.done-time-block-mantra)) .done-time-block-badge {
+        grid-column: 2;
+        grid-row: 1;
+      }
+    }
+
+    #doneList .done-time-block-items {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+
+    /* 无任务时段：body 仅含标题行，不挂载空 .done-time-content，高度随标题收缩 */
+    #doneList .done-time-block--empty .done-time-block-body {
+      align-items: stretch;
+      min-height: 0;
+    }
+    #doneList .done-time-block--empty .done-time-block-body.done-time-block-body--flex-axis {
+      display: flex;
+      flex-direction: column;
+    }
+    #doneList .done-time-block--empty .done-time-axis {
+      align-self: stretch;
+      min-height: 0;
+    }
+    #doneList .done-time-block--empty .done-time-axis-line {
+      top: 8px;
+      bottom: 8px;
+    }
+    #doneList .done-time-block--empty .done-time-content {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    #doneList .done-time-block--empty .done-time-block-head {
+      margin-bottom: 0;
+      padding: 4px 10px;
+      row-gap: 2px;
+      border-bottom: none;
+    }
+    #doneList .done-time-block--empty-no-mantra .done-time-block-head {
+      row-gap: 0;
+    }
+    #doneList .done-time-block--empty .done-time-block-mantra {
+      padding-top: 0;
+      margin-top: 0;
+    }
+    #doneList .done-time-block--empty .done-time-block-badge {
+      display: none !important;
+    }
+    #doneList .done-time-block-empty {
+      margin: 0;
+      padding: 10px;
+      font-size: 12px;
+      color: #94a3b8;
+      text-align: center;
+    }
+
     #doneList .done-time-block-item {
       display: flex;
       flex-direction: row;
-      align-items: center;
+      align-items: stretch;
       padding: 0;
       margin: 0;
       border: 0;
@@ -5386,27 +5880,44 @@
       box-sizing: border-box;
     }
 
-    /* 完成时间贴在时间轴列（与块级轴线视觉对齐），主行仅文案+操作 */
-    #doneList .done-time-block-item .done-time-axis-cell {
-      flex: 0 0 40px;
-      width: 40px;
-      min-width: 40px;
+    #doneList .done-time-block-time-list > li.done-time-block-time-item {
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      list-style: none;
+    }
+
+    /* 完成时间在时间轴左侧列：默认顶对齐；折叠行由下方 #doneList.done-time-block-list 规则改为居中，与右侧任务条一致 */
+    #doneList .done-time-block-time-item .done-time-axis-cell {
+      flex: 0 1 auto;
+      width: auto;
+      min-width: 0;
+      max-width: 100%;
       align-self: stretch;
       display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 6px 2px;
+      align-items: flex-start;
+      justify-content: flex-start;
+      padding: 8px 4px 8px 0;
       box-sizing: border-box;
-      border-right: 1px solid rgba(148, 163, 184, 0.28);
-      background: rgba(248, 250, 252, 0.65);
+      border: none !important;
+      background: transparent !important;
+      box-shadow: none !important;
+      outline: none !important;
+    }
+
+    #doneList .done-time-block-time-item .done-time-axis-cell time.done-time-compact {
+      -webkit-appearance: none;
+      appearance: none;
+      margin: 0;
     }
 
     #doneList .done-time-block-item.done-text-expanded {
       align-items: flex-start;
     }
 
-    #doneList .done-time-block-item.done-text-expanded .done-time-axis-cell {
-      padding-top: 9px;
+    #doneList .done-time-block-time-item.done-text-expanded .done-time-axis-cell {
+      padding-top: 10px;
+      align-items: flex-start;
     }
 
     #doneList .done-time-block-item .done-compact-row {
@@ -5414,22 +5925,81 @@
       width: auto;
       min-width: 0;
       max-width: none;
+      align-items: flex-start;
+    }
+    /* 折叠行：任务条与时间列在行内垂直居中（共用 --done-time-block-row-pad-y）；展开仍 stretch */
+    #doneList.done-time-block-list .done-time-block-item:not(.done-text-expanded) {
+      align-items: center;
+    }
+    #doneList.done-time-block-list .done-time-block-item:not(.done-text-expanded) .done-compact-row {
+      flex: 0 1 auto;
+      width: 100%;
+      align-self: center;
+      align-items: center;
+      box-sizing: border-box;
+      padding: var(--done-time-block-row-pad-y) 12px;
+    }
+    #doneList.done-time-block-list .done-time-block-time-item:not(.done-text-expanded) {
+      align-items: center;
+    }
+    #doneList.done-time-block-list .done-time-block-time-item:not(.done-text-expanded) .done-time-axis-cell {
+      align-items: center;
+      justify-content: flex-start;
+      box-sizing: border-box;
+      padding: var(--done-time-block-row-pad-y) 4px var(--done-time-block-row-pad-y) 0;
+    }
+    #doneList.done-time-block-list .done-time-block-item .done-compact-row .actions {
+      align-self: center;
     }
 
-    /* 时间戳：小于任务名、浅色，与各时段块解耦（任务名见 .done-compact-row .task-text） */
-    #doneList .done-time-block-item .done-time-axis-cell .done-time-compact {
+    /* 时间分块：勾选在 row 首子节点（勿放入 text-wrap，避免 overflow:hidden 裁切圆）；折叠行与正文竖向居中 */
+    #doneList.done-time-block-list .done-time-block-item .done-check-icon {
+      position: relative;
+      z-index: 2;
+      flex-shrink: 0;
+      align-self: center;
+      margin-left: calc(
+        -1 * (var(--done-axis-col-w, 18px) / 2 + 8px + var(--done-compact-pl-start, 12px))
+      );
+      margin-right: 0;
+    }
+    #doneList.done-time-block-list .done-time-block-item.done-text-expanded .done-check-icon {
+      align-self: flex-start;
+    }
+    /* 折叠单行省略由 text-wrap / task-text 负责；行本身不 hidden，避免误伤子项 */
+    #doneList.done-time-block-list .timeline-item:not(.done-text-expanded) .done-compact-row {
+      overflow: visible;
+    }
+
+    /* 时间分块：折叠行正文区与勾选竖向居中；展开时顶对齐 */
+    #doneList.done-time-block-list .done-time-block-item:not(.done-text-expanded) .done-compact-text-wrap {
+      align-items: center;
+    }
+    #doneList.done-time-block-list .done-time-block-item .done-compact-text-wrap {
+      align-items: flex-start;
+    }
+    #doneList.done-time-block-list .timeline-item.done-text-expanded.done-time-block-item .done-compact-text-wrap {
+      align-items: flex-start;
+    }
+
+    /* 时间戳：小于任务名、浅色；左对齐；纯文字（不再使用 .done-time 药丸） */
+    #doneList .done-time-block-time-item .done-time-axis-cell .done-time-compact {
       flex-shrink: 0;
       font-size: 12px;
       font-weight: 400;
       line-height: 1.15;
-      text-align: center;
-      justify-content: center;
+      text-align: left;
+      justify-content: flex-start;
+      text-decoration: none;
       color: #999;
       min-width: 0;
       white-space: nowrap;
-      background: transparent;
-      padding: 0;
-      border-radius: 0;
+      background: transparent !important;
+      padding: 0 !important;
+      border: none !important;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+      outline: none !important;
       box-sizing: border-box;
       font-variant-numeric: tabular-nums;
     }
@@ -5451,6 +6021,32 @@
     }
 
     #doneList .done-time-block.done-time-block--morning .done-time-block-item:nth-child(even) {
+      background: rgba(239, 159, 39, 0.07);
+    }
+
+    #doneList .done-time-block.done-time-block--day .done-time-block-item--flex-row:nth-child(even),
+    #doneList .done-time-block.done-time-block--evening .done-time-block-item--flex-row:nth-child(even),
+    #doneList .done-time-block.done-time-block--morning .done-time-block-item--flex-row:nth-child(even) {
+      background: transparent !important;
+    }
+    #doneList .done-time-block.done-time-block--day .done-time-block-item--flex-row:nth-child(even) .done-time-block-row__task {
+      background: rgba(55, 138, 221, 0.07);
+    }
+    #doneList .done-time-block.done-time-block--evening .done-time-block-item--flex-row:nth-child(even) .done-time-block-row__task {
+      background: rgba(127, 119, 221, 0.07);
+    }
+    #doneList .done-time-block.done-time-block--morning .done-time-block-item--flex-row:nth-child(even) .done-time-block-row__task {
+      background: rgba(239, 159, 39, 0.07);
+    }
+
+    /* 与右侧任务行同序斑马纹，分隔线在时间列下也连续可见 */
+    #doneList .done-time-block.done-time-block--day .done-time-block-time-item:nth-child(even) {
+      background: rgba(55, 138, 221, 0.07);
+    }
+    #doneList .done-time-block.done-time-block--evening .done-time-block-time-item:nth-child(even) {
+      background: rgba(127, 119, 221, 0.07);
+    }
+    #doneList .done-time-block.done-time-block--morning .done-time-block-time-item:nth-child(even) {
       background: rgba(239, 159, 39, 0.07);
     }
 
@@ -5608,6 +6204,9 @@
     #doneList .timeline-item.done-text-expanded .done-compact-text-wrap:has(.done-entry-pill) {
       align-items: flex-start;
     }
+    #doneList.done-time-block-list .timeline-item.done-text-expanded.done-time-block-item .done-compact-text-wrap:has(.done-entry-pill) {
+      align-items: flex-start;
+    }
 
     #doneList .done-compact-row .task-text {
       font-size: 14px;
@@ -5667,44 +6266,74 @@
       overflow-wrap: anywhere;
     }
 
-    /* 电脑端（鼠标）：My Done List 行高略增、细线分隔、时间戳在时间轴列内垂直居中 */
+    /* 电脑端（鼠标）：My Done List 行高略增、细线分隔；折叠行时间列与任务条竖向居中 */
     @media (min-width: 768px) and (pointer: fine) {
+      #doneList.done-time-block-list {
+        --done-time-block-row-pad-y: 9px;
+      }
+      #doneList .done-time-block-time-item {
+        align-items: stretch;
+        min-height: 0;
+        box-sizing: border-box;
+      }
       #doneList .done-time-block-item {
         align-items: stretch;
         min-height: 0;
         box-sizing: border-box;
       }
-      /* 展开多行：与全局 flex-start 解耦，使时间列随整行拉高并在列内居中戳记 */
+      #doneList.done-time-block-list .done-time-block-item:not(.done-text-expanded) {
+        align-items: center;
+      }
+      /* 展开多行：与全局 flex-start 解耦，时间列与任务行同高、戳记顶对齐 */
       #doneList .done-time-block-item.done-text-expanded {
         align-items: stretch;
       }
       #doneList .done-time-block-items > li.done-time-block-item:not(:last-child) {
         border-bottom: 1px solid rgba(226, 232, 240, 0.98);
       }
+      /* 时间列单独 li 不再画底边，避免窄列下像「时间戳下划线」；分隔由右侧任务行底边承担 */
       #doneList .done-time-block.done-time-block--day .done-time-block-item:nth-child(even),
       #doneList .done-time-block.done-time-block--evening .done-time-block-item:nth-child(even),
       #doneList .done-time-block.done-time-block--morning .done-time-block-item:nth-child(even) {
         background: transparent !important;
       }
-      #doneList .done-time-block-item .done-time-axis-cell {
-        padding: 6px 4px 6px 2px;
+      #doneList .done-time-block.done-time-block--day .done-time-block-time-item:nth-child(even),
+      #doneList .done-time-block.done-time-block--evening .done-time-block-time-item:nth-child(even),
+      #doneList .done-time-block.done-time-block--morning .done-time-block-time-item:nth-child(even) {
+        background: transparent !important;
+      }
+      #doneList .done-time-block-time-item .done-time-axis-cell {
+        padding: 9px 4px 9px 0;
         align-items: center;
-        justify-content: center;
+        justify-content: flex-start;
         align-self: stretch;
       }
-      #doneList .done-time-block-item.done-text-expanded .done-time-axis-cell {
-        padding-top: 8px;
-        padding-bottom: 8px;
-        align-items: center;
+      #doneList .done-time-block-time-item.done-text-expanded .done-time-axis-cell {
+        padding-top: 10px;
+        padding-bottom: 10px;
+        align-items: flex-start;
       }
       #doneList .done-compact-row {
         padding: 9px 12px;
         align-items: center;
       }
+      #doneList.done-time-block-list .done-time-block-item:not(.done-text-expanded) .done-compact-row {
+        align-items: center;
+        padding: var(--done-time-block-row-pad-y) 12px;
+      }
+      #doneList.done-time-block-list .done-time-block-item.done-text-expanded .done-compact-row {
+        align-items: flex-start;
+      }
+      #doneList.done-time-block-list .done-time-block-item .done-compact-row .actions {
+        align-self: center;
+      }
       #doneList .done-compact-row .task-text {
         line-height: 1.28;
       }
       #doneList .done-compact-text-wrap {
+        align-items: center;
+      }
+      #doneList.done-time-block-list .done-time-block-item:not(.done-text-expanded) .done-compact-text-wrap {
         align-items: center;
       }
       #doneList .timeline-item.done-text-expanded .done-compact-text-wrap {
@@ -5714,6 +6343,33 @@
         align-items: center;
         padding-top: 9px;
         padding-bottom: 9px;
+      }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item.done-time-block-item:not(.done-text-expanded) .done-compact-row {
+        align-items: center;
+        padding-top: var(--done-time-block-row-pad-y);
+        padding-bottom: var(--done-time-block-row-pad-y);
+      }
+      /* 展开：须写在全屏规则之后，与时间列 .done-time-axis-cell 上下 10px 一致 */
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item.done-time-block-item.done-text-expanded .done-compact-row,
+      #doneList .done-time-block-item.done-text-expanded .done-compact-row {
+        padding-top: 10px;
+        padding-bottom: 10px;
+      }
+      #doneList .done-time-block-time-item.done-text-expanded .done-time-axis-cell .done-time-compact {
+        line-height: 1.28;
+        height: auto;
+        max-height: none;
+        min-height: 0;
+      }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item.done-time-block-item.done-text-expanded .done-compact-row {
+        align-items: flex-start;
+      }
+    }
+
+    @media (max-width: 767px) {
+      #doneList.done-time-block-list {
+        --done-compact-pl-start: max(8px, env(safe-area-inset-left, 0px));
+        --done-time-block-row-pad-y: 2px;
       }
     }
 
@@ -6851,6 +7507,45 @@
       white-space: normal;
       overflow: visible;
       word-break: break-word;
+    }
+
+    @media (min-width: 768px) {
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .done-time-block-head:has(.done-time-block-mantra) {
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        grid-template-rows: auto;
+        align-items: center;
+        row-gap: 0;
+      }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .done-time-block-head:not(:has(.done-time-block-mantra)) {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-rows: auto;
+        align-items: center;
+        row-gap: 0;
+      }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .done-time-block-head-main {
+        grid-column: 1;
+        grid-row: 1;
+      }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .done-time-block-mantra {
+        grid-column: 2;
+        grid-row: 1;
+        margin-top: 0;
+        padding: 3px 12px;
+        min-width: 0;
+      }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .done-time-block-badge {
+        grid-column: 3;
+        grid-row: 1;
+        align-self: center;
+      }
+      body.primary-module-fullscreen
+        #dynamicModule.module-focus-active
+        #doneList
+        .done-time-block-head:not(:has(.done-time-block-mantra))
+        .done-time-block-badge {
+        grid-column: 2;
+        grid-row: 1;
+      }
     }
 
     /* 手机全屏：Weekly Plan 任务字体降一档 */
@@ -8188,13 +8883,32 @@
       line-height: 1;
     }
 
-    @media (max-width: 480px) {
+    /* 手机端：避免标题区被 flex 挤成极窄竖条（一字一行）；桌面端保持原横向排布 */
+    @media (max-width: 767px) {
       #habitRoutineModule .habit-health-weight-row .habit-health-weight-head {
-        flex-wrap: wrap;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+      }
+
+      #habitRoutineModule .habit-health-weight-row .habit-health-weight-titles {
+        flex: 0 0 auto;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+      }
+
+      #habitRoutineModule .habit-health-weight-row .habit-health-weight-titles .submodule-title {
+        white-space: normal;
+      }
+
+      #habitRoutineModule .habit-health-weight-row .habit-health-weight-goal {
+        white-space: normal;
       }
 
       #habitRoutineModule .habit-health-weight-row .habit-health-weight-inputs--merged {
-        margin-left: auto;
+        margin-left: 0;
+        align-self: flex-start;
       }
     }
 
@@ -11075,6 +11789,12 @@
         padding-right: max(12px, env(safe-area-inset-right, 0px));
         padding-left: max(8px, env(safe-area-inset-left, 0px));
       }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item.done-time-block-item:not(.done-text-expanded) .done-compact-row {
+        align-items: center;
+      }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item.done-time-block-item.done-text-expanded .done-compact-row {
+        align-items: flex-start;
+      }
 
       body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .done-compact-text-wrap {
         min-width: 0;
@@ -11603,9 +12323,10 @@
       body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .done-time-axis-cell .done-time-compact {
         display: inline-flex !important;
         align-items: center;
-        justify-content: center !important;
+        justify-content: flex-start !important;
         min-width: 0;
         font-variant-numeric: tabular-nums;
+        text-decoration: none;
       }
 
       body.primary-module-fullscreen #myGoalsModule.module-focus-active > .module-header .module-header-date-text {
@@ -11652,7 +12373,7 @@
         padding: 5px 9px;
       }
 
-      /* Done 时间块顶栏用 width:calc(100%+40px) 在窄屏会向右溢出 */
+      /* Done 时间块 body：grid 子项不撑破容器 */
       #doneList .done-time-block-body {
         min-width: 0;
       }
@@ -11731,6 +12452,12 @@
         box-sizing: border-box;
         padding-right: max(12px, env(safe-area-inset-right, 0px));
         padding-left: max(8px, env(safe-area-inset-left, 0px));
+      }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item.done-time-block-item:not(.done-text-expanded) .done-compact-row {
+        align-items: center;
+      }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item.done-time-block-item.done-text-expanded .done-compact-row {
+        align-items: flex-start;
       }
 
       body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .done-compact-text-wrap {
@@ -12010,10 +12737,11 @@
         scroll-padding-inline-end: max(16px, env(safe-area-inset-right, 0px));
       }
 
-      /* 时间轴与内容区：相对宽度，避免固定 px 在高分屏上错位 */
+      /* 时间轴与内容区：相对宽度；纵向往外可见，避免打钩圆叠在轴线上时被裁切 */
       #doneList .done-time-block-list > li.done-time-block {
         max-width: 100%;
-        overflow: hidden;
+        overflow-x: hidden;
+        overflow-y: visible;
       }
 
       #doneList .done-time-block-body {
@@ -12022,19 +12750,36 @@
         min-width: 0;
       }
 
+      #doneList.done-time-block-list {
+        --done-time-col-max: 3.15rem;
+        --done-axis-col-w: clamp(16px, 4.5vw, 18px);
+        --done-time-block-row-pad-y: 2px;
+      }
+
       #doneList .done-time-axis {
-        flex: 0 0 clamp(1.875rem, 5.5vw, 2rem);
-        min-width: clamp(1.875rem, 5.5vw, 2rem);
+        flex: 0 0 var(--done-axis-col-w, 18px);
+        min-width: var(--done-axis-col-w, 18px);
+        max-width: var(--done-axis-col-w, 18px);
+        --axis-left: 2px;
+      }
+
+      #doneList .done-time-block-body:has(.done-time-block-time-col) {
+        grid-template-columns: minmax(0, var(--done-time-col-max, 3.15rem))
+          minmax(16px, var(--done-axis-col-w, 18px)) minmax(0, 1fr);
+      }
+
+      #doneList .done-time-block-body:not(:has(.done-time-block-time-col)) {
+        grid-template-columns: minmax(16px, var(--done-axis-col-w, 18px)) minmax(0, 1fr);
       }
 
       #doneList .done-time-content {
         flex: 1 1 0%;
         min-width: 0;
         max-width: 100%;
-        margin-left: clamp(4px, 1.2vw, 8px);
+        margin-left: 0;
       }
 
-      /* 顶栏负 margin + calc(100%+40px) 在窄屏会导致横向溢出，强制贴齐容器 */
+      /* 分割横条首行全宽：与安全区内边距 */
       #doneList .done-time-block-head {
         width: 100% !important;
         max-width: 100% !important;
@@ -12052,6 +12797,12 @@
         padding: 2px max(0.5rem, env(safe-area-inset-right, 0px)) 2px max(0.5rem, env(safe-area-inset-left, 0px));
       }
 
+      #doneList.done-time-block-list .done-time-block-item:not(.done-text-expanded) .done-compact-row {
+        align-items: center;
+        padding: var(--done-time-block-row-pad-y) max(0.5rem, env(safe-area-inset-right, 0px)) var(--done-time-block-row-pad-y)
+          max(0.5rem, env(safe-area-inset-left, 0px));
+      }
+
       #doneList .done-compact-text-wrap {
         min-width: 0;
       }
@@ -12064,26 +12815,52 @@
         box-sizing: border-box;
         align-items: stretch;
       }
+      #doneList .done-time-block-time-item {
+        min-height: 40px;
+        box-sizing: border-box;
+      }
       #doneList .done-time-block-items > li.done-time-block-item:not(:last-child) {
         border-bottom: 1px solid rgba(226, 232, 240, 0.98);
       }
+      /* 时间列 li 无底边（同桌面端），避免时间文字下出现灰线 */
       #doneList .done-time-block.done-time-block--day .done-time-block-item:nth-child(even),
       #doneList .done-time-block.done-time-block--evening .done-time-block-item:nth-child(even),
       #doneList .done-time-block.done-time-block--morning .done-time-block-item:nth-child(even) {
         background: transparent !important;
       }
-      #doneList .done-time-block-item .done-time-axis-cell {
-        padding: 1px 3px;
+      #doneList .done-time-block.done-time-block--day .done-time-block-time-item:nth-child(even),
+      #doneList .done-time-block.done-time-block--evening .done-time-block-time-item:nth-child(even),
+      #doneList .done-time-block.done-time-block--morning .done-time-block-time-item:nth-child(even) {
+        background: transparent !important;
       }
-      #doneList .done-time-block-item.done-text-expanded .done-time-axis-cell {
+      #doneList .done-time-block-time-item .done-time-axis-cell {
+        padding: 2px 3px 2px 0;
+        align-items: center;
+      }
+      #doneList.done-time-block-list .done-time-block-time-item:not(.done-text-expanded) .done-time-axis-cell {
+        padding: var(--done-time-block-row-pad-y) 3px var(--done-time-block-row-pad-y) 0;
+      }
+      #doneList .done-time-block-time-item.done-text-expanded .done-time-axis-cell {
+        padding: 4px 3px 4px 0;
+        align-items: flex-start;
+      }
+      /* 展开：与时间列 padding 一致 */
+      #doneList .done-time-block-item.done-text-expanded .done-compact-row {
         padding-top: 4px;
+        padding-bottom: 4px;
       }
       #doneList .done-compact-row .task-text {
         font-size: 13px;
         line-height: 1.22;
       }
+      #doneList .done-time-block-time-item.done-text-expanded .done-time-axis-cell .done-time-compact {
+        line-height: 1.22;
+        height: auto;
+        max-height: none;
+        min-height: 0;
+      }
 
-      /* My Done List：手机端与桌面共用左侧 pill，字号略随条目略小 */
+      /* My Done List：手机端与桌面共用条目左侧 pill，字号略随条目略小 */
       #doneList .done-entry-pill {
         font-size: 8px;
         padding: 1px 4px;
@@ -12107,6 +12884,16 @@
         padding-bottom: 2px !important;
         padding-right: max(12px, env(safe-area-inset-right, 0px)) !important;
         padding-left: max(8px, env(safe-area-inset-left, 0px)) !important;
+      }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item.done-time-block-item.done-text-expanded .done-compact-row {
+        padding-top: 4px !important;
+        padding-bottom: 4px !important;
+      }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item.done-time-block-item:not(.done-text-expanded) .done-compact-row {
+        align-items: center;
+      }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item.done-time-block-item.done-text-expanded .done-compact-row {
+        align-items: flex-start;
       }
 
       body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item .done-compact-text-wrap {
@@ -12174,7 +12961,7 @@
     }
 
     /*
-     * 横屏手机 / 768–1023 窄屏：不命中 max-width:767 时仍禁止 done 顶栏 calc(100%+40px) 右溢，
+     * 横屏手机 / 768–1023 窄屏：不命中 max-width:767 时仍禁止 done 顶栏横向溢出，
      * 并收紧 flex 子项 min-width，避免任务文案与 Tab/底栏贴边裁切。
      */
     @media (max-width: 1023px) {
@@ -12251,13 +13038,35 @@
       }
     }
 
-    /* 所有设备：完成时间（时间轴列内居中；HH:MM；字号/色见 .done-time-block-item … .done-time-compact） */
+    /* 所有设备：完成时间 HH:MM；左对齐；与全局 .done-time 药丸解耦 */
     #doneList .done-time-axis-cell .done-time-compact {
       display: inline-flex !important;
       align-items: center;
-      justify-content: center !important;
+      justify-content: flex-start !important;
       min-width: 0;
+      font-size: 12px;
+      line-height: 1.15;
+      font-weight: 400;
+      color: #64748b;
+      text-decoration: none;
+      background: transparent !important;
+      padding: 0 !important;
+      border: none !important;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+      outline: none !important;
+      -webkit-appearance: none;
+      appearance: none;
       font-variant-numeric: tabular-nums;
+    }
+
+    /* 折叠行：时间戳与勾选圆同高（16px），竖向居中时与圆心对齐 */
+    #doneList.done-time-block-list .done-time-block-time-item:not(.done-text-expanded) .done-time-axis-cell .done-time-compact {
+      height: 16px;
+      min-height: 16px;
+      max-height: 16px;
+      line-height: 16px;
+      box-sizing: border-box;
     }
 
   </style>
@@ -13397,7 +14206,7 @@
               <div class="forge-progress-row">
                 <span class="forge-progress-label forge-body">Body</span>
                 <div class="forge-progress-track" aria-hidden="true"><div class="forge-progress-fill forge-body"></div></div>
-                <span class="forge-progress-val">180/400 个</span>
+                <span class="forge-progress-val">180/400 Reps</span>
               </div>
               <div class="forge-week-dots" aria-hidden="true">
                 <span class="forge-day-dot is-on">M</span>
@@ -13414,12 +14223,21 @@
             </details>
 
             <div class="forge-sub-card forge-mind-card">
-              <div class="forge-sub-card-head">
+              <div
+                class="forge-sub-card-head forge-sub-card-head--collapsible"
+                role="button"
+                tabindex="0"
+                aria-expanded="true"
+                aria-controls="forgeMindCardBody"
+                id="forgeMindCardHead"
+              >
                 <div class="forge-sub-card-titles">
-                  <h3>Mind Training</h3>
+                  <h3 id="forgeMindCardTitle">Mind Training</h3>
                 </div>
                 <span class="forge-sub-status">0/17 完成</span>
+                <span class="forge-sub-card-chevron" aria-hidden="true">▼</span>
               </div>
+            <div id="forgeMindCardBody" class="forge-sub-card-body">
             <div class="forge-mind-tabs" role="tablist" aria-label="Mind 训练分类">
               <button type="button" class="forge-mind-tab" role="tab" id="forgeMindTabPc" aria-selected="true" aria-controls="forgeMindPanelPc" tabindex="0" data-forge-mind-tab="pc">Psycho-Cybernetics</button>
               <button type="button" class="forge-mind-tab" role="tab" id="forgeMindTabMed" aria-selected="false" aria-controls="forgeMindPanelMed" tabindex="-1" data-forge-mind-tab="med">Meditation</button>
@@ -13550,7 +14368,7 @@
 
                     <div class="forge-task-card-right">
 
-                      <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                      <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                       <span class="forge-task-card-checkin-slot"></span>
 
@@ -13649,7 +14467,7 @@
 
                     <div class="forge-task-card-right">
 
-                      <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                      <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                       <span class="forge-task-card-checkin-slot"></span>
 
@@ -13938,14 +14756,24 @@
               </div>
             </div>
             </div>
+            </div>
 
             <div class="forge-sub-card forge-body-card">
-              <div class="forge-sub-card-head">
+              <div
+                class="forge-sub-card-head forge-sub-card-head--collapsible"
+                role="button"
+                tabindex="0"
+                aria-expanded="true"
+                aria-controls="forgeBodyCardBody"
+                id="forgeBodyCardHead"
+              >
                 <div class="forge-sub-card-titles">
-                  <h3>Body Training</h3>
+                  <h3 id="forgeBodyCardTitle">Body Training</h3>
                 </div>
                 <span class="forge-sub-status">0/49 完成</span>
+                <span class="forge-sub-card-chevron" aria-hidden="true">▼</span>
               </div>
+            <div id="forgeBodyCardBody" class="forge-sub-card-body">
             <div class="forge-body-tabs" role="tablist" aria-label="Body 训练分类">
               <button type="button" class="forge-body-tab" role="tab" id="forgeBodyTabKb" aria-selected="true" aria-controls="forgeBodyPanelKb" tabindex="0" data-forge-body-tab="kb">壶铃</button>
               <button type="button" class="forge-body-tab" role="tab" id="forgeBodyTabBw" aria-selected="false" aria-controls="forgeBodyPanelBw" tabindex="-1" data-forge-body-tab="bw">自重健身</button>
@@ -13964,7 +14792,7 @@
                     <div class="forge-task-card-right forge-kb-result-cell">
                       <div class="forge-kb-result-main">
                         <span class="forge-kb-weight-pill" title="周标准设定中的重量">16kg</span>
-                        <span class="forge-task-val forge-task-val--idle">— / — 个</span>
+                        <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
                       </div>
                       <span class="forge-task-card-checkin-slot"></span>
                     </div>
@@ -13984,7 +14812,7 @@
                     <div class="forge-task-card-right forge-kb-result-cell">
                       <div class="forge-kb-result-main">
                         <span class="forge-kb-weight-pill" title="周标准设定中的重量">16kg</span>
-                        <span class="forge-task-val forge-task-val--idle">— / — 个</span>
+                        <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
                       </div>
                       <span class="forge-task-card-checkin-slot"></span>
                     </div>
@@ -14004,7 +14832,7 @@
                     <div class="forge-task-card-right forge-kb-result-cell">
                       <div class="forge-kb-result-main">
                         <span class="forge-kb-weight-pill" title="周标准设定中的重量">16kg</span>
-                        <span class="forge-task-val forge-task-val--idle">— / — 个</span>
+                        <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
                       </div>
                       <span class="forge-task-card-checkin-slot"></span>
                     </div>
@@ -14024,7 +14852,7 @@
                     <div class="forge-task-card-right forge-kb-result-cell">
                       <div class="forge-kb-result-main">
                         <span class="forge-kb-weight-pill" title="周标准设定中的重量">16kg</span>
-                        <span class="forge-task-val forge-task-val--idle">— / — 个</span>
+                        <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
                       </div>
                       <span class="forge-task-card-checkin-slot"></span>
                     </div>
@@ -14044,7 +14872,7 @@
                     <div class="forge-task-card-right forge-kb-result-cell">
                       <div class="forge-kb-result-main">
                         <span class="forge-kb-weight-pill" title="周标准设定中的重量">16kg</span>
-                        <span class="forge-task-val forge-task-val--idle">— / — 个</span>
+                        <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
                       </div>
                       <span class="forge-task-card-checkin-slot"></span>
                     </div>
@@ -14064,7 +14892,7 @@
                     <div class="forge-task-card-right forge-kb-result-cell">
                       <div class="forge-kb-result-main">
                         <span class="forge-kb-weight-pill" title="周标准设定中的重量">16kg</span>
-                        <span class="forge-task-val forge-task-val--idle">— / — 组</span>
+                        <span class="forge-task-val forge-task-val--idle">— / — Set</span>
                       </div>
                       <span class="forge-task-card-checkin-slot"></span>
                     </div>
@@ -14077,7 +14905,7 @@
                 </div>
               </div>
               <div class="forge-body-tab-panel" id="forgeBodyPanelBw" role="tabpanel" aria-labelledby="forgeBodyTabBw" hidden data-forge-body-tab="bw">
-                <p class="forge-body-panel-meta forge-task-group-meta">无额外负重；站桩等为时长（min）；与壶铃、跑步、囚徒互补</p>
+                <p class="forge-body-panel-meta forge-task-group-meta">无额外负重；站桩等为时长（min）；平板/侧平为 sec；其余多为 Reps；与壶铃、跑步、囚徒互补</p>
                 <div class="forge-task-row forge-task-card forge-task-card--body" data-forge-wp-goal-sync="true">
 
                   <div class="forge-task-card-top">
@@ -14125,7 +14953,7 @@
 
                     <div class="forge-task-card-right">
 
-                      <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                      <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                       <span class="forge-task-card-checkin-slot"></span>
 
@@ -14158,7 +14986,7 @@
 
                     <div class="forge-task-card-right">
 
-                      <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                      <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                       <span class="forge-task-card-checkin-slot"></span>
 
@@ -14191,7 +15019,7 @@
 
                     <div class="forge-task-card-right">
 
-                      <span class="forge-task-val forge-task-val--idle">— / — 下</span>
+                      <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                       <span class="forge-task-card-checkin-slot"></span>
 
@@ -14224,7 +15052,7 @@
 
                     <div class="forge-task-card-right">
 
-                      <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                      <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                       <span class="forge-task-card-checkin-slot"></span>
 
@@ -14257,7 +15085,7 @@
 
                     <div class="forge-task-card-right">
 
-                      <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                      <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                       <span class="forge-task-card-checkin-slot"></span>
 
@@ -14290,7 +15118,7 @@
 
                     <div class="forge-task-card-right">
 
-                      <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                      <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                       <span class="forge-task-card-checkin-slot"></span>
 
@@ -14323,7 +15151,7 @@
 
                     <div class="forge-task-card-right">
 
-                      <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                      <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                       <span class="forge-task-card-checkin-slot"></span>
 
@@ -14356,7 +15184,7 @@
 
                     <div class="forge-task-card-right">
 
-                      <span class="forge-task-val forge-task-val--idle">— / — 秒</span>
+                      <span class="forge-task-val forge-task-val--idle">— / — sec</span>
 
                       <span class="forge-task-card-checkin-slot"></span>
 
@@ -14389,7 +15217,7 @@
 
                     <div class="forge-task-card-right">
 
-                      <span class="forge-task-val forge-task-val--idle">— / — 秒</span>
+                      <span class="forge-task-val forge-task-val--idle">— / — sec</span>
 
                       <span class="forge-task-card-checkin-slot"></span>
 
@@ -14422,7 +15250,7 @@
 
                     <div class="forge-task-card-right">
 
-                      <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                      <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                       <span class="forge-task-card-checkin-slot"></span>
 
@@ -14491,7 +15319,7 @@
 
                     <div class="forge-task-card-right">
 
-                      <span class="forge-task-val forge-task-val--idle">— / — 组</span>
+                      <span class="forge-task-val forge-task-val--idle">— / — Set（组）</span>
 
                       <span class="forge-task-card-checkin-slot"></span>
 
@@ -14533,7 +15361,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -14566,7 +15394,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -14599,7 +15427,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -14632,7 +15460,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -14665,7 +15493,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -14706,7 +15534,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -14739,7 +15567,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -14772,7 +15600,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -14805,7 +15633,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -14838,7 +15666,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -14879,7 +15707,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -14912,7 +15740,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -14945,7 +15773,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -14978,7 +15806,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15011,7 +15839,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15052,7 +15880,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15085,7 +15913,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15118,7 +15946,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15151,7 +15979,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15184,7 +16012,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15225,7 +16053,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15258,7 +16086,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15291,7 +16119,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15324,7 +16152,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15357,7 +16185,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15398,7 +16226,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15431,7 +16259,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15464,7 +16292,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15497,7 +16325,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15530,7 +16358,7 @@
 
                         <div class="forge-task-card-right">
 
-                          <span class="forge-task-val forge-task-val--idle">— / — 次</span>
+                          <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                           <span class="forge-task-card-checkin-slot"></span>
 
@@ -15552,6 +16380,7 @@
                   </div>
                 </details>
               </div>
+            </div>
             </div>
             </div>
           </section>
@@ -19547,9 +20376,17 @@
 
     function forgeUnitSuffixFromIdleForDisplay(idle) {
       const gr = String(forgeParseTaskValGoalRight(idle) || "");
-      const m = gr.match(/(min|个|次|组|km|秒|下)\s*$/i);
+      if (/Set（组）\s*$/i.test(gr)) return "Set（组）";
+      const m = gr.match(/(min|km|sec|Set|Reps?|个|次|组|秒|下)\s*$/i);
       if (!m) return "";
-      return /^km$/i.test(m[1]) ? "km" : m[1];
+      const raw = m[1];
+      const low = raw.toLowerCase();
+      if (low === "km") return "km";
+      if (low === "min") return "min";
+      if (low === "sec") return "sec";
+      if (low === "set" || raw === "组") return "Set";
+      if (low === "reps" || low === "rep" || raw === "个" || raw === "次" || raw === "下") return "Reps";
+      return raw;
     }
 
     function ensureForgeTaskCheckinCountEl(row) {
@@ -20042,6 +20879,7 @@
       return "dawn";
     }
 
+    /* 列表自上而下：靠近 24:00 的时段在上，靠近 0:00 的在下（与竖轴「从早到晚向下」相反） */
     const DONE_TIME_BLOCKS = [
       { key: "lateNight", range: "23:00 - 24:00", icon: "🪐", emptyBadge: "深夜" },
       { key: "evening", range: "17:00 - 23:00", icon: "🌙", emptyBadge: "", mantra: "每天有“3天”，每周有“21天”，每年有“1095天”" },
@@ -20395,11 +21233,14 @@
 
         const main = document.createElement("div");
         main.className = "done-compact-text-wrap";
-        const numEl = document.createElement("span");
-        numEl.className = "done-compact-num";
-        numEl.textContent = "✓";
-        numEl.classList.add("done-check-icon");
-        main.appendChild(numEl);
+        const hideDoneCheckGlyph = Boolean(doneRowOpts && doneRowOpts.timeBlockFlexLayout);
+        let numEl = null;
+        if (!hideDoneCheckGlyph) {
+          numEl = document.createElement("span");
+          numEl.className = "done-compact-num";
+          numEl.textContent = "✓";
+          numEl.classList.add("done-check-icon");
+        }
         if (forgeDoneLine) {
           const brForge = parseLeadingBracketTag(forgeDoneLine.full);
           const inner =
@@ -20429,7 +21270,7 @@
           Boolean(doneRowOpts && doneRowOpts.suppressDuplicateDoneTime) && Boolean(timeLabel);
 
         const timeEl = document.createElement("time");
-        timeEl.className = "done-time done-time-compact";
+        timeEl.className = "done-time-compact";
         if (task.completedAt) {
           timeEl.dateTime = new Date(task.completedAt).toISOString();
         }
@@ -20441,9 +21282,12 @@
           timeAxisCell.classList.add("done-time-axis-cell--deduped");
           timeAxisCell.setAttribute("aria-hidden", "true");
         } else if (timeEl.textContent) {
-          timeAxisCell.appendChild(timeEl);
+          if (!(doneRowOpts && doneRowOpts.timeBlockFlexLayout)) {
+            timeAxisCell.appendChild(timeEl);
+          }
         }
 
+        if (numEl) row.appendChild(numEl);
         row.appendChild(main);
         row.appendChild(actions);
 
@@ -20452,10 +21296,68 @@
         row.addEventListener("click", (ev) => {
           if (ev.target.closest(".actions")) return;
           li.classList.toggle("done-text-expanded");
+          const bodyEl = li.closest(".done-time-block-body");
+          if (bodyEl && !(doneRowOpts && doneRowOpts.timeBlockFlexLayout)) {
+            const timeListEl = bodyEl.querySelector(".done-time-block-time-list");
+            if (timeListEl && li.parentNode) {
+              const idx = Array.prototype.indexOf.call(li.parentNode.children, li);
+              const tItem = timeListEl.children[idx];
+              if (tItem) {
+                tItem.classList.toggle("done-text-expanded", li.classList.contains("done-text-expanded"));
+              }
+            }
+            requestAnimationFrame(function () {
+              syncDoneTimeBlockRowHeights(bodyEl);
+            });
+          }
         });
 
-        li.appendChild(timeAxisCell);
-        li.appendChild(row);
+        if (doneRowOpts && doneRowOpts.timeBlockFlexLayout) {
+          const wrap = document.createElement("div");
+          wrap.className = "done-time-block-row";
+
+          const colTime = document.createElement("div");
+          colTime.className = "done-time-block-row__time";
+          if (hideDupTime) {
+            colTime.classList.add("done-time-block-row__time--deduped");
+            colTime.setAttribute("aria-hidden", "true");
+          } else if (timeEl.textContent) {
+            colTime.appendChild(timeEl);
+          }
+
+          const colAxis = document.createElement("div");
+          colAxis.className = "done-time-block-row__axis";
+          colAxis.setAttribute("aria-hidden", "true");
+          const lineTop = document.createElement("div");
+          lineTop.className = "done-time-block-row__axis-line done-time-block-row__axis-line--top";
+          const dotEl = document.createElement("div");
+          dotEl.className = "done-time-block-row__dot";
+          const lineBot = document.createElement("div");
+          lineBot.className = "done-time-block-row__axis-line done-time-block-row__axis-line--bottom";
+          const bi = Number(doneRowOpts.blockIndex) || 0;
+          const bl = Math.max(1, Number(doneRowOpts.blockLength) || 1);
+          if (bi === 0) {
+            lineTop.classList.add("done-time-block-row__axis-line--hidden");
+          }
+          if (bi === bl - 1) {
+            lineBot.classList.add("done-time-block-row__axis-line--hidden");
+          }
+          colAxis.appendChild(lineTop);
+          colAxis.appendChild(dotEl);
+          colAxis.appendChild(lineBot);
+
+          const colTask = document.createElement("div");
+          colTask.className = "done-time-block-row__task";
+          colTask.appendChild(row);
+
+          wrap.appendChild(colTime);
+          wrap.appendChild(colAxis);
+          wrap.appendChild(colTask);
+          li.appendChild(wrap);
+        } else {
+          li.appendChild(timeAxisCell);
+          li.appendChild(row);
+        }
       } else {
         if (listName === "closedList") {
           if (task.completed && closedListCompleteAnimIds.has(task.id)) {
@@ -20778,6 +21680,67 @@
       ul.appendChild(footer);
     }
 
+    /** My Done 时间分块：左侧时间列与右侧任务行独立 ul，需逐行等高。
+     * 折叠行在整张清单内统一行高（所有时段块中取最大自然高度），避免块与块之间行距不一致；展开行仍按该行内容增高。 */
+    function syncAllDoneTimeBlockRowHeights(doneListEl) {
+      const doneList = doneListEl || document.getElementById("doneList");
+      if (!doneList || !doneList.classList.contains("done-time-block-list")) return;
+      if (!doneList.querySelector(".done-time-block-time-list")) return;
+      const bodies = doneList.querySelectorAll(":scope > li.done-time-block > .done-time-block-body");
+      bodies.forEach(function (bodyEl) {
+        const timeList = bodyEl.querySelector(".done-time-block-time-list");
+        const itemWrap = bodyEl.querySelector(".done-time-block-items");
+        if (!timeList || !itemWrap) return;
+        const timeItems = timeList.querySelectorAll(":scope > li.done-time-block-time-item");
+        const taskItems = itemWrap.querySelectorAll(":scope > li.done-time-block-item");
+        const n = Math.min(timeItems.length, taskItems.length);
+        for (let i = 0; i < n; i++) {
+          timeItems[i].style.minHeight = "";
+          taskItems[i].style.minHeight = "";
+        }
+      });
+      let globalMaxCollapsed = 0;
+      const rows = [];
+      bodies.forEach(function (bodyEl) {
+        const timeList = bodyEl.querySelector(".done-time-block-time-list");
+        const itemWrap = bodyEl.querySelector(".done-time-block-items");
+        if (!timeList || !itemWrap) return;
+        const timeItems = timeList.querySelectorAll(":scope > li.done-time-block-time-item");
+        const taskItems = itemWrap.querySelectorAll(":scope > li.done-time-block-item");
+        const n = Math.min(timeItems.length, taskItems.length);
+        for (let i = 0; i < n; i++) {
+          const r1 = timeItems[i].getBoundingClientRect();
+          const r2 = taskItems[i].getBoundingClientRect();
+          const naturalH = Math.ceil(Math.max(r1.height, r2.height));
+          const expanded = taskItems[i].classList.contains("done-text-expanded");
+          rows.push({ timeEl: timeItems[i], taskEl: taskItems[i], naturalH: naturalH, expanded: expanded });
+          if (!expanded) {
+            globalMaxCollapsed = Math.max(globalMaxCollapsed, naturalH);
+          }
+        }
+      });
+      rows.forEach(function (row) {
+        const h = row.expanded ? row.naturalH : globalMaxCollapsed > 0 ? globalMaxCollapsed : row.naturalH;
+        row.timeEl.style.minHeight = h + "px";
+        row.taskEl.style.minHeight = h + "px";
+      });
+    }
+
+    function syncDoneTimeBlockRowHeights(bodyEl) {
+      const root = bodyEl && bodyEl.closest ? bodyEl.closest("#doneList") : null;
+      syncAllDoneTimeBlockRowHeights(root || document.getElementById("doneList"));
+    }
+
+    function ensureDoneTimeBlockRowHeightObserver(bodyEl) {
+      if (!bodyEl || bodyEl._doneTimeBlockRowSyncObs || typeof ResizeObserver === "undefined") return;
+      if (!bodyEl.querySelector(".done-time-block-time-list")) return;
+      const ro = new ResizeObserver(function () {
+        syncDoneTimeBlockRowHeights(bodyEl);
+      });
+      ro.observe(bodyEl);
+      bodyEl._doneTimeBlockRowSyncObs = ro;
+    }
+
     function renderList(ul, tasks, listName) {
       ul.innerHTML = "";
       let ordered = tasks;
@@ -20806,31 +21769,23 @@
         DONE_TIME_BLOCKS.forEach((block) => {
           const blockTasks = grouped.get(block.key) || [];
           const blockLi = document.createElement("li");
-          blockLi.className = "done-time-block done-time-block--" + block.key;
+          blockLi.className = "done-time-block done-time-block--" + block.key + " done-time-block--flex-axis";
 
           const body = document.createElement("div");
-          body.className = "done-time-block-body";
-
-          const axisCol = document.createElement("div");
-          axisCol.className = "done-time-axis";
-          const axisLine = document.createElement("div");
-          axisLine.className = "done-time-axis-line done-time-axis-line--" + block.key;
-          const axisIcon = document.createElement("div");
-          axisIcon.className = "done-time-axis-icon done-time-axis-icon--" + block.key;
-          axisIcon.textContent = block.icon;
-          axisCol.appendChild(axisLine);
-          axisCol.appendChild(axisIcon);
-
-          const contentCol = document.createElement("div");
-          contentCol.className = "done-time-content";
+          body.className = "done-time-block-body done-time-block-body--flex-axis";
 
           const head = document.createElement("div");
           head.className = "done-time-block-head";
           const headMain = document.createElement("div");
           headMain.className = "done-time-block-head-main";
+          const headAxisIcon = document.createElement("div");
+          headAxisIcon.className = "done-time-axis-icon done-time-axis-icon--" + block.key;
+          headAxisIcon.setAttribute("aria-hidden", "true");
+          headAxisIcon.textContent = block.icon;
           const range = document.createElement("span");
           range.className = "done-time-block-range";
           range.textContent = block.range;
+          headMain.appendChild(headAxisIcon);
           headMain.appendChild(range);
           head.appendChild(headMain);
 
@@ -20848,19 +21803,20 @@
             badge.textContent = badgeText;
             head.appendChild(badge);
           }
-          contentCol.appendChild(head);
 
           if (!blockTasks.length) {
             blockLi.classList.add("done-time-block--empty");
             if (!block.mantra) {
               blockLi.classList.add("done-time-block--empty-no-mantra");
             }
-            body.appendChild(axisCol);
-            body.appendChild(contentCol);
+            body.appendChild(head);
             blockLi.appendChild(body);
             ul.appendChild(blockLi);
             return;
           }
+
+          const contentCol = document.createElement("div");
+          contentCol.className = "done-time-content";
 
           const itemWrap = document.createElement("ul");
           itemWrap.className = "done-time-block-items";
@@ -20871,13 +21827,22 @@
             const suppressDuplicateDoneTime =
               Boolean(curLabel) && curLabel === prevLabel;
             const li = taskItem(task, listName, idx, blockTasks.length, undefined, {
-              suppressDuplicateDoneTime
+              suppressDuplicateDoneTime,
+              timeBlockFlexLayout: true,
+              blockKey: block.key,
+              blockIndex: idx,
+              blockLength: blockTasks.length
             });
-            li.classList.add("done-time-block-item", "done-time-block-item--" + block.key);
+            li.classList.add(
+              "done-time-block-item",
+              "done-time-block-item--" + block.key,
+              "done-time-block-item--flex-row"
+            );
             itemWrap.appendChild(li);
           });
           contentCol.appendChild(itemWrap);
-          body.appendChild(axisCol);
+
+          body.appendChild(head);
           body.appendChild(contentCol);
           blockLi.appendChild(body);
           ul.appendChild(blockLi);
@@ -25895,11 +26860,17 @@
     function inferForgeWpGoalUnit(nameRaw) {
       const s = String(nameRaw || "").trim();
       if (!s) return "min";
-      if (/[Tt]abata|TABATA/i.test(s)) return "组";
-      if (/跑|公里|慢跑|冲刺|跑步/.test(s)) return "km";
-      if (/囚徒|第\s*[一二三四五六七八九十\d]+\s*式|^第\s*\d/.test(s)) return "次";
-      if (/壶铃|摆荡|深蹲|波比|开合|箭步|俯卧撑|引体|硬拉|卧推|单手|双手|负重|乌鸦|倒立|卷腹|引体向上|^桥\s/.test(s)) return "个";
-      if (/心灵|正念|预演|冥想|观呼吸|NSDR|晨间|生理|叹息|冷水|循环|时空|视觉|控制|预想|俯瞰|终局|爱命运|晚间|分钟|剧场/.test(s)) return "min";
+      if (/[Tt]abata|TABATA/i.test(s)) return "Set";
+      if (/冲刺跑/.test(s)) return "Set（组）";
+      if (/冲刺|间歇/.test(s)) return "Set";
+      if (/跑|公里|慢跑|跑步/.test(s)) return "km";
+      if (/平板支撑|侧平板|Side\s*Plank|Plank\s*Hold/i.test(s)) return "sec";
+      if (
+        /壶铃|摆荡|深蹲|波比|开合|弹跳|登山|箭步|俯卧撑|引体|硬拉|卧推|单手|双手|负重|乌鸦|倒立|卷腹|腹肌轮|超人|引体向上|^桥\s|囚徒|第\s*[一二三四五六七八九十\d]+\s*式|^第\s*\d|生理叹息|循环换气/.test(s)
+      ) {
+        return "Reps";
+      }
+      if (/心灵|正念|预演|冥想|观呼吸|NSDR|晨间|冷水|时空|视觉|控制|预想|俯瞰|终局|爱命运|晚间|分钟|剧场|站桩/.test(s)) return "min";
       return "min";
     }
 
@@ -25937,12 +26908,10 @@
       const s = String(u || "").trim().toLowerCase();
       if (!s) return "";
       if (s === "min" || s === "分钟" || s === "分") return "min";
-      if (/组/.test(s)) return "组";
-      if (/个/.test(s)) return "个";
-      if (/次/.test(s)) return "次";
+      if (s === "set" || s === "set（组）" || /组/.test(s)) return "set";
+      if (s === "reps" || s === "rep" || /个|次|下/.test(s)) return "reps";
       if (/km|公里/.test(s)) return "km";
-      if (/秒/.test(s)) return "秒";
-      if (/下/.test(s)) return "下";
+      if (s === "sec" || /秒/.test(s)) return "sec";
       return s.replace(/\s+/g, "");
     }
 
@@ -25970,31 +26939,32 @@
       return n;
     }
 
-    function parseForgeWpActualAmount(amtRaw, isMind, meta) {
-      if (isMind && meta && meta.minutes != null && !Number.isNaN(Number(meta.minutes))) {
+    function parseForgeWpActualAmount(amtRaw, isMind, meta, taskLabelHint) {
+      const hintRaw = String(taskLabelHint || "").trim();
+      const hintName = hintRaw.split("/")[0].trim();
+      const repLikeMind = isMind && hintName && inferForgeWpGoalUnit(hintName) === "Reps";
+      if (isMind && !repLikeMind && meta && meta.minutes != null && !Number.isNaN(Number(meta.minutes))) {
         return { n: Number(meta.minutes), u: "min" };
       }
       const amt = String(amtRaw || "").trim();
       if (!amt) return null;
-      if (isMind) {
+      if (isMind && !repLikeMind) {
         const mMin = parseMinutesFromForgeAmount(amt);
         if (mMin != null) return { n: mMin, u: "min" };
         const m2 = amt.match(/(\d+(?:\.\d+)?)/);
         if (m2) return { n: parseFloat(m2[1]), u: "min" };
         return null;
       }
-      let m = amt.match(/(\d+(?:\.\d+)?)\s*组/);
-      if (m) return { n: parseFloat(m[1]), u: "组" };
-      m = amt.match(/(\d+(?:\.\d+)?)\s*个/);
-      if (m) return { n: parseFloat(m[1]), u: "个" };
-      m = amt.match(/(\d+(?:\.\d+)?)\s*次/);
-      if (m) return { n: parseFloat(m[1]), u: "次" };
-      m = amt.match(/(\d+(?:\.\d+)?)\s*下/);
-      if (m) return { n: parseFloat(m[1]), u: "下" };
+      let m = amt.match(/(\d+(?:\.\d+)?)\s*(?:组|set)\b/i);
+      if (m) return { n: parseFloat(m[1]), u: "Set" };
+      m = amt.match(/(\d+(?:\.\d+)?)\s*(?:个|次|下|reps?)\b/i);
+      if (m) return { n: parseFloat(m[1]), u: "Reps" };
       m = amt.match(/(\d+(?:\.\d+)?)\s*km/i);
       if (m) return { n: parseFloat(m[1]), u: "km" };
-      m = amt.match(/(\d+(?:\.\d+)?)\s*秒/);
-      if (m) return { n: parseFloat(m[1]), u: "秒" };
+      m = amt.match(/(\d+(?:\.\d+)?)\s*(?:秒|sec)\b/i);
+      if (m) return { n: parseFloat(m[1]), u: "sec" };
+      m = amt.match(/(\d+(?:\.\d+)?)\s*min\b/i);
+      if (m) return { n: parseFloat(m[1]), u: "min" };
       m = amt.match(/(\d+(?:\.\d+)?)/);
       if (m) return { n: parseFloat(m[1]), u: "" };
       return null;
@@ -26009,7 +26979,13 @@
         const key = extractForgeDoneLabelForMatch(task);
         if (!key) return;
         const isMind = !!task.forgeMindMeta;
-        const parsed = parseForgeWpActualAmount(meta.amount, isMind, meta);
+        const info = getForgeDoneLineInfo(task);
+        let labelHint = "";
+        if (info && info.stripped) {
+          const ld = info.stripped.lastIndexOf(" · ");
+          labelHint = ld >= 0 ? info.stripped.slice(0, ld).trim() : info.stripped.trim();
+        }
+        const parsed = parseForgeWpActualAmount(meta.amount, isMind, meta, labelHint);
         if (!parsed || typeof parsed.n !== "number" || Number.isNaN(parsed.n)) return;
         if (!map[key]) {
           map[key] = { sum: 0, unit: parsed.u };
@@ -27178,6 +28154,53 @@
       refreshForgeWeekPlanSchemeAProgress(root);
     }
 
+    function bindForgeSubCardCollapse() {
+      const root = document.getElementById("forgePanelToday");
+      if (!root || root.dataset.forgeSubCardCollapseBound === "1") return;
+      root.dataset.forgeSubCardCollapseBound = "1";
+      const mqDesktop = window.matchMedia("(min-width: 768px)");
+      function forgeSubCardCollapseIsMobile() {
+        return !mqDesktop.matches;
+      }
+      function expandAllForgeSubCardsForDesktop() {
+        if (!forgeSubCardCollapseIsMobile()) {
+          root.querySelectorAll(".forge-sub-card.forge-mind-card, .forge-sub-card.forge-body-card").forEach(function (card) {
+            card.classList.remove("is-collapsed");
+            const head = card.querySelector(".forge-sub-card-head--collapsible");
+            if (head) head.setAttribute("aria-expanded", "true");
+          });
+        }
+      }
+      function toggleCard(card) {
+        if (!forgeSubCardCollapseIsMobile()) return;
+        const head = card.querySelector(".forge-sub-card-head--collapsible");
+        card.classList.toggle("is-collapsed");
+        const collapsed = card.classList.contains("is-collapsed");
+        if (head) head.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      }
+      root.querySelectorAll(".forge-sub-card-head--collapsible").forEach(function (head) {
+        head.addEventListener("click", function () {
+          if (!forgeSubCardCollapseIsMobile()) return;
+          const card = head.closest(".forge-sub-card");
+          if (card) toggleCard(card);
+        });
+        head.addEventListener("keydown", function (e) {
+          if (!forgeSubCardCollapseIsMobile()) return;
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          const card = head.closest(".forge-sub-card");
+          if (card) toggleCard(card);
+        });
+      });
+      if (typeof mqDesktop.addEventListener === "function") {
+        mqDesktop.addEventListener("change", expandAllForgeSubCardsForDesktop);
+      } else if (typeof mqDesktop.addListener === "function") {
+        mqDesktop.addListener(expandAllForgeSubCardsForDesktop);
+      }
+      window.addEventListener("resize", expandAllForgeSubCardsForDesktop);
+      expandAllForgeSubCardsForDesktop();
+    }
+
     function initForgeModule() {
       if (!forgeModule) return;
       ensureForgeKbWeightsState();
@@ -27189,6 +28212,7 @@
         el.textContent = d.getFullYear() + "/" + pad2(d.getMonth() + 1) + "/" + pad2(d.getDate());
       }
       const forgePanelToday = document.getElementById("forgePanelToday");
+      bindForgeSubCardCollapse();
       bindForgeMindCategoryTabs();
       bindForgeBodyCategoryTabs();
       syncForgeKbWeightUi();
