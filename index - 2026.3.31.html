@@ -26,6 +26,12 @@
       --border: #e5e7eb;
       /* 移动端底栏占位：与 fixed 底栏 + 安全区一致（与原 72–76px 留白对齐） */
       --app-bottom-nav-space: calc(72px + env(safe-area-inset-bottom, 0px));
+      /*
+       * My Done 任务行密度（仅影响 ≤767px 内带 !important 的收紧规则；桌面仍用 #doneList 内 --done-time-block-row-pad-y）
+       * 修改方式：① 改此处默认值 ② 控制台：setDoneListRowStyle({ padY: '8px', minHeight: '28px' }) ③ localStorage 键 todo-app-done-list-row-v1
+       */
+      --done-list-row-pad-y: 6px;
+      --done-list-row-min-height: 20px;
     }
 
     /* 强制兜底（仅触控端）：修复标题换行、标语同排、右侧留白 */
@@ -5190,6 +5196,11 @@
       padding-left: 20px;
     }
 
+    #doneList.timeline-list {
+      overflow-x: visible;
+      overflow-y: visible;
+    }
+
     .timeline-list::before {
       content: "";
       position: absolute;
@@ -5478,6 +5489,10 @@
     #doneList.done-time-block-list {
       --done-time-col-max: 3.25rem;
       --done-axis-col-w: 18px;
+      /* 时间轴圆点与连续竖线：轴线列宽须与 .done-time-content::before 的 left 使用同一变量 */
+      --done-axis-dot-size: 10px;
+      --done-axis-line-w: 2px;
+      --done-axis-col-w-row: 16px;
       /* 与 .done-compact-row 左内边距一致，用于把勾选圆心对准轴线中心 */
       --done-compact-pl-start: 12px;
       /* 折叠行：时间列与任务行共用纵向 padding，行内垂直居中（勿用 absolute 定位时间） */
@@ -5492,6 +5507,8 @@
       max-width: 100%;
       min-width: 0;
       box-sizing: border-box;
+      overflow-x: visible;
+      overflow-y: visible;
     }
 
     #doneList.done-time-block-list::before {
@@ -5644,11 +5661,16 @@
     #doneList .done-time-block-body.done-time-block-body--flex-axis .done-time-content::before {
       content: "";
       position: absolute;
-      left: calc(44px + var(--done-axis-col-w, 18px) / 2 - 1px);
+      /* 时间列 44px + 轴线列水平中心 − 竖线宽度一半，使线穿过圆心 */
+      left: calc(
+        44px + var(--done-axis-col-w-row, 16px) / 2 - var(--done-axis-line-w, 2px) / 2
+      );
       top: 0;
       bottom: 0;
       width: 0;
-      border-left: 2px solid var(--axis-line-color, #cbd5e1);
+      border-left-width: var(--done-axis-line-w, 2px);
+      border-left-style: solid;
+      border-left-color: var(--axis-line-color, #cbd5e1);
       opacity: var(--axis-line-opacity, 1);
       border-radius: 0;
       z-index: 0;
@@ -5700,8 +5722,10 @@
       font-variant-numeric: tabular-nums;
     }
     #doneList .done-time-block-item--flex-row .done-time-block-row__axis {
-      width: 16px;
-      flex-shrink: 0;
+      flex: 0 0 var(--done-axis-col-w-row, 16px);
+      width: var(--done-axis-col-w-row, 16px);
+      min-width: var(--done-axis-col-w-row, 16px);
+      max-width: var(--done-axis-col-w-row, 16px);
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -5723,8 +5747,8 @@
       visibility: hidden;
     }
     #doneList .done-time-block-item--flex-row .done-time-block-row__dot {
-      width: 7px;
-      height: 7px;
+      width: var(--done-axis-dot-size, 10px);
+      height: var(--done-axis-dot-size, 10px);
       border-radius: 50%;
       flex-shrink: 0;
       background: #3949ab;
@@ -5772,7 +5796,7 @@
       box-sizing: border-box;
     }
     #doneList .done-time-block-item--flex-row .done-time-block-row__task .task-text {
-      font-size: 13px;
+      font-size: var(--done-list-task-font-size, 16px);
     }
     #doneList.done-time-block-list .done-time-block-item--flex-row:not(.done-text-expanded) .done-compact-text-wrap {
       align-items: center !important;
@@ -6095,6 +6119,8 @@
       width: 100%;
       max-width: 100%;
       box-sizing: border-box;
+      overflow-x: visible;
+      overflow-y: visible;
     }
 
     /* 无任务时段：body 仅含标题行，不挂载空 .done-time-content，高度随标题收缩 */
@@ -6476,8 +6502,12 @@
       align-items: flex-start;
     }
 
+    #doneList {
+      --done-list-task-font-size: 16px;
+    }
+
     #doneList .done-compact-row .task-text {
-      font-size: 14px;
+      font-size: var(--done-list-task-font-size, 16px);
       line-height: 1.35;
       font-weight: 500;
       color: #334155;
@@ -6626,14 +6656,7 @@
     @media (max-width: 767px) {
       #doneList.done-time-block-list {
         --done-compact-pl-start: max(8px, env(safe-area-inset-left, 0px));
-        --done-time-block-row-pad-y: 4px;
-      }
-      #doneList .done-time-block-item--flex-row .done-time-block-row {
-        min-height: 28px;
-      }
-      #doneList .done-time-block-item,
-      #doneList .done-time-block-time-item {
-        min-height: 28px;
+        --done-time-block-row-pad-y: 7px;
       }
     }
 
@@ -6673,6 +6696,7 @@
     #doneList .done-row-actions-menu {
       position: relative;
       flex-shrink: 0;
+      overflow: visible;
     }
 
     #doneList .done-row-menu-btn {
@@ -6711,18 +6735,20 @@
       outline-offset: 2px;
     }
 
+    /* fixed：默认离屏，打开后由 syncDoneRowMenuPanelPosition 写入 top/left，避免任意祖先 overflow 裁切 */
     #doneList .done-row-menu-panel {
-      position: absolute;
-      right: 0;
-      top: 100%;
-      margin-top: 2px;
+      position: fixed;
+      left: -9999px;
+      top: -9999px;
+      right: auto;
+      margin: 0;
       min-width: 136px;
       padding: 8px 0;
       border-radius: 8px;
       border: 1px solid #e2e8f0;
       background: #fff;
       box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12);
-      z-index: 30;
+      z-index: 10050;
       box-sizing: border-box;
     }
 
@@ -6755,6 +6781,10 @@
 
     /* 折叠行点开「⋯」：祖先 overflow:hidden 会裁切菜单，临时放开并抬高叠层 */
     #doneList .timeline-item.done-row-menu-open:not(.done-text-expanded) .done-compact-row {
+      overflow: visible;
+    }
+
+    #doneList .timeline-item.done-row-menu-open:not(.done-text-expanded) .done-compact-text-wrap {
       overflow: visible;
     }
 
@@ -12129,7 +12159,7 @@
         min-height: 0;
         max-width: 100%;
         overflow-y: auto;
-        overflow-x: hidden;
+        overflow-x: visible;
         -webkit-overflow-scrolling: touch;
         box-sizing: border-box;
         padding-left: max(10px, env(safe-area-inset-left, 0px));
@@ -12165,7 +12195,7 @@
         min-width: 0;
         min-height: 0;
         overflow-y: auto;
-        overflow-x: hidden;
+        overflow-x: visible;
         -webkit-overflow-scrolling: touch;
         box-sizing: border-box;
         padding-left: max(10px, env(safe-area-inset-left, 0px));
@@ -12402,7 +12432,6 @@
       }
 
       #doneList .done-compact-row .task-text {
-        font-size: 15px;
         line-height: 1.22;
       }
 
@@ -12439,8 +12468,8 @@
         flex: 1 1 auto;
         min-height: 0;
         overflow-y: auto;
-        /* clip 会阻断内层 Kinetic Tab 横向滚动；hidden 保留裁切但不挡子级 overflow-x: auto */
-        overflow-x: hidden;
+        /* 横向不裁切 fixed 下拉等；Kinetic Tab 行仍用自身 overflow-x: auto */
+        overflow-x: visible;
         -webkit-overflow-scrolling: touch;
       }
 
@@ -12480,7 +12509,7 @@
         flex: 1 1 auto;
         min-height: 0;
         overflow-y: auto;
-        overflow-x: hidden;
+        overflow-x: visible;
         -webkit-overflow-scrolling: touch;
       }
 
@@ -12565,10 +12594,6 @@
 
       .more-page-bottom-nav button {
         padding: 6px 11px;
-      }
-
-      #doneList .done-compact-row .task-text {
-        font-size: 15px;
       }
 
       #doneList .done-time-block-range {
@@ -12725,7 +12750,7 @@
         min-height: 0;
         min-width: 0;
         overflow-y: auto;
-        overflow-x: hidden;
+        overflow-x: visible;
         -webkit-overflow-scrolling: touch;
       }
 
@@ -12840,7 +12865,7 @@
         min-width: 0;
         max-width: 100%;
         overflow-y: auto;
-        overflow-x: hidden;
+        overflow-x: visible;
         touch-action: pan-x pan-y;
         -webkit-overflow-scrolling: touch;
         box-sizing: border-box;
@@ -13037,7 +13062,7 @@
 
       body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .done-compact-row .task-text {
         line-height: 1.45;
-        font-size: 14px;
+        font-size: var(--done-list-task-font-size, 16px);
       }
 
       #doneList .done-time-block-head {
@@ -13099,13 +13124,13 @@
         box-sizing: border-box;
       }
 
-      /* clip 在 ColorOS WebView 上易把合法子项裁掉；hidden + 子项 min-width:0 更稳 */
+      /* 横向不裁切 fixed 菜单；纵向滚动仍由全屏 .module-content 承担 */
       #dynamicModule .module-content {
-        overflow-x: hidden;
+        overflow-x: visible;
       }
 
       body.primary-module-fullscreen #dynamicModule.module-focus-active > .module-content {
-        overflow-x: hidden;
+        overflow-x: visible;
         overscroll-behavior-x: contain;
         touch-action: pan-x pan-y;
         padding-left: max(10px, env(safe-area-inset-left, 0px));
@@ -13172,10 +13197,10 @@
         scroll-padding-inline-end: max(16px, env(safe-area-inset-right, 0px));
       }
 
-      /* 时间轴与内容区：相对宽度；纵向往外可见，避免打钩圆叠在轴线上时被裁切 */
+      /* 时间轴与内容区：相对宽度；横向不裁切「⋯」fixed 菜单溢出 */
       #doneList .done-time-block-list > li.done-time-block {
         max-width: 100%;
-        overflow-x: hidden;
+        overflow-x: visible;
         overflow-y: visible;
       }
 
@@ -13188,12 +13213,15 @@
       #doneList.done-time-block-list {
         --done-time-col-max: 3.15rem;
         --done-axis-col-w: clamp(16px, 4.5vw, 18px);
-        /* 折叠任务行：4px 上下，竖向由 __task 承担；flex 行内 .done-compact-row 纵向为 0，避免与 __task 叠成双倍空白 */
-        --done-time-block-row-pad-y: 4px;
+        /* 折叠任务行：7px 上下 + __task 与 .done-compact-row 对齐（flex 行内 compact 为 0，竖直靠 __task） */
+        --done-time-block-row-pad-y: 7px;
         /* flex-axis 行：时间列 | 轴线圆点 | 文案，列间距 6px（与 .done-time-block-row gap 一致） */
         --done-flex-time-w: 2.5rem;
         --done-flex-gap: 6px;
-        --done-flex-axis-w: 10px;
+        /* 轴线列略大于圆点，竖线与圆心对齐（与下方 ::before 共用 --done-flex-axis-w） */
+        --done-axis-dot-size: 10px;
+        --done-axis-line-w: 2px;
+        --done-flex-axis-w: 12px;
       }
 
       #doneList .done-time-axis {
@@ -13219,17 +13247,18 @@
         margin-left: 0;
       }
 
-      /* My Done（flex-axis）：手机端时间 | 圆点 | 文案列间距 6px、三列垂直居中；脊柱与圆点同心（对齐桌面 44px+9px 逻辑） */
+      /* My Done（flex-axis）：脊柱与轴线列、圆点同一水平中心 */
       #doneList .done-time-block-body.done-time-block-body--flex-axis .done-time-content::before {
         left: calc(
-          var(--done-flex-time-w, 2.5rem) + var(--done-flex-gap, 6px) + var(--done-flex-axis-w, 10px) / 2 - 1px
+          var(--done-flex-time-w, 2.5rem) + var(--done-flex-gap, 6px) + var(--done-flex-axis-w, 12px) / 2 -
+            var(--done-axis-line-w, 2px) / 2
         );
       }
 
       #doneList .done-time-block-item--flex-row .done-time-block-row {
         gap: var(--done-flex-gap, 6px);
         align-items: center;
-        min-height: 28px;
+        min-height: 32px;
       }
 
       #doneList .done-time-block-item--flex-row .done-time-block-row__time {
@@ -13249,10 +13278,10 @@
       }
 
       #doneList .done-time-block-item--flex-row .done-time-block-row__axis {
-        width: var(--done-flex-axis-w, 10px);
-        min-width: var(--done-flex-axis-w, 10px);
-        max-width: var(--done-flex-axis-w, 10px);
-        flex: 0 0 var(--done-flex-axis-w, 10px);
+        width: var(--done-flex-axis-w, 12px);
+        min-width: var(--done-flex-axis-w, 12px);
+        max-width: var(--done-flex-axis-w, 12px);
+        flex: 0 0 var(--done-flex-axis-w, 12px);
       }
 
       #doneList .done-time-block-item--flex-row .done-time-block-row__task {
@@ -13287,7 +13316,7 @@
 
       #doneList.done-time-block-list .done-time-block-item:not(.done-text-expanded) .done-compact-row {
         align-items: center;
-        padding: 4px max(12px, env(safe-area-inset-right, 0px)) 4px max(12px, env(safe-area-inset-left, 0px));
+        padding: 7px max(12px, env(safe-area-inset-right, 0px)) 7px max(12px, env(safe-area-inset-left, 0px));
       }
 
       #doneList.done-time-block-list .done-time-block-item--flex-row:not(.done-text-expanded) .done-compact-row {
@@ -13298,16 +13327,16 @@
         min-width: 0;
       }
 
-      /* My Done List：任务行 min-height 28px + 适中内边距，偏列表密度 */
+      /* My Done List：任务行 min-height 32px + padding 7px 12px，兼顾密度与可读 */
       #doneList .done-time-block-item {
         margin-bottom: 0 !important;
         padding: 0 !important;
-        min-height: 28px;
+        min-height: 32px;
         box-sizing: border-box;
         align-items: stretch;
       }
       #doneList .done-time-block-time-item {
-        min-height: 28px;
+        min-height: 32px;
         box-sizing: border-box;
       }
       #doneList .done-time-block-items > li.done-time-block-item:not(:last-child) {
@@ -13330,7 +13359,7 @@
         padding-bottom: 5px;
       }
       #doneList .done-compact-row .task-text {
-        font-size: 13px;
+        font-size: var(--done-list-task-font-size, 16px);
         line-height: 1.22;
       }
       #doneList .done-time-block-time-item.done-text-expanded .done-time-axis-cell .done-time-compact {
@@ -13448,6 +13477,29 @@
       #doneList .actions button:not(.btn-icon-action) {
         min-height: 48px;
         padding: 0.375rem 0.625rem;
+      }
+    }
+
+    /* My Done：仅手机端（≤767px）收紧任务行；数值来自 :root 变量，可用 setDoneListRowStyle 覆盖 */
+    @media (max-width: 767px) {
+      #doneList .done-compact-row,
+      #doneList .done-time-block-row,
+      #doneList .done-time-block-row__task {
+        padding-top: var(--done-list-row-pad-y) !important;
+        padding-bottom: var(--done-list-row-pad-y) !important;
+        min-height: var(--done-list-row-min-height) !important;
+      }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item .done-compact-row {
+        padding-top: var(--done-list-row-pad-y) !important;
+        padding-bottom: var(--done-list-row-pad-y) !important;
+      }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item.done-time-block-item.done-text-expanded .done-compact-row {
+        padding-top: var(--done-list-row-pad-y) !important;
+        padding-bottom: var(--done-list-row-pad-y) !important;
+      }
+      body.primary-module-fullscreen #dynamicModule.module-focus-active #doneList .timeline-item.done-time-block-item--flex-row:not(.done-text-expanded) .done-compact-row {
+        padding-top: var(--done-list-row-pad-y) !important;
+        padding-bottom: var(--done-list-row-pad-y) !important;
       }
     }
 
@@ -18044,6 +18096,61 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
   <script>
     const STORAGE_KEY = "todo-app-data-v1";
+    /** My Done 手机端行高：{ padY, minHeight }，与 :root 中 --done-list-row-* 对应 */
+    const DONE_LIST_ROW_STYLE_KEY = "todo-app-done-list-row-v1";
+
+    function applyDoneListRowStyleFromStorage() {
+      try {
+        const raw = localStorage.getItem(DONE_LIST_ROW_STYLE_KEY);
+        if (!raw) return;
+        const o = JSON.parse(raw);
+        if (!o || typeof o !== "object") return;
+        if (typeof o.padY === "string" && o.padY.trim()) {
+          document.documentElement.style.setProperty("--done-list-row-pad-y", o.padY.trim());
+        }
+        if (typeof o.minHeight === "string" && o.minHeight.trim()) {
+          document.documentElement.style.setProperty("--done-list-row-min-height", o.minHeight.trim());
+        }
+      } catch (_err) {}
+    }
+    applyDoneListRowStyleFromStorage();
+
+    /**
+     * 自定义 My Done 在窄屏（≤767px）下的任务行上下内边距与最小高度（会写入 localStorage）。
+     * 例：setDoneListRowStyle({ padY: '8px', minHeight: '32px' })
+     * 恢复默认：resetDoneListRowStyle()
+     */
+    window.setDoneListRowStyle = function (opts) {
+      if (!opts || typeof opts !== "object") {
+        console.warn("setDoneListRowStyle: 请传入对象，例如 { padY: '8px', minHeight: '28px' }");
+        return;
+      }
+      let prev = {};
+      try {
+        prev = JSON.parse(localStorage.getItem(DONE_LIST_ROW_STYLE_KEY) || "{}") || {};
+      } catch (_e) {}
+      const merged = Object.assign({}, prev);
+      if (opts.padY != null) {
+        const v = String(opts.padY).trim();
+        document.documentElement.style.setProperty("--done-list-row-pad-y", v);
+        merged.padY = v;
+      }
+      if (opts.minHeight != null) {
+        const v = String(opts.minHeight).trim();
+        document.documentElement.style.setProperty("--done-list-row-min-height", v);
+        merged.minHeight = v;
+      }
+      try {
+        localStorage.setItem(DONE_LIST_ROW_STYLE_KEY, JSON.stringify(merged));
+      } catch (_e) {}
+    };
+    window.resetDoneListRowStyle = function () {
+      try {
+        localStorage.removeItem(DONE_LIST_ROW_STYLE_KEY);
+      } catch (_e) {}
+      document.documentElement.style.removeProperty("--done-list-row-pad-y");
+      document.documentElement.style.removeProperty("--done-list-row-min-height");
+    };
     const CLOUD_SYNC_CONFIG_KEY = "todo-app-firebase-config-v1";
     const CLOUD_SYNC_ROOM_KEY = "todo-app-cloud-room-v1";
     const CLOUD_SYNC_CLIENT_KEY = "todo-app-cloud-client-id-v1";
@@ -22056,11 +22163,11 @@
 
     function clearDoneRowMenuPanelPosition(panel) {
       if (!panel) return;
-      panel.style.position = "";
-      panel.style.left = "";
-      panel.style.top = "";
-      panel.style.right = "";
-      panel.style.marginTop = "";
+      panel.style.position = "fixed";
+      panel.style.left = "-9999px";
+      panel.style.top = "-9999px";
+      panel.style.right = "auto";
+      panel.style.marginTop = "0";
       panel.style.zIndex = "";
     }
 
@@ -22221,6 +22328,7 @@
           panel.hidden = false;
           trigger.setAttribute("aria-expanded", "true");
           if (rowLiForMenu) rowLiForMenu.classList.add("done-row-menu-open");
+          syncDoneRowMenuPanelPosition(panel, trigger);
           requestAnimationFrame(function () {
             requestAnimationFrame(function () {
               syncDoneRowMenuPanelPosition(panel, trigger);
