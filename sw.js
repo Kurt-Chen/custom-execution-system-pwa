@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20260415b";
+const CACHE_NAME = "exec-system-pwa-v20260416c";
 const APP_SHELL = [
   "./",
   "./index.html",
