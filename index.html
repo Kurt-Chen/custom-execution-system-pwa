@@ -18821,6 +18821,8 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
   <script>
     const STORAGE_KEY = "todo-app-data-v1";
+    /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260415";
     /** My Done 手机端行高：{ padY, minHeight }，与 :root 中 --done-list-row-* 对应 */
     const DONE_LIST_ROW_STYLE_KEY = "todo-app-done-list-row-v1";
 
@@ -19504,24 +19506,28 @@
     }
 
     async function initAppVersionBadge() {
+      function applyCacheNameLabel(cacheName) {
+        const short = String(cacheName || "").replace(/^exec-system-pwa-/, "");
+        setAppVersionText(short || cacheName || "unknown");
+      }
       setAppVersionText("--");
       try {
-        const res = await fetch("./sw.js?ts=" + Date.now(), { cache: "no-store" });
+        const swUrl = new URL("sw.js", location.href);
+        swUrl.searchParams.set("ts", String(Date.now()));
+        const res = await fetch(swUrl.href, { cache: "no-store" });
         if (!res.ok) {
-          setAppVersionText("unknown");
+          applyCacheNameLabel(APP_CACHE_NAME_FOR_BADGE);
           return;
         }
         const text = await res.text();
         const m = text.match(/const\s+CACHE_NAME\s*=\s*["']([^"']+)["']/);
         if (!m || !m[1]) {
-          setAppVersionText("unknown");
+          applyCacheNameLabel(APP_CACHE_NAME_FOR_BADGE);
           return;
         }
-        const cacheName = m[1];
-        const short = cacheName.replace(/^exec-system-pwa-/, "");
-        setAppVersionText(short || cacheName);
+        applyCacheNameLabel(m[1]);
       } catch (_err) {
-        setAppVersionText("offline");
+        applyCacheNameLabel(APP_CACHE_NAME_FOR_BADGE);
       }
     }
 

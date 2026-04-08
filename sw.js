@@ -1,3 +1,4 @@
+/* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
 const CACHE_NAME = "exec-system-pwa-v20260415";
 const APP_SHELL = [
   "./",
