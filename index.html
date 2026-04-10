@@ -4295,11 +4295,23 @@
 
     #forgeModule .forge-weekly-min-fields {
       display: flex;
+      flex-direction: row;
       flex-wrap: wrap;
       align-items: flex-end;
-      gap: 8px 12px;
+      gap: 10px 14px;
       flex: 1;
-      min-width: min(100%, 180px);
+      min-width: min(100%, 200px);
+    }
+
+    #forgeModule .forge-weekly-min-fields .forge-weekly-min-label:first-of-type {
+      flex: 1 1 160px;
+      min-width: 0;
+    }
+
+    #forgeModule .forge-weekly-min-fields .forge-weekly-min-label:last-of-type {
+      flex: 0 1 118px;
+      min-width: 96px;
+      max-width: 160px;
     }
 
     #forgeModule .forge-weekly-min-actions {
@@ -4317,6 +4329,35 @@
       padding: 5px 10px;
       font-size: 12px;
       line-height: 1.2;
+    }
+
+    #forgeModule .forge-weekly-min-actions .forge-weekly-min-save:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    #forgeModule .forge-weekly-min-row:not(.forge-weekly-min-row--editing) .forge-weekly-min-name,
+    #forgeModule .forge-weekly-min-row:not(.forge-weekly-min-row--editing) .forge-weekly-min-target {
+      background: #f1f5f9;
+      color: #334155;
+      cursor: default;
+    }
+
+    #forgeModule .forge-weekly-min-row--editing .forge-weekly-min-name,
+    #forgeModule .forge-weekly-min-row--editing .forge-weekly-min-target {
+      background: #ffffff;
+      color: #0f172a;
+      cursor: text;
+    }
+
+    #forgeModule .forge-weekly-min-row--mind.forge-weekly-min-row--editing .forge-weekly-min-name,
+    #forgeModule .forge-weekly-min-row--mind.forge-weekly-min-row--editing .forge-weekly-min-target {
+      border-color: #c4b5fd;
+    }
+
+    #forgeModule .forge-weekly-min-row--body.forge-weekly-min-row--editing .forge-weekly-min-name,
+    #forgeModule .forge-weekly-min-row--body.forge-weekly-min-row--editing .forge-weekly-min-target {
+      border-color: #86efac;
     }
 
     @media (max-width: 520px) {
@@ -7667,6 +7708,12 @@
       line-height: 1.2;
     }
 
+    #kineticCountdownList .kinetic-countdown-item > .actions {
+      flex-shrink: 0;
+      align-self: flex-start;
+      margin-top: 0;
+    }
+
     .btn-done {
       background: var(--success);
     }
@@ -7715,6 +7762,57 @@
 
     .btn-edit.btn-icon-action:hover {
       background: #1d4ed8;
+    }
+
+    .btn-save.btn-icon-action {
+      background: #059669;
+    }
+
+    .btn-save.btn-icon-action:hover {
+      filter: brightness(0.95);
+    }
+
+    .btn-save.btn-icon-action:disabled {
+      opacity: 0.42;
+      cursor: not-allowed;
+      filter: none;
+    }
+
+    .compact-manual-item-icons {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      margin-left: 4px;
+      flex-shrink: 0;
+      vertical-align: middle;
+    }
+
+    .compact-manual-item-icons .btn-icon-action {
+      width: 26px;
+      height: 26px;
+      min-width: 26px;
+      min-height: 26px;
+    }
+
+    .manual-item-edit-input {
+      flex: 1;
+      min-width: 0;
+      font: inherit;
+      font-size: inherit;
+      color: #0f172a;
+      padding: 3px 8px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: #ffffff;
+      box-sizing: border-box;
+    }
+
+    #forgeModule .forge-weekly-min-actions--icons {
+      gap: 4px;
+    }
+
+    #forgeModule .forge-weekly-min-actions--icons .btn-icon-action {
+      margin: 0;
     }
 
     .empty {
@@ -10657,6 +10755,10 @@
       font-size: 13px;
       line-height: 1.4;
       word-break: break-word;
+    }
+
+    #projectModule .project-task-item > .actions {
+      flex-shrink: 0;
     }
 
     #projectModule .project-task-item.done .task-text {
@@ -16949,7 +17051,8 @@
             <div id="moduleSubTabPanel-forge-today-standards" class="forge-today-sub-panel" role="tabpanel" aria-labelledby="moduleSubTabBtn-forge-today-standards">
             <p class="forge-standards-lead" style="margin-top:0">为自选动作设定<strong>本周最低</strong>；在下方 <strong>Mind / Body</strong> 标签间切换；每条动作的进度条为本周累计相对该标准。壶铃在「Body → 壶铃」中按<strong>动作 + 重量</strong>分条列出。</p>
             <p id="forgeWeeklyMinWeekRange" class="forge-weekly-min-week-range" aria-live="polite"></p>
-            <datalist id="forgeWeeklyMinTaskDatalist"></datalist>
+            <datalist id="forgeWeeklyMinTaskDatalistMind"></datalist>
+            <datalist id="forgeWeeklyMinTaskDatalistBody"></datalist>
             <div class="forge-weekly-min-board" role="group" aria-label="周最低标准">
               <div class="forge-weekly-min-tabs" role="tablist" aria-label="周最低 Mind 或 Body">
                 <button
@@ -21659,6 +21762,16 @@
       renderProjectTasks();
     }
 
+    function updateProjectTaskText(projectKey, taskId, newText) {
+      const t = String(newText || "").trim();
+      if (!t) return;
+      const task = getProjectTasks(projectKey).find((x) => x.id === taskId);
+      if (!task) return;
+      task.text = t;
+      saveState();
+      render();
+    }
+
     function setProjectTaskStatus(projectKey, taskId, status) {
       if (!["todo", "doing", "done"].includes(status)) return;
       const task = getProjectTasks(projectKey).find((t) => t.id === taskId);
@@ -21717,13 +21830,17 @@
         textEl.textContent = task.text;
         li.appendChild(textEl);
 
-        const delBtn = document.createElement("button");
-        delBtn.className = "btn-delete btn-icon-action";
-        delBtn.type = "button";
-        delBtn.innerHTML = ICON_BTN_DELETE_SVG;
-        delBtn.setAttribute("aria-label", "删除");
-        delBtn.addEventListener("click", () => deleteProjectTask(projectKey, task.id));
-        li.appendChild(delBtn);
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        appendManualItemEditSaveDeleteIcons(li, task, "_project", actions, {
+          persistText: function (id, v) {
+            updateProjectTaskText(projectKey, id, v);
+          },
+          onDelete: function () {
+            deleteProjectTask(projectKey, task.id);
+          }
+        });
+        li.appendChild(actions);
 
         listEl.appendChild(li);
       });
@@ -24077,6 +24194,158 @@
       render();
     }
 
+    function updateSimpleListItemText(listName, id, newText) {
+      const t = String(newText || "").trim();
+      if (!t) return;
+      if (listName === "stopDoing" || listName === "notToDo") {
+        const it = state[listName].find((x) => x.id === id);
+        if (!it) return;
+        it.text = t;
+      } else if (listName === "memo") {
+        const it = state.memo.find((x) => x.id === id);
+        if (!it) return;
+        it.text = t;
+      } else if (listName === "dailyWin") {
+        const it = state.dailyWin.find((x) => x.id === id);
+        if (!it) return;
+        it.text = t;
+      } else if (listName === "closedList") {
+        const it = state.closedList.find((x) => x.id === id);
+        if (!it) return;
+        it.text = t;
+      } else {
+        return;
+      }
+      saveState();
+      render();
+    }
+
+    /** Kinetic 倒计时：仅改标题（日期仍通过删除后重加更稳妥） */
+    function updateKineticCountdownLabel(id, newLabel) {
+      const t = String(newLabel || "").trim();
+      if (!t) return;
+      if (!Array.isArray(state.kineticCountdowns)) return;
+      const it = state.kineticCountdowns.find((x) => x.id === id);
+      if (!it) return;
+      it.label = t;
+      saveState();
+      render();
+    }
+
+    function appendManualItemEditSaveDeleteIcons(li, task, listName, actions, overrides) {
+      overrides = overrides || {};
+      const getDisplayText =
+        typeof overrides.getDisplayText === "function"
+          ? overrides.getDisplayText
+          : function () {
+              return String(task.text || "");
+            };
+      const persistText =
+        typeof overrides.persistText === "function"
+          ? overrides.persistText
+          : function (id, text) {
+              updateSimpleListItemText(listName, id, text);
+            };
+      const onDelete =
+        typeof overrides.onDelete === "function"
+          ? overrides.onDelete
+          : function () {
+              deleteTask(task.id, listName);
+            };
+      const textElSelector = overrides.textElSelector || ".task-text";
+      const restoredTag = overrides.restoredTag || "span";
+      const restoredClass = overrides.restoredClass || "task-text";
+
+      function makeRestoredNode(text) {
+        const el = document.createElement(restoredTag);
+        el.className = restoredClass;
+        el.textContent = text;
+        return el;
+      }
+
+      const iconGroup = document.createElement("span");
+      iconGroup.className = "compact-manual-item-icons";
+      iconGroup.setAttribute("role", "group");
+
+      function mkIconBtn(cls, svg, aria) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn-icon-action " + cls;
+        b.innerHTML = svg;
+        b.setAttribute("aria-label", aria);
+        return b;
+      }
+
+      const editBtn = mkIconBtn("btn-edit", ICON_BTN_EDIT_SVG, "修改");
+      const saveBtn = mkIconBtn("btn-save", ICON_BTN_SAVE_SVG, "保存");
+      saveBtn.disabled = true;
+      const delBtn = mkIconBtn("btn-delete", ICON_BTN_DELETE_SVG, "删除");
+
+      function findTextEl() {
+        return li.querySelector(textElSelector);
+      }
+
+      function cancelEdit() {
+        const inp = li.querySelector("input.manual-item-edit-input");
+        if (!inp) return;
+        inp.replaceWith(makeRestoredNode(getDisplayText()));
+        li.removeAttribute("data-manual-editing");
+        saveBtn.disabled = true;
+        editBtn.setAttribute("aria-label", "修改");
+      }
+
+      function startEdit() {
+        const textEl = findTextEl();
+        if (!textEl || li.getAttribute("data-manual-editing") === "1") return;
+        const inp = document.createElement("input");
+        inp.type = "text";
+        inp.className = "manual-item-edit-input";
+        inp.value = getDisplayText();
+        inp.setAttribute("aria-label", "编辑内容");
+        textEl.replaceWith(inp);
+        li.setAttribute("data-manual-editing", "1");
+        saveBtn.disabled = false;
+        editBtn.setAttribute("aria-label", "取消");
+        inp.focus();
+        inp.select();
+        inp.onkeydown = function (ev) {
+          if (ev.key === "Enter") {
+            ev.preventDefault();
+            saveBtn.click();
+          } else if (ev.key === "Escape") {
+            ev.preventDefault();
+            cancelEdit();
+          }
+        };
+      }
+
+      editBtn.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        if (li.getAttribute("data-manual-editing") === "1") {
+          cancelEdit();
+        } else {
+          startEdit();
+        }
+      });
+      saveBtn.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        const inp = li.querySelector("input.manual-item-edit-input");
+        if (!inp) return;
+        const v = String(inp.value || "").trim();
+        if (!v) return;
+        persistText(task.id, v);
+      });
+      delBtn.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        onDelete();
+      });
+
+      iconGroup.appendChild(editBtn);
+      iconGroup.appendChild(saveBtn);
+      iconGroup.appendChild(delBtn);
+      actions.appendChild(iconGroup);
+    }
+
     function formatDoneListTime(ts) {
       if (!ts) return "";
       const d = new Date(ts);
@@ -24224,6 +24493,10 @@
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12.5 8C9.85 8 7.45 8.99 5.6 10.6L4 9v9h9l-2.62-2.62A6.98 6.98 0 0112.5 12c3.04 0 5.55 1.8 6.72 4.4l1.94-.64A8.5 8.5 0 0012.5 8z"/></svg>';
     const ICON_BTN_DELETE_SVG =
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>';
+    const ICON_BTN_EDIT_SVG =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>';
+    const ICON_BTN_SAVE_SVG =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10V5l4 4h-4z"/></svg>';
 
     const FORGE_DONE_PREFIX_MIND = "【Forge·Mind】";
     const FORGE_DONE_PREFIX_BODY = "【Forge·Body】";
@@ -24261,10 +24534,22 @@
       return { inner: m[1], rest: s.slice(m[0].length), raw: m[0] };
     }
 
+    /** 今日 Forge / Done 左侧徽章：去掉「Forge·/Forge-」前缀，仅显示 Mind / Body */
+    function forgePillBadgeTextFromBracketInner(innerRaw, forgeKind) {
+      const s = String(innerRaw || "").trim();
+      if (/^forge\s*[·\-\u2014—]\s*mind$/i.test(s)) return "Mind";
+      if (/^forge\s*[·\-\u2014—]\s*body$/i.test(s)) return "Body";
+      if (/^mind$/i.test(s)) return "Mind";
+      if (/^body$/i.test(s)) return "Body";
+      if (forgeKind === "mind") return "Mind";
+      if (forgeKind === "body") return "Body";
+      return s;
+    }
+
     function donePillVariantFromInner(inner) {
       const t = String(inner || "");
-      if (t.indexOf("Forge·Mind") >= 0) return "forge-mind";
-      if (t.indexOf("Forge·Body") >= 0) return "forge-body";
+      if (/forge\s*[·\-\u2014—]\s*mind/i.test(t) || t.indexOf("Forge·Mind") >= 0) return "forge-mind";
+      if (/forge\s*[·\-\u2014—]\s*body/i.test(t) || t.indexOf("Forge·Body") >= 0) return "forge-body";
       if (t.indexOf("周计划") >= 0) return "weekly";
       if (t.indexOf("习惯") >= 0) return "habit";
       if (t.indexOf("备忘录") >= 0) return "memo";
@@ -24319,8 +24604,35 @@
       panel.style.zIndex = "10050";
     }
 
+    function doneRowMenuEventTargetElement(ev) {
+      const t = ev && ev.target;
+      if (!t) return null;
+      if (t.nodeType === 3) return t.parentElement || null;
+      return t.nodeType === 1 ? t : t.parentElement || null;
+    }
+
+    function doneRowMenuPointerInsideActions(ev) {
+      const el = doneRowMenuEventTargetElement(ev);
+      return !!(el && el.closest && el.closest(".done-row-actions-menu"));
+    }
+
+    function bindDoneRowMenuOutsideDismiss(panel) {
+      function dismissFromOutside(ev) {
+        if (doneRowMenuPointerInsideActions(ev)) return;
+        closeAllDoneRowMenus();
+      }
+      document.addEventListener("pointerdown", dismissFromOutside, true);
+      return function unbindDoneRowMenuOutside() {
+        document.removeEventListener("pointerdown", dismissFromOutside, true);
+      };
+    }
+
     function closeAllDoneRowMenus() {
       document.querySelectorAll("ul.app-done-time-timeline .done-row-menu-panel").forEach(function (panel) {
+        if (panel._doneMenuDocDismiss) {
+          panel._doneMenuDocDismiss();
+          panel._doneMenuDocDismiss = null;
+        }
         if (panel._doneMenuResizeHandler) {
           window.removeEventListener("resize", panel._doneMenuResizeHandler);
           panel._doneMenuResizeHandler = null;
@@ -24425,11 +24737,10 @@
           restoreItem.addEventListener("click", (ev) => {
             ev.preventDefault();
             ev.stopPropagation();
+            ev.stopImmediatePropagation();
             const rid = task.id;
             closeAllDoneRowMenus();
-            requestAnimationFrame(function () {
-              restoreTask(rid);
-            });
+            restoreTask(rid);
           });
           panel.appendChild(restoreItem);
         }
@@ -24441,11 +24752,10 @@
         delItem.addEventListener("click", (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
+          ev.stopImmediatePropagation();
           const did = task.id;
           closeAllDoneRowMenus();
-          requestAnimationFrame(function () {
-            deleteTask(did, "done");
-          });
+          deleteTask(did, "done");
         });
         panel.appendChild(delItem);
         const rowLiForMenu = li;
@@ -24481,22 +24791,22 @@
             panel._doneMenuScrollEl = mcScroll;
             mcScroll.addEventListener("scroll", onScrollClose, { passive: true, once: true });
           }
-          setTimeout(function () {
-            document.addEventListener(
-              "click",
-              function closeOnAway() {
-                closeAllDoneRowMenus();
-              },
-              { once: true }
-            );
-          }, 0);
+          panel._doneMenuDocDismiss = bindDoneRowMenuOutsideDismiss(panel);
         });
         menuWrap.appendChild(trigger);
         menuWrap.appendChild(panel);
         actions.appendChild(menuWrap);
       }
 
-      if (listName !== "closedList" && listName !== "done") {
+      if (
+        listName === "stopDoing" ||
+        listName === "notToDo" ||
+        listName === "memo" ||
+        listName === "dailyWin" ||
+        listName === "closedList"
+      ) {
+        appendManualItemEditSaveDeleteIcons(li, task, listName, actions);
+      } else if (listName !== "done") {
         const delBtn = document.createElement("button");
         delBtn.className = "btn-delete btn-icon-action";
         delBtn.type = "button";
@@ -24526,7 +24836,7 @@
           const brForge = parseLeadingBracketTag(forgeDoneLine.full);
           const inner =
             brForge && brForge.inner
-              ? brForge.inner
+              ? forgePillBadgeTextFromBracketInner(brForge.inner, forgeDoneLine.kind)
               : forgeDoneLine.kind === "mind"
                 ? "Mind"
                 : "Body";
@@ -24538,9 +24848,15 @@
         } else {
           const br = parseLeadingBracketTag(String(task.text || ""));
           if (br) {
-            main.appendChild(
-              createDoneEntryPill(br.inner, donePillVariantFromInner(br.inner))
-            );
+            const variant = donePillVariantFromInner(br.inner);
+            const pillInner =
+              variant === "forge-mind" || variant === "forge-body"
+                ? forgePillBadgeTextFromBracketInner(
+                    br.inner,
+                    variant === "forge-mind" ? "mind" : "body"
+                  )
+                : br.inner;
+            main.appendChild(createDoneEntryPill(pillInner, variant));
             textEl.textContent = br.rest;
           }
           main.appendChild(textEl);
@@ -24650,16 +24966,6 @@
           const mainRow = document.createElement("div");
           mainRow.className = "closed-list-main-row";
           mainRow.appendChild(textEl);
-          const miniDeleteBtn = document.createElement("button");
-          miniDeleteBtn.type = "button";
-          miniDeleteBtn.className = "closed-list-mini-del";
-          miniDeleteBtn.setAttribute("aria-label", "删除");
-          miniDeleteBtn.textContent = "×";
-          miniDeleteBtn.addEventListener("click", (ev) => {
-            ev.stopPropagation();
-            deleteTask(task.id, listName);
-          });
-          mainRow.appendChild(miniDeleteBtn);
 
           const miniStepField = document.createElement("div");
           miniStepField.className = "closed-list-mini-step-field";
@@ -24705,7 +25011,7 @@
           li.appendChild(textEl);
         }
         /* done：actions 已挂入 .done-compact-row，不可再 append 到 li，否则会移动节点、破坏布局与「恢复/删除」命中 */
-        if (listName !== "closedList" && listName !== "done") li.appendChild(actions);
+        if (listName !== "done") li.appendChild(actions);
         if (listName === "memo") {
           let touchStartX = 0;
           let touchStartY = 0;
@@ -25345,6 +25651,94 @@
       const nr = { items: {}, suppressed: oldSup };
       state.weeklyPlanDoneRef[weekKey] = nr;
       return nr;
+    }
+
+    /** 从周计划 Done 镜像映射中移除某主任务及其微任务对应的 My Done 条目（用于跨周迁移前清理） */
+    function removeWeeklyPlanTaskDoneMirrors(weekKey, taskId) {
+      const wid = String(taskId || "");
+      if (!wid) return;
+      if (!state.weeklyPlanDoneRef || typeof state.weeklyPlanDoneRef !== "object") return;
+      const ref = state.weeklyPlanDoneRef[weekKey];
+      if (!ref || !ref.items || typeof ref.items !== "object") return;
+      const items = ref.items;
+      Object.keys(items).forEach(function (k) {
+        let hit = false;
+        if (k === "main:" + wid) hit = true;
+        else if (k.indexOf("micro:" + wid + ":") === 0) hit = true;
+        if (!hit) return;
+        const doneId = items[k];
+        if (doneId) {
+          state.done = state.done.filter(function (d) {
+            return d.id !== doneId;
+          });
+        }
+        delete items[k];
+      });
+    }
+
+    /**
+     * 自然周切换后：将所有「早于当前日历周」的周计划中未完成的任务并入本周（state.weeklyPlan[currentSunday]）。
+     * 已完成任务保留在原周作为记录；仅迁移 isWeeklyPlanMainComplete === false 的任务。
+     */
+    function rolloverWeeklyPlanIncompleteToCurrentWeek() {
+      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
+      const curKey = getCurrentWeeklyPlanCalendarWeekKey();
+      const pastKeys = Object.keys(state.weeklyPlan).filter(function (k) {
+        return k < curKey;
+      });
+      if (pastKeys.length === 0) return false;
+      pastKeys.sort();
+
+      const destBase = getWeeklyPlanTasksForWeekKey(curKey).map(function (t) {
+        return normalizeWeeklyPlanTask(t);
+      });
+      const destIdSet = new Set(destBase.map(function (t) {
+        return t.id;
+      }));
+      const rolled = [];
+      let changed = false;
+
+      pastKeys.forEach(function (oldKey) {
+        const raw = state.weeklyPlan[oldKey];
+        if (!Array.isArray(raw) || raw.length === 0) {
+          delete state.weeklyPlan[oldKey];
+          changed = true;
+          return;
+        }
+        const kept = [];
+        raw.forEach(function (task) {
+          const t = normalizeWeeklyPlanTask(task);
+          if (isWeeklyPlanMainComplete(t)) {
+            kept.push(normalizeWeeklyPlanTask(task));
+          } else {
+            removeWeeklyPlanTaskDoneMirrors(oldKey, t.id);
+            if (destIdSet.has(t.id)) {
+              kept.push(normalizeWeeklyPlanTask(task));
+              return;
+            }
+            destIdSet.add(t.id);
+            rolled.push(normalizeWeeklyPlanTask(task));
+            changed = true;
+          }
+        });
+        if (kept.length === 0) {
+          delete state.weeklyPlan[oldKey];
+          changed = true;
+        } else {
+          if (kept.length !== raw.length) changed = true;
+          state.weeklyPlan[oldKey] = kept;
+        }
+      });
+
+      if (rolled.length > 0) {
+        state.weeklyPlan[curKey] = destBase.concat(rolled);
+        changed = true;
+      }
+
+      if (changed) {
+        saveState();
+      }
+      return changed;
     }
 
     function syncWeeklyPlanDoneList() {
@@ -26382,18 +26776,34 @@
         metaEl.className = "kinetic-countdown-meta";
         metaEl.textContent = formatKineticCountdownMetaLine(item);
 
-        const delBtn = document.createElement("button");
-        delBtn.type = "button";
-        delBtn.className = "btn-delete btn-icon-action";
-        delBtn.innerHTML = ICON_BTN_DELETE_SVG;
-        delBtn.addEventListener("click", () => deleteKineticCountdown(item.id));
-        delBtn.setAttribute("aria-label", "删除「" + item.label + "」");
-
         main.appendChild(titleEl);
         main.appendChild(remainEl);
         main.appendChild(metaEl);
         li.appendChild(main);
-        li.appendChild(delBtn);
+
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        appendManualItemEditSaveDeleteIcons(
+          li,
+          { id: item.id, text: item.label },
+          "kinetic",
+          actions,
+          {
+            getDisplayText: function () {
+              return String(item.label || "");
+            },
+            persistText: function (id, text) {
+              updateKineticCountdownLabel(id, text);
+            },
+            onDelete: function () {
+              deleteKineticCountdown(item.id);
+            },
+            textElSelector: ".kinetic-countdown-label",
+            restoredTag: "div",
+            restoredClass: "kinetic-countdown-label"
+          }
+        );
+        li.appendChild(actions);
         kineticCountdownList.appendChild(li);
       });
     }
@@ -28208,6 +28618,7 @@
         });
       }
       refreshAllDailyWinCheckins();
+      rolloverWeeklyPlanIncompleteToCurrentWeek();
       syncWeeklyPlanDoneList();
       syncAnniversaryTw020DoneList();
       syncAnniversaryTw021DoneList();
@@ -30487,31 +30898,60 @@
     }
 
     function refreshForgeWeeklyMinTaskDatalist() {
-      const dl = document.getElementById("forgeWeeklyMinTaskDatalist");
-      if (!dl) return;
-      const seen = Object.create(null);
-      function add(t) {
-        const x = String(t || "")
-          .replace(/\s+/g, " ")
-          .replace(/\s*\/\s*/g, " / ")
-          .trim();
-        if (!x || seen[x]) return;
-        seen[x] = true;
-        const opt = document.createElement("option");
-        opt.value = x;
-        dl.appendChild(opt);
+      const dlMind = document.getElementById("forgeWeeklyMinTaskDatalistMind");
+      const dlBody = document.getElementById("forgeWeeklyMinTaskDatalistBody");
+      if (!dlMind || !dlBody) return;
+      function makeAdd(dl) {
+        const seen = Object.create(null);
+        return function add(t) {
+          const x = String(t || "")
+            .replace(/\s+/g, " ")
+            .replace(/\s*\/\s*/g, " / ")
+            .trim();
+          if (!x || seen[x]) return;
+          seen[x] = true;
+          const opt = document.createElement("option");
+          opt.value = x;
+          dl.appendChild(opt);
+        };
       }
-      dl.innerHTML = "";
+      const addMind = makeAdd(dlMind);
+      const addBody = makeAdd(dlBody);
+      dlMind.innerHTML = "";
+      dlBody.innerHTML = "";
       const mod = document.getElementById("forgeModule");
       if (mod) {
-        mod.querySelectorAll(".forge-task-text").forEach((el) => {
-          const raw = (el.textContent || "").replace(/\s+/g, " ").trim();
-          if (!raw) return;
-          const beforeSlash = raw.split("/")[0].trim();
-          if (beforeSlash) add(beforeSlash);
+        const mindPanel = mod.querySelector("#forgePanelMind");
+        const bodyPanel = mod.querySelector("#forgePanelBody");
+        function harvest(panel, realm) {
+          if (!panel) return;
+          panel.querySelectorAll(".forge-task-text").forEach(function (el) {
+            const raw = (el.textContent || "").replace(/\s+/g, " ").trim();
+            if (!raw) return;
+            const beforeSlash = raw.split("/")[0].trim();
+            if (!beforeSlash) return;
+            if (realm === "mind") addMind(beforeSlash);
+            else addBody(beforeSlash);
+          });
+        }
+        harvest(mindPanel, "mind");
+        harvest(bodyPanel, "body");
+      }
+      ensureForgeWeeklyMinimumsState();
+      if (state.forge && Array.isArray(state.forge.weeklyMinimums)) {
+        state.forge.weeklyMinimums.forEach(function (r) {
+          if (!r || typeof r !== "object") return;
+          const realm = r.realm === "mind" ? "mind" : "body";
+          const lb = String(r.label || "").trim();
+          if (!lb) return;
+          if (realm === "mind") addMind(lb);
+          else addBody(lb);
         });
       }
-      FORGE_WP_TASK_NAME_EXTRAS.forEach(add);
+      FORGE_WP_TASK_NAME_EXTRAS.forEach(function (name) {
+        if (inferForgeWpMindBodyKind(name) === "mind") addMind(name);
+        else addBody(name);
+      });
     }
 
     function renderForgeWeeklyMinRows() {
@@ -30553,13 +30993,21 @@
         el.innerHTML =
           '<div class="forge-weekly-min-row-top">' +
           '<div class="forge-weekly-min-fields">' +
-          '<label class="forge-weekly-min-label">动作 <input type="text" class="forge-weekly-min-name" list="forgeWeeklyMinTaskDatalist" autocomplete="off" /></label>' +
+          '<label class="forge-weekly-min-label">动作 <input type="text" class="forge-weekly-min-name" list="' +
+          (realm === "mind" ? "forgeWeeklyMinTaskDatalistMind" : "forgeWeeklyMinTaskDatalistBody") +
+          '" autocomplete="off" /></label>' +
           '<label class="forge-weekly-min-label">本周最低 <input type="number" class="forge-weekly-min-target" min="0" step="0.1" /></label>' +
           "</div>" +
-          '<div class="forge-weekly-min-actions">' +
-          '<button type="button" class="btn forge-weekly-min-save">保存</button>' +
-          '<button type="button" class="btn forge-weekly-min-edit">修改</button>' +
-          '<button type="button" class="btn forge-weekly-min-remove">移除</button>' +
+          '<div class="forge-weekly-min-actions forge-weekly-min-actions--icons">' +
+          '<button type="button" class="btn-icon-action forge-weekly-min-save" disabled aria-label="保存">' +
+          ICON_BTN_SAVE_SVG +
+          "</button>" +
+          '<button type="button" class="btn-icon-action forge-weekly-min-edit" aria-label="修改">' +
+          ICON_BTN_EDIT_SVG +
+          "</button>" +
+          '<button type="button" class="btn-icon-action btn-delete forge-weekly-min-remove" aria-label="移除">' +
+          ICON_BTN_DELETE_SVG +
+          "</button>" +
           "</div>" +
           "</div>" +
           '<div class="forge-weekly-min-progress-meta"></div>' +
@@ -30567,6 +31015,8 @@
           '<div class="forge-weekly-min-fill"></div></div>';
         const nameInp = el.querySelector(".forge-weekly-min-name");
         const tgtInp = el.querySelector(".forge-weekly-min-target");
+        const saveBtn = el.querySelector(".forge-weekly-min-save");
+        const editBtn = el.querySelector(".forge-weekly-min-edit");
         const metaEl = el.querySelector(".forge-weekly-min-progress-meta");
         const fill = el.querySelector(".forge-weekly-min-fill");
         const trackEl = el.querySelector(".forge-weekly-min-track");
@@ -30590,26 +31040,62 @@
           row.weeklyMin = tgtInp ? tgtInp.value.trim() : "";
           saveState();
         }
-        nameInp.addEventListener("change", function () {
-          pushRowState();
-          renderForgeWeeklyMinRows();
-          refreshAllForgeTodayTaskRowsFromDone();
-        });
-        tgtInp.addEventListener("change", function () {
-          pushRowState();
-          renderForgeWeeklyMinRows();
-        });
-        el.querySelector(".forge-weekly-min-save").addEventListener("click", function () {
-          pushRowState();
-          renderForgeWeeklyMinRows();
-          refreshAllForgeTodayTaskRowsFromDone();
-        });
-        el.querySelector(".forge-weekly-min-edit").addEventListener("click", function () {
-          if (nameInp) {
-            nameInp.focus();
-            nameInp.select();
+        function revertWeeklyMinInputsFromRow() {
+          if (nameInp) nameInp.value = String(row.label || "").trim();
+          if (tgtInp) {
+            const w = String(row.weeklyMin || "").trim();
+            const wn = parseFloat(w);
+            tgtInp.value = !Number.isNaN(wn) && wn > 0 ? w : "";
           }
-        });
+        }
+        function applyWeeklyMinRowLocked(locked) {
+          if (locked) {
+            if (nameInp) nameInp.setAttribute("readonly", "readonly");
+            if (tgtInp) tgtInp.setAttribute("readonly", "readonly");
+            el.classList.remove("forge-weekly-min-row--editing");
+            if (saveBtn) saveBtn.disabled = true;
+            if (editBtn) {
+              editBtn.innerHTML = ICON_BTN_EDIT_SVG;
+              editBtn.setAttribute("aria-label", "解锁后可编辑动作名与本周最低");
+            }
+          } else {
+            if (nameInp) nameInp.removeAttribute("readonly");
+            if (tgtInp) tgtInp.removeAttribute("readonly");
+            el.classList.add("forge-weekly-min-row--editing");
+            if (saveBtn) saveBtn.disabled = false;
+            if (editBtn) {
+              editBtn.innerHTML = ICON_BTN_EDIT_SVG;
+              editBtn.setAttribute("aria-label", "放弃本次修改并恢复为已保存内容");
+            }
+          }
+        }
+        const isNewEmptyRow = !label && !String(row.weeklyMin || "").trim();
+        applyWeeklyMinRowLocked(!isNewEmptyRow);
+        if (isNewEmptyRow && nameInp) {
+          nameInp.focus();
+        }
+        if (editBtn) {
+          editBtn.addEventListener("click", function () {
+            if (el.classList.contains("forge-weekly-min-row--editing")) {
+              revertWeeklyMinInputsFromRow();
+              applyWeeklyMinRowLocked(true);
+            } else {
+              applyWeeklyMinRowLocked(false);
+              if (nameInp) {
+                nameInp.focus();
+                nameInp.select();
+              }
+            }
+          });
+        }
+        if (saveBtn) {
+          saveBtn.addEventListener("click", function () {
+            if (saveBtn.disabled) return;
+            pushRowState();
+            renderForgeWeeklyMinRows();
+            refreshAllForgeTodayTaskRowsFromDone();
+          });
+        }
         el.querySelector(".forge-weekly-min-remove").addEventListener("click", function () {
           state.forge.weeklyMinimums = state.forge.weeklyMinimums.filter(function (x) {
             return x.id !== id;
