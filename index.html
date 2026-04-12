@@ -7059,6 +7059,13 @@
       min-width: 0;
     }
 
+    /* 固定钟点反思提示：仅正文染色，不影响轴线/按钮；不计入统计 */
+    ul.app-done-time-timeline .done-compact-row .task-text.task-text--time-reflection {
+      color: #b91c1c !important;
+      font-weight: 600;
+      text-decoration: none !important;
+    }
+
     ul.app-done-time-timeline .done-compact-row.done-row-toggle {
       cursor: pointer;
     }
@@ -20241,7 +20248,8 @@
       },
       forge: {},
       backwardMeasure: { weekly: {}, monthly: {}, quarterly: {} },
-      backwardMeasurePeriod: { weekly: "", monthly: "", quarterly: "" }
+      backwardMeasurePeriod: { weekly: "", monthly: "", quarterly: "" },
+      timeReflectionDismissed: {}
     };
 
     function getCloudSyncConfig() {
@@ -21180,6 +21188,9 @@
               state.backwardMeasurePeriod[pk] = "";
             }
           });
+          if (!state.timeReflectionDismissed || typeof state.timeReflectionDismissed !== "object") {
+            state.timeReflectionDismissed = {};
+          }
           state.kineticCountdowns = state.kineticCountdowns
             .filter((x) => x && typeof x === "object" && typeof x.label === "string")
             .map((x) => {
@@ -24244,6 +24255,10 @@
             delete item.completedAt;
           }
         }
+        if (task.kind === "timeReflection") {
+          ensureTimeReflectionDismissedMap();
+          state.timeReflectionDismissed[task.id] = true;
+        }
       }
       if (listName === "closedList") {
         removeClosedListDoneCopy(task.id);
@@ -24549,6 +24564,100 @@
       { key: "dawn", range: "00:00 - 05:00", icon: "🌙", emptyBadge: "凌晨" }
     ];
 
+    /** 当日固定钟点的反思提示（到点后写入 state.done，不计入「真实产出」统计） */
+    const TIME_REFLECTION_SLOTS = [
+      {
+        slotKey: "0505",
+        h: 5,
+        m: 5,
+        title:
+          "极致能动性：一种将想法直接转化为现实的意志——不等待许可，不依赖外部资源，不被「我不会」卡住。稀缺的不是能力，是愿意先动起来的意志。",
+        body: ""
+      },
+      {
+        slotKey: "0800",
+        h: 8,
+        m: 0,
+        title: "极致能动性 = 启动力 × 迭代力 × 杠杆力 × 判断力 × 心理韧性",
+        body: ""
+      },
+      { slotKey: "1000", h: 10, m: 0, title: "识别逃避机制", body: "我现在通过做这件事，正在逃避什么？" },
+      {
+        slotKey: "1300",
+        h: 13,
+        m: 0,
+        title: "行为审计（旁观者视角）",
+        body: "如果有人拍下我过去两小时的行为，他们会得出结论：我想要什么样的生活？"
+      },
+      { slotKey: "1500", h: 15, m: 0, title: "愿景校准", body: "我是在向我憎恨的生活移动，还是向我想要的生活移动？" },
+      { slotKey: "1700", h: 17, m: 0, title: "揭穿合理化谎言", body: "我正在假装哪件最重要的事情并不重要？" },
+      {
+        slotKey: "1930",
+        h: 19,
+        m: 30,
+        title: "身份审查",
+        body: "我今天做的哪些事是出于「身份保护」，而不是出于真实的渴望？"
+      },
+      {
+        slotKey: "2130",
+        h: 21,
+        m: 30,
+        title: "能量审计",
+        body: "今天什么时候我感觉最活着？什么时候感觉最死气沉沉？"
+      }
+    ];
+
+    function doneAtDateHourMinute(dateStr, hour, minute) {
+      const parts = String(dateStr).split("-").map(Number);
+      if (parts.length !== 3 || parts.some((n) => !Number.isInteger(n))) {
+        return Date.now();
+      }
+      const [y, mo, d] = parts;
+      return new Date(y, mo - 1, d, hour, minute, 0, 0).getTime();
+    }
+
+    function timeReflectionStableId(dateKey, slotKey) {
+      return "timeReflection:" + dateKey + ":" + slotKey;
+    }
+
+    function ensureTimeReflectionDismissedMap() {
+      if (!state.timeReflectionDismissed || typeof state.timeReflectionDismissed !== "object") {
+        state.timeReflectionDismissed = {};
+      }
+    }
+
+    /** 日历「今天」且当前时刻已过对应钟点时插入一条；需页面保持打开才会触发。删除后写入 dismissed，当天不再出现。 */
+    function ensureTimeReflectionPromptsForToday() {
+      const todayKey = formatDateInputValue(new Date());
+      const now = Date.now();
+      let changed = false;
+      ensureTimeReflectionDismissedMap();
+      for (let i = 0; i < TIME_REFLECTION_SLOTS.length; i++) {
+        const slot = TIME_REFLECTION_SLOTS[i];
+        const slotTs = doneAtDateHourMinute(todayKey, slot.h, slot.m);
+        if (now < slotTs) continue;
+        const id = timeReflectionStableId(todayKey, slot.slotKey);
+        if (state.timeReflectionDismissed[id]) continue;
+        if (state.done.some((t) => t.id === id)) continue;
+        const bodyTrim = String(slot.body || "").trim();
+        const lineText = bodyTrim ? slot.title + " — " + bodyTrim : slot.title;
+        state.done.push({
+          id,
+          kind: "timeReflection",
+          text: lineText,
+          createdAt: slotTs,
+          completedAt: slotTs
+        });
+        changed = true;
+      }
+      if (changed) saveState();
+      return changed;
+    }
+
+    function isDoneCountedAsDayProduction(task) {
+      return !(task && task.kind === "timeReflection");
+    }
+
     function closeOpenSwipeRows(exceptLi) {
       document
         .querySelectorAll("#closedList > li.swipe-delete-open, #memoList > li.swipe-delete-open")
@@ -24836,7 +24945,8 @@
         const skipRestore =
           (task.habitMeta && task.habitMeta.key === "dailyThreeWins") ||
           Boolean(task.weeklyPlanMeta) ||
-          Boolean(task.anniversaryTwMeta);
+          Boolean(task.anniversaryTwMeta) ||
+          task.kind === "timeReflection";
         const menuWrap = document.createElement("div");
         menuWrap.className = "done-row-actions-menu";
         const trigger = document.createElement("button");
@@ -24983,6 +25093,10 @@
             textEl.textContent = br.rest;
           }
           main.appendChild(textEl);
+        }
+
+        if (task.kind === "timeReflection") {
+          textEl.classList.add("task-text--time-reflection");
         }
 
         const timeLabel = formatDoneListTime(task.completedAt);
@@ -28778,9 +28892,11 @@
       syncAnniversaryTw020DoneList();
       syncAnniversaryTw021DoneList();
       syncAnniversaryTw022DoneList();
+      ensureTimeReflectionPromptsForToday();
       doneList.classList.remove("timeline-list");
       doneList.classList.add("done-time-block-list", "app-done-time-timeline");
       const filteredDoneTasks = state.done.filter((task) => isSameDate(task.completedAt, selectedDoneDate));
+      const filteredDoneTasksForStats = filteredDoneTasks.filter(isDoneCountedAsDayProduction);
       const filteredMemoItems = state.memo.filter((item) => isSameDate(item.createdAt, selectedMemoDate));
       const filteredClosedListItems = state.closedList
         .filter((item) => isSameDate(item.createdAt, selectedClosedListDate))
@@ -28844,9 +28960,9 @@
       if (closedListPrimaryInputRow) {
         closedListPrimaryInputRow.style.display = isClosedListEditable ? "" : "none";
       }
-      renderDoneDayStats(doneDayStats, filteredDoneTasks);
+      renderDoneDayStats(doneDayStats, filteredDoneTasksForStats);
       if (doneListTitleCount) {
-        const n = filteredDoneTasks.length;
+        const n = filteredDoneTasksForStats.length;
         const dayLabel = formatDoneListDayCountLabel(selectedDoneDate);
         doneListTitleCount.setAttribute("aria-label", dayLabel + " " + n + " 项");
         doneListTitleCount.replaceChildren();
@@ -29811,6 +29927,19 @@
         renderDailyReminder();
       }
     }, 30000);
+
+    setInterval(function () {
+      if (ensureTimeReflectionPromptsForToday()) {
+        render();
+      }
+    }, 60000);
+
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState !== "visible") return;
+      if (ensureTimeReflectionPromptsForToday()) {
+        render();
+      }
+    });
 
     function formatDateInputValue(date) {
       const d = new Date(date);
