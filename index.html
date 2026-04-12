@@ -20219,6 +20219,8 @@
     let cloudSyncLastErrorMsg = "";
     let cloudSyncStatusSnapshot = { text: "未同步", statusClass: "" };
     let cloudSyncInitInFlight = false;
+    /** 合并远端与内存 state 时避免 saveState → scheduleCloudSyncPush 递归 */
+    let cloudSyncSuppressPush = false;
 
     if (!cloudSyncClientId) {
       cloudSyncClientId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -20782,9 +20784,212 @@
       cloudSyncLastHash = serializeStateForCloud();
     }
 
+    function recordTieTimestampForSync(item) {
+      if (!item || typeof item !== "object") return 0;
+      const c = Number(item.completedAt);
+      const cr = Number(item.createdAt);
+      if (Number.isFinite(c) && c > 0) return c;
+      if (Number.isFinite(cr) && cr > 0) return cr;
+      return 0;
+    }
+
+    /** 按 id 合并两端记录：并集；同 id 取时间戳较大者，平局取本地 */
+    function mergeIdRecordArraysPreferLocalOnTie(localArr, remoteArr) {
+      const loc = Array.isArray(localArr) ? localArr : [];
+      const rem = Array.isArray(remoteArr) ? remoteArr : [];
+      const idx = new Map();
+      function ingest(item, preferLocalOnTie) {
+        if (!item || typeof item !== "object" || item.id == null) return;
+        const id = String(item.id);
+        const ts = recordTieTimestampForSync(item);
+        const cur = idx.get(id);
+        if (!cur) {
+          idx.set(id, { item, ts, preferLocalOnTie });
+          return;
+        }
+        if (ts > cur.ts) {
+          idx.set(id, { item, ts, preferLocalOnTie });
+        } else if (ts === cur.ts && preferLocalOnTie) {
+          idx.set(id, { item, ts, preferLocalOnTie: true });
+        }
+      }
+      rem.forEach((x) => ingest(x, false));
+      loc.forEach((x) => ingest(x, true));
+      return Array.from(idx.values())
+        .map((x) => x.item)
+        .sort((a, b) => recordTieTimestampForSync(b) - recordTieTimestampForSync(a));
+    }
+
+    function mergeFuelScoresForSync(localArr, remoteArr) {
+      const map = new Map();
+      [...(Array.isArray(remoteArr) ? remoteArr : []), ...(Array.isArray(localArr) ? localArr : [])].forEach(
+        (item) => {
+          if (!item || typeof item !== "object") return;
+          const d = item.date;
+          if (!d) return;
+          const existing = map.get(d);
+          const tu = Number(item.updatedAt) || 0;
+          const eu = existing ? Number(existing.updatedAt) || 0 : -1;
+          if (!existing || tu >= eu) {
+            map.set(d, item);
+          }
+        }
+      );
+      return Array.from(map.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    }
+
+    function mergeHabitCheckinsForSync(localHc, remoteHc) {
+      const lo = localHc && typeof localHc === "object" ? localHc : {};
+      const ro = remoteHc && typeof remoteHc === "object" ? remoteHc : {};
+      const dates = new Set([...Object.keys(lo), ...Object.keys(ro)]);
+      const out = {};
+      dates.forEach((d) => {
+        const a = lo[d] && typeof lo[d] === "object" ? lo[d] : {};
+        const b = ro[d] && typeof ro[d] === "object" ? ro[d] : {};
+        out[d] = { ...b, ...a };
+      });
+      return out;
+    }
+
+    function mergeDailyWinTomorrowRefForSync(loc, rem) {
+      const lo = loc && typeof loc === "object" ? loc : {};
+      const ro = rem && typeof rem === "object" ? rem : {};
+      const keys = new Set([...Object.keys(lo), ...Object.keys(ro)]);
+      const out = {};
+      keys.forEach((k) => {
+        const la = Array.isArray(lo[k]) ? lo[k] : [];
+        const ra = Array.isArray(ro[k]) ? ro[k] : [];
+        out[k] = mergeIdRecordArraysPreferLocalOnTie(la, ra);
+      });
+      return out;
+    }
+
+    function mergeWeeklyPlanDoneRefForSync(loc, rem) {
+      const lo = loc && typeof loc === "object" ? loc : {};
+      const ro = rem && typeof rem === "object" ? rem : {};
+      const wks = new Set([...Object.keys(lo), ...Object.keys(ro)]);
+      const out = {};
+      wks.forEach((wk) => {
+        const a = lo[wk] && typeof lo[wk] === "object" ? lo[wk] : {};
+        const b = ro[wk] && typeof ro[wk] === "object" ? ro[wk] : {};
+        const itemsA = a.items && typeof a.items === "object" ? a.items : {};
+        const itemsB = b.items && typeof b.items === "object" ? b.items : {};
+        out[wk] = { ...b, ...a, items: { ...itemsB, ...itemsA } };
+      });
+      return out;
+    }
+
+    function mergeAnniversaryDoneRefForSync(loc, rem) {
+      const modules = ["tw020", "tw021", "tw022"];
+      const lo = loc && typeof loc === "object" ? loc : {};
+      const ro = rem && typeof rem === "object" ? rem : {};
+      const out = {};
+      modules.forEach((mod) => {
+        const a = lo[mod] && typeof lo[mod] === "object" ? lo[mod] : {};
+        const b = ro[mod] && typeof ro[mod] === "object" ? ro[mod] : {};
+        const itemsA = a.items && typeof a.items === "object" ? a.items : {};
+        const itemsB = b.items && typeof b.items === "object" ? b.items : {};
+        out[mod] = { ...b, ...a, items: { ...itemsB, ...itemsA } };
+      });
+      return out;
+    }
+
+    function mergeProjectTasksForSync(loc, rem) {
+      const a = loc && typeof loc === "object" ? loc : {};
+      const b = rem && typeof rem === "object" ? rem : {};
+      const qa = Array.isArray(a.quoteApp) ? a.quoteApp : [];
+      const qb = Array.isArray(b.quoteApp) ? b.quoteApp : [];
+      return {
+        ...b,
+        ...a,
+        quoteApp: mergeIdRecordArraysPreferLocalOnTie(qa, qb)
+      };
+    }
+
+    /**
+     * 推送前先与云端快照合并：按条并集，避免旧本机整包覆盖他端新打卡。
+     * remoteUpdatedAt > lastSeen 时，全局配置类子树以远端为准（LWW）。
+     */
+    function mergeLocalStateWithRemotePayloadBeforePush(remoteState, remoteUpdatedAt, lastSeen) {
+      if (!remoteState || typeof remoteState !== "object" || !Array.isArray(remoteState.done)) {
+        return null;
+      }
+      let base;
+      try {
+        base = JSON.parse(JSON.stringify(state));
+      } catch (_e) {
+        return null;
+      }
+      const ru = Number(remoteUpdatedAt) || 0;
+      const ls = Number(lastSeen) || 0;
+      const serverNewer = ru > 0 && ru > ls;
+
+      base.done = mergeIdRecordArraysPreferLocalOnTie(state.done, remoteState.done);
+      base.memo = mergeIdRecordArraysPreferLocalOnTie(state.memo, remoteState.memo);
+      base.closedList = mergeIdRecordArraysPreferLocalOnTie(state.closedList, remoteState.closedList);
+      base.dailyWin = mergeIdRecordArraysPreferLocalOnTie(state.dailyWin, remoteState.dailyWin);
+      base.stopDoing = mergeIdRecordArraysPreferLocalOnTie(state.stopDoing, remoteState.stopDoing);
+      base.notToDo = mergeIdRecordArraysPreferLocalOnTie(state.notToDo, remoteState.notToDo);
+      base.kineticCountdowns = mergeIdRecordArraysPreferLocalOnTie(
+        state.kineticCountdowns,
+        remoteState.kineticCountdowns
+      );
+      base.fuelScores = mergeFuelScoresForSync(state.fuelScores, remoteState.fuelScores);
+      base.habitCheckins = mergeHabitCheckinsForSync(state.habitCheckins, remoteState.habitCheckins);
+      base.dailyWinTomorrowRef = mergeDailyWinTomorrowRefForSync(
+        state.dailyWinTomorrowRef,
+        remoteState.dailyWinTomorrowRef
+      );
+      base.weeklyPlanDoneRef = mergeWeeklyPlanDoneRefForSync(
+        state.weeklyPlanDoneRef,
+        remoteState.weeklyPlanDoneRef
+      );
+      base.anniversaryDoneRef = mergeAnniversaryDoneRefForSync(
+        state.anniversaryDoneRef,
+        remoteState.anniversaryDoneRef
+      );
+      base.projectTasks = mergeProjectTasksForSync(state.projectTasks, remoteState.projectTasks);
+
+      if (serverNewer) {
+        base.ageGoals = remoteState.ageGoals && typeof remoteState.ageGoals === "object" ? remoteState.ageGoals : {};
+        base.ruleOf100 =
+          remoteState.ruleOf100 && typeof remoteState.ruleOf100 === "object" ? remoteState.ruleOf100 : {};
+        base.weeklyPlan =
+          remoteState.weeklyPlan && typeof remoteState.weeklyPlan === "object" ? remoteState.weeklyPlan : {};
+        base.forge = remoteState.forge && typeof remoteState.forge === "object" ? remoteState.forge : {};
+        base.backwardMeasure =
+          remoteState.backwardMeasure && typeof remoteState.backwardMeasure === "object"
+            ? remoteState.backwardMeasure
+            : {};
+        base.backwardMeasurePeriod =
+          remoteState.backwardMeasurePeriod && typeof remoteState.backwardMeasurePeriod === "object"
+            ? remoteState.backwardMeasurePeriod
+            : {};
+        base.anniversaryTw020 =
+          remoteState.anniversaryTw020 && typeof remoteState.anniversaryTw020 === "object"
+            ? remoteState.anniversaryTw020
+            : base.anniversaryTw020;
+        base.anniversaryTw021 =
+          remoteState.anniversaryTw021 && typeof remoteState.anniversaryTw021 === "object"
+            ? remoteState.anniversaryTw021
+            : base.anniversaryTw021;
+        base.anniversaryTw022 =
+          remoteState.anniversaryTw022 && typeof remoteState.anniversaryTw022 === "object"
+            ? remoteState.anniversaryTw022
+            : base.anniversaryTw022;
+        base.timeReflectionDismissed =
+          remoteState.timeReflectionDismissed &&
+          typeof remoteState.timeReflectionDismissed === "object"
+            ? { ...remoteState.timeReflectionDismissed, ...state.timeReflectionDismissed }
+            : state.timeReflectionDismissed || {};
+      }
+
+      return base;
+    }
+
     function scheduleCloudSyncPush() {
       /* 不在此处判断 cloudSyncPushing：否则正在上传时本地改动会被直接丢弃，直到下一次保存 */
-      if (!cloudSyncReady || cloudSyncApplyingRemote || !cloudSyncRef) return;
+      if (!cloudSyncReady || cloudSyncApplyingRemote || cloudSyncSuppressPush || !cloudSyncRef) return;
       if (cloudSyncPushTimer) clearTimeout(cloudSyncPushTimer);
       cloudSyncPushTimer = setTimeout(() => {
         cloudSyncPushTimer = null;
@@ -20798,7 +21003,7 @@
         scheduleCloudSyncPush();
         return;
       }
-      const nextHash = serializeStateForCloud();
+      let nextHash = serializeStateForCloud();
       if (!nextHash || nextHash === cloudSyncLastHash) return;
       setCloudSyncStatus("同步中...", "status-syncing");
       cloudSyncPushing = true;
@@ -20809,17 +21014,53 @@
         firebase.database.ServerValue.TIMESTAMP != null
           ? firebase.database.ServerValue.TIMESTAMP
           : Date.now();
-      cloudSyncRef
-        .set({
-          state: state,
-          updatedAt: serverTs,
-          updatedBy: cloudSyncClientId
+
+      readRealtimeDbSnapshotOnce(cloudSyncRef)
+        .then((snap) => {
+          const payload = snap && typeof snap.val === "function" ? snap.val() : null;
+          const lastSeen = getCloudLastSeenUpdatedAt();
+          if (payload && payload.state && Array.isArray(payload.state.done)) {
+            const remoteAt = coerceCloudUpdatedAt(payload.updatedAt);
+            const merged = mergeLocalStateWithRemotePayloadBeforePush(payload.state, remoteAt, lastSeen);
+            if (merged) {
+              let mergedJson = "";
+              try {
+                mergedJson = JSON.stringify(merged);
+              } catch (_e) {
+                mergedJson = "";
+              }
+              const beforeJson = serializeStateForCloud();
+              if (mergedJson && mergedJson !== beforeJson) {
+                cloudSyncSuppressPush = true;
+                try {
+                  localStorage.setItem(STORAGE_KEY, mergedJson);
+                  loadState();
+                  setCloudSyncHashFromCurrentState();
+                  render();
+                } finally {
+                  cloudSyncSuppressPush = false;
+                }
+              }
+            }
+          }
+          nextHash = serializeStateForCloud();
+          if (!nextHash || nextHash === cloudSyncLastHash) {
+            setCloudSyncStatus("已连接 ✓", "status-connected");
+            return null;
+          }
+          return cloudSyncRef.set({
+            state: state,
+            updatedAt: serverTs,
+            updatedBy: cloudSyncClientId
+          });
         })
-        .then(() => {
-          cloudSyncLastHash = nextHash;
+        .then((setResult) => {
+          if (setResult === null) {
+            return;
+          }
+          cloudSyncLastHash = serializeStateForCloud();
           cloudSyncLastErrorMsg = "";
           setCloudSyncStatus("已连接 ✓", "status-connected");
-          /* 读回服务端解析后的毫秒时间，写入 lastSeen（与多设备统一时钟轴） */
           return readRealtimeDbSnapshotOnce(cloudSyncRef)
             .then((snap) => {
               const payload = snap && typeof snap.val === "function" ? snap.val() : null;
@@ -20828,9 +21069,7 @@
                 setCloudLastSeenUpdatedAt(ua);
               }
             })
-            .catch(() => {
-              /* 读回失败不当作写入失败；lastSeen 可由 on('value') 本机分支补全 */
-            });
+            .catch(() => {});
         })
         .catch((err) => {
           console.warn("云同步写入失败:", err);
@@ -20838,7 +21077,6 @@
         })
         .finally(() => {
           cloudSyncPushing = false;
-          /* 上传过程中若又有 saveState，450ms 防抖可能未排程；此处补一次比对 */
           if (cloudSyncReady && !cloudSyncApplyingRemote && cloudSyncRef) {
             const h = serializeStateForCloud();
             if (h && h !== cloudSyncLastHash) {
@@ -20950,7 +21188,7 @@
           )
         );
         cloudSyncRef = firebase.database().ref("rooms/" + cloudSyncRoomId + "/state");
-        /* 以云端为准：先读房间快照再订阅；用 updatedAt 与 lastSeen 比较，避免未对齐就用本地覆盖云端 */
+        /* 先读房间快照；与 push 相同做按条合并 + 全局 LWW，避免「remoteAt≤lastSeen」时拒绝拉取导致落后本机丢他端打卡 */
         const initialSnap = await readRealtimeDbSnapshotOnce(cloudSyncRef);
         const initialPayload =
           initialSnap && typeof initialSnap.val === "function"
@@ -20959,25 +21197,29 @@
         if (initialPayload && initialPayload.state && Array.isArray(initialPayload.state.done)) {
           const remoteAt = coerceCloudUpdatedAt(initialPayload.updatedAt);
           const lastSeen = getCloudLastSeenUpdatedAt();
-          let rh = "";
-          let lh = "";
-          try {
-            rh = JSON.stringify(initialPayload.state);
-            lh = serializeStateForCloud();
-          } catch (_e) {}
-          const contentDiff = Boolean(rh && lh && rh !== lh);
-          if (remoteAt > lastSeen) {
-            applyRemoteState(initialPayload.state, false);
-            if (remoteAt > 0) {
-              setCloudLastSeenUpdatedAt(remoteAt);
+          const merged = mergeLocalStateWithRemotePayloadBeforePush(initialPayload.state, remoteAt, lastSeen);
+          if (merged) {
+            let mergedJson = "";
+            try {
+              mergedJson = JSON.stringify(merged);
+            } catch (_e) {
+              mergedJson = "";
             }
-          } else if (remoteAt > 0 && remoteAt === lastSeen && contentDiff) {
-            /* 同一时间戳下内容不一致（极少见）仍对齐云端 */
-            applyRemoteState(initialPayload.state, false);
+            const beforeJson = serializeStateForCloud();
+            if (mergedJson && mergedJson !== beforeJson) {
+              cloudSyncSuppressPush = true;
+              try {
+                localStorage.setItem(STORAGE_KEY, mergedJson);
+                loadState();
+                setCloudSyncHashFromCurrentState();
+                render();
+              } finally {
+                cloudSyncSuppressPush = false;
+              }
+            }
+          }
+          if (remoteAt > 0) {
             setCloudLastSeenUpdatedAt(remoteAt);
-          } else if (remoteAt === 0 && lastSeen === 0 && contentDiff) {
-            applyRemoteState(initialPayload.state, false);
-            setCloudLastSeenUpdatedAt(Date.now());
           }
         }
         setCloudSyncHashFromCurrentState();
@@ -20995,7 +21237,30 @@
             return;
           }
           setCloudSyncStatus("同步中...", "status-syncing");
-          applyRemoteState(payload.state);
+          const lastSeenVal = getCloudLastSeenUpdatedAt();
+          const mergedVal = mergeLocalStateWithRemotePayloadBeforePush(payload.state, ua, lastSeenVal);
+          if (mergedVal) {
+            let mj = "";
+            try {
+              mj = JSON.stringify(mergedVal);
+            } catch (_e) {
+              mj = "";
+            }
+            const bj = serializeStateForCloud();
+            if (mj && mj !== bj) {
+              cloudSyncSuppressPush = true;
+              try {
+                localStorage.setItem(STORAGE_KEY, mj);
+                loadState();
+                setCloudSyncHashFromCurrentState();
+                render();
+              } finally {
+                cloudSyncSuppressPush = false;
+              }
+            }
+          } else if (payload.state && Array.isArray(payload.state.done)) {
+            applyRemoteState(payload.state, false);
+          }
           if (ua > 0) {
             setCloudLastSeenUpdatedAt(ua);
           }
@@ -21046,7 +21311,9 @@
 
     function saveState() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      scheduleCloudSyncPush();
+      if (!cloudSyncSuppressPush) {
+        scheduleCloudSyncPush();
+      }
     }
 
     function loadState() {
