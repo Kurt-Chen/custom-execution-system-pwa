@@ -19651,7 +19651,7 @@
     const STORAGE_KEY = "todo-app-data-v1";
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
     const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260417";
-    /** 本机已确认跟上的云端 payload.updatedAt(ms)。勿用「本机最后保存时间」比较，否则电脑任意一次 save 会误判比手机云端新、拒绝合并 */
+    /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** My Done 手机端行高：{ padY, minHeight }，与 :root 中 --done-list-row-* 对应 */
     const DONE_LIST_ROW_STYLE_KEY = "todo-app-done-list-row-v1";
@@ -20802,18 +20802,35 @@
       if (!nextHash || nextHash === cloudSyncLastHash) return;
       setCloudSyncStatus("同步中...", "status-syncing");
       cloudSyncPushing = true;
-      const pushedAt = Date.now();
+      const serverTs =
+        window.firebase &&
+        firebase.database &&
+        firebase.database.ServerValue &&
+        firebase.database.ServerValue.TIMESTAMP != null
+          ? firebase.database.ServerValue.TIMESTAMP
+          : Date.now();
       cloudSyncRef
         .set({
           state: state,
-          updatedAt: pushedAt,
+          updatedAt: serverTs,
           updatedBy: cloudSyncClientId
         })
         .then(() => {
           cloudSyncLastHash = nextHash;
           cloudSyncLastErrorMsg = "";
           setCloudSyncStatus("已连接 ✓", "status-connected");
-          setCloudLastSeenUpdatedAt(pushedAt);
+          /* 读回服务端解析后的毫秒时间，写入 lastSeen（与多设备统一时钟轴） */
+          return readRealtimeDbSnapshotOnce(cloudSyncRef)
+            .then((snap) => {
+              const payload = snap && typeof snap.val === "function" ? snap.val() : null;
+              const ua = coerceCloudUpdatedAt(payload && payload.updatedAt);
+              if (ua > 0) {
+                setCloudLastSeenUpdatedAt(ua);
+              }
+            })
+            .catch(() => {
+              /* 读回失败不当作写入失败；lastSeen 可由 on('value') 本机分支补全 */
+            });
         })
         .catch((err) => {
           console.warn("云同步写入失败:", err);
@@ -20970,10 +20987,15 @@
         cloudSyncRef.on("value", (snap) => {
           const payload = snap.val();
           if (!payload || !payload.state) return;
-          if (payload.updatedBy === cloudSyncClientId) return;
+          const ua = coerceCloudUpdatedAt(payload.updatedAt);
+          if (payload.updatedBy === cloudSyncClientId) {
+            if (ua > 0) {
+              setCloudLastSeenUpdatedAt(ua);
+            }
+            return;
+          }
           setCloudSyncStatus("同步中...", "status-syncing");
           applyRemoteState(payload.state);
-          const ua = coerceCloudUpdatedAt(payload.updatedAt);
           if (ua > 0) {
             setCloudLastSeenUpdatedAt(ua);
           }
@@ -24750,6 +24772,106 @@
           completedAt: slotTs
         });
         changed = true;
+      }
+      if (changed) saveState();
+      return changed;
+    }
+
+    /** 7:15 / 14:15 / 21:15 插入「N 岁目标 + 倒计时」；N 为 40～60 中下一个 diffDays≥0 的生日里程碑 */
+    const AGE_GOAL_MILESTONE_PROMPT_SLOTS = [
+      { slotKey: "ageGoal0715", h: 7, m: 15 },
+      { slotKey: "ageGoal1415", h: 14, m: 15 },
+      { slotKey: "ageGoal2115", h: 21, m: 15 }
+    ];
+
+    function getChineseLunarDateTimeFormatForAgeGoals() {
+      try {
+        return new Intl.DateTimeFormat("zh-CN-u-ca-chinese", {
+          year: "numeric",
+          month: "long",
+          day: "numeric"
+        });
+      } catch (_e) {
+        return null;
+      }
+    }
+
+    function getActiveAgeGoalMilestoneForDonePrompt() {
+      const lunarFmt = getChineseLunarDateTimeFormatForAgeGoals();
+      if (!lunarFmt) return null;
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      for (let age = 40; age <= 60; age++) {
+        const lunarYear = 1986 + age;
+        const target = findGregorianDateForLunarBirthday(lunarYear, lunarFmt);
+        if (!target) continue;
+        const diffMs = target.getTime() - today.getTime();
+        const diffDays = Math.ceil(diffMs / 86400000);
+        if (diffDays >= 0) {
+          return { n: age, diffDays: diffDays };
+        }
+      }
+      return null;
+    }
+
+    function buildAgeGoalMilestoneDonePromptText(milestone) {
+      if (!milestone || typeof milestone.n !== "number") return "";
+      const n = milestone.n;
+      const diffDays = milestone.diffDays;
+      const raw = getAgeGoalTargets(n);
+      const arr = [0, 1, 2].map((i) => {
+        const t = String(raw[i] || "").trim();
+        return t ? t : "（未填）";
+      });
+      const goalsPart = n + "岁目标：①" + arr[0] + "；②" + arr[1] + "；③" + arr[2] + "。";
+      const countdownPart =
+        diffDays > 0
+          ? "倒计时：还有" + diffDays + "天！"
+          : "倒计时：今天就是" + n + "岁生日！";
+      return goalsPart + countdownPart;
+    }
+
+    /** 与定时反思相同：过钟点插入；已存在则刷新文案（随目标编辑 / 倒计时变化更新） */
+    function ensureAgeGoalMilestonePromptsForToday() {
+      const todayKey = formatDateInputValue(new Date());
+      const now = Date.now();
+      let changed = false;
+      ensureTimeReflectionDismissedMap();
+      const milestone = getActiveAgeGoalMilestoneForDonePrompt();
+      if (milestone && milestone.n === 40 && ensureDefaultAge40Goals()) {
+        changed = true;
+      }
+      if (!milestone) {
+        if (changed) saveState();
+        return changed;
+      }
+      const lineText = buildAgeGoalMilestoneDonePromptText(milestone);
+      if (!lineText) {
+        if (changed) saveState();
+        return changed;
+      }
+      for (let i = 0; i < AGE_GOAL_MILESTONE_PROMPT_SLOTS.length; i++) {
+        const slot = AGE_GOAL_MILESTONE_PROMPT_SLOTS[i];
+        const slotTs = doneAtDateHourMinute(todayKey, slot.h, slot.m);
+        if (now < slotTs) continue;
+        const id = timeReflectionStableId(todayKey, slot.slotKey);
+        if (state.timeReflectionDismissed[id]) continue;
+        const found = state.done.find((t) => t.id === id);
+        if (found) {
+          if (found.text !== lineText) {
+            found.text = lineText;
+            changed = true;
+          }
+        } else {
+          state.done.push({
+            id,
+            kind: "timeReflection",
+            text: lineText,
+            createdAt: slotTs,
+            completedAt: slotTs
+          });
+          changed = true;
+        }
       }
       if (changed) saveState();
       return changed;
@@ -28995,6 +29117,7 @@
       syncAnniversaryTw021DoneList();
       syncAnniversaryTw022DoneList();
       ensureTimeReflectionPromptsForToday();
+      ensureAgeGoalMilestonePromptsForToday();
       doneList.classList.remove("timeline-list");
       doneList.classList.add("done-time-block-list", "app-done-time-timeline");
       const filteredDoneTasks = state.done.filter((task) => isSameDate(task.completedAt, selectedDoneDate));
@@ -30031,14 +30154,14 @@
     }, 30000);
 
     setInterval(function () {
-      if (ensureTimeReflectionPromptsForToday()) {
+      if (ensureTimeReflectionPromptsForToday() || ensureAgeGoalMilestonePromptsForToday()) {
         render();
       }
     }, 60000);
 
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState !== "visible") return;
-      if (ensureTimeReflectionPromptsForToday()) {
+      if (ensureTimeReflectionPromptsForToday() || ensureAgeGoalMilestonePromptsForToday()) {
         render();
       }
     });
