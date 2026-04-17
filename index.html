@@ -24605,6 +24605,25 @@
       });
     }
 
+    /** 从 My Done 删除/恢复周计划镜像时，同步撤销周计划里的完成态，避免 render→syncWeeklyPlanDoneList 立刻补回 */
+    function revertWeeklyPlanCompletionFromDoneMeta(meta) {
+      if (!meta || typeof meta !== "object") return;
+      const weekKey = meta.weekKey;
+      const taskId = meta.taskId;
+      if (!weekKey || !taskId) return;
+      const tasks = getWeeklyPlanTasksForWeekKey(weekKey);
+      const wpTask = tasks.find((t) => t.id === taskId);
+      if (!wpTask) return;
+      if (meta.kind === "micro" && meta.microId) {
+        const m = (wpTask.microTasks || []).find((x) => x.id === meta.microId);
+        if (m) m.done = false;
+        applyWeeklyPlanMainDoneFromMicros(wpTask);
+      } else {
+        wpTask.mainDone = false;
+      }
+      saveWeeklyPlanTasksForWeek(tasks, weekKey);
+    }
+
     function restoreTask(id) {
       const idx = state.done.findIndex((item) => item.id === id);
       if (idx === -1) return;
@@ -24613,6 +24632,7 @@
         return;
       }
       if (task.weeklyPlanMeta && task.weeklyPlanMeta.weekKey) {
+        revertWeeklyPlanCompletionFromDoneMeta(task.weeklyPlanMeta);
         const wk = task.weeklyPlanMeta.weekKey;
         const sk = task.weeklyPlanMeta.syncKey;
         if (!state.weeklyPlanDoneRef || typeof state.weeklyPlanDoneRef !== "object") {
@@ -24774,6 +24794,7 @@
       }
       if (listName === "done") {
         if (task.weeklyPlanMeta && task.weeklyPlanMeta.weekKey) {
+          revertWeeklyPlanCompletionFromDoneMeta(task.weeklyPlanMeta);
           const wk = task.weeklyPlanMeta.weekKey;
           const sk = task.weeklyPlanMeta.syncKey;
           if (!state.weeklyPlanDoneRef || typeof state.weeklyPlanDoneRef !== "object") {
@@ -25173,6 +25194,14 @@
         body: ""
       },
       {
+        slotKey: "0440ideaGap",
+        h: 4,
+        m: 40,
+        title:
+          "一个人能培养的最伟大技能，就是缩短想法与执行之间的差距（The Idea-Reality Gap）。Potency/Power = The Gap between Thoughts and Action.",
+        body: ""
+      },
+      {
         slotKey: "avoid0505",
         h: 5,
         m: 5,
@@ -25254,6 +25283,13 @@
         body: ""
       },
       {
+        slotKey: "1150roadHeaven",
+        h: 11,
+        m: 50,
+        title: "The Road To Heaven Feels Like Hell. The Road To Hell Feels Like Heaven.",
+        body: ""
+      },
+      {
         slotKey: "1200",
         h: 12,
         m: 0,
@@ -25265,6 +25301,14 @@
         h: 12,
         m: 30,
         title: "MONEY = Freedom = Confidence = Options = Power",
+        body: ""
+      },
+      {
+        slotKey: "1250agency",
+        h: 12,
+        m: 50,
+        title:
+          "Agency > Intelligence，Blame yourself for everything, and preserve your agency. Capitalism rewards agency far more, than it does intelligence.",
         body: ""
       },
       {
@@ -25313,6 +25357,14 @@
         body: ""
       },
       {
+        slotKey: "1800timeDepth",
+        h: 18,
+        m: 0,
+        title:
+          "时间不是你消耗的东西，而是你覆盖的距离。深层时间：20年经验压缩进一年。浅层时间：一年经验重复了20年。如果时间线很长，那它就是错的。如果你想要不现实的结果，你需要使用不现实的截止日期。",
+        body: ""
+      },
+      {
         slotKey: "1900",
         h: 19,
         m: 0,
@@ -25354,6 +25406,14 @@
         m: 0,
         title:
           "写「每天三赢」，手写或朗读一遍「人生使命、价值观、愿景、目标、身份认同」！",
+        body: ""
+      },
+      {
+        slotKey: "2245skillVol",
+        h: 22,
+        m: 45,
+        title:
+          "Skill = Volume/Reps × Feedback Loops（技能 = 重复次数× 练习间的改进程度）。以\"数百小时\"衡量投入。任何技能：只要20小时的专注努力 → \"足够好\"！",
         body: ""
       },
       {
@@ -25404,6 +25464,29 @@
         h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
       }
       return Math.abs(h) % 3;
+    }
+
+    /** 走 secondary 色：按 TIME_REFLECTION_SLOTS 钟点排序后的下标 %3，排序上相邻两条必不同色；表外 key 回退哈希 */
+    let __timeReflectionChronoMod3BySlotKey = null;
+    function timeReflectionChronoSecondaryVariantIndex(slotKey) {
+      if (!__timeReflectionChronoMod3BySlotKey) {
+        const map = Object.create(null);
+        const ord = TIME_REFLECTION_SLOTS.slice().sort(function (a, b) {
+          const ta = a.h * 60 + a.m;
+          const tb = b.h * 60 + b.m;
+          if (ta !== tb) return ta - tb;
+          return String(a.slotKey).localeCompare(String(b.slotKey));
+        });
+        for (let i = 0; i < ord.length; i++) {
+          map[String(ord[i].slotKey)] = i % 3;
+        }
+        __timeReflectionChronoMod3BySlotKey = map;
+      }
+      const sk = String(slotKey || "");
+      if (Object.prototype.hasOwnProperty.call(__timeReflectionChronoMod3BySlotKey, sk)) {
+        return __timeReflectionChronoMod3BySlotKey[sk];
+      }
+      return timeReflectionSecondaryVariantIndex(sk);
     }
 
     /** 与 TIME_REFLECTION 中带 body 的六条对应：My Done 正文用蓝色（见 .task-text--time-reflection-blue） */
@@ -25522,7 +25605,7 @@
       const goalsPart = n + "岁目标：①" + arr[0] + "；②" + arr[1] + "；③" + arr[2] + "。";
       const countdownLead =
         diffDays > 0
-          ? "倒数日：还有" + diffDays + "天！"
+          ? "倒数日：仅剩" + diffDays + "天。"
           : "倒数日：今天就是" + n + "岁生日！";
       return countdownLead + goalsPart;
     }
@@ -26049,7 +26132,7 @@
           } else {
             const sk = trSlotKey || String(task.id || "x");
             textEl.classList.add(
-              "task-text--time-reflection-secondary-" + String(timeReflectionSecondaryVariantIndex(sk))
+              "task-text--time-reflection-secondary-" + String(timeReflectionChronoSecondaryVariantIndex(sk))
             );
           }
         }
@@ -28236,7 +28319,7 @@
       const dayDiff = kineticCalendarDaysFromToday(deadlineMs);
       let countdownPart = "";
       if (dayDiff > 0) {
-        countdownPart = "距第12周截止还剩 " + dayDiff + " 天";
+        countdownPart = "仅剩" + dayDiff + "天";
       } else if (dayDiff === 0) {
         countdownPart = "今天为第12周截止日";
       } else {
@@ -28624,7 +28707,7 @@
       remainEl.className = "tw020-cd-remain";
       if (dayDiff > 0) {
         remainEl.classList.add("future");
-        remainEl.textContent = "距第12周截止还剩 " + dayDiff + " 天";
+        remainEl.textContent = "仅剩" + dayDiff + "天";
       } else if (dayDiff === 0) {
         remainEl.classList.add("today");
         remainEl.textContent = "今天为第12周截止日";
@@ -29146,7 +29229,7 @@
           remainEl.className = "tw020-cd-remain";
           if (dayDiff > 0) {
             remainEl.classList.add("future");
-            remainEl.textContent = "距第12周截止还剩 " + dayDiff + " 天";
+            remainEl.textContent = "仅剩" + dayDiff + "天";
           } else if (dayDiff === 0) {
             remainEl.classList.add("today");
             remainEl.textContent = "今天为第12周截止日";
@@ -29679,7 +29762,7 @@
           remainEl.className = "tw020-cd-remain";
           if (dayDiff > 0) {
             remainEl.classList.add("future");
-            remainEl.textContent = "距第12周截止还剩 " + dayDiff + " 天";
+            remainEl.textContent = "仅剩" + dayDiff + "天";
           } else if (dayDiff === 0) {
             remainEl.classList.add("today");
             remainEl.textContent = "今天为第12周截止日";
