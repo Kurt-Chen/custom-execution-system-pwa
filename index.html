@@ -7575,6 +7575,14 @@
       max-width: 100%;
       overflow: hidden;
     }
+    /* WebView（如 ColorOS）：时段横排行折叠态 width:0 与 flex 横轴宽度分配叠加会导致正文趋近 0 宽、一字一行；改 auto，单行省略仍由 .task-text 承担 */
+    ul.app-done-time-timeline.done-time-block-list .done-time-block-item--flex-row.timeline-item:not(.done-text-expanded) .done-compact-text-wrap {
+      width: auto;
+      flex: 1 1 0%;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+    }
     ul.app-done-time-timeline .timeline-item:not(.done-text-expanded) .done-compact-row .task-text {
       display: block;
       width: 100%;
@@ -7829,6 +7837,9 @@
     }
 
     ul.app-done-time-timeline .timeline-item.done-row-menu-open:not(.done-text-expanded) .done-compact-text-wrap {
+      overflow: visible;
+    }
+    ul.app-done-time-timeline.done-time-block-list .done-time-block-item--flex-row.timeline-item.done-row-menu-open:not(.done-text-expanded) .done-compact-text-wrap {
       overflow: visible;
     }
 
@@ -11698,6 +11709,21 @@
       color: #831843;
     }
 
+    .anniversary-story-plan-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 6px 8px;
+      margin: 0 0 6px;
+    }
+
+    .anniversary-story-plan-actions .anniversary-story-plan-save-btn:disabled,
+    .anniversary-story-plan-actions .anniversary-story-plan-edit-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
     .anniversary-story-plan-input {
       display: block;
       width: 100%;
@@ -11719,6 +11745,11 @@
       outline: 2px solid rgba(219, 39, 119, 0.25);
       border-color: #f472b6;
       background: #fff;
+    }
+
+    .anniversary-story-plan-input[readonly] {
+      cursor: default;
+      background: #f5f3ff;
     }
 
     .anniversary-tw020-countdown {
@@ -17044,12 +17075,30 @@
                     </div>
                     <div class="anniversary-story-plan-body">
                       <label class="anniversary-story-plan-label" for="anniversary020FutureStory">未来故事</label>
+                      <div class="anniversary-story-plan-actions">
+                        <button
+                          type="button"
+                          id="anniversary020StoryEditBtn"
+                          class="anniversary-story-plan-edit-btn tw020-btn-mini"
+                        >
+                          修改
+                        </button>
+                        <button
+                          type="button"
+                          id="anniversary020StorySaveBtn"
+                          class="anniversary-story-plan-save-btn tw020-btn-mini"
+                          disabled
+                        >
+                          保存
+                        </button>
+                      </div>
                       <textarea
                         id="anniversary020FutureStory"
                         class="anniversary-story-plan-input"
                         rows="5"
                         placeholder="在此书写你的未来故事…"
                         spellcheck="true"
+                        readonly
                       ></textarea>
                     </div>
                   </div>
@@ -17104,12 +17153,30 @@
                     </div>
                     <div class="anniversary-story-plan-body">
                       <label class="anniversary-story-plan-label" for="anniversary021FutureStory">未来故事</label>
+                      <div class="anniversary-story-plan-actions">
+                        <button
+                          type="button"
+                          id="anniversary021StoryEditBtn"
+                          class="anniversary-story-plan-edit-btn tw020-btn-mini"
+                        >
+                          修改
+                        </button>
+                        <button
+                          type="button"
+                          id="anniversary021StorySaveBtn"
+                          class="anniversary-story-plan-save-btn tw020-btn-mini"
+                          disabled
+                        >
+                          保存
+                        </button>
+                      </div>
                       <textarea
                         id="anniversary021FutureStory"
                         class="anniversary-story-plan-input"
                         rows="5"
                         placeholder="在此书写你的未来故事…"
                         spellcheck="true"
+                        readonly
                       ></textarea>
                     </div>
                   </div>
@@ -17164,12 +17231,30 @@
                     </div>
                     <div class="anniversary-story-plan-body">
                       <label class="anniversary-story-plan-label" for="anniversary022FutureStory">未来故事</label>
+                      <div class="anniversary-story-plan-actions">
+                        <button
+                          type="button"
+                          id="anniversary022StoryEditBtn"
+                          class="anniversary-story-plan-edit-btn tw020-btn-mini"
+                        >
+                          修改
+                        </button>
+                        <button
+                          type="button"
+                          id="anniversary022StorySaveBtn"
+                          class="anniversary-story-plan-save-btn tw020-btn-mini"
+                          disabled
+                        >
+                          保存
+                        </button>
+                      </div>
                       <textarea
                         id="anniversary022FutureStory"
                         class="anniversary-story-plan-input"
                         rows="5"
                         placeholder="在此书写你的未来故事…"
                         spellcheck="true"
+                        readonly
                       ></textarea>
                     </div>
                   </div>
@@ -21882,6 +21967,186 @@
       };
     }
 
+    /** 十二周年 TW020/021/022：按周、按任务 id 深合并；字段冲突时 preferRemote=true 取远端（与 serverNewer 一致），否则取本机；仅在一端出现的任务保留。 */
+    function mergeTwDisjointString(locStr, remStr, preferRemote) {
+      const a = typeof locStr === "string" ? locStr : "";
+      const b = typeof remStr === "string" ? remStr : "";
+      if (a === b) return a;
+      if (!a) return b;
+      if (!b) return a;
+      return preferRemote ? b : a;
+    }
+
+    function mergeTwSubsForSync(remSubs, locSubs, preferRemote) {
+      const R = Array.isArray(remSubs) ? remSubs : [];
+      const L = Array.isArray(locSubs) ? locSubs : [];
+      const map = new Map();
+      R.forEach(function (s) {
+        if (!s || !s.id) return;
+        map.set(s.id, {
+          id: s.id,
+          text: typeof s.text === "string" ? s.text : "",
+          done: Boolean(s.done)
+        });
+      });
+      L.forEach(function (s) {
+        if (!s || !s.id) return;
+        const loc = {
+          id: s.id,
+          text: typeof s.text === "string" ? s.text : "",
+          done: Boolean(s.done)
+        };
+        const ex = map.get(loc.id);
+        if (!ex) {
+          map.set(loc.id, loc);
+          return;
+        }
+        const rt = ex.text;
+        const lt = loc.text;
+        const text = rt !== lt ? (preferRemote ? rt : lt) : lt;
+        const done = ex.done !== loc.done ? (preferRemote ? ex.done : loc.done) : loc.done;
+        map.set(loc.id, { id: loc.id, text: text, done: done });
+      });
+      const order = [];
+      const seen = new Set();
+      R.forEach(function (s) {
+        if (s && s.id && !seen.has(s.id)) {
+          order.push(s.id);
+          seen.add(s.id);
+        }
+      });
+      L.forEach(function (s) {
+        if (s && s.id && !seen.has(s.id)) {
+          order.push(s.id);
+          seen.add(s.id);
+        }
+      });
+      return order
+        .map(function (id) {
+          return map.get(id);
+        })
+        .filter(Boolean);
+    }
+
+    function cloneTwTaskForMerge(t) {
+      if (!t || typeof t !== "object") {
+        return { id: newTw020Id(), text: "", subs: [], done: false };
+      }
+      return {
+        id: typeof t.id === "string" && t.id ? t.id : newTw020Id(),
+        text: typeof t.text === "string" ? t.text : "",
+        done: Boolean(t.done),
+        subs: mergeTwSubsForSync(t.subs || [], [], false)
+      };
+    }
+
+    function mergeTwOneTask(remBase, locTask, preferRemote) {
+      const r = remBase || {};
+      const l = locTask || {};
+      const id = (typeof l.id === "string" && l.id) || (typeof r.id === "string" && r.id) || newTw020Id();
+      const rt = typeof r.text === "string" ? r.text : "";
+      const lt = typeof l.text === "string" ? l.text : "";
+      const text = rt !== lt ? (preferRemote ? rt : lt) : lt;
+      const rDone = Boolean(r.done);
+      const lDone = Boolean(l.done);
+      const done = rDone !== lDone ? (preferRemote ? rDone : lDone) : lDone;
+      const subs = mergeTwSubsForSync(r.subs || [], l.subs || [], preferRemote);
+      return { id: id, text: text, subs: subs, done: done };
+    }
+
+    function mergeTwWeekTasksForSync(remWeekArr, locWeekArr, preferRemote) {
+      const map = new Map();
+      (Array.isArray(remWeekArr) ? remWeekArr : []).forEach(function (t) {
+        if (t && t.id) {
+          map.set(t.id, cloneTwTaskForMerge(t));
+        }
+      });
+      (Array.isArray(locWeekArr) ? locWeekArr : []).forEach(function (t) {
+        if (!t || !t.id) return;
+        const loc = cloneTwTaskForMerge(t);
+        const ex = map.get(loc.id);
+        if (!ex) {
+          map.set(loc.id, loc);
+          return;
+        }
+        map.set(loc.id, mergeTwOneTask(ex, loc, preferRemote));
+      });
+      const order = [];
+      const seen = new Set();
+      (Array.isArray(remWeekArr) ? remWeekArr : []).forEach(function (t) {
+        if (t && t.id && map.has(t.id) && !seen.has(t.id)) {
+          order.push(t.id);
+          seen.add(t.id);
+        }
+      });
+      (Array.isArray(locWeekArr) ? locWeekArr : []).forEach(function (t) {
+        if (t && t.id && !seen.has(t.id)) {
+          order.push(t.id);
+          seen.add(t.id);
+        }
+      });
+      return order
+        .map(function (id) {
+          return map.get(id);
+        })
+        .filter(Boolean);
+    }
+
+    function mergeTw020WeeksMapsForSync(locWeeks, remWeeks, preferRemote) {
+      const out = {};
+      for (let w = 1; w <= 13; w++) {
+        const k = String(w);
+        out[k] = mergeTwWeekTasksForSync(
+          (remWeeks && remWeeks[k]) || [],
+          (locWeeks && locWeeks[k]) || [],
+          preferRemote
+        );
+      }
+      return out;
+    }
+
+    function mergeAnniversaryTwUiOverlay(localUi, remoteUi) {
+      const lui = localUi && typeof localUi === "object" ? localUi : {};
+      const rui = remoteUi && typeof remoteUi === "object" ? remoteUi : {};
+      return {
+        weekExpanded: { ...(rui.weekExpanded || {}), ...(lui.weekExpanded || {}) },
+        taskExpanded: { ...(rui.taskExpanded || {}), ...(lui.taskExpanded || {}) }
+      };
+    }
+
+    function mergeAnniversaryTw020ModuleForSync(localMod, remoteMod, preferRemote) {
+      const lo = localMod && typeof localMod === "object" ? localMod : { weeks: {}, futureStory: "" };
+      const ro = remoteMod && typeof remoteMod === "object" ? remoteMod : { weeks: {}, futureStory: "" };
+      return {
+        weeks: mergeTw020WeeksMapsForSync(lo.weeks || {}, ro.weeks || {}, preferRemote),
+        futureStory: mergeTwDisjointString(lo.futureStory, ro.futureStory, preferRemote),
+        ui: mergeAnniversaryTwUiOverlay(lo.ui, ro.ui)
+      };
+    }
+
+    function mergeAnniversaryTwAnchorModuleForSync(localMod, remoteMod, preferRemote) {
+      const lo = localMod && typeof localMod === "object" ? localMod : { anchor: null, weeks: {}, futureStory: "" };
+      const ro = remoteMod && typeof remoteMod === "object" ? remoteMod : { anchor: null, weeks: {}, futureStory: "" };
+      const la = lo.anchor != null ? String(lo.anchor) : null;
+      const ra = ro.anchor != null ? String(ro.anchor) : null;
+      let anchor = la;
+      if (ra == null) {
+        anchor = la;
+      } else if (la == null) {
+        anchor = ra;
+      } else if (ra !== la) {
+        anchor = preferRemote ? ra : la;
+      } else {
+        anchor = la;
+      }
+      return {
+        anchor: anchor,
+        weeks: mergeTw020WeeksMapsForSync(lo.weeks || {}, ro.weeks || {}, preferRemote),
+        futureStory: mergeTwDisjointString(lo.futureStory, ro.futureStory, preferRemote),
+        ui: mergeAnniversaryTwUiOverlay(lo.ui, ro.ui)
+      };
+    }
+
     /**
      * 推送前先与云端快照合并：按条并集，避免旧本机整包覆盖他端新打卡。
      * remoteUpdatedAt > lastSeen 时，全局配置类子树以远端为准（LWW）。
@@ -21926,6 +22191,23 @@
       );
       base.projectTasks = mergeProjectTasksForSync(state.projectTasks, remoteState.projectTasks);
 
+      const anniversaryTwPreferRemote = serverNewer;
+      base.anniversaryTw020 = mergeAnniversaryTw020ModuleForSync(
+        state.anniversaryTw020,
+        remoteState.anniversaryTw020,
+        anniversaryTwPreferRemote
+      );
+      base.anniversaryTw021 = mergeAnniversaryTwAnchorModuleForSync(
+        state.anniversaryTw021,
+        remoteState.anniversaryTw021,
+        anniversaryTwPreferRemote
+      );
+      base.anniversaryTw022 = mergeAnniversaryTwAnchorModuleForSync(
+        state.anniversaryTw022,
+        remoteState.anniversaryTw022,
+        anniversaryTwPreferRemote
+      );
+
       if (serverNewer) {
         base.ageGoals = remoteState.ageGoals && typeof remoteState.ageGoals === "object" ? remoteState.ageGoals : {};
         base.ruleOf100 =
@@ -21941,18 +22223,6 @@
           remoteState.backwardMeasurePeriod && typeof remoteState.backwardMeasurePeriod === "object"
             ? remoteState.backwardMeasurePeriod
             : {};
-        base.anniversaryTw020 =
-          remoteState.anniversaryTw020 && typeof remoteState.anniversaryTw020 === "object"
-            ? remoteState.anniversaryTw020
-            : base.anniversaryTw020;
-        base.anniversaryTw021 =
-          remoteState.anniversaryTw021 && typeof remoteState.anniversaryTw021 === "object"
-            ? remoteState.anniversaryTw021
-            : base.anniversaryTw021;
-        base.anniversaryTw022 =
-          remoteState.anniversaryTw022 && typeof remoteState.anniversaryTw022 === "object"
-            ? remoteState.anniversaryTw022
-            : base.anniversaryTw022;
         base.timeReflectionDismissed =
           remoteState.timeReflectionDismissed &&
           typeof remoteState.timeReflectionDismissed === "object"
@@ -26315,7 +26585,7 @@
         h: 4,
         m: 0,
         title:
-          "砖块哲学：不要去想那堵该死的墙；没有墙，只有砖头。你的任务是完美地铺好这一块砖，然后再去铺下一块。成功没有任何秘密，只有枯燥但有效的准则：你只需要每天出现，然后铺好下一块砖。",
+          "不要去想那堵该死的墙；没有墙，只有砖头。你的任务是完美地铺好这一块砖，然后再去铺下一块。成功没有任何秘密，只有枯燥但有效的准则：你只需要每天出现，然后铺好下一块砖。",
         body: ""
       },
       {
@@ -26385,6 +26655,22 @@
         h: 20,
         m: 55,
         title: "Scrolling = Brain fog，Eating too much = Brain fog.",
+        body: ""
+      },
+      {
+        slotKey: "elonCorrectiveFeedback2320",
+        h: 23,
+        m: 20,
+        title:
+          "确保你有一个「可纠错的反馈闭环」。最强的人不是不犯错的人，而是那个「纠错频率」最高的人。——马斯克",
+        body: ""
+      },
+      {
+        slotKey: "duanBenfen2340",
+        h: 23,
+        m: 40,
+        title:
+          "本分简单讲就是「做对的事情，把事情做对」。「发现错误马上改正，再大的代价都是最小的代价」。我不信勤奋，我只信做对的事情。本分 =「坚持做对的事情」=「停止做错的事情」/「Stop doing list」= 成功的秘诀——段永平",
         body: ""
       }
     ];
@@ -29847,43 +30133,99 @@
 
     const anniversaryFutureStoryTimers = { t020: null, t021: null, t022: null };
 
+    function syncAnniversaryFutureStoryTextareaFromState(ta, futureStory) {
+      if (!ta) {
+        return;
+      }
+      if (ta.readOnly) {
+        const v = futureStory || "";
+        if (ta.value !== v) {
+          ta.value = v;
+        }
+        return;
+      }
+      if (document.activeElement === ta) {
+        return;
+      }
+    }
+
+    function refreshAnniversaryStoryPlanActionButtons(ta) {
+      if (!ta || !ta.id) {
+        return;
+      }
+      const m = /^(anniversary\d{3})FutureStory$/.exec(ta.id);
+      if (!m) {
+        return;
+      }
+      const pre = m[1];
+      const editBtn = document.getElementById(pre + "StoryEditBtn");
+      const saveBtn = document.getElementById(pre + "StorySaveBtn");
+      if (editBtn) {
+        editBtn.disabled = !ta.readOnly;
+      }
+      if (saveBtn) {
+        saveBtn.disabled = ta.readOnly;
+      }
+    }
+
+    function commitAnniversaryFutureStoryFromTextarea(ta) {
+      if (!ta || !ta.id) {
+        return;
+      }
+      if (ta.id === "anniversary020FutureStory") {
+        normalizeAnniversaryTw020State();
+        state.anniversaryTw020.futureStory = String(ta.value || "");
+      } else if (ta.id === "anniversary021FutureStory") {
+        normalizeAnniversaryTw021State();
+        state.anniversaryTw021.futureStory = String(ta.value || "");
+      } else if (ta.id === "anniversary022FutureStory") {
+        normalizeAnniversaryTw022State();
+        state.anniversaryTw022.futureStory = String(ta.value || "");
+      }
+    }
+
     function bindAnniversaryFutureStoryInputs() {
-      const t020 = document.getElementById("anniversary020FutureStory");
-      if (t020 && !t020.dataset.bound) {
-        t020.dataset.bound = "1";
-        t020.addEventListener("input", () => {
-          clearTimeout(anniversaryFutureStoryTimers.t020);
-          anniversaryFutureStoryTimers.t020 = setTimeout(() => {
-            normalizeAnniversaryTw020State();
-            state.anniversaryTw020.futureStory = String(t020.value || "");
+      function wireFutureStoryTextarea(ta, timerKey) {
+        if (!ta || ta.dataset.bound) {
+          return;
+        }
+        ta.dataset.bound = "1";
+        ta.readOnly = true;
+        refreshAnniversaryStoryPlanActionButtons(ta);
+        ta.addEventListener("input", () => {
+          if (ta.readOnly) {
+            return;
+          }
+          clearTimeout(anniversaryFutureStoryTimers[timerKey]);
+          anniversaryFutureStoryTimers[timerKey] = setTimeout(() => {
+            commitAnniversaryFutureStoryFromTextarea(ta);
             saveState();
           }, 450);
         });
-      }
-      const t021 = document.getElementById("anniversary021FutureStory");
-      if (t021 && !t021.dataset.bound) {
-        t021.dataset.bound = "1";
-        t021.addEventListener("input", () => {
-          clearTimeout(anniversaryFutureStoryTimers.t021);
-          anniversaryFutureStoryTimers.t021 = setTimeout(() => {
-            normalizeAnniversaryTw021State();
-            state.anniversaryTw021.futureStory = String(t021.value || "");
+        const m = /^(anniversary\d{3})FutureStory$/.exec(ta.id);
+        const pre = m ? m[1] : "";
+        const editBtn = pre ? document.getElementById(pre + "StoryEditBtn") : null;
+        const saveBtn = pre ? document.getElementById(pre + "StorySaveBtn") : null;
+        if (editBtn) {
+          editBtn.addEventListener("click", () => {
+            ta.readOnly = false;
+            refreshAnniversaryStoryPlanActionButtons(ta);
+            ta.focus();
+          });
+        }
+        if (saveBtn) {
+          saveBtn.addEventListener("click", () => {
+            clearTimeout(anniversaryFutureStoryTimers[timerKey]);
+            commitAnniversaryFutureStoryFromTextarea(ta);
             saveState();
-          }, 450);
-        });
+            ta.readOnly = true;
+            refreshAnniversaryStoryPlanActionButtons(ta);
+          });
+        }
       }
-      const t022 = document.getElementById("anniversary022FutureStory");
-      if (t022 && !t022.dataset.bound) {
-        t022.dataset.bound = "1";
-        t022.addEventListener("input", () => {
-          clearTimeout(anniversaryFutureStoryTimers.t022);
-          anniversaryFutureStoryTimers.t022 = setTimeout(() => {
-            normalizeAnniversaryTw022State();
-            state.anniversaryTw022.futureStory = String(t022.value || "");
-            saveState();
-          }, 450);
-        });
-      }
+      wireFutureStoryTextarea(document.getElementById("anniversary020FutureStory"), "t020");
+      wireFutureStoryTextarea(document.getElementById("anniversary021FutureStory"), "t021");
+      wireFutureStoryTextarea(document.getElementById("anniversary022FutureStory"), "t022");
     }
 
     function bindAnniversaryCollapsibles() {
@@ -29924,11 +30266,9 @@
     function renderAnniversaryTw020() {
       normalizeAnniversaryTw020State();
       const ta020 = document.getElementById("anniversary020FutureStory");
-      if (ta020 && document.activeElement !== ta020) {
-        const fv = state.anniversaryTw020.futureStory || "";
-        if (ta020.value !== fv) {
-          ta020.value = fv;
-        }
+      if (ta020) {
+        syncAnniversaryFutureStoryTextareaFromState(ta020, state.anniversaryTw020.futureStory);
+        refreshAnniversaryStoryPlanActionButtons(ta020);
       }
       const elCd = document.getElementById("anniversary020Countdown");
       const elCur = document.getElementById("anniversary020CurrentWeek");
@@ -30425,11 +30765,9 @@
     function renderAnniversaryTw021() {
       normalizeAnniversaryTw021State();
       const ta021 = document.getElementById("anniversary021FutureStory");
-      if (ta021 && document.activeElement !== ta021) {
-        const fv = state.anniversaryTw021.futureStory || "";
-        if (ta021.value !== fv) {
-          ta021.value = fv;
-        }
+      if (ta021) {
+        syncAnniversaryFutureStoryTextareaFromState(ta021, state.anniversaryTw021.futureStory);
+        refreshAnniversaryStoryPlanActionButtons(ta021);
       }
       const elCd = document.getElementById("anniversary021Countdown");
       const elCur = document.getElementById("anniversary021CurrentWeek");
@@ -30958,11 +31296,9 @@
     function renderAnniversaryTw022() {
       normalizeAnniversaryTw022State();
       const ta022 = document.getElementById("anniversary022FutureStory");
-      if (ta022 && document.activeElement !== ta022) {
-        const fv = state.anniversaryTw022.futureStory || "";
-        if (ta022.value !== fv) {
-          ta022.value = fv;
-        }
+      if (ta022) {
+        syncAnniversaryFutureStoryTextareaFromState(ta022, state.anniversaryTw022.futureStory);
+        refreshAnniversaryStoryPlanActionButtons(ta022);
       }
       const elCd = document.getElementById("anniversary022Countdown");
       const elCur = document.getElementById("anniversary022CurrentWeek");
@@ -33752,6 +34088,20 @@
       );
     }
 
+    /** 与 Sexual Performance 固定项一致：周最低标准中仅允许 realm=spt（腹肌轮 / 凯格尔 / 边缘控制） */
+    function forgeWpIsSptExclusiveWeeklyMinName(nameRaw) {
+      const key = forgeWpNormalizeTaskKey(String(nameRaw || "").split("/")[0].trim());
+      if (!key) {
+        return false;
+      }
+      for (let i = 0; i < FORGE_WP_SPT_TASK_NAME_EXTRAS.length; i++) {
+        if (forgeWpNormalizeTaskKey(FORGE_WP_SPT_TASK_NAME_EXTRAS[i]) === key) {
+          return true;
+        }
+      }
+      return false;
+    }
+
     function ensureForgeWeeklyMinimumsState() {
       if (!state.forge || typeof state.forge !== "object") state.forge = {};
       if (!Array.isArray(state.forge.weeklyMinimums)) state.forge.weeklyMinimums = [];
@@ -33760,6 +34110,10 @@
         if (!r || typeof r !== "object") return;
         if (r.realm !== "mind" && r.realm !== "body" && r.realm !== "spt") {
           r.realm = "body";
+          migratedRealm = true;
+        }
+        if (forgeWpIsSptExclusiveWeeklyMinName(r.label) && r.realm !== "spt") {
+          r.realm = "spt";
           migratedRealm = true;
         }
       });
@@ -33791,6 +34145,7 @@
       dlMind.innerHTML = "";
       dlBody.innerHTML = "";
       dlSpt.innerHTML = "";
+      ensureForgeWeeklyMinimumsState();
       const mod = document.getElementById("forgeModule");
       if (mod) {
         const mindPanel = mod.querySelector("#forgePanelMind");
@@ -33804,7 +34159,7 @@
             if (!beforeSlash) return;
             if (realm === "mind") addMind(beforeSlash);
             else if (realm === "spt") addSpt(beforeSlash);
-            else addBody(beforeSlash);
+            else if (!forgeWpIsSptExclusiveWeeklyMinName(beforeSlash)) addBody(beforeSlash);
           });
         }
         harvest(mindPanel, "mind");
@@ -33812,7 +34167,6 @@
         harvest(mod.querySelector("#forgePanelRedPill"), "body");
         harvest(mod.querySelector("#forgePanelSpt"), "spt");
       }
-      ensureForgeWeeklyMinimumsState();
       if (state.forge && Array.isArray(state.forge.weeklyMinimums)) {
         state.forge.weeklyMinimums.forEach(function (r) {
           if (!r || typeof r !== "object") return;
@@ -33821,10 +34175,11 @@
           if (!lb) return;
           if (realm === "mind") addMind(lb);
           else if (realm === "spt") addSpt(lb);
-          else addBody(lb);
+          else if (!forgeWpIsSptExclusiveWeeklyMinName(lb)) addBody(lb);
         });
       }
       FORGE_WP_TASK_NAME_EXTRAS.forEach(function (name) {
+        if (forgeWpIsSptExclusiveWeeklyMinName(name)) return;
         if (inferForgeWpMindBodyKind(name) === "mind") addMind(name);
         else addBody(name);
       });
