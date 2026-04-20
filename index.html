@@ -6520,7 +6520,7 @@
       gap: 4px;
     }
 
-    /* My Done：间隙日志 — 卡片：标题 + 三行（圆点标签 | 内容） */
+    /* My Done：间隙日志 — 卡片三行（色点标签 | 内容），任务名仅在 Act 行展示 */
     ul.app-done-time-timeline li.done:not(.done-text-expanded) .done-interstitial-journal,
     ul.app-done-time-timeline li.timeline-item.done:not(.done-text-expanded) .done-interstitial-journal {
       display: none !important;
@@ -6539,23 +6539,13 @@
       box-sizing: border-box;
       text-align: left;
     }
-    .done-interstitial-card-title {
-      padding: 10px 12px;
-      font-size: 14px;
-      font-weight: 650;
-      line-height: 1.4;
-      color: var(--text);
-      border-bottom: 1px solid var(--border);
-      background: #f8fafc;
-      word-break: break-word;
-    }
     .done-interstitial-card-rows {
       display: flex;
       flex-direction: column;
     }
     .done-interstitial-card-row {
       display: grid;
-      grid-template-columns: minmax(4.75rem, 6.25rem) minmax(0, 1fr);
+      grid-template-columns: auto minmax(0, 1fr);
       align-items: stretch;
       border-bottom: 1px solid var(--border);
     }
@@ -6581,6 +6571,7 @@
       font-size: 12px;
       font-weight: 700;
       letter-spacing: 0.04em;
+      white-space: nowrap;
     }
     .done-interstitial-card-row--act .done-interstitial-dot {
       background: var(--success);
@@ -6614,11 +6605,21 @@
       color: var(--text);
       word-break: break-word;
     }
+    @media (max-width: 767px) {
+      .done-interstitial-card-act-text {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        overflow: hidden;
+        overflow-wrap: anywhere;
+      }
+    }
     .done-interstitial-field {
       width: 100%;
-      min-height: 2.5rem;
+      min-height: 1.45em;
       max-height: 8rem;
-      resize: vertical;
+      resize: none;
+      overflow-x: hidden;
       margin: 0;
       padding: 0;
       font: inherit;
@@ -6634,6 +6635,10 @@
       outline: none;
       box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.35);
       border-radius: 4px;
+    }
+    .done-interstitial-field::placeholder {
+      color: #991b1b;
+      opacity: 0.88;
     }
     ul.app-done-time-timeline.done-time-block-list .done-time-block-item--flex-row:not(.done-text-expanded) .done-time-block-row__task .done-compact-row,
     ul.app-done-time-timeline .done-time-block-item--flex-row:not(.done-text-expanded) .done-time-block-row__task .done-compact-row {
@@ -26857,7 +26862,22 @@
       saveState();
     }
 
-    /** My Done：间隙日志 — 卡片标题 + 三行（色点标签 | 内容），与主行 Act 文案一致 */
+    /** Assess / Adjust：单行起算高度，随内容增高，封顶 8rem 后内部滚动 */
+    function sizeDoneInterstitialJournalTextarea(ta) {
+      if (!ta || ta.tagName !== "TEXTAREA") return;
+      const cs = window.getComputedStyle(ta);
+      const lineH = parseFloat(cs.lineHeight);
+      const linePx = Number.isFinite(lineH) && lineH > 0 ? lineH : 22;
+      const maxPx = Math.min(512, Math.max(96, parseFloat(cs.maxHeight) || 128));
+      ta.style.resize = "none";
+      ta.style.height = "1px";
+      const scrollH = ta.scrollHeight;
+      const next = Math.min(Math.max(scrollH, linePx), maxPx);
+      ta.style.height = next + "px";
+      ta.style.overflowY = scrollH > maxPx ? "auto" : "hidden";
+    }
+
+    /** My Done：间隙日志 — 卡片三行（色点标签 | 内容），任务名仅在 Act 行展示 */
     function appendDoneInterstitialJournal(containerEl, liForSync, task, actLineText) {
       if (!containerEl || !liForSync || !task || task.kind === "timeReflection") return;
       const dj =
@@ -26868,14 +26888,13 @@
       const wrap = document.createElement("div");
       wrap.className = "done-interstitial-journal";
       wrap.setAttribute("role", "group");
-      wrap.setAttribute("aria-label", "间隙日志 Act / Assess / Adjust");
+      wrap.setAttribute(
+        "aria-label",
+        actStr ? "间隙日志：" + actStr : "间隙日志 Act / Assess / Adjust"
+      );
 
       const card = document.createElement("div");
       card.className = "done-interstitial-card";
-
-      const titleEl = document.createElement("div");
-      titleEl.className = "done-interstitial-card-title";
-      titleEl.textContent = actStr;
 
       const rowsEl = document.createElement("div");
       rowsEl.className = "done-interstitial-card-rows";
@@ -26909,20 +26928,34 @@
       function makeJournalTextarea(key, ariaName) {
         const ta = document.createElement("textarea");
         ta.className = "done-interstitial-field";
-        ta.rows = 2;
+        ta.rows = 1;
         ta.setAttribute("data-done-journal-field", key);
-        ta.setAttribute("aria-label", ariaName);
+        if (key === "assess") {
+          ta.setAttribute("placeholder", "和计划相比，什么没发生？");
+          ta.setAttribute("aria-label", "Assess：和计划相比，什么没发生？");
+        } else if (key === "adjust") {
+          ta.setAttribute("placeholder", "下次具体改变什么动作？");
+          ta.setAttribute("aria-label", "Adjust：下次具体改变什么动作？");
+        } else {
+          ta.setAttribute("aria-label", ariaName);
+        }
         ta.value = String((dj && dj[key]) || "");
-        ta.addEventListener("blur", function () {
-          updateDoneJournalField(task.id, key, ta.value);
-        });
-        ta.addEventListener("input", function () {
+        function syncJournalLayout() {
+          sizeDoneInterstitialJournalTextarea(ta);
           const bodyEl = liForSync.closest(".done-time-block-body");
           if (bodyEl) {
             requestAnimationFrame(function () {
               syncDoneTimeBlockRowHeights(bodyEl);
             });
           }
+        }
+        ta.addEventListener("blur", function () {
+          updateDoneJournalField(task.id, key, ta.value);
+        });
+        ta.addEventListener("input", syncJournalLayout);
+        requestAnimationFrame(function () {
+          sizeDoneInterstitialJournalTextarea(ta);
+          requestAnimationFrame(syncJournalLayout);
         });
         return ta;
       }
@@ -26930,7 +26963,6 @@
       rowsEl.appendChild(makeCardRow("assess", "Assess", makeJournalTextarea("assess", "Assess")));
       rowsEl.appendChild(makeCardRow("adjust", "Adjust", makeJournalTextarea("adjust", "Adjust")));
 
-      card.appendChild(titleEl);
       card.appendChild(rowsEl);
       wrap.appendChild(card);
       containerEl.appendChild(wrap);
