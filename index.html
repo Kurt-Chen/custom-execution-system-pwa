@@ -6514,6 +6514,73 @@
       padding: 6px 12px 6px 8px;
       box-sizing: border-box;
     }
+    ul.app-done-time-timeline .done-time-block-item--flex-row.done-text-expanded .done-time-block-row__task {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 4px;
+    }
+
+    /* My Done：间隙日志（展开后显示；折叠不占位） */
+    ul.app-done-time-timeline li.done:not(.done-text-expanded) .done-interstitial-journal,
+    ul.app-done-time-timeline li.timeline-item.done:not(.done-text-expanded) .done-interstitial-journal {
+      display: none !important;
+    }
+    .done-interstitial-journal {
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 2px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--border);
+    }
+    .done-interstitial-line {
+      display: grid;
+      grid-template-columns: 4.35rem minmax(0, 1fr);
+      gap: 6px 8px;
+      align-items: start;
+      margin-bottom: 6px;
+    }
+    .done-interstitial-line:last-child {
+      margin-bottom: 0;
+    }
+    .done-interstitial-line--act {
+      align-items: baseline;
+    }
+    .done-interstitial-k {
+      font-size: 11px;
+      font-weight: 650;
+      color: var(--muted);
+      padding-top: 4px;
+      white-space: nowrap;
+    }
+    .done-interstitial-line--act .done-interstitial-k {
+      padding-top: 0;
+    }
+    .done-interstitial-act {
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.45;
+      word-break: break-word;
+    }
+    .done-interstitial-field {
+      width: 100%;
+      min-height: 2.5rem;
+      max-height: 8rem;
+      resize: vertical;
+      margin: 0;
+      padding: 6px 8px;
+      font: inherit;
+      font-size: 13px;
+      line-height: 1.35;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #fafbfc;
+      box-sizing: border-box;
+    }
+    .done-interstitial-field:focus {
+      outline: none;
+      border-color: var(--primary);
+      background: #fff;
+    }
     ul.app-done-time-timeline.done-time-block-list .done-time-block-item--flex-row:not(.done-text-expanded) .done-time-block-row__task .done-compact-row,
     ul.app-done-time-timeline .done-time-block-item--flex-row:not(.done-text-expanded) .done-time-block-row__task .done-compact-row {
       padding: 0 !important;
@@ -22159,6 +22226,20 @@
       window.location.reload();
     };
 
+    function normalizeDoneListJournalFieldsInState() {
+      if (!Array.isArray(state.done)) return;
+      state.done.forEach(function (item) {
+        if (!item || typeof item !== "object") return;
+        if (item.kind === "timeReflection") return;
+        if (!item.doneJournal || typeof item.doneJournal !== "object") {
+          item.doneJournal = { assess: "", adjust: "" };
+        } else {
+          if (typeof item.doneJournal.assess !== "string") item.doneJournal.assess = "";
+          if (typeof item.doneJournal.adjust !== "string") item.doneJournal.adjust = "";
+        }
+      });
+    }
+
     function saveState() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       if (!cloudSyncSuppressPush) {
@@ -22370,6 +22451,7 @@
               if (Number.isFinite(n) && n > 0) return item;
               return { ...item, completedAt: Date.now() };
             });
+            normalizeDoneListJournalFieldsInState();
           }
           refreshKineticCountdownLunarTargets();
           normalizeKineticCountdownTargetDays();
@@ -24566,14 +24648,66 @@
       });
     }
 
+    /** stopDoing / notToDo 点「完成」后：打开 My Done、展开该行并聚焦 Assess */
+    function expandAndFocusDoneJournalAssessById(doneIdStr) {
+      const idStr = String(doneIdStr || "");
+      if (!idStr) return;
+      if (typeof activateKineticTab === "function") {
+        activateKineticTab("done");
+      }
+      const root = document.getElementById("doneList");
+      if (!root) return;
+      const li = Array.from(root.querySelectorAll("li.timeline-item.done[data-done-id]")).find(function (el) {
+        return el.getAttribute("data-done-id") === idStr;
+      });
+      if (!li) return;
+      const journal = li.querySelector(".done-interstitial-journal");
+      if (!journal) return;
+      li.classList.add("done-text-expanded");
+      const bodyEl = li.closest(".done-time-block-body");
+      if (bodyEl) {
+        requestAnimationFrame(function () {
+          syncDoneTimeBlockRowHeights(bodyEl);
+        });
+      }
+      const ta = journal.querySelector('textarea[data-done-journal-field="assess"]');
+      if (ta && typeof ta.focus === "function") {
+        try {
+          ta.focus({ preventScroll: false });
+        } catch (_e) {
+          ta.focus();
+        }
+        try {
+          const len = ta.value.length;
+          ta.setSelectionRange(len, len);
+        } catch (_e2) {}
+      }
+      try {
+        li.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      } catch (_e3) {}
+    }
+
+    function scheduleExpandAndFocusDoneJournalAssess(doneIdStr) {
+      if (doneIdStr == null || String(doneIdStr) === "") return;
+      const idStr = String(doneIdStr);
+      window.setTimeout(function () {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            expandAndFocusDoneJournalAssessById(idStr);
+          });
+        });
+      }, 0);
+    }
+
     function markDone(id, listKey) {
       const list = state[listKey];
       if (!Array.isArray(list)) return;
       const idx = list.findIndex((item) => item.id === id);
       if (idx === -1) return;
       const task = list[idx];
+      const newDoneId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
       state.done.unshift({
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        id: newDoneId,
         text: task.text,
         createdAt: task.createdAt,
         completedAt: Date.now(),
@@ -24583,6 +24717,7 @@
 
       saveState();
       render();
+      scheduleExpandAndFocusDoneJournalAssess(newDoneId);
     }
 
     function addManualDone() {
@@ -26655,11 +26790,82 @@
       });
     }
 
+    function updateDoneJournalField(taskId, field, value) {
+      if (field !== "assess" && field !== "adjust") return;
+      const item = state.done.find((d) => d.id === taskId);
+      if (!item || item.kind === "timeReflection") return;
+      if (!item.doneJournal || typeof item.doneJournal !== "object") {
+        item.doneJournal = { assess: "", adjust: "" };
+      }
+      const v = String(value);
+      if (item.doneJournal[field] === v) return;
+      item.doneJournal[field] = v;
+      saveState();
+    }
+
+    /** My Done：间隙日志（Interstitial）Act / Assess / Adjust；Act 为只读展示，与主行文案一致 */
+    function appendDoneInterstitialJournal(containerEl, liForSync, task, actLineText) {
+      if (!containerEl || !liForSync || !task || task.kind === "timeReflection") return;
+      const dj =
+        task.doneJournal && typeof task.doneJournal === "object"
+          ? task.doneJournal
+          : { assess: "", adjust: "" };
+      const wrap = document.createElement("div");
+      wrap.className = "done-interstitial-journal";
+      wrap.setAttribute("role", "group");
+      wrap.setAttribute("aria-label", "间隙日志 Act / Assess / Adjust");
+
+      const lineAct = document.createElement("div");
+      lineAct.className = "done-interstitial-line done-interstitial-line--act";
+      const labAct = document.createElement("span");
+      labAct.className = "done-interstitial-k";
+      labAct.textContent = "Act：";
+      const valAct = document.createElement("span");
+      valAct.className = "done-interstitial-act";
+      valAct.textContent = String(actLineText || "");
+      lineAct.appendChild(labAct);
+      lineAct.appendChild(valAct);
+      wrap.appendChild(lineAct);
+
+      function makeField(key, labelText) {
+        const line = document.createElement("div");
+        line.className = "done-interstitial-line";
+        const lab = document.createElement("span");
+        lab.className = "done-interstitial-k";
+        lab.textContent = labelText;
+        const ta = document.createElement("textarea");
+        ta.className = "done-interstitial-field";
+        ta.rows = 2;
+        ta.setAttribute("data-done-journal-field", key);
+        ta.setAttribute("aria-label", labelText.replace(/：$/, ""));
+        ta.value = String((dj && dj[key]) || "");
+        ta.addEventListener("blur", function () {
+          updateDoneJournalField(task.id, key, ta.value);
+        });
+        ta.addEventListener("input", function () {
+          const bodyEl = liForSync.closest(".done-time-block-body");
+          if (bodyEl) {
+            requestAnimationFrame(function () {
+              syncDoneTimeBlockRowHeights(bodyEl);
+            });
+          }
+        });
+        line.appendChild(lab);
+        line.appendChild(ta);
+        return line;
+      }
+
+      wrap.appendChild(makeField("assess", "Assess："));
+      wrap.appendChild(makeField("adjust", "Adjust："));
+      containerEl.appendChild(wrap);
+    }
+
     function taskItem(task, listName, index, listTotal, doneCelebrateGlyph, doneRowOpts) {
       const li = document.createElement("li");
       if (listName === "done") {
         li.classList.add("done");
         li.classList.add("timeline-item");
+        li.setAttribute("data-done-id", String(task.id || ""));
         if (task.kind === "timeReflection") {
           li.classList.add("timeline-item--reminder");
           li.classList.add("done-time-block-item--reminder");
@@ -26935,6 +27141,7 @@
 
         row.addEventListener("click", (ev) => {
           if (ev.target.closest(".actions")) return;
+          if (ev.target.closest(".done-interstitial-journal")) return;
           li.classList.toggle("done-text-expanded");
           const bodyEl = li.closest(".done-time-block-body");
           if (bodyEl && !(doneRowOpts && doneRowOpts.timeBlockFlexLayout)) {
@@ -26992,6 +27199,7 @@
           const colTask = document.createElement("div");
           colTask.className = "done-time-block-row__task";
           colTask.appendChild(row);
+          appendDoneInterstitialJournal(colTask, li, task, textEl.textContent);
 
           wrap.appendChild(colTime);
           wrap.appendChild(colAxis);
@@ -27000,6 +27208,7 @@
         } else {
           li.appendChild(timeAxisCell);
           li.appendChild(row);
+          appendDoneInterstitialJournal(li, li, task, textEl.textContent);
         }
       } else {
         if (listName === "closedList") {
@@ -32104,6 +32313,7 @@
       if (item.completedAt) return item;
       return { ...item, completedAt: Date.now() };
     });
+    normalizeDoneListJournalFieldsInState();
     state.stopDoing = state.stopDoing.map((item) => {
       if (item.createdAt) return item;
       return { ...item, createdAt: Date.now() };
