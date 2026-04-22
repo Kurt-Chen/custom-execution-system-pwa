@@ -7619,6 +7619,33 @@
       min-width: 0;
       max-width: 100%;
     }
+
+    /* 已选性质 / 只读 Power 标：与来源 pill、正文同一行，省半格高度 */
+    ul.app-done-time-timeline .done-compact-inline-row {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    ul.app-done-time-timeline .done-compact-inline-row > .task-text {
+      flex: 1 1 0%;
+      min-width: 0;
+      max-width: 100%;
+    }
+    ul.app-done-time-timeline .done-compact-inline-row .done-outcome-segment--compact {
+      flex: 0 1 auto;
+      min-width: 0;
+    }
+    ul.app-done-time-timeline .done-compact-inline-row .done-outcome-expand-panel {
+      flex-basis: 100%;
+      width: 100%;
+    }
+
     ul.app-done-time-timeline .done-compact-text-wrap:has(.done-compact-meta-stack) {
       flex-direction: column;
       align-items: stretch;
@@ -28263,48 +28290,70 @@
           const metaStack = document.createElement("div");
           metaStack.className = "done-compact-meta-stack";
 
-          const outcomeRow = document.createElement("div");
-          outcomeRow.className = "done-compact-outcome-row";
-          appendDoneOutcomeKindIntoContainer(outcomeRow, task);
+          const explicitOutcome =
+            task.outcomeKind === "power" ||
+            task.outcomeKind === "neutral" ||
+            task.outcomeKind === "treason";
+          const useInlineOutcomeRow = explicitOutcome || doneTaskUsesPowerBadgeOnly(task);
 
-          const taskLine = document.createElement("div");
-          taskLine.className = "done-compact-source-line";
-
-          if (forgeDoneLine) {
-            const brForge = parseLeadingBracketTag(forgeDoneLine.full);
-            const inner =
-              brForge && brForge.inner
-                ? forgePillBadgeTextFromBracketInner(brForge.inner, forgeDoneLine.kind)
-                : forgeDoneLine.kind === "mind"
-                  ? "Mind"
-                  : "Body";
-            const variant =
-              forgeDoneLine.kind === "mind" ? "forge-mind" : "forge-body";
-            taskLine.appendChild(createDoneEntryPill(inner, variant));
-            textEl.textContent = forgeDoneLine.stripped;
-          } else {
-            const br = parseLeadingBracketTag(String(task.text || ""));
-            if (br) {
-              const variant = donePillVariantFromInner(br.inner);
-              const pillInner =
-                variant === "forge-mind" || variant === "forge-body"
-                  ? forgePillBadgeTextFromBracketInner(
-                      br.inner,
-                      variant === "forge-mind" ? "mind" : "body"
-                    )
-                  : br.inner;
-              taskLine.appendChild(createDoneEntryPill(pillInner, variant));
-              textEl.textContent = br.rest;
+          function appendDonePillsAndTextToLine(lineEl) {
+            if (forgeDoneLine) {
+              const brForge = parseLeadingBracketTag(forgeDoneLine.full);
+              const inner =
+                brForge && brForge.inner
+                  ? forgePillBadgeTextFromBracketInner(brForge.inner, forgeDoneLine.kind)
+                  : forgeDoneLine.kind === "mind"
+                    ? "Mind"
+                    : "Body";
+              const variant =
+                forgeDoneLine.kind === "mind" ? "forge-mind" : "forge-body";
+              lineEl.appendChild(createDoneEntryPill(inner, variant));
+              textEl.textContent = forgeDoneLine.stripped;
+            } else {
+              const br = parseLeadingBracketTag(String(task.text || ""));
+              if (br) {
+                const variant = donePillVariantFromInner(br.inner);
+                const pillInner =
+                  variant === "forge-mind" || variant === "forge-body"
+                    ? forgePillBadgeTextFromBracketInner(
+                        br.inner,
+                        variant === "forge-mind" ? "mind" : "body"
+                      )
+                    : br.inner;
+                lineEl.appendChild(createDoneEntryPill(pillInner, variant));
+                textEl.textContent = br.rest;
+              }
             }
+            lineEl.appendChild(textEl);
           }
-          taskLine.appendChild(textEl);
 
-          if (outcomeRow.firstChild) metaStack.appendChild(outcomeRow);
-          if (outcomeRow.firstChild || taskLine.querySelector(".done-entry-pill")) {
-            metaStack.appendChild(taskLine);
-            main.appendChild(metaStack);
+          if (useInlineOutcomeRow) {
+            const inlineRow = document.createElement("div");
+            inlineRow.className = "done-compact-inline-row";
+            appendDoneOutcomeKindIntoContainer(inlineRow, task);
+            appendDonePillsAndTextToLine(inlineRow);
+            if (inlineRow.firstChild) {
+              metaStack.appendChild(inlineRow);
+              main.appendChild(metaStack);
+            } else {
+              main.appendChild(textEl);
+            }
           } else {
-            main.appendChild(textEl);
+            const outcomeRow = document.createElement("div");
+            outcomeRow.className = "done-compact-outcome-row";
+            appendDoneOutcomeKindIntoContainer(outcomeRow, task);
+
+            const taskLine = document.createElement("div");
+            taskLine.className = "done-compact-source-line";
+            appendDonePillsAndTextToLine(taskLine);
+
+            if (outcomeRow.firstChild) metaStack.appendChild(outcomeRow);
+            if (outcomeRow.firstChild || taskLine.querySelector(".done-entry-pill")) {
+              metaStack.appendChild(taskLine);
+              main.appendChild(metaStack);
+            } else {
+              main.appendChild(textEl);
+            }
           }
         }
 
