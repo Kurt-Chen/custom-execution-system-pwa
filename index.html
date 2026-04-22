@@ -1221,6 +1221,169 @@
       margin: 0;
     }
 
+    .done-head-stats-stack {
+      flex: 1 1 0%;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 6px;
+    }
+
+    /* My Done 顶栏：当日完成性质 Power / Neutral / Treason（习惯与 Forge 计为力量） */
+    .done-outcome-day-stats {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 3px;
+      min-width: 0;
+    }
+
+    .done-outcome-day-stats__head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .done-outcome-day-stats__title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #0f172a;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .done-outcome-day-stats__details {
+      flex: 0 0 auto;
+      font-size: 10px;
+      line-height: 1.2;
+      color: #64748b;
+    }
+
+    .done-outcome-day-stats__details > summary {
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+      font-weight: 600;
+      color: #475569;
+    }
+
+    .done-outcome-day-stats__details > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .done-outcome-day-stats__details-body {
+      margin-top: 4px;
+      padding: 6px 8px;
+      border-radius: 8px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      font-size: 10px;
+      font-weight: 500;
+      color: #475569;
+      line-height: 1.45;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+
+    .done-outcome-day-stats__bar {
+      display: flex;
+      width: 100%;
+      height: 8px;
+      border-radius: 999px;
+      overflow: hidden;
+      gap: 2px;
+      box-sizing: border-box;
+      background: rgba(100, 116, 139, 0.12);
+    }
+
+    .done-outcome-day-stats__seg {
+      flex-basis: 0;
+      min-width: 0;
+      border-radius: 2px;
+      box-sizing: border-box;
+    }
+
+    .done-outcome-day-stats__seg--power {
+      background: #16a34a;
+    }
+
+    .done-outcome-day-stats__seg--neutral {
+      background: #cbd5e1;
+    }
+
+    .done-outcome-day-stats__seg--treason {
+      background: #dc2626;
+    }
+
+    .done-outcome-day-stats__legend {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 8px 10px;
+      font-size: 10px;
+      line-height: 1.25;
+      color: #64748b;
+      font-weight: 600;
+    }
+
+    .done-outcome-day-stats__legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .done-outcome-day-stats__legend-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .done-outcome-day-stats__legend-dot--power {
+      background: #16a34a;
+    }
+
+    .done-outcome-day-stats__legend-dot--neutral {
+      background: #94a3b8;
+    }
+
+    .done-outcome-day-stats__legend-dot--treason {
+      background: #dc2626;
+    }
+
+    .done-outcome-day-stats__legend-num {
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .done-outcome-day-stats__legend-num--power {
+      color: #15803d;
+    }
+
+    .done-outcome-day-stats__legend-num--neutral {
+      color: #475569;
+    }
+
+    .done-outcome-day-stats__legend-num--treason {
+      color: #b91c1c;
+    }
+
+    .done-outcome-day-stats--empty .done-outcome-day-stats__hint {
+      font-size: 11px;
+      font-weight: 600;
+      color: #94a3b8;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .done-day-stats {
       flex: 1 1 0%;
       min-width: 0;
@@ -16952,7 +17115,10 @@
             </span>
           </h2>
           <div class="done-head-summary-row">
-            <div id="doneDayStats" class="done-day-stats" aria-live="polite"></div>
+            <div class="done-head-stats-stack">
+              <div id="doneOutcomeDayStats" class="done-outcome-day-stats" aria-live="polite"></div>
+              <div id="doneDayStats" class="done-day-stats" aria-live="polite"></div>
+            </div>
             <p id="doneCountInline" class="kinetic-done-count-inline" aria-live="polite"></p>
           </div>
           <div class="done-filter-row done-toolbar-row">
@@ -21217,6 +21383,7 @@
     const memoCount = document.getElementById("memoCount");
     const closedListCount = document.getElementById("closedListCount");
     const doneListTitleCount = document.getElementById("doneListTitleCount");
+    const doneOutcomeDayStats = document.getElementById("doneOutcomeDayStats");
     const doneDayStats = document.getElementById("doneDayStats");
     const doneCountInline = document.getElementById("doneCountInline");
     const dailyWinCount = document.getElementById("dailyWinCount");
@@ -26369,6 +26536,117 @@
       bar.setAttribute("aria-label", aria);
       el.setAttribute("aria-label", aria);
       el.appendChild(bar);
+    }
+
+    /** 顶栏性质统计：习惯 / Forge 与列表只读绿标一致，计为力量 */
+    function getDoneStatsOutcomeBucket(task) {
+      if (doneTaskUsesPowerBadgeOnly(task)) return "power";
+      return getEffectiveDoneOutcomeKind(task);
+    }
+
+    /** Done 顶栏：当日完成性质三分类条 + 数量与占比（与「今日 n 项」同一任务集） */
+    function renderDoneOutcomeDayStats(el, tasks) {
+      if (!el) return;
+      const keys = ["power", "neutral", "treason"];
+      const labels = { power: "力量选择", neutral: "中立流", treason: "背叛选择" };
+      const counts = { power: 0, neutral: 0, treason: 0 };
+      (tasks || []).forEach(function (t) {
+        const b = getDoneStatsOutcomeBucket(t);
+        if (counts[b] !== undefined) counts[b]++;
+      });
+      const total = tasks ? tasks.length : 0;
+      el.replaceChildren();
+      if (total === 0) {
+        el.className = "done-outcome-day-stats done-outcome-day-stats--empty";
+        const hint = document.createElement("span");
+        hint.className = "done-outcome-day-stats__hint";
+        hint.textContent = "暂无完成";
+        el.appendChild(hint);
+        el.setAttribute("aria-label", "当日暂无完成记录");
+        return;
+      }
+      el.className = "done-outcome-day-stats";
+      const head = document.createElement("div");
+      head.className = "done-outcome-day-stats__head";
+      const title = document.createElement("span");
+      title.className = "done-outcome-day-stats__title";
+      title.textContent = "今日性质配比";
+      head.appendChild(title);
+      const det = document.createElement("details");
+      det.className = "done-outcome-day-stats__details";
+      const sum = document.createElement("summary");
+      sum.textContent = "查看说明";
+      det.appendChild(sum);
+      const detBody = document.createElement("div");
+      detBody.className = "done-outcome-day-stats__details-body";
+      detBody.textContent =
+        "力量选择：习惯打卡、Forge 完成及显式标记为 Power 的条目。中立流：未另作标记的完成。背叛选择：显式标记为 Treason 的条目。占比按当日计入「产出」的完成条数计算（不含钟点反思）。";
+      det.appendChild(detBody);
+      head.appendChild(det);
+      el.appendChild(head);
+
+      const pcts = keys.map(function (k) {
+        return Math.round((counts[k] / total) * 100);
+      });
+      const drift = 100 - (pcts[0] + pcts[1] + pcts[2]);
+      pcts[2] = Math.max(0, Math.min(100, pcts[2] + drift));
+
+      const bar = document.createElement("div");
+      bar.className = "done-outcome-day-stats__bar";
+      bar.setAttribute("role", "img");
+      const ariaParts = [];
+      keys.forEach(function (k, i) {
+        const c = counts[k];
+        const seg = document.createElement("span");
+        seg.className = "done-outcome-day-stats__seg done-outcome-day-stats__seg--" + k;
+        seg.style.flexGrow = String(Math.max(c, 0));
+        seg.style.flexShrink = "1";
+        seg.style.flexBasis = "0";
+        seg.style.minWidth = c > 0 ? "3px" : "0";
+        seg.title = labels[k] + " " + c + " 项（" + pcts[i] + "%）";
+        ariaParts.push(labels[k] + c + "项，约" + pcts[i] + "%");
+        bar.appendChild(seg);
+      });
+      bar.setAttribute("aria-label", "当日完成性质分布：" + ariaParts.join("，"));
+      el.appendChild(bar);
+
+      const legend = document.createElement("div");
+      legend.className = "done-outcome-day-stats__legend";
+      keys.forEach(function (k, i) {
+        const item = document.createElement("span");
+        item.className = "done-outcome-day-stats__legend-item";
+        const dot = document.createElement("span");
+        dot.className = "done-outcome-day-stats__legend-dot done-outcome-day-stats__legend-dot--" + k;
+        dot.setAttribute("aria-hidden", "true");
+        const lab = document.createElement("span");
+        lab.textContent = labels[k];
+        const num = document.createElement("span");
+        num.className =
+          "done-outcome-day-stats__legend-num done-outcome-day-stats__legend-num--" + k;
+        num.textContent = String(counts[k]) + " · " + String(pcts[i]) + "%";
+        item.appendChild(dot);
+        item.appendChild(lab);
+        item.appendChild(num);
+        legend.appendChild(item);
+      });
+      el.appendChild(legend);
+
+      el.setAttribute(
+        "aria-label",
+        "当日完成性质：力量" +
+          counts.power +
+          "项约" +
+          pcts[0] +
+          "%，中立" +
+          counts.neutral +
+          "项约" +
+          pcts[1] +
+          "%，背叛" +
+          counts.treason +
+          "项约" +
+          pcts[2] +
+          "%"
+      );
     }
 
     /* 列表自上而下：靠近 24:00 的时段在上，靠近 0:00 的在下（与竖轴「从早到晚向下」相反） */
@@ -32295,6 +32573,7 @@
       if (closedListPrimaryInputRow) {
         closedListPrimaryInputRow.style.display = isClosedListEditable ? "" : "none";
       }
+      renderDoneOutcomeDayStats(doneOutcomeDayStats, filteredDoneTasksForStats);
       renderDoneDayStats(doneDayStats, filteredDoneTasksForStats);
       if (doneListTitleCount) {
         const n = filteredDoneTasksForStats.length;
