@@ -7669,6 +7669,77 @@
       box-sizing: border-box;
       margin: 0;
     }
+
+    /* 已选性质：summary 为小标签，展开后再显示三键 */
+    ul.app-done-time-timeline .done-outcome-segment--compact {
+      display: block;
+      max-width: 100%;
+      min-width: 0;
+      flex: 0 1 auto;
+      box-sizing: border-box;
+    }
+    ul.app-done-time-timeline .done-outcome-summary {
+      list-style: none;
+      cursor: pointer;
+      width: max-content;
+      max-width: 100%;
+      min-width: 0;
+      padding: 0;
+      margin: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+    ul.app-done-time-timeline .done-outcome-summary::-webkit-details-marker {
+      display: none;
+    }
+    ul.app-done-time-timeline .done-outcome-compact-chip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+      margin: 0;
+      padding: 1px 7px;
+      min-height: 22px;
+      border-radius: 999px;
+      font-size: 9px;
+      font-weight: 700;
+      line-height: 1.2;
+      letter-spacing: 0.01em;
+      box-sizing: border-box;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    ul.app-done-time-timeline .done-outcome-compact-chip .done-outcome-btn__label {
+      overflow: visible;
+      text-overflow: clip;
+      white-space: nowrap;
+    }
+    ul.app-done-time-timeline .done-outcome-compact-chip--power {
+      background: #22c55e;
+      color: #ffffff;
+      border: 1px solid #16a34a;
+    }
+    ul.app-done-time-timeline .done-outcome-compact-chip--neutral {
+      background: #e2e8f0;
+      color: #334155;
+      border: 1px solid #cbd5e1;
+    }
+    ul.app-done-time-timeline .done-outcome-compact-chip--treason {
+      background: #b45050;
+      color: #ffffff;
+      border: 1px solid #943d43;
+    }
+    ul.app-done-time-timeline .done-outcome-expand-panel {
+      margin-top: 4px;
+      padding-top: 4px;
+      border-top: 1px dashed #e2e8f0;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+    ul.app-done-time-timeline .done-outcome-segment--expand-row {
+      margin: 0;
+    }
+
     ul.app-done-time-timeline .done-outcome-btn {
       display: inline-flex;
       align-items: center;
@@ -27616,40 +27687,96 @@
     }
 
     function createDoneOutcomeSegmentEl(task) {
-      const seg = document.createElement("div");
-      seg.className = "done-outcome-segment";
-      seg.setAttribute("role", "group");
-      seg.setAttribute("aria-label", "Outcome: Power, Neutral, or Treason");
-      const cur = getEffectiveDoneOutcomeKind(task);
       const tid = String(task.id || "");
+      const raw = task.outcomeKind;
+      const explicit =
+        raw === "power" || raw === "neutral" || raw === "treason";
+      const cur = getEffectiveDoneOutcomeKind(task);
       const specs = [
         { kind: "power", label: "Power", icon: "\u26a1" },
         { kind: "neutral", label: "Neutral", icon: "\u25cb" },
         { kind: "treason", label: "Treason", icon: "\u2715" }
       ];
-      specs.forEach(function (s) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className =
-          "done-outcome-btn done-outcome-btn--" + s.kind + (cur === s.kind ? " is-selected" : "");
-        btn.setAttribute("aria-pressed", cur === s.kind ? "true" : "false");
-        const ic = document.createElement("span");
-        ic.className = "done-outcome-btn__icon";
-        ic.setAttribute("aria-hidden", "true");
-        ic.textContent = s.icon;
-        const tx = document.createElement("span");
-        tx.className = "done-outcome-btn__label";
-        tx.textContent = s.label;
-        btn.appendChild(ic);
-        btn.appendChild(tx);
-        btn.addEventListener("click", function (ev) {
-          ev.stopPropagation();
-          ev.preventDefault();
-          setDoneOutcomeKindForDoneId(tid, s.kind);
+
+      function appendOutcomeButtons(container, showSelection) {
+        specs.forEach(function (s) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          const isSel = Boolean(showSelection && cur === s.kind);
+          btn.className =
+            "done-outcome-btn done-outcome-btn--" + s.kind + (isSel ? " is-selected" : "");
+          btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+          const ic = document.createElement("span");
+          ic.className = "done-outcome-btn__icon";
+          ic.setAttribute("aria-hidden", "true");
+          ic.textContent = s.icon;
+          const tx = document.createElement("span");
+          tx.className = "done-outcome-btn__label";
+          tx.textContent = s.label;
+          btn.appendChild(ic);
+          btn.appendChild(tx);
+          btn.addEventListener("click", function (ev) {
+            ev.stopPropagation();
+            ev.preventDefault();
+            setDoneOutcomeKindForDoneId(tid, s.kind);
+          });
+          container.appendChild(btn);
         });
-        seg.appendChild(btn);
+      }
+
+      if (!explicit) {
+        const seg = document.createElement("div");
+        seg.className = "done-outcome-segment done-outcome-segment--pending";
+        seg.setAttribute("role", "group");
+        seg.setAttribute("aria-label", "选择完成性质：Power、Neutral 或 Treason");
+        appendOutcomeButtons(seg, false);
+        return seg;
+      }
+
+      const details = document.createElement("details");
+      details.className = "done-outcome-segment done-outcome-segment--compact";
+      details.setAttribute("role", "group");
+
+      const summary = document.createElement("summary");
+      summary.className = "done-outcome-summary";
+      summary.setAttribute("aria-label", "当前性质：" + cur + "，展开可更改");
+      summary.addEventListener("click", function (ev) {
+        ev.stopPropagation();
       });
-      return seg;
+
+      const chip = document.createElement("span");
+      chip.className = "done-outcome-compact-chip done-outcome-compact-chip--" + cur;
+      chip.setAttribute("aria-hidden", "true");
+      const chipIcon = document.createElement("span");
+      chipIcon.className = "done-outcome-btn__icon";
+      chipIcon.setAttribute("aria-hidden", "true");
+      const chipLab = document.createElement("span");
+      chipLab.className = "done-outcome-btn__label";
+      let ci = "\u25cb";
+      let ct = "Neutral";
+      if (cur === "power") {
+        ci = "\u26a1";
+        ct = "Power";
+      } else if (cur === "treason") {
+        ci = "\u2715";
+        ct = "Treason";
+      }
+      chipIcon.textContent = ci;
+      chipLab.textContent = ct;
+      chip.appendChild(chipIcon);
+      chip.appendChild(chipLab);
+      summary.appendChild(chip);
+
+      const panel = document.createElement("div");
+      panel.className = "done-outcome-expand-panel";
+      const inner = document.createElement("div");
+      inner.className = "done-outcome-segment done-outcome-segment--expand-row";
+      appendOutcomeButtons(inner, true);
+      panel.appendChild(inner);
+
+      details.appendChild(summary);
+      details.appendChild(panel);
+      return details;
     }
 
     /** 将性质 UI 追加到徽章行容器（与来源 pill 同一行） */
