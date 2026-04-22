@@ -7459,6 +7459,128 @@
       box-shadow: 0 0 0 1px rgba(71, 85, 105, 0.1);
     }
 
+    /* My Done：第一行仅分类（Power/Neutral/Treason 或只读 Power）；第二行仅来源 pill；其下为正文 */
+    ul.app-done-time-timeline .done-compact-meta-stack {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 6px;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+      margin: 0 0 4px;
+    }
+    ul.app-done-time-timeline .done-compact-outcome-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    ul.app-done-time-timeline .done-compact-source-pills-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    ul.app-done-time-timeline .done-compact-text-wrap:has(.done-compact-meta-stack) {
+      flex-direction: column;
+      align-items: stretch;
+      align-content: stretch;
+      gap: 2px;
+    }
+    ul.app-done-time-timeline .done-compact-row.done-compact-row--pill-card {
+      background: linear-gradient(165deg, #ecfdf5 0%, #f8fafc 58%);
+      border: 1px solid #bbf7d0;
+      border-left: 3px solid #a5b4fc;
+      border-radius: 12px;
+      box-shadow: 0 1px 3px rgba(5, 150, 105, 0.1);
+      box-sizing: border-box;
+    }
+    ul.app-done-time-timeline .done-compact-row.done-compact-row--pill-card .done-compact-text-wrap {
+      width: 100%;
+      min-width: 0;
+    }
+
+    /* My Done：完成性质 Power / Neutral / Treason（习惯与 Forge 仅只读绿标） */
+    ul.app-done-time-timeline .done-outcome-segment {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+      margin: 0;
+    }
+    ul.app-done-time-timeline .done-outcome-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      margin: 0;
+      padding: 4px 12px;
+      min-height: 30px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.15;
+      letter-spacing: 0.01em;
+      font-family: inherit;
+      cursor: pointer;
+      box-sizing: border-box;
+      border: 1px solid #e2e8f0;
+      background: #f1f5f9;
+      color: #94a3b8;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      transition:
+        background 0.12s ease,
+        color 0.12s ease,
+        border-color 0.12s ease;
+    }
+    ul.app-done-time-timeline .done-outcome-btn__icon {
+      font-size: 12px;
+      line-height: 1;
+    }
+    ul.app-done-time-timeline .done-outcome-btn--power.is-selected {
+      background: #16a34a;
+      color: #ffffff;
+      border-color: #15803d;
+    }
+    ul.app-done-time-timeline .done-outcome-btn--neutral.is-selected {
+      background: #e2e8f0;
+      color: #334155;
+      border-color: #cbd5e1;
+    }
+    ul.app-done-time-timeline .done-outcome-btn--treason.is-selected {
+      background: #dc2626;
+      color: #ffffff;
+      border-color: #b91c1c;
+    }
+    ul.app-done-time-timeline .done-outcome-badge--power {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin: 0;
+      padding: 4px 12px;
+      min-height: 30px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.15;
+      box-sizing: border-box;
+      background: #16a34a;
+      color: #ffffff;
+      border: 1px solid #15803d;
+      white-space: nowrap;
+    }
     ul.app-done-time-timeline .done-compact-text-wrap:has(.done-entry-pill) {
       align-items: center;
     }
@@ -22837,6 +22959,7 @@
               return { ...item, completedAt: Date.now() };
             });
             normalizeDoneListJournalFieldsInState();
+            normalizeDoneOutcomeKindsInState();
           }
           refreshKineticCountdownLunarTargets();
           normalizeKineticCountdownTargetDays();
@@ -27180,6 +27303,116 @@
       return pill;
     }
 
+    /** Habit / Forge：固定为 Power，仅展示绿标，不参与三选一 */
+    function doneTaskUsesPowerBadgeOnly(task) {
+      if (!task || typeof task !== "object") return false;
+      if (task.habitMeta && typeof task.habitMeta === "object") return true;
+      if (task.forgeMindMeta || task.forgeBodyMeta) return true;
+      if (getForgeDoneLineInfo(task)) return true;
+      return false;
+    }
+
+    /** 默认 neutral；显式 power / treason 来自 outcomeKind */
+    function getEffectiveDoneOutcomeKind(task) {
+      if (!task || typeof task !== "object") return "neutral";
+      const k = task.outcomeKind;
+      if (k === "power" || k === "neutral" || k === "treason") return k;
+      return "neutral";
+    }
+
+    function setDoneOutcomeKindForDoneId(id, kind) {
+      const sid = String(id || "");
+      if (!sid) return;
+      if (kind !== "power" && kind !== "neutral" && kind !== "treason") return;
+      const item = state.done.find(function (x) {
+        return x && String(x.id) === sid;
+      });
+      if (!item || item.kind === "timeReflection" || doneTaskUsesPowerBadgeOnly(item)) return;
+      item.outcomeKind = kind;
+      saveState();
+      render();
+    }
+
+    function createDonePowerBadgeEl() {
+      const badge = document.createElement("span");
+      badge.className = "done-outcome-badge done-outcome-badge--power";
+      badge.setAttribute("aria-label", "Power");
+      const ic = document.createElement("span");
+      ic.className = "done-outcome-btn__icon";
+      ic.setAttribute("aria-hidden", "true");
+      ic.textContent = "\u26a1";
+      const tx = document.createElement("span");
+      tx.textContent = "Power";
+      badge.appendChild(ic);
+      badge.appendChild(tx);
+      return badge;
+    }
+
+    function createDoneOutcomeSegmentEl(task) {
+      const seg = document.createElement("div");
+      seg.className = "done-outcome-segment";
+      seg.setAttribute("role", "group");
+      seg.setAttribute("aria-label", "Outcome: Power, Neutral, or Treason");
+      const cur = getEffectiveDoneOutcomeKind(task);
+      const tid = String(task.id || "");
+      const specs = [
+        { kind: "power", label: "Power", icon: "\u26a1" },
+        { kind: "neutral", label: "Neutral", icon: "\u25cb" },
+        { kind: "treason", label: "Treason", icon: "\u2715" }
+      ];
+      specs.forEach(function (s) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className =
+          "done-outcome-btn done-outcome-btn--" + s.kind + (cur === s.kind ? " is-selected" : "");
+        btn.setAttribute("aria-pressed", cur === s.kind ? "true" : "false");
+        const ic = document.createElement("span");
+        ic.className = "done-outcome-btn__icon";
+        ic.setAttribute("aria-hidden", "true");
+        ic.textContent = s.icon;
+        const tx = document.createElement("span");
+        tx.textContent = s.label;
+        btn.appendChild(ic);
+        btn.appendChild(tx);
+        btn.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          ev.preventDefault();
+          setDoneOutcomeKindForDoneId(tid, s.kind);
+        });
+        seg.appendChild(btn);
+      });
+      return seg;
+    }
+
+    /** 将性质 UI 追加到徽章行容器（与来源 pill 同一行） */
+    function appendDoneOutcomeKindIntoContainer(container, task) {
+      if (!container || !task || task.kind === "timeReflection") return;
+      if (doneTaskUsesPowerBadgeOnly(task)) {
+        container.appendChild(createDonePowerBadgeEl());
+        return;
+      }
+      container.appendChild(createDoneOutcomeSegmentEl(task));
+    }
+
+    function normalizeDoneOutcomeKindsInState() {
+      if (!Array.isArray(state.done)) return;
+      state.done.forEach(function (item) {
+        if (!item || typeof item !== "object") return;
+        if (item.kind === "timeReflection") {
+          delete item.outcomeKind;
+          return;
+        }
+        if (doneTaskUsesPowerBadgeOnly(item)) {
+          delete item.outcomeKind;
+          return;
+        }
+        const k = item.outcomeKind;
+        if (k && k !== "power" && k !== "neutral" && k !== "treason") {
+          delete item.outcomeKind;
+        }
+      });
+    }
+
     function clearDoneRowMenuPanelPosition(panel) {
       if (!panel) return;
       panel.style.position = "fixed";
@@ -27577,6 +27810,16 @@
             numEl.classList.add("done-check-icon");
           }
         }
+        const metaStack = document.createElement("div");
+        metaStack.className = "done-compact-meta-stack";
+
+        const outcomeRow = document.createElement("div");
+        outcomeRow.className = "done-compact-outcome-row";
+        appendDoneOutcomeKindIntoContainer(outcomeRow, task);
+
+        const pillsRow = document.createElement("div");
+        pillsRow.className = "done-compact-source-pills-row";
+
         if (forgeDoneLine) {
           const brForge = parseLeadingBracketTag(forgeDoneLine.full);
           const inner =
@@ -27587,9 +27830,8 @@
                 : "Body";
           const variant =
             forgeDoneLine.kind === "mind" ? "forge-mind" : "forge-body";
-          main.appendChild(createDoneEntryPill(inner, variant));
+          pillsRow.appendChild(createDoneEntryPill(inner, variant));
           textEl.textContent = forgeDoneLine.stripped;
-          main.appendChild(textEl);
         } else {
           const br = parseLeadingBracketTag(String(task.text || ""));
           if (br) {
@@ -27601,11 +27843,16 @@
                     variant === "forge-mind" ? "mind" : "body"
                   )
                 : br.inner;
-            main.appendChild(createDoneEntryPill(pillInner, variant));
+            pillsRow.appendChild(createDoneEntryPill(pillInner, variant));
             textEl.textContent = br.rest;
           }
-          main.appendChild(textEl);
         }
+
+        if (outcomeRow.firstChild) metaStack.appendChild(outcomeRow);
+        if (pillsRow.firstChild) metaStack.appendChild(pillsRow);
+        if (metaStack.firstChild) main.appendChild(metaStack);
+        main.appendChild(textEl);
+        if (metaStack.firstChild) row.classList.add("done-compact-row--pill-card");
 
         if (task.kind === "timeReflection") {
           textEl.classList.add("task-text--time-reflection");
@@ -32892,6 +33139,7 @@
       return { ...item, completedAt: Date.now() };
     });
     normalizeDoneListJournalFieldsInState();
+    normalizeDoneOutcomeKindsInState();
     state.stopDoing = state.stopDoing.map((item) => {
       if (item.createdAt) return item;
       return { ...item, createdAt: Date.now() };
