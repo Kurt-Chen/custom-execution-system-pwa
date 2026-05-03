@@ -2615,6 +2615,40 @@
       align-self: center;
     }
 
+    #weeklyPlanSection .weekly-plan-main-actions-wrap .compact-manual-item-icons {
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+
+    #weeklyPlanSection .weekly-plan-move-lane-btn {
+      flex-shrink: 0;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 5px 8px;
+      border-radius: 8px;
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      color: #334155;
+      cursor: pointer;
+      line-height: 1.2;
+      white-space: nowrap;
+      min-height: 26px;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    #weeklyPlanSection .weekly-plan-item--lane-life .weekly-plan-move-lane-btn {
+      border-color: #93c5fd;
+      background: #eff6ff;
+      color: #1e40af;
+    }
+
+    #weeklyPlanSection .weekly-plan-item--lane-work .weekly-plan-move-lane-btn {
+      border-color: #fdba74;
+      background: #fff7ed;
+      color: #c2410c;
+    }
+
     .weekly-plan-drag-handle {
       flex-shrink: 0;
       width: 18px;
@@ -30515,6 +30549,27 @@
       render();
     }
 
+    /** 主任务在生活/工作之间迁移；移入目标类后插在该类列表顶部。 */
+    function moveWeeklyPlanTaskToLane(taskId, newLane) {
+      const targetLane = newLane === "work" ? "work" : "life";
+      const tasks = getWeeklyPlanTasksForViewWeek();
+      const task = tasks.find((t) => t.id === taskId);
+      if (!task) return;
+      if (getWeeklyPlanTaskLane(task) === targetLane) return;
+      const rest = tasks.filter((t) => t.id !== taskId);
+      const moved = normalizeWeeklyPlanTask(Object.assign({}, task, { lane: targetLane }));
+      const life = rest.filter((t) => getWeeklyPlanTaskLane(t) === "life");
+      const work = rest.filter((t) => getWeeklyPlanTaskLane(t) === "work");
+      if (targetLane === "work") {
+        work.unshift(moved);
+        saveWeeklyPlanTasksForWeek(life.concat(work));
+      } else {
+        life.unshift(moved);
+        saveWeeklyPlanTasksForWeek(life.concat(work));
+      }
+      render();
+    }
+
     function updateWeeklyPlanTaskText(taskId, newText) {
       const text = String(newText || "").trim();
       if (!text) {
@@ -30851,6 +30906,22 @@
         delMain.innerHTML = ICON_BTN_DELETE_SVG;
         delMain.setAttribute("aria-label", "删除主任务");
 
+        const moveLaneBtn = document.createElement("button");
+        moveLaneBtn.type = "button";
+        moveLaneBtn.className = "weekly-plan-move-lane-btn";
+        const taskLane = getWeeklyPlanTaskLane(task);
+        if (taskLane === "life") {
+          moveLaneBtn.textContent = "移到工作";
+          moveLaneBtn.setAttribute("aria-label", "移到工作");
+        } else {
+          moveLaneBtn.textContent = "移到生活";
+          moveLaneBtn.setAttribute("aria-label", "移到生活");
+        }
+        moveLaneBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          moveWeeklyPlanTaskToLane(task.id, taskLane === "life" ? "work" : "life");
+        });
+
         const mainMoreBtn = document.createElement("button");
         mainMoreBtn.type = "button";
         mainMoreBtn.className = "btn-icon-action manual-item-more-btn";
@@ -30919,6 +30990,7 @@
 
         mainIconGroup.appendChild(editMain);
         mainIconGroup.appendChild(saveMain);
+        mainIconGroup.appendChild(moveLaneBtn);
         mainIconGroup.appendChild(delMain);
         mainActWrap.appendChild(mainIconGroup);
         mainActWrap.appendChild(mainMoreBtn);
