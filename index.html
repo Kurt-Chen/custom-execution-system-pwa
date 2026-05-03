@@ -2655,15 +2655,15 @@
       justify-content: flex-end;
     }
 
-    #weeklyPlanSection .weekly-plan-move-lane-btn {
+    #weeklyPlanSection .weekly-plan-promote-closed-btn {
       flex-shrink: 0;
       font-size: 11px;
       font-weight: 700;
       padding: 5px 8px;
       border-radius: 8px;
-      border: 1px solid #cbd5e1;
-      background: #f8fafc;
-      color: #334155;
+      border: 1px solid #c4b5fd;
+      background: #f5f3ff;
+      color: #5b21b6;
       cursor: pointer;
       line-height: 1.2;
       white-space: nowrap;
@@ -2671,16 +2671,9 @@
       -webkit-tap-highlight-color: transparent;
     }
 
-    #weeklyPlanSection .weekly-plan-item--lane-life .weekly-plan-move-lane-btn {
-      border-color: #93c5fd;
-      background: #eff6ff;
-      color: #1e40af;
-    }
-
-    #weeklyPlanSection .weekly-plan-item--lane-work .weekly-plan-move-lane-btn {
-      border-color: #fdba74;
-      background: #fff7ed;
-      color: #c2410c;
+    #weeklyPlanSection .weekly-plan-promote-closed-btn:hover {
+      background: #ede9fe;
+      border-color: #a78bfa;
     }
 
     .weekly-plan-drag-handle {
@@ -30660,27 +30653,32 @@
       render();
     }
 
-    /** 主任务在生活/工作之间迁移；移入目标类后插在该类列表顶部。 */
-    function moveWeeklyPlanTaskToLane(taskId, newLane) {
-      const targetLane = newLane === "work" ? "work" : "life";
-      const tasks = getWeeklyPlanTasksForViewWeek();
+    /** 将当前周视图中的主任务镜像到 Closed-List（每日最多 3 条；同任务不重复） */
+    function promoteWeeklyPlanTaskToClosedList(taskId) {
+      const weekKey = getWeeklyPlanViewWeekKey();
+      const tasks = getWeeklyPlanTasksForWeekKey(weekKey);
       const task = tasks.find((t) => t.id === taskId);
       if (!task) return;
-      if (getWeeklyPlanTaskLane(task) === targetLane) return;
-      const rest = tasks.filter((t) => t.id !== taskId);
-      const moved = normalizeWeeklyPlanTask(Object.assign({}, task, { lane: targetLane }));
-      const life = rest.filter((t) => getWeeklyPlanTaskLane(t) === "life");
-      const work = rest.filter((t) => getWeeklyPlanTaskLane(t) === "work");
-      ensureWeeklyPlanUi();
-      state.weeklyPlanUi.addLane = targetLane;
-      state.weeklyPlanUi.shell = targetLane;
-      if (targetLane === "work") {
-        work.unshift(moved);
-        saveWeeklyPlanTasksForWeek(life.concat(work));
-      } else {
-        life.unshift(moved);
-        saveWeeklyPlanTasksForWeek(life.concat(work));
+      const text = String(task.text || "").trim() || "（主任务）";
+      const mirrorOf = { kind: "weeklyPlan", id: task.id, weekKey };
+      const fp = closedListMirrorFingerprint(mirrorOf);
+      if (closedListHasMirrorFingerprint(fp)) {
+        alert("该周计划主任务已在封闭清单中。");
+        return;
       }
+      const dateStr = selectedClosedListDate;
+      const sameDayCount = state.closedList.filter((item) => isSameDate(item.createdAt, dateStr)).length;
+      if (sameDayCount >= 3) {
+        alert("Closed-List 每天最多 3 条，请先删除一条再加入。");
+        return;
+      }
+      tryMirrorToClosedList({
+        text,
+        dateStr,
+        mirrorOf
+      });
+      saveState();
+      setWeeklyPlanShell("closed");
       render();
     }
 
@@ -31030,20 +31028,14 @@
         delMain.innerHTML = ICON_BTN_DELETE_SVG;
         delMain.setAttribute("aria-label", "删除主任务");
 
-        const moveLaneBtn = document.createElement("button");
-        moveLaneBtn.type = "button";
-        moveLaneBtn.className = "weekly-plan-move-lane-btn";
-        const taskLane = getWeeklyPlanTaskLane(task);
-        if (taskLane === "life") {
-          moveLaneBtn.textContent = "移到工作";
-          moveLaneBtn.setAttribute("aria-label", "移到工作");
-        } else {
-          moveLaneBtn.textContent = "移到生活";
-          moveLaneBtn.setAttribute("aria-label", "移到生活");
-        }
-        moveLaneBtn.addEventListener("click", (ev) => {
+        const toClosedBtn = document.createElement("button");
+        toClosedBtn.type = "button";
+        toClosedBtn.className = "weekly-plan-promote-closed-btn";
+        toClosedBtn.textContent = "移动到封闭清单";
+        toClosedBtn.setAttribute("aria-label", "移动到封闭清单");
+        toClosedBtn.addEventListener("click", (ev) => {
           ev.stopPropagation();
-          moveWeeklyPlanTaskToLane(task.id, taskLane === "life" ? "work" : "life");
+          promoteWeeklyPlanTaskToClosedList(task.id);
         });
 
         const mainMoreBtn = document.createElement("button");
@@ -31114,7 +31106,7 @@
 
         mainIconGroup.appendChild(editMain);
         mainIconGroup.appendChild(saveMain);
-        mainIconGroup.appendChild(moveLaneBtn);
+        mainIconGroup.appendChild(toClosedBtn);
         mainIconGroup.appendChild(delMain);
         mainActWrap.appendChild(mainIconGroup);
         mainActWrap.appendChild(mainMoreBtn);
