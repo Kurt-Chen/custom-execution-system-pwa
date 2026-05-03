@@ -3102,47 +3102,8 @@
       box-shadow: inset 0 -2px 0 #ea580c;
     }
 
-    .weekly-plan-lanes {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
+    .weekly-plan-lanes--single {
       padding: 0 12px 12px;
-    }
-
-    .weekly-plan-lane-block {
-      border-radius: 12px;
-      padding: 8px 10px 10px;
-      border: 1px solid #e2e8f0;
-    }
-
-    .weekly-plan-lane-block--life {
-      border-color: #bfdbfe;
-      background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
-    }
-
-    .weekly-plan-lane-block--work {
-      border-color: #fed7aa;
-      background: linear-gradient(180deg, #fffbeb 0%, #ffffff 100%);
-    }
-
-    .weekly-plan-lane-heading {
-      margin: 0 0 8px;
-      font-size: 13px;
-      font-weight: 800;
-      color: #475569;
-    }
-
-    .weekly-plan-lane-block--life .weekly-plan-lane-heading {
-      color: #1d4ed8;
-    }
-
-    .weekly-plan-lane-block--work .weekly-plan-lane-heading {
-      color: #c2410c;
-    }
-
-    .weekly-plan-list--lane-life,
-    .weekly-plan-list--lane-work {
-      margin: 0;
     }
 
     .weekly-plan-item--lane-life.weekly-plan-item {
@@ -3171,6 +3132,11 @@
         text-align: right;
         line-height: 1.3;
         max-width: 58vw;
+      }
+      #weeklyPlanSection .weekly-plan-lane-seg {
+        font-size: 12px;
+        padding: 8px 6px;
+        line-height: 1.25;
       }
     }
 
@@ -17855,7 +17821,7 @@
             <input type="date" id="weeklyPlanJumpDate" class="done-filter" title="显示该日期所在周（周日起算）" hidden />
           </div>
           <div class="weekly-plan-lane-add-shell">
-            <div class="weekly-plan-lane-segmented" role="tablist" aria-label="添加任务分类">
+            <div class="weekly-plan-lane-segmented" role="tablist" aria-label="切换生活周计划或工作周计划视图">
               <button
                 type="button"
                 id="weeklyPlanLaneLifeBtn"
@@ -17863,7 +17829,7 @@
                 role="tab"
                 aria-selected="true"
               >
-                生活
+                生活周计划
               </button>
               <button
                 type="button"
@@ -17872,7 +17838,7 @@
                 role="tab"
                 aria-selected="false"
               >
-                工作
+                工作周计划
               </button>
             </div>
             <div class="todo-filter-row done-toolbar-row weekly-plan-add-row weekly-plan-lane-add-fields">
@@ -17882,17 +17848,9 @@
               </button>
             </div>
           </div>
-          <div class="weekly-plan-lanes">
-            <div class="weekly-plan-lane-block weekly-plan-lane-block--life">
-              <h4 class="weekly-plan-lane-heading">生活</h4>
-              <ul id="weeklyPlanListLife" class="weekly-plan-list weekly-plan-list--lane-life"></ul>
-              <div id="weeklyPlanEmptyLife" class="empty weekly-plan-lane-empty">暂无生活任务</div>
-            </div>
-            <div class="weekly-plan-lane-block weekly-plan-lane-block--work">
-              <h4 class="weekly-plan-lane-heading">工作</h4>
-              <ul id="weeklyPlanListWork" class="weekly-plan-list weekly-plan-list--lane-work"></ul>
-              <div id="weeklyPlanEmptyWork" class="empty weekly-plan-lane-empty">暂无工作任务</div>
-            </div>
+          <div class="weekly-plan-lanes weekly-plan-lanes--single">
+            <ul id="weeklyPlanList" class="weekly-plan-list"></ul>
+            <div id="weeklyPlanEmpty" class="empty">暂无任务</div>
           </div>
           <p id="weeklyPlanFooterMeta" class="weekly-plan-footer-meta" hidden aria-hidden="true">本周 0 项 · 完成 0 项</p>
         </section>
@@ -22203,10 +22161,8 @@
     const weeklyPlanSection = document.getElementById("weeklyPlanSection");
     const weeklyPlanTaskInput = document.getElementById("weeklyPlanTaskInput");
     const addWeeklyPlanTaskBtn = document.getElementById("addWeeklyPlanTaskBtn");
-    const weeklyPlanListLife = document.getElementById("weeklyPlanListLife");
-    const weeklyPlanListWork = document.getElementById("weeklyPlanListWork");
-    const weeklyPlanEmptyLife = document.getElementById("weeklyPlanEmptyLife");
-    const weeklyPlanEmptyWork = document.getElementById("weeklyPlanEmptyWork");
+    const weeklyPlanList = document.getElementById("weeklyPlanList");
+    const weeklyPlanEmpty = document.getElementById("weeklyPlanEmpty");
     const weeklyPlanLaneLifeBtn = document.getElementById("weeklyPlanLaneLifeBtn");
     const weeklyPlanLaneWorkBtn = document.getElementById("weeklyPlanLaneWorkBtn");
     const weeklyPlanHeadSummary = document.getElementById("weeklyPlanHeadSummary");
@@ -30560,6 +30516,8 @@
       const moved = normalizeWeeklyPlanTask(Object.assign({}, task, { lane: targetLane }));
       const life = rest.filter((t) => getWeeklyPlanTaskLane(t) === "life");
       const work = rest.filter((t) => getWeeklyPlanTaskLane(t) === "work");
+      ensureWeeklyPlanUi();
+      state.weeklyPlanUi.addLane = targetLane;
       if (targetLane === "work") {
         work.unshift(moved);
         saveWeeklyPlanTasksForWeek(life.concat(work));
@@ -30649,9 +30607,10 @@
 
     function scrollToFirstWeeklyPlanIncompleteTask() {
       const tasks = getWeeklyPlanTasksForViewWeek();
+      const viewLane = getWeeklyPlanAddLane();
+      const inView = tasks.filter((t) => getWeeklyPlanTaskLane(t) === viewLane);
       const firstTodo =
-        tasks.find((t) => getWeeklyPlanTaskLane(t) === "life" && !isWeeklyPlanMainComplete(t)) ||
-        tasks.find((t) => getWeeklyPlanTaskLane(t) === "work" && !isWeeklyPlanMainComplete(t)) ||
+        inView.find((t) => !isWeeklyPlanMainComplete(t)) ||
         tasks.find((t) => !isWeeklyPlanMainComplete(t));
       if (!firstTodo) {
         return;
@@ -30772,25 +30731,24 @@
     }
 
     function renderWeeklyPlanList() {
-      if (!weeklyPlanListLife || !weeklyPlanListWork || !weeklyPlanEmptyLife || !weeklyPlanEmptyWork) {
+      if (!weeklyPlanList || !weeklyPlanEmpty) {
         return;
       }
+      const viewLane = getWeeklyPlanAddLane();
       const tasks = getWeeklyPlanTasksForViewWeek();
       const sortLane = (arr) => {
         const inc = arr.filter((t) => !isWeeklyPlanMainComplete(t));
         const done = arr.filter((t) => isWeeklyPlanMainComplete(t));
         return inc.concat(done);
       };
-      const lifeSorted = sortLane(tasks.filter((t) => getWeeklyPlanTaskLane(t) === "life"));
-      const workSorted = sortLane(tasks.filter((t) => getWeeklyPlanTaskLane(t) === "work"));
-      weeklyPlanListLife.innerHTML = "";
-      weeklyPlanListWork.innerHTML = "";
-      weeklyPlanEmptyLife.style.display = lifeSorted.length ? "none" : "block";
-      weeklyPlanEmptyWork.style.display = workSorted.length ? "none" : "block";
+      const filtered = tasks.filter((t) => getWeeklyPlanTaskLane(t) === viewLane);
+      const tasksSorted = sortLane(filtered);
+      weeklyPlanList.innerHTML = "";
+      weeklyPlanEmpty.style.display = tasksSorted.length ? "none" : "block";
       const curKey = getCurrentWeeklyPlanCalendarWeekKey();
       const emptyPrefix = getWeeklyPlanViewWeekKey() === curKey ? "本周暂无" : "该周暂无";
-      weeklyPlanEmptyLife.textContent = emptyPrefix + "生活任务";
-      weeklyPlanEmptyWork.textContent = emptyPrefix + "工作任务";
+      weeklyPlanEmpty.textContent =
+        emptyPrefix + (viewLane === "work" ? "工作任务" : "生活任务");
 
       const appendRows = (parentUl, tasksSorted, toneRef) => {
       tasksSorted.forEach((task) => {
@@ -31238,8 +31196,7 @@
         parentUl.appendChild(li);
       });
       };
-      appendRows(weeklyPlanListLife, lifeSorted, { n: 0 });
-      appendRows(weeklyPlanListWork, workSorted, { n: 0 });
+      appendRows(weeklyPlanList, tasksSorted, { n: 0 });
     }
 
     function renderWeeklyPlanUI() {
