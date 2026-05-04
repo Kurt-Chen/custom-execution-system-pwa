@@ -24306,7 +24306,7 @@
       );
     }
 
-    /** 其他模块手动添加任务时，镜像一条到 Closed-List（受每日 3 条上限约束；已存在同指纹则跳过） */
+    /** 显式推广到 Closed-List（如周计划「加入封闭清单」）；受每日 3 条上限与同指纹去重约束 */
     function tryMirrorToClosedList(payload) {
       const text = String(payload.text || "").trim();
       const mirrorOf = payload.mirrorOf;
@@ -24329,11 +24329,6 @@
       }
       const m = createMemo(text);
       state.memo.unshift(m);
-      tryMirrorToClosedList({
-        text: m.text,
-        dateStr: formatDateInputValue(new Date(m.createdAt)),
-        mirrorOf: { kind: "memo", id: m.id }
-      });
       memoInput.value = "";
       saveState();
       render();
@@ -24437,19 +24432,9 @@
           completed: false,
           createdAt: Date.now()
         });
-        tryMirrorToClosedList({
-          text: text.trim(),
-          dateStr: formatDateInputValue(new Date()),
-          mirrorOf: { kind: "dailyWinTomorrow", id: twId, dateKey: targetDateKey }
-        });
       } else {
         const dw = createDailyWin(text, targetDateKey);
         state.dailyWin.unshift(dw);
-        tryMirrorToClosedList({
-          text: dw.text,
-          dateStr: targetDateKey,
-          mirrorOf: { kind: "dailyWin", id: dw.id }
-        });
       }
       if (dailyWinViewMode === "today" && sameDayCount === 2) {
         selectedDoneDate = targetDateKey;
@@ -24491,11 +24476,6 @@
       }
       const pt = createProjectTask(projectKey, text);
       getProjectTasks(projectKey).unshift(pt);
-      tryMirrorToClosedList({
-        text: pt.text,
-        dateStr: formatDateInputValue(new Date()),
-        mirrorOf: { kind: "project", id: pt.id, projectKey: projectKey }
-      });
       if (inputEl) inputEl.value = "";
       saveState();
       renderProjectTasks();
@@ -24777,7 +24757,7 @@
       }
       if (k === "stopDoing" || k === "notToDo") {
         if (complete) {
-          markDone(mirrorOf.id, k);
+          return markDone(mirrorOf.id, k, true);
         }
         return;
       }
@@ -24787,6 +24767,7 @@
       const item = state.closedList.find((x) => x.id === id);
       if (!item) return;
       item.completed = Boolean(checked);
+      let expandTodoJournalFromMirror = null;
       if (item.completed) {
         item.completedAt = Date.now();
         closedListCompleteAnimIds.add(id);
@@ -24795,7 +24776,7 @@
           render();
         }, 750);
         if (item.mirrorOf) {
-          applyMirrorSourceComplete(item.mirrorOf, true);
+          expandTodoJournalFromMirror = applyMirrorSourceComplete(item.mirrorOf, true);
         }
         syncClosedListToDone(item);
       } else {
@@ -24808,6 +24789,9 @@
       }
       saveState();
       render();
+      if (expandTodoJournalFromMirror) {
+        scheduleExpandAndFocusDoneJournalAssess(expandTodoJournalFromMirror);
+      }
     }
 
     function toggleMemoComplete(id, checked) {
@@ -26127,7 +26111,8 @@
       }, 0);
     }
 
-    function markDone(id, listKey) {
+    /** silent：仅改 state，不 save/render；供 Closed-List 勾选完成内联调用，避免嵌套 render 与勾选状态错乱 */
+    function markDone(id, listKey, silent) {
       const list = state[listKey];
       if (!Array.isArray(list)) return;
       const idx = list.findIndex((item) => item.id === id);
@@ -26143,6 +26128,9 @@
       });
       list.splice(idx, 1);
 
+      if (silent) {
+        return newDoneId;
+      }
       saveState();
       render();
       scheduleExpandAndFocusDoneJournalAssess(newDoneId);
@@ -26889,11 +26877,6 @@
       }
       const s = createStopNotItem(text, formatDateInputValue(new Date()));
       state.stopDoing.unshift(s);
-      tryMirrorToClosedList({
-        text: s.text,
-        dateStr: formatDateInputValue(new Date()),
-        mirrorOf: { kind: "stopDoing", id: s.id }
-      });
       stopDoingInput.value = "";
       saveState();
       render();
@@ -26908,11 +26891,6 @@
       }
       const n = createStopNotItem(text, formatDateInputValue(new Date()));
       state.notToDo.unshift(n);
-      tryMirrorToClosedList({
-        text: n.text,
-        dateStr: formatDateInputValue(new Date()),
-        mirrorOf: { kind: "notToDo", id: n.id }
-      });
       notToDoInput.value = "";
       saveState();
       render();
@@ -34546,6 +34524,7 @@
       const base = item.createdAt ? item : { ...item, createdAt: Date.now() };
       return {
         ...base,
+        completed: Boolean(base.completed),
         miniStep: typeof base.miniStep === "string" ? base.miniStep : "",
         avoidance: normalizeClosedListAvoidance(base.avoidance)
       };
