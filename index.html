@@ -3155,20 +3155,6 @@
       min-width: 0;
     }
 
-    .closed-list-embedded-meta {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: baseline;
-      gap: 6px 10px;
-      margin: 0 0 8px;
-      font-weight: 700;
-      color: #5b21b6;
-    }
-
-    .closed-list-embedded-label {
-      font-size: 14px;
-    }
-
     .weekly-plan-tasks-panel {
       min-width: 0;
     }
@@ -17916,10 +17902,6 @@
             >
               <div id="closedListDayProgressFill" class="closed-list-day-progress__fill"></div>
             </div>
-            <div class="closed-list-embedded-meta" aria-live="polite">
-              <span class="closed-list-embedded-label">Closed-List</span>
-              <span id="closedListCount" class="count">0</span>
-            </div>
             <div class="closed-list-date-nav-row" aria-label="Closed-List 日期导航">
               <button id="closedListPrevDayBtn" class="closed-list-date-nav-btn" type="button" aria-label="上一天">‹</button>
               <span id="closedListDateNavLabel" class="closed-list-date-nav-label" aria-live="polite"></span>
@@ -22125,7 +22107,6 @@
     const closedList = document.getElementById("closedList");
     const doneList = document.getElementById("doneList");
     const memoCount = document.getElementById("memoCount");
-    const closedListCount = document.getElementById("closedListCount");
     const doneListTitleCount = document.getElementById("doneListTitleCount");
     const doneOutcomeDayStats = document.getElementById("doneOutcomeDayStats");
     const doneDayStats = document.getElementById("doneDayStats");
@@ -22401,7 +22382,9 @@
       forge: {},
       backwardMeasure: { weekly: {}, monthly: {}, quarterly: {} },
       backwardMeasurePeriod: { weekly: "", monthly: "", quarterly: "" },
-      timeReflectionDismissed: {}
+      timeReflectionDismissed: {},
+      /** 云同步合并：本机删除过的记录 id → 删除时间戳；合并并集时剔除，避免「删了又回来」 */
+      syncTombstones: {}
     };
 
     function getCloudSyncConfig() {
@@ -22977,6 +22960,62 @@
         .sort((a, b) => recordTieTimestampForSync(b) - recordTieTimestampForSync(a));
     }
 
+    function mergeSyncTombstoneMaps(lo, ro) {
+      const out = {};
+      if (lo && typeof lo === "object") {
+        Object.keys(lo).forEach((k) => {
+          const v = Number(lo[k]);
+          if (Number.isFinite(v) && v > 0) out[k] = v;
+        });
+      }
+      if (ro && typeof ro === "object") {
+        Object.keys(ro).forEach((k) => {
+          const v = Number(ro[k]);
+          if (!Number.isFinite(v) || v <= 0) return;
+          const cur = Number(out[k]) || 0;
+          out[k] = Math.max(cur, v);
+        });
+      }
+      return out;
+    }
+
+    function omitTombstonedIdRecords(arr, tombstones) {
+      if (!Array.isArray(arr)) return [];
+      const ts = tombstones && typeof tombstones === "object" ? tombstones : {};
+      return arr.filter((item) => {
+        if (!item || item.id == null) return false;
+        return !Object.prototype.hasOwnProperty.call(ts, String(item.id));
+      });
+    }
+
+    function filterDailyWinTomorrowRefByTombstones(ref, tombstones) {
+      if (!ref || typeof ref !== "object") return {};
+      const out = {};
+      Object.keys(ref).forEach((k) => {
+        const arr = ref[k];
+        out[k] = Array.isArray(arr) ? omitTombstonedIdRecords(arr, tombstones) : arr;
+      });
+      return out;
+    }
+
+    const SYNC_TOMBSTONE_MAX_KEYS = 4000;
+    function recordSyncTombstone(id) {
+      if (id == null) return;
+      const sid = String(id);
+      if (!sid) return;
+      if (!state.syncTombstones || typeof state.syncTombstones !== "object") {
+        state.syncTombstones = {};
+      }
+      state.syncTombstones[sid] = Date.now();
+      const keys = Object.keys(state.syncTombstones);
+      if (keys.length <= SYNC_TOMBSTONE_MAX_KEYS) return;
+      keys.sort((a, b) => state.syncTombstones[a] - state.syncTombstones[b]);
+      const drop = keys.length - SYNC_TOMBSTONE_MAX_KEYS;
+      for (let i = 0; i < drop; i++) {
+        delete state.syncTombstones[keys[i]];
+      }
+    }
+
     function mergeFuelScoresForSync(localArr, remoteArr) {
       const map = new Map();
       [...(Array.isArray(remoteArr) ? remoteArr : []), ...(Array.isArray(localArr) ? localArr : [])].forEach(
@@ -23261,21 +23300,51 @@
       const ls = Number(lastSeen) || 0;
       const serverNewer = ru > 0 && ru > ls;
 
-      base.done = mergeIdRecordArraysPreferLocalOnTie(state.done, remoteState.done);
-      base.memo = mergeIdRecordArraysPreferLocalOnTie(state.memo, remoteState.memo);
-      base.closedList = mergeIdRecordArraysPreferLocalOnTie(state.closedList, remoteState.closedList);
-      base.dailyWin = mergeIdRecordArraysPreferLocalOnTie(state.dailyWin, remoteState.dailyWin);
-      base.stopDoing = mergeIdRecordArraysPreferLocalOnTie(state.stopDoing, remoteState.stopDoing);
-      base.notToDo = mergeIdRecordArraysPreferLocalOnTie(state.notToDo, remoteState.notToDo);
-      base.kineticCountdowns = mergeIdRecordArraysPreferLocalOnTie(
-        state.kineticCountdowns,
-        remoteState.kineticCountdowns
+      base.syncTombstones = mergeSyncTombstoneMaps(
+        state.syncTombstones,
+        remoteState.syncTombstones
+      );
+      const ts = base.syncTombstones;
+
+      base.done = omitTombstonedIdRecords(
+        mergeIdRecordArraysPreferLocalOnTie(state.done, remoteState.done),
+        ts
+      );
+      base.memo = omitTombstonedIdRecords(
+        mergeIdRecordArraysPreferLocalOnTie(state.memo, remoteState.memo),
+        ts
+      );
+      base.closedList = omitTombstonedIdRecords(
+        mergeIdRecordArraysPreferLocalOnTie(state.closedList, remoteState.closedList),
+        ts
+      );
+      base.dailyWin = omitTombstonedIdRecords(
+        mergeIdRecordArraysPreferLocalOnTie(state.dailyWin, remoteState.dailyWin),
+        ts
+      );
+      base.stopDoing = omitTombstonedIdRecords(
+        mergeIdRecordArraysPreferLocalOnTie(state.stopDoing, remoteState.stopDoing),
+        ts
+      );
+      base.notToDo = omitTombstonedIdRecords(
+        mergeIdRecordArraysPreferLocalOnTie(state.notToDo, remoteState.notToDo),
+        ts
+      );
+      base.kineticCountdowns = omitTombstonedIdRecords(
+        mergeIdRecordArraysPreferLocalOnTie(
+          state.kineticCountdowns,
+          remoteState.kineticCountdowns
+        ),
+        ts
       );
       base.fuelScores = mergeFuelScoresForSync(state.fuelScores, remoteState.fuelScores);
       base.habitCheckins = mergeHabitCheckinsForSync(state.habitCheckins, remoteState.habitCheckins);
-      base.dailyWinTomorrowRef = mergeDailyWinTomorrowRefForSync(
-        state.dailyWinTomorrowRef,
-        remoteState.dailyWinTomorrowRef
+      base.dailyWinTomorrowRef = filterDailyWinTomorrowRefByTombstones(
+        mergeDailyWinTomorrowRefForSync(
+          state.dailyWinTomorrowRef,
+          remoteState.dailyWinTomorrowRef
+        ),
+        ts
       );
       base.weeklyPlanDoneRef = mergeWeeklyPlanDoneRefForSync(
         state.weeklyPlanDoneRef,
@@ -23286,6 +23355,12 @@
         remoteState.anniversaryDoneRef
       );
       base.projectTasks = mergeProjectTasksForSync(state.projectTasks, remoteState.projectTasks);
+      if (base.projectTasks && Array.isArray(base.projectTasks.quoteApp)) {
+        base.projectTasks = {
+          ...base.projectTasks,
+          quoteApp: omitTombstonedIdRecords(base.projectTasks.quoteApp, ts)
+        };
+      }
 
       const anniversaryTwPreferRemote = serverNewer;
       base.anniversaryTw020 = mergeAnniversaryTw020ModuleForSync(
@@ -23712,6 +23787,9 @@
           }
           if (!Array.isArray(state.closedList)) {
             state.closedList = [];
+          }
+          if (!state.syncTombstones || typeof state.syncTombstones !== "object") {
+            state.syncTombstones = {};
           }
           if (!state.ruleOf100 || typeof state.ruleOf100 !== "object") {
             state.ruleOf100 = {};
@@ -27045,6 +27123,16 @@
       }
       if (listName === "memo") {
         removeMemoDoneCopy(task.id);
+      }
+      if (
+        listName === "done" ||
+        listName === "memo" ||
+        listName === "closedList" ||
+        listName === "dailyWin" ||
+        listName === "stopDoing" ||
+        listName === "notToDo"
+      ) {
+        recordSyncTombstone(task.id);
       }
       list.splice(idx, 1);
       saveState();
@@ -31501,6 +31589,7 @@
     }
 
     function deleteKineticCountdown(id) {
+      recordSyncTombstone(id);
       state.kineticCountdowns = state.kineticCountdowns.filter((x) => x.id !== id);
       saveState();
       render();
@@ -33629,7 +33718,6 @@
       stopDoingCount.textContent = state.stopDoing.length;
       notToDoCount.textContent = state.notToDo.length;
       memoCount.textContent = filteredMemoItems.length;
-      closedListCount.textContent = filteredClosedListItems.length;
       if (closedListDayQuota) {
         closedListDayQuota.textContent = String(filteredClosedListItems.length) + "/3";
       }
@@ -34949,6 +35037,7 @@
       const list = getDailyWinTomorrowRefList(targetDateKey);
       const idx = list.findIndex((item) => item && item.id === id);
       if (idx === -1) return;
+      recordSyncTombstone(id);
       list.splice(idx, 1);
       saveState();
       render();
