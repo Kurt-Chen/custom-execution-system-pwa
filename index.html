@@ -22960,6 +22960,46 @@
         .sort((a, b) => recordTieTimestampForSync(b) - recordTieTimestampForSync(a));
     }
 
+    /**
+     * Firebase 云同步 / push 前合并：仅用按条时间戳会选到「整包较新但 completed 未带上」的副本，导致本地刚勾选被旧快照覆盖。
+     * 对同一 id，任一侧 completed 为 true 则结果必为已完成，completedAt 取较大者（与 mergeIdRecordArraysPreferLocalOnTie 配合）。
+     */
+    function mergeClosedListArraysForSync(localArr, remoteArr) {
+      const loc = Array.isArray(localArr) ? localArr : [];
+      const rem = Array.isArray(remoteArr) ? remoteArr : [];
+      const merged = mergeIdRecordArraysPreferLocalOnTie(loc, rem);
+      const mapLoc = new Map(
+        loc
+          .filter((x) => x && x.id != null)
+          .map((x) => {
+            return [String(x.id), x];
+          })
+      );
+      const mapRem = new Map(
+        rem
+          .filter((x) => x && x.id != null)
+          .map((x) => {
+            return [String(x.id), x];
+          })
+      );
+      return merged.map(function (item) {
+        if (!item || item.id == null) return item;
+        const id = String(item.id);
+        const L = mapLoc.get(id);
+        const R = mapRem.get(id);
+        const wantDone = Boolean((L && L.completed) || (R && R.completed) || item.completed);
+        if (!wantDone) return item;
+        const out = Object.assign({}, item, { completed: true });
+        const ca = [L && L.completedAt, R && R.completedAt, item.completedAt]
+          .map((t) => Number(t))
+          .filter((t) => Number.isFinite(t) && t > 0);
+        if (ca.length) {
+          out.completedAt = Math.max.apply(null, ca);
+        }
+        return out;
+      });
+    }
+
     function mergeSyncTombstoneMaps(lo, ro) {
       const out = {};
       if (lo && typeof lo === "object") {
@@ -23315,7 +23355,7 @@
         ts
       );
       base.closedList = omitTombstonedIdRecords(
-        mergeIdRecordArraysPreferLocalOnTie(state.closedList, remoteState.closedList),
+        mergeClosedListArraysForSync(state.closedList, remoteState.closedList),
         ts
       );
       base.closedList.forEach(function (cl) {
@@ -23648,6 +23688,7 @@
         cloudSyncReady = true;
         cloudSyncLastErrorMsg = "";
         setCloudSyncStatus("已连接 ✓", "status-connected");
+        /* onValue 回声：本机 set({ updatedBy: clientId }) 回传时直接忽略，避免用未含最新字段的快照再 merge 覆盖 in-memory state */
         cloudSyncRef.on("value", (snap) => {
           const payload = snap.val();
           if (!payload || !payload.state) return;
@@ -24751,6 +24792,12 @@
     function toggleClosedListComplete(id, checked) {
       const item = state.closedList.find((x) => x.id === id);
       if (!item) return;
+      /**
+       * 避免同一交互内重复触发（click 双射、触摸合成事件）把已完成立刻打回：目标状态与内存一致则不再写。
+       */
+      if (Boolean(item.completed) === Boolean(checked)) {
+        return;
+      }
       item.completed = Boolean(checked);
       if (item.completed) {
         item.completedAt = Date.now();
@@ -28783,11 +28830,12 @@
         closedListCheckEl.type = "checkbox";
         closedListCheckEl.className = "closed-list-check";
         closedListCheckEl.checked = Boolean(task.completed);
-        closedListCheckEl.addEventListener("click", (event) => {
-          event.preventDefault();
+        closedListCheckEl.addEventListener("change", (event) => {
+          event.stopPropagation();
+          const want = Boolean(event.target.checked);
           const cur = state.closedList.find((x) => x.id === task.id);
           if (!cur) return;
-          toggleClosedListComplete(task.id, !cur.completed);
+          toggleClosedListComplete(task.id, want);
         });
       }
       if (listName === "memo") {
