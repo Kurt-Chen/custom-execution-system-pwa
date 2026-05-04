@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20260504b";
+const CACHE_NAME = "exec-system-pwa-v20260504c";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -38,8 +38,17 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
+  /** HTML / 导航请求绕过 HTTP 缓存，避免线上长期看到旧版 index */
+  const isHtmlShell =
+    req.mode === "navigate" ||
+    req.destination === "document" ||
+    url.pathname === "/" ||
+    url.pathname.endsWith("/") ||
+    /\/index\.html$/i.test(url.pathname);
+  const netReq = isHtmlShell ? new Request(req, { cache: "reload" }) : req;
+
   event.respondWith(
-    fetch(req)
+    fetch(netReq)
       .then((res) => {
         const cloned = res.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(req, cloned));
