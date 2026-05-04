@@ -23318,6 +23318,11 @@
         mergeIdRecordArraysPreferLocalOnTie(state.closedList, remoteState.closedList),
         ts
       );
+      base.closedList.forEach(function (cl) {
+        if (cl && typeof cl === "object" && Object.prototype.hasOwnProperty.call(cl, "mirrorOf")) {
+          delete cl.mirrorOf;
+        }
+      });
       base.dailyWin = omitTombstonedIdRecords(
         mergeIdRecordArraysPreferLocalOnTie(state.dailyWin, remoteState.dailyWin),
         ts
@@ -23788,6 +23793,11 @@
           if (!Array.isArray(state.closedList)) {
             state.closedList = [];
           }
+          state.closedList.forEach(function (clItem) {
+            if (clItem && typeof clItem === "object" && Object.prototype.hasOwnProperty.call(clItem, "mirrorOf")) {
+              delete clItem.mirrorOf;
+            }
+          });
           if (!state.syncTombstones || typeof state.syncTombstones !== "object") {
             state.syncTombstones = {};
           }
@@ -24376,39 +24386,6 @@
       };
     }
 
-    function closedListMirrorFingerprint(mirrorOf) {
-      if (!mirrorOf || !mirrorOf.kind) return "";
-      return [
-        mirrorOf.kind,
-        mirrorOf.id || "",
-        mirrorOf.weekKey || "",
-        mirrorOf.projectKey || "",
-        mirrorOf.dateKey || ""
-      ].join("|");
-    }
-
-    function closedListHasMirrorFingerprint(fp) {
-      if (!fp) return false;
-      return state.closedList.some(
-        (c) => c.mirrorOf && closedListMirrorFingerprint(c.mirrorOf) === fp
-      );
-    }
-
-    /** 显式推广到 Closed-List（如周计划「加入封闭清单」）；受每日 3 条上限与同指纹去重约束 */
-    function tryMirrorToClosedList(payload) {
-      const text = String(payload.text || "").trim();
-      const mirrorOf = payload.mirrorOf;
-      const dateStr = payload.dateStr || formatDateInputValue(new Date());
-      if (!text || !mirrorOf) return;
-      const fp = closedListMirrorFingerprint(mirrorOf);
-      if (closedListHasMirrorFingerprint(fp)) return;
-      const sameDayCount = state.closedList.filter((item) => isSameDate(item.createdAt, dateStr)).length;
-      if (sameDayCount >= 3) return;
-      const item = createClosedListItem(text, dateStr, "");
-      item.mirrorOf = mirrorOf;
-      state.closedList.unshift(item);
-    }
-
     function addMemo() {
       const text = memoInput.value.trim();
       if (!text) {
@@ -24770,87 +24747,7 @@
       });
     }
 
-    /** Closed-List 镜像条目勾选完成时，回写对应模块中的源任务（stop/notToDo 仅支持勾选完成，撤销完成无法从 Done 恢复列表项） */
-    function applyMirrorSourceComplete(mirrorOf, complete) {
-      if (!mirrorOf || !mirrorOf.kind) return;
-      const k = mirrorOf.kind;
-      if (k === "memo") {
-        const memoItem = state.memo.find((x) => x.id === mirrorOf.id);
-        if (!memoItem) return;
-        if (complete) {
-          memoItem.completed = true;
-          memoItem.completedAt = Date.now();
-          syncMemoToDone(memoItem);
-        } else {
-          memoItem.completed = false;
-          delete memoItem.completedAt;
-          removeMemoDoneCopy(memoItem.id);
-        }
-        return;
-      }
-      if (k === "project") {
-        const pk = mirrorOf.projectKey;
-        if (!pk) return;
-        if (complete) setProjectTaskStatus(pk, mirrorOf.id, "done");
-        else setProjectTaskStatus(pk, mirrorOf.id, "todo");
-        return;
-      }
-      if (k === "weeklyPlan") {
-        const wk = mirrorOf.weekKey;
-        if (!wk) return;
-        const tasks = getWeeklyPlanTasksForWeekKey(wk);
-        const task = tasks.find((t) => t.id === mirrorOf.id);
-        if (!task) return;
-        if (complete) {
-          task.mainDone = true;
-          (task.microTasks || []).forEach((m) => {
-            m.done = true;
-          });
-        } else {
-          task.mainDone = false;
-          (task.microTasks || []).forEach((m) => {
-            m.done = false;
-          });
-        }
-        saveWeeklyPlanTasksForWeek(tasks, wk);
-        syncWeeklyPlanDoneList();
-        return;
-      }
-      if (k === "dailyWin") {
-        const dw = state.dailyWin.find((x) => x.id === mirrorOf.id);
-        if (!dw) return;
-        if (complete) {
-          dw.completed = true;
-          dw.completedAt = Date.now();
-        } else {
-          dw.completed = false;
-          delete dw.completedAt;
-        }
-        return;
-      }
-      if (k === "dailyWinTomorrow") {
-        const dk = mirrorOf.dateKey;
-        if (!dk) return;
-        const list = getDailyWinTomorrowRefList(dk);
-        const dw = list.find((x) => x.id === mirrorOf.id);
-        if (!dw) return;
-        if (complete) {
-          dw.completed = true;
-          dw.completedAt = Date.now();
-        } else {
-          dw.completed = false;
-          delete dw.completedAt;
-        }
-        return;
-      }
-      if (k === "stopDoing" || k === "notToDo") {
-        if (complete) {
-          markDone(mirrorOf.id, k, true);
-        }
-        return;
-      }
-    }
-
+    /** Closed-List 独立完成：仅同步 My Done，不回写周计划/备忘录/其它模块 */
     function toggleClosedListComplete(id, checked) {
       const item = state.closedList.find((x) => x.id === id);
       if (!item) return;
@@ -24862,17 +24759,11 @@
           closedListCompleteAnimIds.delete(id);
           render();
         }, 750);
-        if (item.mirrorOf) {
-          applyMirrorSourceComplete(item.mirrorOf, true);
-        }
         syncClosedListToDone(item);
       } else {
         closedListCompleteAnimIds.delete(id);
         delete item.completedAt;
         removeClosedListDoneCopy(item.id);
-        if (item.mirrorOf) {
-          applyMirrorSourceComplete(item.mirrorOf, false);
-        }
       }
       saveState();
       render();
@@ -30784,30 +30675,25 @@
       render();
     }
 
-    /** 将当前周视图中的主任务镜像到 Closed-List（每日最多 3 条；同任务不重复） */
+    /** 将周计划主任务标题复制到当日 Closed-List（无模块关联；每日最多 3 条；同日同标题不重复） */
     function promoteWeeklyPlanTaskToClosedList(taskId) {
       const weekKey = getWeeklyPlanViewWeekKey();
       const tasks = getWeeklyPlanTasksForWeekKey(weekKey);
       const task = tasks.find((t) => t.id === taskId);
       if (!task) return;
-      const text = String(task.text || "").trim() || "（主任务）";
-      const mirrorOf = { kind: "weeklyPlan", id: task.id, weekKey };
-      const fp = closedListMirrorFingerprint(mirrorOf);
-      if (closedListHasMirrorFingerprint(fp)) {
-        alert("该周计划主任务已在封闭清单中。");
-        return;
-      }
+      const mainT = String(task.text || "").trim() || "（主任务）";
+      const lineText = "【自周计划】" + mainT;
       const dateStr = selectedClosedListDate;
-      const sameDayCount = state.closedList.filter((item) => isSameDate(item.createdAt, dateStr)).length;
-      if (sameDayCount >= 3) {
+      const sameDay = state.closedList.filter((item) => isSameDate(item.createdAt, dateStr));
+      if (sameDay.length >= 3) {
         alert("Closed-List 每天最多 3 条，请先删除一条再加入。");
         return;
       }
-      tryMirrorToClosedList({
-        text,
-        dateStr,
-        mirrorOf
-      });
+      if (sameDay.some((it) => String(it.text || "").trim() === lineText)) {
+        alert("今日封闭清单已有相同条目（已从周计划复制过）。");
+        return;
+      }
+      state.closedList.unshift(createClosedListItem(lineText, dateStr, ""));
       saveState();
       setWeeklyPlanShell("closed");
       render();
@@ -31162,8 +31048,8 @@
         const toClosedBtn = document.createElement("button");
         toClosedBtn.type = "button";
         toClosedBtn.className = "weekly-plan-promote-closed-btn";
-        toClosedBtn.textContent = "移动到封闭清单";
-        toClosedBtn.setAttribute("aria-label", "移动到封闭清单");
+        toClosedBtn.textContent = "复制到封闭清单";
+        toClosedBtn.setAttribute("aria-label", "复制主任务标题到封闭清单（不与周计划联动）");
         toClosedBtn.addEventListener("click", (ev) => {
           ev.stopPropagation();
           promoteWeeklyPlanTaskToClosedList(task.id);
