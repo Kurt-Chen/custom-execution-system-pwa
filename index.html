@@ -935,6 +935,58 @@
       outline-offset: 2px;
     }
 
+    /* 垃圾箱列表（Kinetic · 垃圾箱 Tab） */
+    #trashList.trash-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    #trashSection .trash-item {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      margin-bottom: 8px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+    }
+    #trashSection .trash-item-main {
+      flex: 1;
+      min-width: 0;
+    }
+    #trashSection .trash-source-badge {
+      display: inline-block;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #e0e7ff;
+      color: #3730a3;
+      margin-bottom: 4px;
+    }
+    #trashSection .trash-item-meta {
+      font-size: 12px;
+      color: #64748b;
+      margin-top: 4px;
+    }
+    #trashSection .trash-item .actions {
+      flex-shrink: 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    @media (max-width: 767px) {
+      #trashSection .trash-item {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      #trashSection .trash-item .actions {
+        justify-content: flex-end;
+      }
+    }
+
     #dynamicModule .kinetic-tab-panel.kinetic-tab-hidden {
       display: none !important;
     }
@@ -16409,6 +16461,9 @@
       #dynamicModule .kinetic-tabs #kineticTabBtn-dailyReminder {
         order: 5;
       }
+      #dynamicModule .kinetic-tabs #kineticTabBtn-trash {
+        order: 6;
+      }
 
       #dynamicModule .kinetic-tabs .kinetic-tab-btn {
         flex: 0 0 auto !important;
@@ -16789,6 +16844,9 @@
       }
       #dynamicModule .kinetic-tabs #kineticTabBtn-dailyReminder {
         order: 5;
+      }
+      #dynamicModule .kinetic-tabs #kineticTabBtn-trash {
+        order: 6;
       }
 
       #dynamicModule .kinetic-tabs .kinetic-tab-btn {
@@ -18405,6 +18463,30 @@
           <ul id="memoList"></ul>
           <div id="memoEmpty" class="empty">暂无备忘录内容</div>
         </section>
+        </section>
+
+        <section
+          id="trashSection"
+          class="collapsed kinetic-sub-trash"
+          aria-label="垃圾箱"
+        >
+          <h2 class="section-title">
+            垃圾箱<span id="trashTitleCount" class="done-list-title-count" aria-live="polite"></span>
+            <span class="title-right">
+              <button
+                id="toggleTrashBtn"
+                class="toggle-btn toggle-chevron"
+                type="button"
+                aria-label="切换此区块"
+                aria-expanded="false"
+              ></button>
+            </span>
+          </h2>
+          <p class="submodule-note">
+            从各列表删除的条目会暂存于此，<strong>30 天内</strong>可恢复；过期后自动清除。与云同步房间合并时，垃圾箱记录按条合并。
+          </p>
+          <ul id="trashList" class="trash-list"></ul>
+          <div id="trashEmpty" class="empty">垃圾箱为空</div>
         </section>
 
         <section
@@ -22785,6 +22867,11 @@
     const todoSection = document.getElementById("todoSection");
     const memoSection = memoList.closest("section");
     const toggleDailyReminderBtn = document.getElementById("toggleDailyReminderBtn");
+    const trashSection = document.getElementById("trashSection");
+    const toggleTrashBtn = document.getElementById("toggleTrashBtn");
+    const trashList = document.getElementById("trashList");
+    const trashEmpty = document.getElementById("trashEmpty");
+    const trashTitleCount = document.getElementById("trashTitleCount");
     const dailyReminderSection = document.getElementById("dailyReminderSection");
     const toggleWeeklyPlanBtn = document.getElementById("toggleWeeklyPlanBtn");
     const weeklyPlanSection = document.getElementById("weeklyPlanSection");
@@ -22861,7 +22948,8 @@
       { key: "weekly", label: "Weekly Plan", sectionEl: weeklyPlanSection, toggleBtn: toggleWeeklyPlanBtn, panelId: "kineticTabPanelWeekly" },
       { key: "anniversary", label: "12 Week Year", sectionEl: anniversaryModule, toggleBtn: toggleAnniversaryModuleBtn, panelId: "kineticTabPanelAnniversary" },
       { key: "countdown", label: "倒计时", sectionEl: kineticCountdownSection, toggleBtn: toggleKineticCountdownBtn, panelId: "kineticTabPanelCountdown" },
-      { key: "dailyReminder", label: "每日提醒", sectionEl: dailyReminderSection, toggleBtn: toggleDailyReminderBtn, panelId: "kineticTabPanelDailyReminder" }
+      { key: "dailyReminder", label: "每日提醒", sectionEl: dailyReminderSection, toggleBtn: toggleDailyReminderBtn, panelId: "kineticTabPanelDailyReminder" },
+      { key: "trash", label: "垃圾箱", sectionEl: trashSection, toggleBtn: toggleTrashBtn, panelId: "kineticTabPanelTrash" }
     ];
     const ageGoalsCountdownList = document.getElementById("ageGoalsCountdownList");
     const moneyGoalsList = document.getElementById("moneyGoalsList");
@@ -22941,6 +23029,8 @@
       timeReflectionDismissed: {},
       /** 云同步合并：本机删除过的记录 id → 删除时间戳；合并并集时剔除，避免「删了又回来」 */
       syncTombstones: {},
+      /** 垃圾箱：软删条目，30 天内可恢复（结构见 pushTrashEntry） */
+      trash: [],
       /** 人生进度表（4000 周） */
       life4000Weeks: { name: "", birthDate: "", birthLunarText: "" }
     };
@@ -23610,6 +23700,461 @@
       return out;
     }
 
+    /** 垃圾箱：删除后保留时长（30 天），过期自动清除 */
+    const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+    function deepCloneForTrash(obj) {
+      try {
+        return JSON.parse(JSON.stringify(obj));
+      } catch (_e) {
+        return null;
+      }
+    }
+
+    function purgeExpiredTrash() {
+      if (!Array.isArray(state.trash)) {
+        state.trash = [];
+        return false;
+      }
+      const cutoff = Date.now() - TRASH_RETENTION_MS;
+      const next = state.trash.filter(function (e) {
+        return e && typeof e === "object" && typeof e.deletedAt === "number" && e.deletedAt >= cutoff;
+      });
+      if (next.length === state.trash.length) return false;
+      state.trash = next;
+      return true;
+    }
+
+    function pushTrashEntry(parts) {
+      if (!Array.isArray(state.trash)) state.trash = [];
+      purgeExpiredTrash();
+      const tid = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      const payload = deepCloneForTrash(parts.payload);
+      if (parts.payload != null && payload == null) return;
+      state.trash.unshift({
+        id: tid,
+        sourceList: String(parts.sourceList || ""),
+        originalId: parts.originalId != null ? parts.originalId : "",
+        deletedAt: Date.now(),
+        payload: payload,
+        meta: deepCloneForTrash(parts.meta) || {}
+      });
+    }
+
+    function trashSummaryLine(ent) {
+      const p = ent && ent.payload;
+      const sl = ent && ent.sourceList;
+      if (!p) return "（无摘要）";
+      if (typeof p.text === "string" && p.text) return p.text.length > 100 ? p.text.slice(0, 100) + "…" : p.text;
+      if (typeof p.label === "string" && p.label) return p.label.length > 100 ? p.label.slice(0, 100) + "…" : p.label;
+      if (sl && sl.indexOf("anniversary") === 0 && typeof p.text === "string") return p.text.slice(0, 100);
+      return String(ent.originalId || "").slice(0, 80);
+    }
+
+    function trashSourceLabel(sl) {
+      const map = {
+        done: "My Done",
+        memo: "备忘录",
+        closedList: "Closed-List",
+        dailyWin: "Daily Win",
+        stopDoing: "Stop Doing",
+        notToDo: "Not To Do",
+        weeklyPlan: "周计划",
+        weeklyPlanMicro: "周计划微任务",
+        projectTask: "项目任务",
+        kineticCountdown: "倒计时",
+        dailyWinTomorrowRef: "Daily Win · 明日备忘",
+        anniversaryTw020Task: "12WY · 020 任务",
+        anniversaryTw020Sub: "12WY · 020 子任务",
+        anniversaryTw021Task: "12WY · 021 任务",
+        anniversaryTw021Sub: "12WY · 021 子任务",
+        anniversaryTw022Task: "12WY · 022 任务",
+        anniversaryTw022Sub: "12WY · 022 子任务",
+        rule100Card: "Rule of 100"
+      };
+      return map[sl] || sl || "未知";
+    }
+
+    function listHasId(arr, id) {
+      return Array.isArray(arr) && arr.some((x) => x && x.id === id);
+    }
+
+    function restoreTrashEntry(trashId) {
+      purgeExpiredTrash();
+      const tid = String(trashId || "");
+      const ix = state.trash.findIndex((x) => x && String(x.id) === tid);
+      if (ix === -1) return false;
+      const ent = state.trash[ix];
+      const sl = ent.sourceList;
+      const p = ent.payload;
+      const m = ent.meta || {};
+      if (!p || typeof p !== "object") {
+        alert("记录损坏，无法恢复。");
+        return false;
+      }
+
+      function okRemoveTrash() {
+        state.trash.splice(ix, 1);
+      }
+
+      try {
+        if (sl === "done") {
+          if (listHasId(state.done, p.id)) {
+            alert("My Done 中已存在相同条目。");
+            return false;
+          }
+          state.done.unshift(p);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "memo") {
+          if (listHasId(state.memo, p.id)) {
+            alert("备忘录中已存在相同条目。");
+            return false;
+          }
+          state.memo.unshift(p);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "closedList") {
+          if (listHasId(state.closedList, p.id)) {
+            alert("Closed-List 中已存在相同条目。");
+            return false;
+          }
+          state.closedList.unshift(p);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "dailyWin") {
+          if (listHasId(state.dailyWin, p.id)) {
+            alert("Daily Win 中已存在相同条目。");
+            return false;
+          }
+          state.dailyWin.unshift(p);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "stopDoing") {
+          if (listHasId(state.stopDoing, p.id)) {
+            alert("Stop Doing 中已存在相同条目。");
+            return false;
+          }
+          state.stopDoing.unshift(p);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "notToDo") {
+          if (listHasId(state.notToDo, p.id)) {
+            alert("Not To Do 中已存在相同条目。");
+            return false;
+          }
+          state.notToDo.unshift(p);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "weeklyPlan") {
+          const wk = m.weekKey || getWeeklyPlanViewWeekKey();
+          const tasks = getWeeklyPlanTasksForWeekKey(wk).map(normalizeWeeklyPlanTask);
+          if (tasks.some((t) => t.id === p.id)) {
+            alert("该周计划中已存在相同主任务。");
+            return false;
+          }
+          const lane = getWeeklyPlanTaskLane(normalizeWeeklyPlanTask(p));
+          const merged = insertWeeklyPlanTaskForLane(tasks, normalizeWeeklyPlanTask(p), lane);
+          saveWeeklyPlanTasksForWeek(merged, wk);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "weeklyPlanMicro") {
+          const wk = m.weekKey || getWeeklyPlanViewWeekKey();
+          const taskId = m.taskId;
+          const tasks = getWeeklyPlanTasksForWeekKey(wk).map(normalizeWeeklyPlanTask);
+          const task = tasks.find((t) => t.id === taskId);
+          if (!task) {
+            alert("找不到对应主任务，无法恢复微任务。");
+            return false;
+          }
+          if (!Array.isArray(task.microTasks)) task.microTasks = [];
+          if (task.microTasks.some((x) => x.id === p.id)) {
+            alert("该微任务已存在。");
+            return false;
+          }
+          task.microTasks.push(p);
+          applyWeeklyPlanMainDoneFromMicros(task);
+          saveWeeklyPlanTasksForWeek(tasks, wk);
+          syncAllWeeklyPlanMirrorsForWeek(wk);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "projectTask") {
+          const pk = m.projectKey || "quoteApp";
+          if (!state.projectTasks || typeof state.projectTasks !== "object") state.projectTasks = { quoteApp: [] };
+          if (!Array.isArray(state.projectTasks[pk])) state.projectTasks[pk] = [];
+          if (listHasId(state.projectTasks[pk], p.id)) {
+            alert("该项目列表中已存在相同条目。");
+            return false;
+          }
+          state.projectTasks[pk].unshift(p);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "kineticCountdown") {
+          if (listHasId(state.kineticCountdowns, p.id)) {
+            alert("倒计时列表中已存在相同条目。");
+            return false;
+          }
+          state.kineticCountdowns.unshift(p);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "dailyWinTomorrowRef") {
+          const dk = m.targetDateKey;
+          if (!dk) {
+            alert("缺少日期键，无法恢复。");
+            return false;
+          }
+          const list = getDailyWinTomorrowRefList(dk);
+          if (list.some((x) => x && x.id === p.id)) {
+            alert("该日明日备忘中已存在相同条目。");
+            return false;
+          }
+          list.push(p);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "anniversaryTw020Task") {
+          normalizeAnniversaryTw020State();
+          const wn = m.weekNum;
+          const key = String(wn);
+          if (!Array.isArray(state.anniversaryTw020.weeks[key])) state.anniversaryTw020.weeks[key] = [];
+          if (state.anniversaryTw020.weeks[key].some((x) => x.id === p.id)) {
+            alert("该周已存在相同任务。");
+            return false;
+          }
+          state.anniversaryTw020.weeks[key].push(p);
+          ensureAnniversaryTwModuleUi(state.anniversaryTw020);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "anniversaryTw020Sub") {
+          normalizeAnniversaryTw020State();
+          const task = getTw020WeekTasks(m.weekNum).find((x) => x.id === m.taskId);
+          if (!task) {
+            alert("找不到父任务，无法恢复子任务。");
+            return false;
+          }
+          if (!Array.isArray(task.subs)) task.subs = [];
+          if (task.subs.some((s) => s.id === p.id)) {
+            alert("该子任务已存在。");
+            return false;
+          }
+          task.subs.push(p);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "anniversaryTw021Task") {
+          normalizeAnniversaryTw021State();
+          const key = String(m.weekNum);
+          if (!Array.isArray(state.anniversaryTw021.weeks[key])) state.anniversaryTw021.weeks[key] = [];
+          if (state.anniversaryTw021.weeks[key].some((x) => x.id === p.id)) {
+            alert("该周已存在相同任务。");
+            return false;
+          }
+          state.anniversaryTw021.weeks[key].push(p);
+          ensureAnniversaryTwModuleUi(state.anniversaryTw021);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "anniversaryTw021Sub") {
+          normalizeAnniversaryTw021State();
+          const task = getTw021WeekTasks(m.weekNum).find((x) => x.id === m.taskId);
+          if (!task) {
+            alert("找不到父任务。");
+            return false;
+          }
+          if (!Array.isArray(task.subs)) task.subs = [];
+          if (task.subs.some((s) => s.id === p.id)) {
+            alert("该子任务已存在。");
+            return false;
+          }
+          task.subs.push(p);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "anniversaryTw022Task") {
+          normalizeAnniversaryTw022State();
+          const key = String(m.weekNum);
+          if (!Array.isArray(state.anniversaryTw022.weeks[key])) state.anniversaryTw022.weeks[key] = [];
+          if (state.anniversaryTw022.weeks[key].some((x) => x.id === p.id)) {
+            alert("该周已存在相同任务。");
+            return false;
+          }
+          state.anniversaryTw022.weeks[key].push(p);
+          ensureAnniversaryTwModuleUi(state.anniversaryTw022);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "anniversaryTw022Sub") {
+          normalizeAnniversaryTw022State();
+          const task = getTw022WeekTasks(m.weekNum).find((x) => x.id === m.taskId);
+          if (!task) {
+            alert("找不到父任务。");
+            return false;
+          }
+          if (!Array.isArray(task.subs)) task.subs = [];
+          if (task.subs.some((s) => s.id === p.id)) {
+            alert("该子任务已存在。");
+            return false;
+          }
+          task.subs.push(p);
+          okRemoveTrash();
+          saveState();
+          render();
+          return true;
+        }
+        if (sl === "rule100Card") {
+          const key = m.key;
+          if (!key) {
+            alert("缺少卡片键，无法恢复。");
+            return false;
+          }
+          ensureRule100ProjectLists();
+          if (m.restoreMode === "removeKey") {
+            if (state.ruleOf100[key]) {
+              alert("该 Rule of 100 键已存在，无法恢复。");
+              return false;
+            }
+            const arr = m.isDay ? state.rule100DayProjectKeys : state.rule100UnitProjectKeys;
+            const ins = Math.min(Math.max(0, Number(m.insertIndex) || 0), arr.length);
+            arr.splice(ins, 0, key);
+            state.ruleOf100[key] = deepCloneForTrash(m.entrySnapshot) || {};
+            okRemoveTrash();
+            saveState();
+            render();
+            return true;
+          }
+          if (m.restoreMode === "clearSlot") {
+            if (!state.ruleOf100[key] || typeof state.ruleOf100[key] !== "object") {
+              alert("卡片状态异常。");
+              return false;
+            }
+            Object.assign(state.ruleOf100[key], deepCloneForTrash(m.previousEntry) || {});
+            okRemoveTrash();
+            saveState();
+            render();
+            return true;
+          }
+          alert("该 Rule of 100 删除记录无法自动恢复。");
+          return false;
+        }
+        alert("暂不支持的恢复类型：" + sl);
+        return false;
+      } catch (err) {
+        console.warn("restoreTrashEntry", err);
+        alert("恢复失败。");
+        return false;
+      }
+    }
+
+    function deleteTrashEntryForever(trashId) {
+      purgeExpiredTrash();
+      const tid = String(trashId || "");
+      const ix = state.trash.findIndex((x) => x && String(x.id) === tid);
+      if (ix === -1) return false;
+      state.trash.splice(ix, 1);
+      saveState();
+      render();
+      return true;
+    }
+
+    function renderTrash() {
+      if (!trashList || !trashEmpty) return;
+      purgeExpiredTrash();
+      const arr = Array.isArray(state.trash) ? state.trash : [];
+      trashEmpty.style.display = arr.length ? "none" : "block";
+      if (trashTitleCount) {
+        trashTitleCount.textContent = arr.length ? "（" + arr.length + "）" : "";
+      }
+      trashList.innerHTML = "";
+      const now = Date.now();
+      arr.forEach(function (ent) {
+        const li = document.createElement("li");
+        li.className = "trash-item task-item";
+        const left = document.createElement("div");
+        left.className = "trash-item-main";
+        const badge = document.createElement("span");
+        badge.className = "trash-source-badge";
+        badge.textContent = trashSourceLabel(ent.sourceList);
+        const title = document.createElement("div");
+        title.className = "task-text";
+        title.textContent = trashSummaryLine(ent);
+        const meta = document.createElement("div");
+        meta.className = "trash-item-meta";
+        const leftMs = TRASH_RETENTION_MS - (now - (ent.deletedAt || 0));
+        const daysLeft = Math.max(0, Math.ceil(leftMs / (24 * 60 * 60 * 1000)));
+        meta.textContent =
+          "删除于 " + new Date(ent.deletedAt || 0).toLocaleString() + " · 约 " + daysLeft + " 天后过期清除";
+        left.appendChild(badge);
+        left.appendChild(title);
+        left.appendChild(meta);
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        const btnRestore = document.createElement("button");
+        btnRestore.type = "button";
+        btnRestore.className = "btn-secondary trash-restore-btn";
+        btnRestore.textContent = "恢复";
+        btnRestore.addEventListener("click", function () {
+          restoreTrashEntry(ent.id);
+        });
+        const btnDel = document.createElement("button");
+        btnDel.type = "button";
+        btnDel.className = "btn-secondary trash-perma-btn";
+        btnDel.textContent = "彻底删除";
+        btnDel.addEventListener("click", function () {
+          if (window.confirm("确定彻底删除？将无法再恢复。")) {
+            deleteTrashEntryForever(ent.id);
+          }
+        });
+        actions.appendChild(btnRestore);
+        actions.appendChild(btnDel);
+        li.appendChild(left);
+        li.appendChild(actions);
+        trashList.appendChild(li);
+      });
+    }
+
     const SYNC_TOMBSTONE_MAX_KEYS = 4000;
     function recordSyncTombstone(id) {
       if (id == null) return;
@@ -24156,6 +24701,11 @@
         isRule100UnitKey
       );
 
+      base.trash = mergeIdRecordArraysPreferLocalOnTie(
+        Array.isArray(state.trash) ? state.trash : [],
+        Array.isArray(remoteState.trash) ? remoteState.trash : []
+      );
+
       if (serverNewer) {
         base.ageGoals = remoteState.ageGoals && typeof remoteState.ageGoals === "object" ? remoteState.ageGoals : {};
         base.weeklyPlan =
@@ -24527,6 +25077,7 @@
     }
 
     function saveState() {
+      purgeExpiredTrash();
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       if (!cloudSyncSuppressPush) {
         scheduleCloudSyncPush();
@@ -24574,6 +25125,10 @@
           if (!Array.isArray(state.closedList)) {
             state.closedList = [];
           }
+          if (!Array.isArray(state.trash)) {
+            state.trash = [];
+          }
+          purgeExpiredTrash();
           if (!state.syncTombstones || typeof state.syncTombstones !== "object") {
             state.syncTombstones = {};
           }
@@ -25561,6 +26116,15 @@
     }
 
     function deleteProjectTask(projectKey, taskId) {
+      const pt = getProjectTasks(projectKey).find((t) => t.id === taskId);
+      if (pt) {
+        pushTrashEntry({
+          sourceList: "projectTask",
+          originalId: taskId,
+          payload: deepCloneForTrash(pt),
+          meta: { projectKey: projectKey }
+        });
+      }
       state.projectTasks[projectKey] = getProjectTasks(projectKey).filter((t) => t.id !== taskId);
       saveState();
       renderProjectTasks();
@@ -25791,6 +26355,17 @@
         const idx = keys.indexOf(key);
         if (idx < 0) return;
         if (keys.length <= 1) {
+          pushTrashEntry({
+            sourceList: "rule100Card",
+            originalId: key,
+            payload: { key: key },
+            meta: {
+              key: key,
+              restoreMode: "clearSlot",
+              isDay: true,
+              previousEntry: deepCloneForTrash(getRule100Entry(key))
+            }
+          });
           const ent = getRule100Entry(key);
           ent.checkins = [];
           ent.name = "";
@@ -25800,6 +26375,18 @@
             hostReset && hostReset.querySelector('[data-rule100-key="' + key + '"]');
           if (nodeReset) nodeReset.classList.remove("rule100-card--name-editing");
         } else {
+          pushTrashEntry({
+            sourceList: "rule100Card",
+            originalId: key,
+            payload: { key: key },
+            meta: {
+              key: key,
+              restoreMode: "removeKey",
+              isDay: true,
+              insertIndex: idx,
+              entrySnapshot: deepCloneForTrash(getRule100Entry(key))
+            }
+          });
           keys.splice(idx, 1);
           delete state.ruleOf100[key];
           purgeRule100DoneForKey(key);
@@ -25812,6 +26399,17 @@
         const idx = keys.indexOf(key);
         if (idx < 0) return;
         if (keys.length <= 1) {
+          pushTrashEntry({
+            sourceList: "rule100Card",
+            originalId: key,
+            payload: { key: key },
+            meta: {
+              key: key,
+              restoreMode: "clearSlot",
+              isDay: false,
+              previousEntry: deepCloneForTrash(getRule100HoursEntry(key))
+            }
+          });
           const ent = getRule100HoursEntry(key);
           ent.name = "";
           ent.hoursTotal = 0;
@@ -25823,6 +26421,18 @@
             hostReset && hostReset.querySelector('[data-rule100-key="' + key + '"]');
           if (nodeReset) nodeReset.classList.remove("rule100-card--name-editing");
         } else {
+          pushTrashEntry({
+            sourceList: "rule100Card",
+            originalId: key,
+            payload: { key: key },
+            meta: {
+              key: key,
+              restoreMode: "removeKey",
+              isDay: false,
+              insertIndex: idx,
+              entrySnapshot: deepCloneForTrash(getRule100HoursEntry(key))
+            }
+          });
           keys.splice(idx, 1);
           delete state.ruleOf100[key];
           purgeRule100DoneForKey(key);
@@ -25850,10 +26460,22 @@
     function toggleClosedListComplete(id, checked) {
       const item = state.closedList.find((x) => x.id === id);
       if (!item) return;
+      const mirrorJustAttached = tryAttachMirrorFromClosedListText(item);
       /**
        * 避免同一交互内重复触发（click 双射、触摸合成事件）把已完成立刻打回：目标状态与内存一致则不再写。
+       * 例外：本次刚补写 mirrorOf（旧数据），即使 Closed-List 已是目标态也要回写周计划对齐。
        */
-      if (Boolean(item.completed) === Boolean(checked)) {
+      if (Boolean(item.completed) === Boolean(checked) && !mirrorJustAttached) {
+        return;
+      }
+      if (mirrorJustAttached && Boolean(item.completed) === Boolean(checked)) {
+        const moEarly = item.mirrorOf;
+        if (moEarly && moEarly.kind === "weeklyPlan") {
+          applyWeeklyPlanCompletionFromMirror(moEarly, Boolean(item.completed));
+          syncAllWeeklyPlanMirrorsForWeek(moEarly.weekKey);
+          saveState();
+          render();
+        }
         return;
       }
       item.completed = Boolean(checked);
@@ -28387,6 +29009,12 @@
       if (listName === "done" && task.kind === "timeReflection") {
         return;
       }
+      pushTrashEntry({
+        sourceList: listName,
+        originalId: task.id,
+        payload: deepCloneForTrash(task),
+        meta: {}
+      });
       if (listName === "done") {
         if (task.weeklyPlanMeta && task.weeklyPlanMeta.weekKey) {
           revertWeeklyPlanCompletionFromDoneMeta(task.weeklyPlanMeta);
@@ -31417,10 +32045,99 @@
       }
     }
 
+    /**
+     * 按 mirrorOf 在周计划各周 bucket 中解析任务（优先记录里的 weekKey；找不到时再查当前周、视图周、其余周）。
+     * 用于跨周 rollover 后 mirrorOf.weekKey 仍指向旧周、但任务已迁入新周的情况。
+     */
+    function resolveWeeklyPlanMirrorLocation(mirrorOf) {
+      if (!mirrorOf || mirrorOf.kind !== "weeklyPlan" || mirrorOf.id == null) return null;
+      const id = mirrorOf.id;
+      const tryKeys = [];
+      if (mirrorOf.weekKey) tryKeys.push(mirrorOf.weekKey);
+      const cur = getCurrentWeeklyPlanCalendarWeekKey();
+      const view = getWeeklyPlanViewWeekKey();
+      if (cur && tryKeys.indexOf(cur) === -1) tryKeys.push(cur);
+      if (view && tryKeys.indexOf(view) === -1) tryKeys.push(view);
+      if (state.weeklyPlan && typeof state.weeklyPlan === "object") {
+        Object.keys(state.weeklyPlan).forEach(function (k) {
+          if (tryKeys.indexOf(k) === -1) tryKeys.push(k);
+        });
+      }
+      for (let i = 0; i < tryKeys.length; i++) {
+        const wk = tryKeys[i];
+        const tasks = getWeeklyPlanTasksForWeekKey(wk);
+        const task = tasks.find((t) => t.id === id);
+        if (task) return { weekKey: wk, task };
+      }
+      return null;
+    }
+
+    /** 任务迁入新周后，统一修正所有指向该 taskId 的 Closed-List mirrorOf.weekKey */
+    function repointWeeklyPlanMirrorWeekKeys(taskId, newWeekKey) {
+      const tid = String(taskId || "");
+      if (!tid || !newWeekKey) return;
+      state.closedList.forEach(function (item) {
+        const mo = item.mirrorOf;
+        if (!mo || mo.kind !== "weeklyPlan" || String(mo.id) !== tid) return;
+        mo.weekKey = newWeekKey;
+      });
+    }
+
+    /**
+     * 旧数据仅有「【自周计划】」前缀、无 mirrorOf 时，按主任务标题在周计划各周中匹配并补写 mirrorOf。
+     */
+    function tryAttachMirrorFromClosedListText(item) {
+      if (!item || item.mirrorOf) return false;
+      const raw = String(item.text || "").trim();
+      const prefix = "【自周计划】";
+      if (raw.indexOf(prefix) !== 0) return false;
+      const mainT = raw.slice(prefix.length).trim();
+      if (!mainT) return false;
+      const tryKeys = [];
+      const viewK = getWeeklyPlanViewWeekKey();
+      const curK = getCurrentWeeklyPlanCalendarWeekKey();
+      if (viewK) tryKeys.push(viewK);
+      if (curK && tryKeys.indexOf(curK) === -1) tryKeys.push(curK);
+      if (state.weeklyPlan && typeof state.weeklyPlan === "object") {
+        Object.keys(state.weeklyPlan).forEach(function (k) {
+          if (tryKeys.indexOf(k) === -1) tryKeys.push(k);
+        });
+      }
+      for (let i = 0; i < tryKeys.length; i++) {
+        const wk = tryKeys[i];
+        const tasks = getWeeklyPlanTasksForWeekKey(wk);
+        const hit = tasks.find(function (t) {
+          return String(t.text || "").trim() === mainT;
+        });
+        if (hit) {
+          item.mirrorOf = { kind: "weeklyPlan", id: hit.id, weekKey: wk };
+          return true;
+        }
+      }
+      return false;
+    }
+
+    /** 跨周迁移或载入后：把 Closed-List 里仍指向旧周的 mirrorOf.weekKey 纠正到任务实际所在周 */
+    function repointStaleWeeklyPlanMirrorsInClosedList() {
+      state.closedList.forEach(function (item) {
+        const mo = item.mirrorOf;
+        if (!mo || mo.kind !== "weeklyPlan") return;
+        const resolved = resolveWeeklyPlanMirrorLocation(mo);
+        if (resolved && mo.weekKey !== resolved.weekKey) {
+          repointWeeklyPlanMirrorWeekKeys(mo.id, resolved.weekKey);
+        }
+      });
+    }
+
     /** Closed-List「自周计划」镜像 ↔ 周计划主任务：勾选任一侧，另一侧同步完成状态 */
     function applyWeeklyPlanCompletionFromMirror(mirrorOf, complete) {
       if (!mirrorOf || mirrorOf.kind !== "weeklyPlan") return;
-      const wk = mirrorOf.weekKey;
+      const resolved = resolveWeeklyPlanMirrorLocation(mirrorOf);
+      if (!resolved) return;
+      const wk = resolved.weekKey;
+      if (mirrorOf.weekKey !== wk) {
+        repointWeeklyPlanMirrorWeekKeys(mirrorOf.id, wk);
+      }
       const tasks = getWeeklyPlanTasksForWeekKey(wk);
       const task = tasks.find((t) => t.id === mirrorOf.id);
       if (!task) return;
@@ -31441,9 +32158,14 @@
     function syncAllWeeklyPlanMirrorsForWeek(weekKey) {
       if (!weekKey) return;
       const tasks = getWeeklyPlanTasksForWeekKey(weekKey);
+      const taskIds = new Set(tasks.map((t) => t.id));
       state.closedList.forEach(function (item) {
         const mo = item.mirrorOf;
-        if (!mo || mo.kind !== "weeklyPlan" || mo.weekKey !== weekKey) return;
+        if (!mo || mo.kind !== "weeklyPlan") return;
+        if (!taskIds.has(mo.id)) return;
+        if (mo.weekKey !== weekKey) {
+          mo.weekKey = weekKey;
+        }
         const task = tasks.find((t) => t.id === mo.id);
         if (!task) return;
         const want = isWeeklyPlanMainComplete(task);
@@ -31566,6 +32288,7 @@
       }
 
       if (changed) {
+        repointStaleWeeklyPlanMirrorsInClosedList();
         saveState();
       }
       return changed;
@@ -32168,8 +32891,40 @@
     }
 
     function deleteWeeklyPlanTask(taskId) {
-      const tasks = getWeeklyPlanTasksForViewWeek().filter((t) => t.id !== taskId);
-      saveWeeklyPlanTasksForWeek(tasks);
+      const weekKey = getWeeklyPlanViewWeekKey();
+      const tasksAll = getWeeklyPlanTasksForWeekKey(weekKey);
+      const hit = tasksAll.find((t) => t.id === taskId);
+      if (hit) {
+        pushTrashEntry({
+          sourceList: "weeklyPlan",
+          originalId: hit.id,
+          payload: deepCloneForTrash(hit),
+          meta: { weekKey: weekKey }
+        });
+        removeWeeklyPlanTaskDoneMirrors(weekKey, taskId);
+      }
+      const tasks = tasksAll.filter((t) => t.id !== taskId);
+      saveWeeklyPlanTasksForWeek(tasks, weekKey);
+      state.closedList
+        .filter(function (item) {
+          const mo = item.mirrorOf;
+          return mo && mo.kind === "weeklyPlan" && mo.weekKey === weekKey && mo.id === taskId;
+        })
+        .forEach(function (item) {
+          pushTrashEntry({
+            sourceList: "closedList",
+            originalId: item.id,
+            payload: deepCloneForTrash(item),
+            meta: { removedWithWeeklyPlanTask: taskId }
+          });
+          removeClosedListDoneCopy(item.id);
+        });
+      state.closedList = state.closedList.filter(function (item) {
+        const mo = item.mirrorOf;
+        if (!mo || mo.kind !== "weeklyPlan" || mo.weekKey !== weekKey || mo.id !== taskId) return true;
+        return false;
+      });
+      saveState();
       render();
     }
 
@@ -32278,9 +33033,19 @@
     }
 
     function deleteWeeklyPlanMicroTask(taskId, microId) {
+      const wk = getWeeklyPlanViewWeekKey();
       const tasks = getWeeklyPlanTasksForViewWeek();
       const task = tasks.find((t) => t.id === taskId);
       if (!task) return;
+      const micro = (task.microTasks || []).find((x) => x.id === microId);
+      if (micro) {
+        pushTrashEntry({
+          sourceList: "weeklyPlanMicro",
+          originalId: microId,
+          payload: deepCloneForTrash(micro),
+          meta: { weekKey: wk, taskId: taskId }
+        });
+      }
       task.microTasks = task.microTasks.filter((x) => x.id !== microId);
       applyWeeklyPlanMainDoneFromMicros(task);
       saveWeeklyPlanTasksForWeek(tasks);
@@ -33060,6 +33825,15 @@
     }
 
     function deleteKineticCountdown(id) {
+      const hit = state.kineticCountdowns.find((x) => x.id === id);
+      if (hit) {
+        pushTrashEntry({
+          sourceList: "kineticCountdown",
+          originalId: id,
+          payload: deepCloneForTrash(hit),
+          meta: {}
+        });
+      }
       recordSyncTombstone(id);
       state.kineticCountdowns = state.kineticCountdowns.filter((x) => x.id !== id);
       saveState();
@@ -33350,6 +34124,15 @@
       if (!Array.isArray(arr)) {
         return;
       }
+      const rm = arr.find((x) => x.id === taskId);
+      if (rm) {
+        pushTrashEntry({
+          sourceList: "anniversaryTw020Task",
+          originalId: taskId,
+          payload: deepCloneForTrash(rm),
+          meta: { weekNum: weekNum }
+        });
+      }
       state.anniversaryTw020.weeks[key] = arr.filter((x) => x.id !== taskId);
       ensureAnniversaryTwModuleUi(state.anniversaryTw020);
       delete state.anniversaryTw020.ui.taskExpanded[anniversaryTwTaskUiKey(weekNum, taskId)];
@@ -33387,6 +34170,15 @@
       const task = getTw020WeekTasks(weekNum).find((x) => x.id === taskId);
       if (!task || !Array.isArray(task.subs)) {
         return;
+      }
+      const sub = task.subs.find((s) => s.id === subId);
+      if (sub) {
+        pushTrashEntry({
+          sourceList: "anniversaryTw020Sub",
+          originalId: subId,
+          payload: deepCloneForTrash(sub),
+          meta: { weekNum: weekNum, taskId: taskId }
+        });
       }
       task.subs = task.subs.filter((s) => s.id !== subId);
       saveState();
@@ -34034,6 +34826,15 @@
       if (!Array.isArray(arr)) {
         return;
       }
+      const rm = arr.find((x) => x.id === taskId);
+      if (rm) {
+        pushTrashEntry({
+          sourceList: "anniversaryTw021Task",
+          originalId: taskId,
+          payload: deepCloneForTrash(rm),
+          meta: { weekNum: weekNum }
+        });
+      }
       state.anniversaryTw021.weeks[key] = arr.filter((x) => x.id !== taskId);
       ensureAnniversaryTwModuleUi(state.anniversaryTw021);
       delete state.anniversaryTw021.ui.taskExpanded[anniversaryTwTaskUiKey(weekNum, taskId)];
@@ -34071,6 +34872,15 @@
       const task = getTw021WeekTasks(weekNum).find((x) => x.id === taskId);
       if (!task || !Array.isArray(task.subs)) {
         return;
+      }
+      const sub = task.subs.find((s) => s.id === subId);
+      if (sub) {
+        pushTrashEntry({
+          sourceList: "anniversaryTw021Sub",
+          originalId: subId,
+          payload: deepCloneForTrash(sub),
+          meta: { weekNum: weekNum, taskId: taskId }
+        });
       }
       task.subs = task.subs.filter((s) => s.id !== subId);
       saveState();
@@ -34565,6 +35375,15 @@
       if (!Array.isArray(arr)) {
         return;
       }
+      const rm = arr.find((x) => x.id === taskId);
+      if (rm) {
+        pushTrashEntry({
+          sourceList: "anniversaryTw022Task",
+          originalId: taskId,
+          payload: deepCloneForTrash(rm),
+          meta: { weekNum: weekNum }
+        });
+      }
       state.anniversaryTw022.weeks[key] = arr.filter((x) => x.id !== taskId);
       ensureAnniversaryTwModuleUi(state.anniversaryTw022);
       delete state.anniversaryTw022.ui.taskExpanded[anniversaryTwTaskUiKey(weekNum, taskId)];
@@ -34602,6 +35421,15 @@
       const task = getTw022WeekTasks(weekNum).find((x) => x.id === taskId);
       if (!task || !Array.isArray(task.subs)) {
         return;
+      }
+      const sub = task.subs.find((s) => s.id === subId);
+      if (sub) {
+        pushTrashEntry({
+          sourceList: "anniversaryTw022Sub",
+          originalId: subId,
+          payload: deepCloneForTrash(sub),
+          meta: { weekNum: weekNum, taskId: taskId }
+        });
       }
       task.subs = task.subs.filter((s) => s.id !== subId);
       saveState();
@@ -35346,6 +36174,7 @@
       renderDailyReminder();
       renderWeeklyPlanUI();
       renderKineticCountdowns();
+      renderTrash();
       renderAnniversaryTw020();
       renderAnniversaryTw021();
       renderAnniversaryTw022();
@@ -36078,6 +36907,7 @@
         avoidance: normalizeClosedListAvoidance(base.avoidance)
       };
     });
+    repointStaleWeeklyPlanMirrorsInClosedList();
     state.dailyWin = state.dailyWin.map((item) => {
       if (item.createdAt) return item;
       return { ...item, createdAt: Date.now() };
@@ -36426,6 +37256,13 @@
       const list = getDailyWinTomorrowRefList(targetDateKey);
       const idx = list.findIndex((item) => item && item.id === id);
       if (idx === -1) return;
+      const row = list[idx];
+      pushTrashEntry({
+        sourceList: "dailyWinTomorrowRef",
+        originalId: id,
+        payload: deepCloneForTrash(row),
+        meta: { targetDateKey: targetDateKey }
+      });
       recordSyncTombstone(id);
       list.splice(idx, 1);
       saveState();
@@ -37141,6 +37978,9 @@
 
         if (tabKey === "dailyReminder" && typeof refreshDailyReminderMarquee === "function") {
           refreshDailyReminderMarquee();
+        }
+        if (tabKey === "trash" && typeof renderTrash === "function") {
+          renderTrash();
         }
       };
 
@@ -38070,6 +38910,12 @@
       switchKineticTabOrToggle("dailyReminder", dailyReminderSection, toggleDailyReminderBtn);
     });
 
+    if (toggleTrashBtn && trashSection) {
+      toggleTrashBtn.addEventListener("click", () => {
+        switchKineticTabOrToggle("trash", trashSection, toggleTrashBtn);
+      });
+    }
+
     toggleKineticCountdownBtn.addEventListener("click", () => {
       switchKineticTabOrToggle("countdown", kineticCountdownSection, toggleKineticCountdownBtn);
     });
@@ -38246,6 +39092,9 @@
       bindSectionHeaderToggle(kineticCountdownSection, toggleKineticCountdownBtn);
       bindSectionHeaderToggle(weeklyPlanSection, toggleWeeklyPlanBtn);
       bindSectionHeaderToggle(anniversaryModule, toggleAnniversaryModuleBtn);
+      if (trashSection && toggleTrashBtn) {
+        bindSectionHeaderToggle(trashSection, toggleTrashBtn);
+      }
     }
     if (memoSection && toggleMemoBtn) {
       bindSectionHeaderToggle(memoSection, toggleMemoBtn);
