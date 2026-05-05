@@ -1575,7 +1575,7 @@
       grid-template-rows: repeat(80, minmax(0, 1fr));
       width: 100%;
       aspect-ratio: 50 / 80;
-      border: 1px solid #0f172a;
+      border: 1px solid #e2e8f0;
       background: #fff;
       box-sizing: border-box;
     }
@@ -1584,8 +1584,8 @@
       min-width: 0;
       min-height: 0;
       box-sizing: border-box;
-      border-right: 1px solid #cbd5e1;
-      border-bottom: 1px solid #cbd5e1;
+      border-right: 1px solid #eef2f7;
+      border-bottom: 1px solid #eef2f7;
       margin: 0;
       padding: 0;
       font-size: 0;
@@ -1597,17 +1597,17 @@
 
     #habitRoutineModule .life4000-cell.is-passed {
       background: #ea580c;
-      border-color: #c2410c;
+      border-color: #ea580c;
     }
 
     #habitRoutineModule .life4000-cell.edge-major-r {
-      border-right-width: 2px;
-      border-right-color: #0f172a;
+      border-right-width: 1px;
+      border-right-color: #cbd5e1;
     }
 
     #habitRoutineModule .life4000-cell.edge-major-b {
-      border-bottom-width: 2px;
-      border-bottom-color: #0f172a;
+      border-bottom-width: 1px;
+      border-bottom-color: #cbd5e1;
     }
 
     #habitRoutineModule .life4000-details {
@@ -1619,11 +1619,32 @@
       width: 100%;
     }
 
-    #habitRoutineModule .life4000-details-title {
+    #habitRoutineModule .life4000-details-title-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 8px 12px;
       margin: 0 0 10px;
+    }
+
+    #habitRoutineModule .life4000-details-title {
+      margin: 0;
       font-size: 15px;
       font-weight: 700;
       color: #0f172a;
+    }
+
+    #habitRoutineModule .life4000-slogan {
+      font-size: 13px;
+      font-weight: 600;
+      color: #dc2626;
+      letter-spacing: 0.02em;
+    }
+
+    #habitRoutineModule .life4000-lunar-fixed {
+      margin: 0 0 10px;
+      font-size: 13px;
+      color: #475569;
     }
 
     #habitRoutineModule .life4000-field {
@@ -19272,34 +19293,14 @@
             <div class="life4000-weeks-shell">
               <div id="life4000GridHost" class="life4000-grid-host" aria-label="4000 周可视化：每格一周"></div>
               <div class="life4000-details">
-                <p class="life4000-details-title">人生进度表</p>
-                <label class="life4000-field">
-                  <span class="life4000-field-label">姓名</span>
-                  <input
-                    id="life4000NameInput"
-                    type="text"
-                    class="life4000-input"
-                    maxlength="40"
-                    placeholder="选填"
-                    autocomplete="name"
-                    aria-label="姓名"
-                  />
-                </label>
-                <label class="life4000-field">
-                  <span class="life4000-field-label">阴历出生日期</span>
-                  <input
-                    id="life4000BirthLunarInput"
-                    type="text"
-                    class="life4000-input"
-                    maxlength="80"
-                    placeholder="1986年冬月初一"
-                    autocomplete="off"
-                    aria-label="阴历出生日期"
-                  />
-                </label>
+                <div class="life4000-details-title-row">
+                  <p class="life4000-details-title">人生进度表</p>
+                  <span class="life4000-slogan">人生只有四千周</span>
+                </div>
+                <p class="life4000-lunar-fixed">阴历出生：1986年冬月初一</p>
                 <p id="life4000SolarResolved" class="life4000-static" aria-live="polite"></p>
                 <p id="life4000CalendarUnavailable" class="life4000-hint" hidden>
-                  当前环境无法使用农历换算（需浏览器支持中文农历日历）。可尝试 Chrome / Edge 最新版。
+                  当前环境无法使用农历换算（需浏览器支持中文农历日历）。已用固定公历 1986-12-02 推算；可尝试 Chrome / Edge 最新版以显示「对应阳历」。
                 </p>
                 <p class="life4000-static">寿命假设：4000 周 ≈ 28,000 天 ≈ 76 年 8 个月（按每月约 30.44 天近似）</p>
                 <p class="life4000-kv">
@@ -19318,7 +19319,6 @@
                   <span class="life4000-k">已度过（占 4000 周）</span>
                   <span id="life4000PercentText" class="life4000-v">—</span>
                 </p>
-                <p id="life4000Hint" class="life4000-hint" hidden>请先填写上方阴历出生日期（例：1986年冬月初一）。</p>
               </div>
             </div>
           </div>
@@ -25723,6 +25723,9 @@
 
     const LIFE4000_TOTAL_WEEKS = 4000;
     const LIFE4000_GRID_COLS = 50;
+    /** 做法 A：自用固定阴历；无农历 API 时用公历 fallback 推算 4000 周 */
+    const LIFE4000_FIXED_LUNAR_BIRTH = "1986年冬月初一";
+    const LIFE4000_SOLAR_FALLBACK_ISO = "1986-12-02";
     let life4000TuesdayRefreshTimer = null;
 
     function ensureLife4000WeeksState() {
@@ -25820,53 +25823,28 @@
 
     function renderLife4000Weeks() {
       const host = document.getElementById("life4000GridHost");
-      const nameIn = document.getElementById("life4000NameInput");
-      const lunarIn = document.getElementById("life4000BirthLunarInput");
       const solarResolvedEl = document.getElementById("life4000SolarResolved");
       const calUnavailEl = document.getElementById("life4000CalendarUnavailable");
       const endEl = document.getElementById("life4000EndDateText");
       const passedEl = document.getElementById("life4000PassedWeeks");
       const remEl = document.getElementById("life4000RemainingWeeks");
       const pctEl = document.getElementById("life4000PercentText");
-      const hintEl = document.getElementById("life4000Hint");
       if (!host) return;
       ensureLife4000WeeksState();
       ensureLife4000GridBuilt(host);
 
-      if (nameIn && !nameIn.dataset.life4000Bound) {
-        nameIn.dataset.life4000Bound = "1";
-        const persistName = () => {
-          state.life4000Weeks.name = String(nameIn.value || "").trim();
-          saveState();
-        };
-        nameIn.addEventListener("change", persistName);
-        nameIn.addEventListener("blur", persistName);
-      }
-      if (lunarIn && !lunarIn.dataset.life4000Bound) {
-        lunarIn.dataset.life4000Bound = "1";
-        const persistLunar = () => {
-          state.life4000Weeks.birthLunarText = String(lunarIn.value || "").trim();
-          const resolved = getLife4000ResolvedBirthDate();
-          if (resolved) state.life4000Weeks.birthDate = formatIsoDate(resolved);
-          saveState();
-          render();
-        };
-        lunarIn.addEventListener("change", persistLunar);
-        lunarIn.addEventListener("blur", persistLunar);
-      }
-
-      if (nameIn) nameIn.value = state.life4000Weeks.name || "";
-      if (lunarIn) lunarIn.value = state.life4000Weeks.birthLunarText || "";
-
       const fmt = getChineseCalendarFormatter();
       if (calUnavailEl) calUnavailEl.hidden = Boolean(fmt);
 
-      const txt = String(state.life4000Weeks.birthLunarText || "").trim();
+      const txt = LIFE4000_FIXED_LUNAR_BIRTH;
       if (solarResolvedEl) {
-        if (!txt) {
-          solarResolvedEl.textContent = "";
-        } else if (!fmt) {
-          solarResolvedEl.textContent = "";
+        if (!fmt) {
+          const fb = parseLife4000BirthLocal(LIFE4000_SOLAR_FALLBACK_ISO);
+          solarResolvedEl.textContent = fb
+            ? "对应阳历：" +
+              formatLife4000CnDate(fb) +
+              "（农历 API 不可用时按固定公历推算）"
+            : "";
         } else {
           const p = parseChineseLunarBirthString(txt);
           const g =
@@ -25874,9 +25852,13 @@
             findGregorianDateForLunarYMD(p.lunarYear, p.monthIndex, p.lunarDay, p.wantLeap, fmt);
           if (g) {
             solarResolvedEl.textContent =
-              "对应阳历：" + formatLife4000CnDate(new Date(g.getFullYear(), g.getMonth(), g.getDate()));
+              "对应阳历：" +
+              formatLife4000CnDate(new Date(g.getFullYear(), g.getMonth(), g.getDate()));
           } else {
-            solarResolvedEl.textContent = "无法解析，请使用类似「1986年冬月初一」的格式（冬月即十一月）。";
+            const fb = parseLife4000BirthLocal(LIFE4000_SOLAR_FALLBACK_ISO);
+            solarResolvedEl.textContent = fb
+              ? "对应阳历：" + formatLife4000CnDate(fb) + "（农历换算失败时按固定公历推算）"
+              : "";
           }
         }
       }
@@ -25884,7 +25866,6 @@
       const birthResolved = getLife4000ResolvedBirthDate();
       const metrics = computeLife4000WeeksMetricsFromBirthDate(birthResolved);
       const hasBirth = Boolean(birthResolved);
-      if (hintEl) hintEl.hidden = hasBirth;
 
       if (endEl) endEl.textContent = metrics.endDate ? formatLife4000CnDate(metrics.endDate) : "—";
       if (passedEl) passedEl.textContent = hasBirth ? metrics.passed + " 周" : "—";
@@ -26080,8 +26061,8 @@
     function getLife4000ResolvedBirthDate() {
       ensureLife4000WeeksState();
       const fmt = getChineseCalendarFormatter();
-      const txt = String(state.life4000Weeks.birthLunarText || "").trim();
-      if (txt && fmt) {
+      const txt = LIFE4000_FIXED_LUNAR_BIRTH;
+      if (fmt) {
         const p = parseChineseLunarBirthString(txt);
         if (p) {
           const g = findGregorianDateForLunarYMD(
@@ -26094,7 +26075,7 @@
           if (g) return new Date(g.getFullYear(), g.getMonth(), g.getDate());
         }
       }
-      return parseLife4000BirthLocal(state.life4000Weeks.birthDate);
+      return parseLife4000BirthLocal(LIFE4000_SOLAR_FALLBACK_ISO);
     }
 
     function endOfLocalCalendarDayMs(date) {
