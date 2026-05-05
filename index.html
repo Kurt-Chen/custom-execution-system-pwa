@@ -23756,9 +23756,160 @@
       };
     }
 
+    function mergeRule100DayEntryForSync(loc, rem, preferRemote) {
+      const lo = loc && typeof loc === "object" ? loc : {};
+      const ro = rem && typeof rem === "object" ? rem : {};
+      const ca = Array.isArray(lo.checkins) ? lo.checkins : [];
+      const cb = Array.isArray(ro.checkins) ? ro.checkins : [];
+      const mergedCheckins = Array.from(
+        new Set(
+          ca.concat(cb).filter(function (d) {
+            return typeof d === "string";
+          })
+        )
+      ).sort();
+      const ncL = typeof lo.cardCollapsed === "boolean" ? lo.cardCollapsed : false;
+      const ncR = typeof ro.cardCollapsed === "boolean" ? ro.cardCollapsed : false;
+      let cardCollapsed = ncL;
+      if (ncL !== ncR) {
+        cardCollapsed = preferRemote ? ncR : ncL;
+      }
+      return {
+        checkins: mergedCheckins,
+        name: mergeTwDisjointString(
+          typeof lo.name === "string" ? lo.name : "",
+          typeof ro.name === "string" ? ro.name : "",
+          preferRemote
+        ),
+        cardCollapsed: cardCollapsed
+      };
+    }
+
+    function mergeRule100UnitEntryForSync(loc, rem, preferRemote) {
+      const lo = loc && typeof loc === "object" ? loc : {};
+      const ro = rem && typeof rem === "object" ? rem : {};
+      const ls = typeof lo.hourSlots === "string" && /^[01]{100}$/.test(lo.hourSlots) ? lo.hourSlots : "";
+      const rs = typeof ro.hourSlots === "string" && /^[01]{100}$/.test(ro.hourSlots) ? ro.hourSlots : "";
+      let mergedSlots;
+      if (ls && rs) {
+        mergedSlots = ls
+          .split("")
+          .map(function (c, i) {
+            return c === "1" || rs[i] === "1" ? "1" : "0";
+          })
+          .join("");
+      } else if (ls) {
+        mergedSlots = ls;
+      } else if (rs) {
+        mergedSlots = rs;
+      } else {
+        const maxHt = Math.max(
+          Math.min(100, Math.floor(Number(lo.hoursTotal) || 0)),
+          Math.min(100, Math.floor(Number(ro.hoursTotal) || 0))
+        );
+        const arr = Array(100).fill("0");
+        for (let i = 0; i < maxHt; i++) {
+          arr[i] = "1";
+        }
+        mergedSlots = arr.join("");
+      }
+      let hoursTotal = 0;
+      for (let i = 0; i < mergedSlots.length; i++) {
+        if (mergedSlots.charAt(i) === "1") {
+          hoursTotal++;
+        }
+      }
+      const lu = typeof lo.unit === "string" ? lo.unit : "hours";
+      const ru = typeof ro.unit === "string" ? ro.unit : "hours";
+      const unit = lu !== ru ? (preferRemote ? ru : lu) : lu;
+      const ncL = typeof lo.cardCollapsed === "boolean" ? lo.cardCollapsed : false;
+      const ncR = typeof ro.cardCollapsed === "boolean" ? ro.cardCollapsed : false;
+      let cardCollapsed = ncL;
+      if (ncL !== ncR) {
+        cardCollapsed = preferRemote ? ncR : ncL;
+      }
+      return {
+        name: mergeTwDisjointString(
+          typeof lo.name === "string" ? lo.name : "",
+          typeof ro.name === "string" ? ro.name : "",
+          preferRemote
+        ),
+        hoursTotal: hoursTotal,
+        hourSlots: mergedSlots,
+        unit: unit,
+        cardCollapsed: cardCollapsed
+      };
+    }
+
+    /**
+     * Rule of 100：按 key 并集（新建项目不会被「整包 LWW」抹掉）；同 key 下打卡日期并集、百格按位取进度并集。
+     */
+    function mergeRuleOf100ObjectForSync(locR, remR, preferRemote) {
+      const lo = locR && typeof locR === "object" ? locR : {};
+      const ro = remR && typeof remR === "object" ? remR : {};
+      const keys = new Set([].concat(Object.keys(lo), Object.keys(ro)));
+      const out = {};
+      keys.forEach(function (key) {
+        const hasL = Object.prototype.hasOwnProperty.call(lo, key);
+        const hasR = Object.prototype.hasOwnProperty.call(ro, key);
+        if (hasL && !hasR) {
+          try {
+            out[key] = JSON.parse(JSON.stringify(lo[key]));
+          } catch (_e) {
+            out[key] = lo[key];
+          }
+          return;
+        }
+        if (!hasL && hasR) {
+          try {
+            out[key] = JSON.parse(JSON.stringify(ro[key]));
+          } catch (_e) {
+            out[key] = ro[key];
+          }
+          return;
+        }
+        if (isRule100UnitKey(key)) {
+          out[key] = mergeRule100UnitEntryForSync(lo[key], ro[key], preferRemote);
+        } else if (isRule100DayKey(key)) {
+          out[key] = mergeRule100DayEntryForSync(lo[key], ro[key], preferRemote);
+        } else {
+          const l = lo[key] && typeof lo[key] === "object" ? lo[key] : {};
+          const r = ro[key] && typeof ro[key] === "object" ? ro[key] : {};
+          out[key] = preferRemote ? Object.assign({}, l, r) : Object.assign({}, r, l);
+        }
+      });
+      return out;
+    }
+
+    function mergeRule100KeyArrays(locArr, remArr, defaultKey, isCategory) {
+      const L = Array.isArray(locArr) ? locArr.filter(isCategory) : [];
+      const R = Array.isArray(remArr) ? remArr.filter(isCategory) : [];
+      if (L.length === 0) {
+        L.push(defaultKey);
+      }
+      if (R.length === 0) {
+        R.push(defaultKey);
+      }
+      const seen = new Set();
+      const out = [];
+      L.forEach(function (k) {
+        if (k && isCategory(k) && !seen.has(k)) {
+          seen.add(k);
+          out.push(k);
+        }
+      });
+      R.forEach(function (k) {
+        if (k && isCategory(k) && !seen.has(k)) {
+          seen.add(k);
+          out.push(k);
+        }
+      });
+      return out.length ? out : [defaultKey];
+    }
+
     /**
      * 推送前先与云端快照合并：按条并集，避免旧本机整包覆盖他端新打卡。
-     * remoteUpdatedAt > lastSeen 时，全局配置类子树以远端为准（LWW）。
+     * remoteUpdatedAt > lastSeen 时，除 Rule of 100 外的全局配置类子树仍以远端为准（LWW）。
      */
     function mergeLocalStateWithRemotePayloadBeforePush(remoteState, remoteUpdatedAt, lastSeen) {
       if (!remoteState || typeof remoteState !== "object" || !Array.isArray(remoteState.done)) {
@@ -23858,10 +24009,22 @@
         anniversaryTwPreferRemote
       );
 
+      base.ruleOf100 = mergeRuleOf100ObjectForSync(state.ruleOf100, remoteState.ruleOf100, serverNewer);
+      base.rule100DayProjectKeys = mergeRule100KeyArrays(
+        state.rule100DayProjectKeys,
+        remoteState.rule100DayProjectKeys,
+        "rule100A",
+        isRule100DayKey
+      );
+      base.rule100UnitProjectKeys = mergeRule100KeyArrays(
+        state.rule100UnitProjectKeys,
+        remoteState.rule100UnitProjectKeys,
+        "rule100D",
+        isRule100UnitKey
+      );
+
       if (serverNewer) {
         base.ageGoals = remoteState.ageGoals && typeof remoteState.ageGoals === "object" ? remoteState.ageGoals : {};
-        base.ruleOf100 =
-          remoteState.ruleOf100 && typeof remoteState.ruleOf100 === "object" ? remoteState.ruleOf100 : {};
         base.weeklyPlan =
           remoteState.weeklyPlan && typeof remoteState.weeklyPlan === "object" ? remoteState.weeklyPlan : {};
         base.forge = remoteState.forge && typeof remoteState.forge === "object" ? remoteState.forge : {};
