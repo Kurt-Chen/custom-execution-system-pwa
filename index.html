@@ -14296,17 +14296,30 @@
       margin: 0;
     }
 
-    .submodule-card.collapsed > *:not(.submodule-card-header):not(.goal-card-header) {
+    .submodule-card.collapsed:not(.rule100-card) > *:not(.submodule-card-header):not(.goal-card-header) {
       display: none !important;
     }
 
-    .submodule-card.collapsed {
+    .submodule-card.collapsed:not(.rule100-card) {
       padding: 8px 8px;
     }
 
-    .submodule-card.collapsed .submodule-card-header,
-    .submodule-card.collapsed .goal-card-header {
+    .submodule-card.collapsed:not(.rule100-card) .submodule-card-header,
+    .submodule-card.collapsed:not(.rule100-card) .goal-card-header {
       margin-bottom: 0;
+    }
+
+    /* Rule of 100 单卡：折叠仅隐藏 .rule100-card-body，保留名称行（含输入框）*/
+    #habitRoutineModule #habitRule100Group .rule100-card.collapsed .rule100-card-body {
+      display: none !important;
+    }
+
+    #habitRoutineModule #habitRule100Group .rule100-card .rule100-card-collapse-btn {
+      flex-shrink: 0;
+      width: 38px;
+      height: 38px;
+      padding: 0;
+      box-sizing: border-box;
     }
 
     @media (max-width: 980px) {
@@ -18972,7 +18985,14 @@
                     <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"></path>
                   </svg>
                 </button>
+                <button
+                  type="button"
+                  class="toggle-btn toggle-chevron rule100-card-collapse-btn"
+                  aria-label="展开或折叠本条进度与格子"
+                  aria-expanded="true"
+                ></button>
               </div>
+              <div class="rule100-card-body">
               <p class="rule100-hours-motto">同一模版：你在上方填写「做什么」</p>
               <p class="rule100-hours-motto">此处按「天」推进，攒满 100 天即本条毕业</p>
               <div class="rule100-hours-visual rule100-days-visual">
@@ -19000,6 +19020,7 @@
                     <button class="habit-check-btn rule100-check-btn" type="button">今日打卡</button>
                   </div>
                 </div>
+              </div>
               </div>
             </section>
                 </div>
@@ -19039,7 +19060,14 @@
                     <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"></path>
                   </svg>
                 </button>
+                <button
+                  type="button"
+                  class="toggle-btn toggle-chevron rule100-card-collapse-btn"
+                  aria-label="展开或折叠本条进度与格子"
+                  aria-expanded="true"
+                ></button>
               </div>
+              <div class="rule100-card-body">
               <div class="rule100-unit-row">
                 <label for="rule100DUnitSelect">计量单位</label>
                 <select id="rule100DUnitSelect" class="rule100-unit-select" data-rule100-unit-select aria-label="本项 100 格对应的单位">
@@ -19092,6 +19120,7 @@
                     <button class="habit-check-btn rule100-hours-btn" type="button">记入</button>
                   </div>
                 </div>
+              </div>
               </div>
             </section>
                 </div>
@@ -25049,6 +25078,7 @@
       }
       const entry = state.ruleOf100[k];
       if (typeof entry.name !== "string") entry.name = "";
+      if (typeof entry.cardCollapsed !== "boolean") entry.cardCollapsed = false;
       if (entry.unit === undefined || entry.unit === null) entry.unit = "hours";
       entry.unit = normalizeRule100Unit(entry.unit);
       ensureRule100HourSlots(entry);
@@ -25068,6 +25098,7 @@
       }
       entry.checkins = Array.from(new Set(entry.checkins.filter((d) => typeof d === "string"))).sort();
       if (typeof entry.name !== "string") entry.name = "";
+      if (typeof entry.cardCollapsed !== "boolean") entry.cardCollapsed = false;
       return entry;
     }
 
@@ -25245,6 +25276,15 @@
       getRule100Cards().forEach((card) => {
         const key = card.dataset.rule100Key;
         if (!key) return;
+
+        const collapseEnt = isRule100UnitKey(key) ? getRule100HoursEntry(key) : getRule100Entry(key);
+        if (collapseEnt.cardCollapsed) {
+          card.classList.add("collapsed");
+        } else {
+          card.classList.remove("collapsed");
+        }
+        const collapseBtnEl = card.querySelector(".rule100-card-collapse-btn");
+        if (collapseBtnEl) setDisclosureToggleState(collapseBtnEl, !collapseEnt.cardCollapsed);
 
         if (isRule100UnitKey(key)) {
           const entry = getRule100HoursEntry(key);
@@ -35232,7 +35272,27 @@
     if (habitRule100Group && !habitRule100Group.dataset.rule100Delegated) {
       habitRule100Group.dataset.rule100Delegated = "1";
       habitRule100Group.addEventListener("click", (ev) => {
-        const hBtn = ev.target.closest(".rule100-hours-btn");
+        const clickEl = ev.target instanceof Element ? ev.target : ev.target && ev.target.parentElement;
+        const cardCollapseBtn = clickEl && clickEl.closest && clickEl.closest(".rule100-card-collapse-btn");
+        if (cardCollapseBtn && habitRule100Group.contains(cardCollapseBtn)) {
+          const card = cardCollapseBtn.closest(".rule100-card");
+          const rk = card && card.dataset.rule100Key;
+          if (rk && habitRule100Group.contains(card)) {
+            ev.preventDefault();
+            const entry = isRule100UnitKey(rk) ? getRule100HoursEntry(rk) : getRule100Entry(rk);
+            if (typeof entry.cardCollapsed !== "boolean") entry.cardCollapsed = false;
+            entry.cardCollapsed = !entry.cardCollapsed;
+            if (entry.cardCollapsed) {
+              card.classList.add("collapsed");
+            } else {
+              card.classList.remove("collapsed");
+            }
+            setDisclosureToggleState(cardCollapseBtn, !entry.cardCollapsed);
+            saveState();
+          }
+          return;
+        }
+        const hBtn = clickEl && clickEl.closest && clickEl.closest(".rule100-hours-btn");
         if (hBtn) {
           const card = hBtn.closest(".rule100-card");
           if (card && habitRule100Group.contains(card)) {
@@ -35241,7 +35301,7 @@
           }
           return;
         }
-        const checkBtn = ev.target.closest(".rule100-check-btn");
+        const checkBtn = clickEl && clickEl.closest && clickEl.closest(".rule100-check-btn");
         if (checkBtn) {
           const card = checkBtn.closest(".rule100-card");
           const rk = card && card.dataset.rule100Key;
@@ -35307,6 +35367,10 @@
       document.querySelectorAll(".submodule-group-toggle.toggle-chevron").forEach((btn) => {
         const g = btn.closest(".submodule-group");
         if (g) setDisclosureToggleState(btn, !g.classList.contains("collapsed"));
+      });
+      document.querySelectorAll(".rule100-card .rule100-card-collapse-btn").forEach((btn) => {
+        const card = btn.closest(".rule100-card");
+        if (card) setDisclosureToggleState(btn, !card.classList.contains("collapsed"));
       });
       if (dynamicModule && toggleDynamicModuleBtn) {
         setDisclosureToggleState(
