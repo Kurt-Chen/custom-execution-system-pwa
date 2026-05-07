@@ -10181,6 +10181,21 @@
       filter: none;
     }
 
+    #memoList .compact-manual-item-icons .manual-item-memo-action-btn {
+      width: auto;
+      min-width: 44px;
+      height: auto;
+      min-height: 28px;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.2;
+    }
+
+    #memoList .compact-manual-item-icons .manual-item-memo-action-btn--danger {
+      color: #b91c1c;
+    }
+
     #habitRoutineModule .daily-win-modern-card > .manual-item-actions-wrap {
       margin-left: auto;
       flex-shrink: 0;
@@ -19063,11 +19078,9 @@
               <section class="kinetic-sub-memo daily-reminder-nested-card" aria-labelledby="dailyReminderMemoHeading">
                 <h2 id="dailyReminderMemoHeading" class="section-title daily-reminder-panel-heading-hidden">备忘录</h2>
                 <p class="daily-reminder-memo-meta-line">备忘条数 <span id="memoCount" class="count">0</span></p>
-                <div class="todo-filter-row done-toolbar-row">
-                  <input id="memoDateFilter" class="done-filter" type="date" title="筛选日期" />
+                <div class="todo-filter-row done-toolbar-row memo-add-row">
                   <input id="memoInput" class="done-manual-input" type="text" placeholder="输入备忘内容" />
                   <button id="addMemoBtn" class="btn-primary" type="button">添加</button>
-                  <p id="memoDateLunarHint" class="inline-lunar-hint" aria-live="polite"></p>
                 </div>
                 <ul id="memoList"></ul>
                 <div id="memoEmpty" class="empty">暂无备忘录内容</div>
@@ -23424,7 +23437,6 @@
     const doneDateDisplay = document.getElementById("doneDateDisplay");
     const kineticHeaderDateInput = document.getElementById("kineticHeaderDateInput");
     const dynamicHeaderDateText = document.getElementById("dynamicHeaderDateText");
-    const memoDateFilter = document.getElementById("memoDateFilter");
     const memoInput = document.getElementById("memoInput");
     const addMemoBtn = document.getElementById("addMemoBtn");
     const doneManualInput = document.getElementById("doneManualInput");
@@ -23630,7 +23642,6 @@
     let activePrimaryModuleKey = "dynamic";
 
     let selectedDoneDate = "";
-    let selectedMemoDate = "";
     let selectedClosedListDate = "";
     let selectedDailyWinDate = "";
     let dailyWinViewMode = "today";
@@ -28707,7 +28718,6 @@
         document.getElementById("closedListDateLunarHint"),
         parseDateInputToLocalNoon(closedListDateFilter.value)
       );
-      setInlineDateLunarHint(document.getElementById("memoDateLunarHint"), parseDateInputToLocalNoon(memoDateFilter.value));
       const gHint = document.getElementById("kineticCountdownGregorianLunarHint");
       if (gHint && kineticCountdownTargetInput) {
         const mode = document.querySelector('input[name="kineticCountdownCal"]:checked');
@@ -30369,13 +30379,52 @@
         return b;
       }
 
-      const editBtn = mkIconBtn("btn-edit", ICON_BTN_EDIT_SVG, "修改");
-      const saveBtn = mkIconBtn("btn-save", ICON_BTN_SAVE_SVG, "保存");
-      saveBtn.disabled = true;
-      const delBtn = mkIconBtn("btn-delete", ICON_BTN_DELETE_SVG, "删除");
+      function mkMemoTextBtn(label, opts) {
+        opts = opts || {};
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn-icon-action manual-item-memo-action-btn " + (opts.extraClass || "");
+        b.textContent = label;
+        b.setAttribute("aria-label", label);
+        return b;
+      }
+
+      let editBtn;
+      let saveBtn;
+      let delBtn;
+      if (listName === "memo") {
+        editBtn = mkMemoTextBtn("编辑");
+        saveBtn = mkMemoTextBtn("保存");
+        saveBtn.classList.add("btn-save");
+        saveBtn.disabled = true;
+        delBtn = mkMemoTextBtn("删除", { extraClass: "manual-item-memo-action-btn--danger" });
+      } else {
+        editBtn = mkIconBtn("btn-edit", ICON_BTN_EDIT_SVG, "修改");
+        saveBtn = mkIconBtn("btn-save", ICON_BTN_SAVE_SVG, "保存");
+        saveBtn.disabled = true;
+        delBtn = mkIconBtn("btn-delete", ICON_BTN_DELETE_SVG, "删除");
+      }
 
       function findTextEl() {
         return li.querySelector(textElSelector);
+      }
+
+      function setEditBtnIdleLabel() {
+        if (listName === "memo") {
+          editBtn.textContent = "编辑";
+          editBtn.setAttribute("aria-label", "编辑");
+        } else {
+          editBtn.setAttribute("aria-label", "修改");
+        }
+      }
+
+      function setEditBtnCancelLabel() {
+        if (listName === "memo") {
+          editBtn.textContent = "取消";
+          editBtn.setAttribute("aria-label", "取消");
+        } else {
+          editBtn.setAttribute("aria-label", "取消");
+        }
       }
 
       function cancelEdit() {
@@ -30384,7 +30433,7 @@
         inp.replaceWith(makeRestoredNode(getDisplayText()));
         li.removeAttribute("data-manual-editing");
         saveBtn.disabled = true;
-        editBtn.setAttribute("aria-label", "修改");
+        setEditBtnIdleLabel();
         wrap.classList.remove("is-expanded");
         moreBtn.setAttribute("aria-expanded", "false");
       }
@@ -30400,7 +30449,7 @@
         textEl.replaceWith(inp);
         li.setAttribute("data-manual-editing", "1");
         saveBtn.disabled = false;
-        editBtn.setAttribute("aria-label", "取消");
+        setEditBtnCancelLabel();
         inp.focus();
         inp.select();
         inp.onkeydown = function (ev) {
@@ -37182,7 +37231,7 @@
       doneList.classList.add("done-time-block-list", "app-done-time-timeline");
       const filteredDoneTasks = state.done.filter((task) => isSameDate(task.completedAt, selectedDoneDate));
       const filteredDoneTasksForStats = filteredDoneTasks.filter(isDoneCountedAsDayProduction);
-      const filteredMemoItems = state.memo.filter((item) => isSameDate(item.createdAt, selectedMemoDate));
+      const filteredMemoItems = state.memo.slice();
       const filteredClosedListItemsRaw = state.closedList.filter((item) =>
         isSameDate(item.createdAt, selectedClosedListDate)
       );
@@ -38106,12 +38155,10 @@
       return { ...item, createdAt: Date.now() };
     });
     selectedDoneDate = formatDateInputValue(new Date());
-    selectedMemoDate = formatDateInputValue(new Date());
     selectedClosedListDate = formatDateInputValue(new Date());
     selectedDailyWinDate = formatDateInputValue(new Date());
     selectedFuelDate = formatDateInputValue(new Date());
     doneDateFilter.value = selectedDoneDate;
-    memoDateFilter.value = selectedMemoDate;
     closedListDateFilter.value = selectedClosedListDate;
     dailyWinDateFilter.value = selectedDailyWinDate;
     weeklyPlanViewWeekKey = getCurrentWeeklyPlanCalendarWeekKey();
@@ -38534,11 +38581,6 @@
         render();
       });
     }
-
-    memoDateFilter.addEventListener("change", (event) => {
-      selectedMemoDate = event.target.value || formatDateInputValue(new Date());
-      render();
-    });
 
     document.getElementById("anniversary021AnchorInput").addEventListener("change", (event) => {
       normalizeAnniversaryTw021State();
