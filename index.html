@@ -24225,6 +24225,20 @@
           }
           state.done.unshift(p);
           okRemoveTrash();
+          if (p.habitMeta && p.habitMeta.date) {
+            if (p.habitMeta.key === "dailyThreeWins") {
+              refreshDailyWinCheckin(p.habitMeta.date);
+            } else {
+              rebuildHabitCheckinFromDoneList(p.habitMeta.key, p.habitMeta.date);
+            }
+          }
+          if (p.rule100Meta && !isRule100UnitKey(p.rule100Meta.key) && p.rule100Meta.date) {
+            const entry = getRule100Entry(p.rule100Meta.key);
+            if (entry.checkins && entry.checkins.indexOf(p.rule100Meta.date) === -1) {
+              entry.checkins.push(p.rule100Meta.date);
+              entry.checkins = Array.from(new Set(entry.checkins)).sort();
+            }
+          }
           saveState();
           render();
           return true;
@@ -25770,20 +25784,13 @@
         delete day.bodyFatRate;
       });
 
-      const dedupeKeys = new Set();
-      state.done = state.done.filter((item) => {
-        if (!item.habitMeta) return true;
-        let key = item.habitMeta.key;
+      state.done.forEach((item) => {
+        if (!item.habitMeta) return;
+        const key = item.habitMeta.key;
         if (key === "bodyWeight" || key === "bodyFatRate") {
           item.habitMeta.key = "weightAndBodyFat";
           item.text = "【习惯】称体重与测体脂率";
-          key = "weightAndBodyFat";
         }
-        if (key !== "weightAndBodyFat") return true;
-        const slot = item.habitMeta.date + "|weightAndBodyFat";
-        if (dedupeKeys.has(slot)) return false;
-        dedupeKeys.add(slot);
-        return true;
       });
     }
 
@@ -25995,6 +26002,193 @@
       );
     }
 
+    /** Done 中同一习惯同日条目为最新在前；撤销「最近一次」= 删掉第一条匹配 */
+    function removeLastHabitStampFromDone(habitKey, dateStr) {
+      const idx = state.done.findIndex(
+        (item) =>
+          item.habitMeta &&
+          item.habitMeta.key === habitKey &&
+          item.habitMeta.date === dateStr
+      );
+      if (idx === -1) return false;
+      state.done.splice(idx, 1);
+      return true;
+    }
+
+    function getHabitDoneRowsForDay(habitKey, dateStr) {
+      return state.done.filter(
+        (item) =>
+          item.habitMeta &&
+          item.habitMeta.key === habitKey &&
+          item.habitMeta.date === dateStr
+      );
+    }
+
+    /** 根据 My Done 剩余条目重建当日 habitCheckins（删除某条 Done 后调用） */
+    function rebuildHabitCheckinFromDoneList(habitKey, dateStr) {
+      if (!state.habitCheckins[dateStr]) state.habitCheckins[dateStr] = {};
+      const rows = getHabitDoneRowsForDay(habitKey, dateStr);
+      if (habitKey === "weightAndBodyFat") {
+        if (rows.length === 0) {
+          state.habitCheckins[dateStr].weightAndBodyFat = false;
+        } else {
+          const latest = rows[0];
+          const m = latest.habitMeta || {};
+          const w = Number(m.weightJin);
+          const f = Number(m.bodyFatPct);
+          if (Number.isFinite(w) && Number.isFinite(f)) {
+            state.habitCheckins[dateStr].weightAndBodyFat = { weightJin: w, bodyFatPct: f };
+          } else {
+            state.habitCheckins[dateStr].weightAndBodyFat = false;
+          }
+        }
+        return;
+      }
+      if (habitKey === "dailyThreeWins") {
+        state.habitCheckins[dateStr].dailyThreeWins = rows.length > 0;
+        return;
+      }
+      if (isHabitMinutesKey(habitKey)) {
+        const batches = [];
+        for (let i = rows.length - 1; i >= 0; i--) {
+          const ba = rows[i].habitMeta && Number(rows[i].habitMeta.batchAmount);
+          if (Number.isFinite(ba) && ba > 0) batches.push(ba);
+        }
+        if (batches.length === 0) {
+          if (rows.length === 0) {
+            state.habitCheckins[dateStr][habitKey] = false;
+          }
+          return;
+        }
+        const minutes = batches.reduce(function (a, b) {
+          return a + b;
+        }, 0);
+        state.habitCheckins[dateStr][habitKey] = {
+          minutes: minutes,
+          times: batches.length,
+          batches: batches.slice()
+        };
+        return;
+      }
+      if (isHabitWordCountKey(habitKey)) {
+        const batches = [];
+        for (let i = rows.length - 1; i >= 0; i--) {
+          const ba = rows[i].habitMeta && Number(rows[i].habitMeta.batchAmount);
+          if (Number.isFinite(ba) && ba > 0) batches.push(ba);
+        }
+        if (batches.length === 0) {
+          if (rows.length === 0) {
+            state.habitCheckins[dateStr][habitKey] = false;
+          }
+          return;
+        }
+        const wordCount = batches.reduce(function (a, b) {
+          return a + b;
+        }, 0);
+        state.habitCheckins[dateStr][habitKey] = {
+          wordCount: wordCount,
+          times: batches.length,
+          batches: batches.slice()
+        };
+        return;
+      }
+      if (isHabitExperimentKey(habitKey)) {
+        const batches = [];
+        const remarks = [];
+        for (let i = rows.length - 1; i >= 0; i--) {
+          const ba = rows[i].habitMeta && Number(rows[i].habitMeta.batchAmount);
+          if (Number.isFinite(ba) && ba > 0) batches.push(ba);
+          const rm = rows[i].habitMeta && rows[i].habitMeta.remarkSnapshot;
+          if (typeof rm === "string" && rm.trim()) remarks.push(rm.trim());
+        }
+        if (batches.length === 0) {
+          if (rows.length === 0) {
+            state.habitCheckins[dateStr][habitKey] = false;
+          }
+          return;
+        }
+        const experiments = batches.reduce(function (a, b) {
+          return a + b;
+        }, 0);
+        const obj = { experiments: experiments, times: batches.length, batches: batches.slice() };
+        const lastRm = remarks.length ? remarks[remarks.length - 1] : "";
+        if (lastRm) obj.remark = lastRm;
+        state.habitCheckins[dateStr][habitKey] = obj;
+        return;
+      }
+      if (isHabitOptionalRemarkKey(habitKey)) {
+        const n = rows.length;
+        if (n === 0) {
+          state.habitCheckins[dateStr][habitKey] = false;
+        } else {
+          const latest = rows[0];
+          const rm =
+            latest.habitMeta && typeof latest.habitMeta.remarkSnapshot === "string"
+              ? latest.habitMeta.remarkSnapshot.trim()
+              : "";
+          const o = { times: n };
+          if (rm) o.remark = rm;
+          state.habitCheckins[dateStr][habitKey] = o;
+        }
+        return;
+      }
+      const n = rows.length;
+      if (n === 0) {
+        state.habitCheckins[dateStr][habitKey] = false;
+      } else {
+        state.habitCheckins[dateStr][habitKey] = { times: n };
+      }
+    }
+
+    function buildHabitExperimentDoneLineText(
+      habitKey,
+      dateStr,
+      todayExperiments,
+      stampTimes,
+      lifetimeTotal,
+      remarkOpt,
+      experimentDelta
+    ) {
+      const label = HABIT_LABELS[habitKey] || habitKey;
+      const tc = Number.isFinite(stampTimes) && stampTimes > 0 ? stampTimes : 0;
+      const lt =
+        Number.isFinite(lifetimeTotal) && lifetimeTotal >= 0 ? lifetimeTotal : getHabitExperimentLifetimeTotal(habitKey);
+      const remarkBit =
+        remarkOpt != null && String(remarkOpt).trim() ? " · " + String(remarkOpt).trim() : "";
+      const delta =
+        Number.isFinite(Number(experimentDelta)) && Number(experimentDelta) > 0 ? Number(experimentDelta) : 1;
+      return (
+        "【习惯】" +
+        label +
+        " 本次 +" +
+        String(delta) +
+        " 次实验 · 今日累计 " +
+        String(todayExperiments) +
+        " 次 · 第 " +
+        String(tc) +
+        " 次打卡 · 终身累计 " +
+        String(lt.toLocaleString("en-US")) +
+        " / " +
+        String(EXPERIMENT_LAB_GOAL.toLocaleString("en-US")) +
+        remarkBit
+      );
+    }
+
+    function updateLatestHabitDoneRowForDay(habitKey, dateStr, newText, patchMeta) {
+      const idx = state.done.findIndex(
+        (item) =>
+          item.habitMeta &&
+          item.habitMeta.key === habitKey &&
+          item.habitMeta.date === dateStr
+      );
+      if (idx === -1) return false;
+      state.done[idx].text = newText;
+      if (patchMeta && typeof patchMeta === "object" && state.done[idx].habitMeta) {
+        Object.assign(state.done[idx].habitMeta, patchMeta);
+      }
+      return true;
+    }
+
     function hasHabitDoneEntry(habitKey, dateStr) {
       return state.done.some(
         (item) =>
@@ -26004,83 +26198,91 @@
       );
     }
 
-    function syncHabitMinutesToDone(habitKey, dateStr, minutes, stampTimes) {
-      removeHabitFromDone(habitKey, dateStr);
+    function syncHabitMinutesToDone(habitKey, dateStr, batchMinutes, totalMinutes, stampTimes) {
       const label = HABIT_LABELS[habitKey] || habitKey;
       const tc = Number.isFinite(stampTimes) && stampTimes > 0 ? stampTimes : 0;
+      const batch = Number.isFinite(batchMinutes) && batchMinutes > 0 ? batchMinutes : 0;
+      const total = Number.isFinite(totalMinutes) && totalMinutes >= 0 ? totalMinutes : 0;
       state.done.unshift({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text:
           "【习惯】" +
           label +
-          " 今日累计 " +
-          String(minutes) +
-          " 分钟 · 打卡 " +
+          " 本次 +" +
+          String(batch) +
+          " 分钟 · 今日累计 " +
+          String(total) +
+          " 分钟 · 第 " +
           String(tc) +
-          " 次",
-        completedAt: habitDateToCompletedAt(dateStr),
-        habitMeta: { key: habitKey, date: dateStr }
+          " 次打卡",
+        completedAt: Date.now(),
+        habitMeta: { key: habitKey, date: dateStr, batchAmount: batch }
       });
     }
 
-    function syncHabitWordCountToDone(habitKey, dateStr, wordCount, stampTimes) {
-      removeHabitFromDone(habitKey, dateStr);
+    function syncHabitWordCountToDone(habitKey, dateStr, batchWords, totalWords, stampTimes) {
       const label = HABIT_LABELS[habitKey] || habitKey;
       const tc = Number.isFinite(stampTimes) && stampTimes > 0 ? stampTimes : 0;
+      const batch = Number.isFinite(batchWords) && batchWords > 0 ? batchWords : 0;
+      const total = Number.isFinite(totalWords) && totalWords >= 0 ? totalWords : 0;
       state.done.unshift({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text:
           "【习惯】" +
           label +
-          " 今日累计 " +
-          String(wordCount) +
-          " 词 · 打卡 " +
+          " 本次 +" +
+          String(batch) +
+          " 词 · 今日累计 " +
+          String(total) +
+          " 词 · 第 " +
           String(tc) +
-          " 次",
-        completedAt: habitDateToCompletedAt(dateStr),
-        habitMeta: { key: habitKey, date: dateStr }
+          " 次打卡",
+        completedAt: Date.now(),
+        habitMeta: { key: habitKey, date: dateStr, batchAmount: batch }
       });
     }
 
-    function syncHabitExperimentToDone(habitKey, dateStr, todayExperiments, stampTimes, lifetimeTotal, remarkOpt) {
-      removeHabitFromDone(habitKey, dateStr);
-      const label = HABIT_LABELS[habitKey] || habitKey;
-      const tc = Number.isFinite(stampTimes) && stampTimes > 0 ? stampTimes : 0;
-      const lt = Number.isFinite(lifetimeTotal) && lifetimeTotal >= 0 ? lifetimeTotal : getHabitExperimentLifetimeTotal(habitKey);
-      const remarkBit =
-        remarkOpt != null && String(remarkOpt).trim()
-          ? " · " + String(remarkOpt).trim()
-          : "";
+    function syncHabitExperimentToDone(
+      habitKey,
+      dateStr,
+      todayExperiments,
+      stampTimes,
+      lifetimeTotal,
+      remarkOpt,
+      experimentDelta
+    ) {
+      const lt =
+        Number.isFinite(lifetimeTotal) && lifetimeTotal >= 0 ? lifetimeTotal : getHabitExperimentLifetimeTotal(habitKey);
+      const delta =
+        Number.isFinite(Number(experimentDelta)) && Number(experimentDelta) > 0 ? Number(experimentDelta) : 1;
+      const remarkTrim = remarkOpt != null && String(remarkOpt).trim() ? String(remarkOpt).trim() : "";
+      const text = buildHabitExperimentDoneLineText(
+        habitKey,
+        dateStr,
+        todayExperiments,
+        stampTimes,
+        lt,
+        remarkOpt,
+        delta
+      );
       state.done.unshift({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
-        text:
-          "【习惯】" +
-          label +
-          " 今日累计 " +
-          String(todayExperiments) +
-          " 次实验 · 打卡 " +
-          String(tc) +
-          " 次 · 终身累计 " +
-          String(lt.toLocaleString("en-US")) +
-          " / " +
-          String(EXPERIMENT_LAB_GOAL.toLocaleString("en-US")) +
-          remarkBit,
-        completedAt: habitDateToCompletedAt(dateStr),
-        habitMeta: { key: habitKey, date: dateStr }
+        text: text,
+        completedAt: Date.now(),
+        habitMeta: { key: habitKey, date: dateStr, batchAmount: delta, remarkSnapshot: remarkTrim }
       });
     }
 
     function syncHabitReadingToDone(habitKey, dateStr, remark, stampTimes) {
-      removeHabitFromDone(habitKey, dateStr);
       const label = HABIT_LABELS[habitKey] || habitKey;
       const r = typeof remark === "string" ? remark.trim() : "";
       const tc = Number.isFinite(stampTimes) && stampTimes > 0 ? stampTimes : 1;
-      const timesBit = " · 今日打卡 " + String(tc) + " 次";
+      const timesBit = " · 第 " + String(tc) + " 次打卡";
       state.done.unshift({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: "【习惯】" + label + timesBit + (r ? " · " + r : ""),
-        completedAt: habitDateToCompletedAt(dateStr),
-        habitMeta: { key: habitKey, date: dateStr }
+        completedAt: Date.now(),
+        habitMeta: { key: habitKey, date: dateStr, remarkSnapshot: r }
       });
     }
 
@@ -26090,29 +26292,29 @@
       if (isHabitWordCountKey(habitKey)) return;
       if (isHabitExperimentKey(habitKey)) return;
       if (isHabitOptionalRemarkKey(habitKey)) return;
-      removeHabitFromDone(habitKey, dateStr);
       const label = HABIT_LABELS[habitKey] || habitKey;
       const tc = Number.isFinite(stampTimesOpt) && stampTimesOpt > 0 ? stampTimesOpt : null;
       let text =
         habitKey === "dailyThreeWins" ? "书写「每天三赢」" : "【习惯】" + label;
       if (tc != null && habitKey !== "dailyThreeWins") {
-        text += " · 今日打卡 " + String(tc) + " 次";
+        text += " · 第 " + String(tc) + " 次打卡";
       }
       state.done.unshift({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text,
-        completedAt: habitDateToCompletedAt(dateStr),
+        completedAt: Date.now(),
         habitMeta: { key: habitKey, date: dateStr }
       });
     }
 
     function syncWeightBodyFatToDone(dateStr, weightJin, bodyFatPct) {
-      removeHabitFromDone("weightAndBodyFat", dateStr);
+      const w = Number(weightJin);
+      const f = Number(bodyFatPct);
       state.done.unshift({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: "【习惯】称体重与测体脂率 " + weightJin + "斤 / " + bodyFatPct + "%",
-        completedAt: habitDateToCompletedAt(dateStr),
-        habitMeta: { key: "weightAndBodyFat", date: dateStr }
+        completedAt: Date.now(),
+        habitMeta: { key: "weightAndBodyFat", date: dateStr, weightJin: w, bodyFatPct: f }
       });
     }
 
@@ -26180,7 +26382,7 @@
         times: stampTimes,
         batches: prevBatches
       };
-      syncHabitMinutesToDone(habitKey, dateKey, newTotal, stampTimes);
+      syncHabitMinutesToDone(habitKey, dateKey, add, newTotal, stampTimes);
       if (input) {
         input.value = "";
       }
@@ -26222,7 +26424,7 @@
         times: stampTimes,
         batches: prevBatches
       };
-      syncHabitWordCountToDone(habitKey, dateKey, newTotal, stampTimes);
+      syncHabitWordCountToDone(habitKey, dateKey, add, newTotal, stampTimes);
       if (input) {
         input.value = "";
       }
@@ -26282,12 +26484,11 @@
           nextObj.remark = cur.remark.trim();
         }
         state.habitCheckins[dateKey][habitKey] = nextObj;
-        syncHabitReadingToDone(
-          habitKey,
-          dateKey,
-          remarkRaw || getHabitRemarkFromCheckinValue(nextObj),
-          nextObj.times
-        );
+        const label = HABIT_LABELS[habitKey] || habitKey;
+        const r = remarkRaw || getHabitRemarkFromCheckinValue(nextObj);
+        const text =
+          "【习惯】" + label + " · 第 " + String(nextObj.times) + " 次打卡" + (r ? " · " + r : "");
+        updateLatestHabitDoneRowForDay(habitKey, dateKey, text, { remarkSnapshot: r });
         saveState();
         render();
         return;
@@ -26311,14 +26512,20 @@
         state.habitCheckins[dateKey][habitKey] = obj;
         const lifetime = getHabitExperimentLifetimeTotal(habitKey);
         const remarkForDone = getHabitRemarkFromCheckinValue(obj);
-        syncHabitExperimentToDone(
+        const batches = obj.batches && obj.batches.length ? obj.batches : [];
+        const lastDelta = batches.length ? batches[batches.length - 1] : 1;
+        const text = buildHabitExperimentDoneLineText(
           habitKey,
           dateKey,
           experiments,
           stampTimes,
           lifetime,
-          remarkForDone || undefined
+          remarkForDone || undefined,
+          lastDelta
         );
+        updateLatestHabitDoneRowForDay(habitKey, dateKey, text, {
+          remarkSnapshot: remarkForDone ? String(remarkForDone).trim() : ""
+        });
         saveState();
         render();
       }
@@ -26355,7 +26562,7 @@
       }
       state.habitCheckins[dateKey][habitKey] = nextObj;
       const lifetime = getHabitExperimentLifetimeTotal(habitKey);
-      syncHabitExperimentToDone(habitKey, dateKey, newTotal, stampTimes, lifetime, remarkRaw || undefined);
+      syncHabitExperimentToDone(habitKey, dateKey, newTotal, stampTimes, lifetime, remarkRaw || undefined, add);
       saveState();
       render();
     }
@@ -26403,6 +26610,7 @@
         batches.push(last);
         return;
       }
+      removeLastHabitStampFromDone(habitKey, dateKey);
       const prevTotal = cur[valueKey];
       const newTotal = prevTotal - last;
       if (newTotal < 0) {
@@ -26415,7 +26623,6 @@
       }
       if (batches.length === 0) {
         day[habitKey] = false;
-        removeHabitFromDone(habitKey, dateKey);
         saveState();
         render();
         return;
@@ -26430,21 +26637,6 @@
         nextObj.remark = cur.remark.trim();
       }
       day[habitKey] = nextObj;
-      if (isHabitExperimentKey(habitKey)) {
-        const lifetime = getHabitExperimentLifetimeTotal(habitKey);
-        syncHabitExperimentToDone(
-          habitKey,
-          dateKey,
-          newTotal,
-          stampTimes,
-          lifetime,
-          nextObj.remark || undefined
-        );
-      } else if (isHabitMinutesKey(habitKey)) {
-        syncHabitMinutesToDone(habitKey, dateKey, newTotal, stampTimes);
-      } else if (isHabitWordCountKey(habitKey)) {
-        syncHabitWordCountToDone(habitKey, dateKey, newTotal, stampTimes);
-      }
       saveState();
       render();
     }
@@ -26459,8 +26651,8 @@
         if (!state.habitCheckins[todayKey]) {
           return;
         }
-        state.habitCheckins[todayKey].weightAndBodyFat = false;
-        removeHabitFromDone(habitKey, todayKey);
+        removeLastHabitStampFromDone(habitKey, todayKey);
+        rebuildHabitCheckinFromDoneList("weightAndBodyFat", todayKey);
         saveState();
         render();
         return;
@@ -26486,7 +26678,7 @@
             nextObj.remark = rm;
           }
           day[habitKey] = nextObj;
-          syncHabitReadingToDone(habitKey, todayKey, rm, nextTimes);
+          removeLastHabitStampFromDone(habitKey, todayKey);
         }
         saveState();
         render();
@@ -26502,7 +26694,7 @@
       } else {
         const nextTimes = tt - 1;
         day[habitKey] = { times: nextTimes };
-        syncHabitToDone(habitKey, todayKey, nextTimes);
+        removeLastHabitStampFromDone(habitKey, todayKey);
       }
       saveState();
       render();
@@ -26558,8 +26750,8 @@
       const wasChecked = isWeightBodyFatChecked(current);
 
       if (wasChecked) {
-        state.habitCheckins[dateKey].weightAndBodyFat = false;
-        removeHabitFromDone("weightAndBodyFat", dateKey);
+        removeLastHabitStampFromDone("weightAndBodyFat", dateKey);
+        rebuildHabitCheckinFromDoneList("weightAndBodyFat", dateKey);
         saveState();
         render();
         return;
@@ -26948,6 +27140,18 @@
       );
     }
 
+    /** 百日「按天」打卡：取消单日或删一条 Done 时只移除一行（小时单位卡仍用 removeRule100HoursFromSlotsRight） */
+    function removeOneRule100DayGridDoneCopy(ruleKey, dateStr) {
+      const idx = state.done.findIndex(function (item) {
+        const m = item.rule100Meta;
+        if (!m || m.key !== ruleKey || m.date !== dateStr) return false;
+        return m.kind !== "hours";
+      });
+      if (idx === -1) return false;
+      state.done.splice(idx, 1);
+      return true;
+    }
+
     function purgeRule100DoneForKey(ruleKey) {
       const rk = String(ruleKey || "");
       if (!rk) return;
@@ -27080,12 +27284,11 @@
     }
 
     function syncRule100ToDone(ruleKey, dateStr, title) {
-      removeRule100DoneCopy(ruleKey, dateStr);
       state.done.unshift({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: "【Rule of 100】" + title,
-        completedAt: habitDateToCompletedAt(dateStr),
-        rule100Meta: { key: ruleKey, date: dateStr }
+        completedAt: Date.now(),
+        rule100Meta: { key: ruleKey, date: dateStr, kind: "day" }
       });
     }
 
@@ -27521,8 +27724,15 @@
         title = String(subTitle.textContent || "").trim() || key;
       }
       if (idx >= 0) {
-        entry.checkins.splice(idx, 1);
-        removeRule100DoneCopy(key, today);
+        removeOneRule100DayGridDoneCopy(key, today);
+        const stillHasDone = state.done.some(function (d) {
+          const m = d.rule100Meta;
+          return m && m.key === key && m.date === today && m.kind !== "hours";
+        });
+        if (!stillHasDone) {
+          const ix2 = entry.checkins.indexOf(today);
+          if (ix2 >= 0) entry.checkins.splice(ix2, 1);
+        }
         bumpDoneFilterToTaskDay(habitDateToCompletedAt(today));
       } else {
         if (entry.checkins.length >= 100) {
@@ -27548,7 +27758,7 @@
       if (i < n) {
         const removed = sorted.slice(i);
         entry.checkins = sorted.slice(0, i);
-        removed.forEach((d) => removeRule100DoneCopy(key, d));
+        removed.forEach((d) => removeOneRule100DayGridDoneCopy(key, d));
         bumpDoneFilterToTaskDay(Date.now());
         saveState();
         render();
@@ -29548,7 +29758,18 @@
         } else {
           const entry = getRule100Entry(meta.key);
           if (entry.checkins && meta.date) {
-            entry.checkins = entry.checkins.filter((dt) => dt !== meta.date);
+            const otherDayDone = state.done.some(function (d) {
+              return (
+                d.id !== task.id &&
+                d.rule100Meta &&
+                d.rule100Meta.key === meta.key &&
+                d.rule100Meta.date === meta.date &&
+                d.rule100Meta.kind !== "hours"
+              );
+            });
+            if (!otherDayDone) {
+              entry.checkins = entry.checkins.filter((dt) => dt !== meta.date);
+            }
           }
         }
         state.done.splice(idx, 1);
@@ -29581,7 +29802,11 @@
       }
       const [removed] = state.done.splice(idx, 1);
       if (removed.habitMeta) {
-        clearHabitCheckinSlot(removed.habitMeta.key, removed.habitMeta.date);
+        if (removed.habitMeta.key === "dailyThreeWins") {
+          refreshDailyWinCheckin(removed.habitMeta.date);
+        } else {
+          rebuildHabitCheckinFromDoneList(removed.habitMeta.key, removed.habitMeta.date);
+        }
         saveState();
         render();
         return;
@@ -29685,9 +29910,6 @@
             delete r.items[sk];
           }
         }
-        if (task.habitMeta && task.habitMeta.key !== "dailyThreeWins") {
-          clearHabitCheckinSlot(task.habitMeta.key, task.habitMeta.date);
-        }
         if (task.fuelMeta) {
           state.fuelScores = state.fuelScores.filter((x) => x.date !== task.fuelMeta.date);
         }
@@ -29708,7 +29930,18 @@
           } else {
             const entry = getRule100Entry(meta.key);
             if (entry.checkins && meta.date) {
-              entry.checkins = entry.checkins.filter((dt) => dt !== meta.date);
+              const otherDayDone = state.done.some(function (d) {
+                return (
+                  d.id !== task.id &&
+                  d.rule100Meta &&
+                  d.rule100Meta.key === meta.key &&
+                  d.rule100Meta.date === meta.date &&
+                  d.rule100Meta.kind !== "hours"
+                );
+              });
+              if (!otherDayDone) {
+                entry.checkins = entry.checkins.filter((dt) => dt !== meta.date);
+              }
             }
           }
         }
@@ -29731,6 +29964,13 @@
         recordSyncTombstone(task.id);
       }
       list.splice(idx, 1);
+      if (listName === "done" && task.habitMeta) {
+        if (task.habitMeta.key === "dailyThreeWins") {
+          refreshDailyWinCheckin(task.habitMeta.date);
+        } else {
+          rebuildHabitCheckinFromDoneList(task.habitMeta.key, task.habitMeta.date);
+        }
+      }
       saveState();
       render();
     }
