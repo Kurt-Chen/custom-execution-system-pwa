@@ -33941,6 +33941,10 @@
           }
           refreshKineticCountdownLunarTargets();
           normalizeKineticCountdownTargetDays();
+          /* Closed-List：本地载入或云合并写入 storage 后，将早于今日的未完成条目归入今日（日历日 = 本地 formatDateInputValue） */
+          if (Array.isArray(state.closedList) && rolloverIncompleteClosedListPastDaysToToday()) {
+            saveState();
+          }
         }
       } catch (err) {
         console.error("读取本地数据失败:", err);
@@ -43810,21 +43814,73 @@
           btn.textContent = collapsed ? "▸" : "▾";
         });
       });
-      document.querySelectorAll(".anniversary-tw-phase-toggle").forEach((btn) => {
-        if (btn.dataset.bound) {
+      bindAnniversaryTwSegmentTabs();
+    }
+
+    function bindAnniversaryTwSegmentTabs() {
+      document.querySelectorAll("#anniversaryModule .anniversary-sub-body").forEach((subBody) => {
+        const tablist = subBody.querySelector('.anniversary-tw-seg-tablist[role="tablist"]');
+        if (!tablist || tablist.dataset.bound) {
           return;
         }
-        btn.dataset.bound = "1";
-        btn.addEventListener("click", () => {
-          const phase = btn.closest(".anniversary-tw-phase");
-          if (!phase) {
-            return;
-          }
-          phase.classList.toggle("collapsed");
-          const collapsed = phase.classList.contains("collapsed");
-          btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
-          btn.textContent = collapsed ? "▸" : "▾";
+        tablist.dataset.bound = "1";
+        const tabs = Array.from(tablist.querySelectorAll('.anniversary-tw-seg-btn[role="tab"]'));
+        if (tabs.length < 2) {
+          return;
+        }
+        const panels = tabs.map((tab) => {
+          const id = tab.getAttribute("aria-controls");
+          return id ? document.getElementById(id) : null;
         });
+        if (panels.some((p) => !p)) {
+          return;
+        }
+
+        const activate = (index, opts) => {
+          const focus = Boolean(opts && opts.focus);
+          tabs.forEach((tab, i) => {
+            const active = i === index;
+            tab.setAttribute("aria-selected", active ? "true" : "false");
+            tab.tabIndex = active ? 0 : -1;
+            const panel = panels[i];
+            panel.classList.toggle("module-tab-hidden", !active);
+            panel.classList.toggle("module-tab-active", active);
+          });
+          if (focus && tabs[index]) {
+            tabs[index].focus();
+          }
+        };
+
+        tabs.forEach((tab, index) => {
+          tab.addEventListener("click", () => activate(index));
+          tab.addEventListener("keydown", (event) => {
+            const navKeys = ["ArrowLeft", "ArrowRight", "Home", "End"];
+            if (!navKeys.includes(event.key)) {
+              return;
+            }
+            event.preventDefault();
+            let nextIndex = index;
+            if (event.key === "ArrowLeft") {
+              nextIndex = (index - 1 + tabs.length) % tabs.length;
+            }
+            if (event.key === "ArrowRight") {
+              nextIndex = (index + 1) % tabs.length;
+            }
+            if (event.key === "Home") {
+              nextIndex = 0;
+            }
+            if (event.key === "End") {
+              nextIndex = tabs.length - 1;
+            }
+            activate(nextIndex, { focus: true });
+          });
+        });
+
+        let initialIndex = tabs.findIndex((t) => t.getAttribute("aria-selected") === "true");
+        if (initialIndex < 0) {
+          initialIndex = 0;
+        }
+        activate(initialIndex);
       });
     }
 
@@ -46502,6 +46558,9 @@
       };
     });
     repointStaleWeeklyPlanMirrorsInClosedList();
+    if (tickClosedListDayRollover()) {
+      saveState();
+    }
     state.dailyWin = state.dailyWin.map((item) => {
       if (item.createdAt) return item;
       return { ...item, createdAt: Date.now() };
@@ -46534,6 +46593,19 @@
 
     syncMyGoalsHeaderTitleForViewport();
     render();
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState !== "visible") return;
+      if (tickClosedListDayRollover()) {
+        saveState();
+        render();
+      }
+    });
+    window.setInterval(function () {
+      if (tickClosedListDayRollover()) {
+        saveState();
+        render();
+      }
+    }, 60000);
     initAppVersionBadge();
     initCloudSync();
     initCloudSyncMobileOfflineHint();
