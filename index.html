@@ -12801,7 +12801,7 @@
         align-items: start;
         gap: 4px 8px;
         position: relative;
-        padding-right: 50px;
+        padding-right: 10px;
         box-sizing: border-box;
       }
 
@@ -12826,6 +12826,7 @@
         grid-column: 1;
         grid-row: 1;
         justify-self: center;
+        align-self: center;
       }
 
       #habitRoutineModule .habit-en-row:not(.habit-health-weight-row) .submodule-title {
@@ -12900,13 +12901,6 @@
         margin-top: 0;
       }
 
-      #habitRoutineModule .habit-en-row:not(.habit-health-weight-row) .habit-en-check-btn {
-        position: absolute;
-        top: 4px;
-        right: max(4px, env(safe-area-inset-right, 0px));
-        z-index: 2;
-      }
-
       #habitRoutineModule .habit-en-row:not(.habit-health-weight-row) .habit-en-actions {
         flex: initial;
         width: 100%;
@@ -12915,7 +12909,7 @@
         display: flex;
         flex-wrap: nowrap;
         align-items: center;
-        justify-content: flex-start;
+        justify-content: flex-end;
         gap: 4px 6px;
       }
 
@@ -12969,6 +12963,10 @@
 
       #habitRoutineModule .habit-en-row.habit-health-weight-row:has(.habit-en-body .submodule-note) {
         align-items: flex-start;
+      }
+
+      #habitRoutineModule .habit-en-row.habit-health-weight-row .habit-en-icon {
+        align-self: center;
       }
 
       #habitRoutineModule .habit-en-body {
@@ -13082,7 +13080,7 @@
 
       #habitRoutineModule .habit-en-row:not(.habit-health-weight-row) {
         gap: 3px 6px;
-        padding-right: 46px;
+        padding-right: 8px;
       }
 
       #habitRoutineModule .habit-en-learning-shell .habit-en-row.submodule-card {
@@ -13656,9 +13654,21 @@
         max-width: min(46vw, 200px);
       }
 
-      /* 习惯子 Tab（#habitHabitsBundle）：手机端隐藏「N次」与「减一次」整块；体重合并卡保留 status 行 */
-      #habitRoutineModule #habitHabitsBundle .habit-en-row:not(.habit-health-weight-row) .habit-en-punch-meta {
+      /* 习惯 Tab：手机端打卡次数仅红色数字；隐藏「减一次」（撤销仍可用无障碍焦点路径以外暂不展示） */
+      #habitRoutineModule #habitHabitsBundle .habit-en-clear-today-btn {
         display: none !important;
+      }
+
+      #habitRoutineModule #habitHabitsBundle .habit-en-today-note {
+        color: #dc2626 !important;
+        font-weight: 700;
+        font-size: 15px;
+        font-variant-numeric: tabular-nums;
+        max-width: min(20vw, 56px);
+        min-width: 0;
+        flex: 0 0 auto;
+        text-align: right;
+        line-height: 1;
       }
     }
 
@@ -35234,17 +35244,6 @@
       });
     }
 
-    function syncWeightBodyFatToDone(dateStr, weightJin, bodyFatPct) {
-      const w = Number(weightJin);
-      const f = Number(bodyFatPct);
-      state.done.unshift({
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
-        text: "【习惯】称体重与测体脂率 " + weightJin + "斤 / " + bodyFatPct + "%",
-        completedAt: Date.now(),
-        habitMeta: { key: "weightAndBodyFat", date: dateStr, weightJin: w, bodyFatPct: f }
-      });
-    }
-
     function refreshDailyWinCheckin(dateStr) {
       if (!state.habitCheckins[dateStr]) state.habitCheckins[dateStr] = {};
       const count = state.dailyWin.filter((item) => isSameDate(item.createdAt, dateStr)).length;
@@ -47202,22 +47201,24 @@
         if (key === "weightAndBodyFat") {
           const v = dayData.weightAndBodyFat;
           const weightStatusEl = card.querySelector(".habit-en-weight-status");
+          const stampTimesWeight =
+            checked && isWeightBodyFatChecked(v)
+              ? Math.max(1, getSimpleHabitStampTimes(v))
+              : 0;
           if (weightStatusEl) {
-            if (checked && v && typeof v === "object" && Number.isFinite(v.weightJin) && Number.isFinite(v.bodyFatPct)) {
-              weightStatusEl.textContent = "已打卡 " + v.weightJin + "斤 / " + v.bodyFatPct + "%";
-            } else if (checked) {
-              weightStatusEl.textContent = "已打卡";
-            } else {
+            if (!checked) {
               weightStatusEl.textContent = "";
+            } else if (isHabitRoutineCompactMobile()) {
+              weightStatusEl.textContent = stampTimesWeight > 0 ? String(stampTimesWeight) : "";
+            } else {
+              weightStatusEl.textContent = "已打卡";
             }
           }
           if (statusEl) {
-            if (checked && v && typeof v === "object" && Number.isFinite(v.weightJin) && Number.isFinite(v.bodyFatPct)) {
-              statusEl.textContent = "已打卡 " + v.weightJin + "斤 / " + v.bodyFatPct + "%";
-            } else if (checked) {
-              statusEl.textContent = "已打卡";
-            } else {
+            if (!checked) {
               statusEl.textContent = "未打卡";
+            } else {
+              statusEl.textContent = "已打卡";
             }
           }
         }
@@ -47250,10 +47251,12 @@
               if (checked && v && typeof v === "object" && Number.isFinite(v.wordCount) && v.wordCount > 0) {
                 const tc = getHabitNumericStampTimes(v, "wordCount");
                 todayNote.textContent = isHabitRoutineCompactMobile()
-                  ? String(v.wordCount) + "词·" + String(tc) + "次"
+                  ? tc > 0
+                    ? String(tc)
+                    : ""
                   : "今日累计 " + String(v.wordCount) + " 词 · 打卡 " + String(tc) + " 次";
               } else if (checked && v === true) {
-                todayNote.textContent = isHabitRoutineCompactMobile() ? "已打卡" : "今日已打卡";
+                todayNote.textContent = isHabitRoutineCompactMobile() ? "" : "今日已打卡";
               } else {
                 todayNote.textContent = "";
               }
@@ -47277,10 +47280,12 @@
               if (checked && v && typeof v === "object" && Number.isFinite(v.minutes) && v.minutes > 0) {
                 const tc = getHabitNumericStampTimes(v, "minutes");
                 todayNote.textContent = isHabitRoutineCompactMobile()
-                  ? String(v.minutes) + "分·" + String(tc) + "次"
+                  ? tc > 0
+                    ? String(tc)
+                    : ""
                   : "今日累计 " + String(v.minutes) + " 分钟 · 打卡 " + String(tc) + " 次";
               } else if (checked && v === true) {
-                todayNote.textContent = isHabitRoutineCompactMobile() ? "已打卡" : "今日已打卡";
+                todayNote.textContent = isHabitRoutineCompactMobile() ? "" : "今日已打卡";
               } else {
                 todayNote.textContent = "";
               }
@@ -47301,13 +47306,17 @@
               if (checked) {
                 const tc = getOptionalRemarkStampTimes(v);
                 const compact = isHabitRoutineCompactMobile();
-                let note = compact ? String(tc) + "次打卡" : "今日打卡 " + String(tc) + " 次";
-                if (remarkStr) {
-                  const maxLen = compact ? 14 : 40;
-                  const snip = remarkStr.length > maxLen ? remarkStr.slice(0, maxLen) + "…" : remarkStr;
-                  note += compact ? "·" + snip : " · " + snip;
+                if (compact) {
+                  todayNote.textContent = tc > 0 ? String(tc) : "";
+                } else {
+                  let note = "今日打卡 " + String(tc) + " 次";
+                  if (remarkStr) {
+                    const maxLen = 40;
+                    const snip = remarkStr.length > maxLen ? remarkStr.slice(0, maxLen) + "…" : remarkStr;
+                    note += " · " + snip;
+                  }
+                  todayNote.textContent = note;
                 }
-                todayNote.textContent = note;
               } else {
                 todayNote.textContent = "";
               }
@@ -47327,18 +47336,20 @@
               if (checked && v && typeof v === "object" && Number.isFinite(v.experiments) && v.experiments > 0) {
                 const tc = getHabitNumericStampTimes(v, "experiments");
                 const compact = isHabitRoutineCompactMobile();
-                let note = compact
-                  ? String(v.experiments) + "实验·" + String(tc) + "次"
-                  : "今日累计 " + String(v.experiments) + " 次实验 · 打卡 " + String(tc) + " 次";
-                const rm = getHabitRemarkFromCheckinValue(v);
-                if (rm) {
-                  const maxLen = compact ? 12 : 36;
-                  const snip = rm.length > maxLen ? rm.slice(0, maxLen) + "…" : rm;
-                  note += compact ? "·" + snip : " · " + snip;
+                if (compact) {
+                  todayNote.textContent = tc > 0 ? String(tc) : "";
+                } else {
+                  let note = "今日累计 " + String(v.experiments) + " 次实验 · 打卡 " + String(tc) + " 次";
+                  const rm = getHabitRemarkFromCheckinValue(v);
+                  if (rm) {
+                    const maxLen = 36;
+                    const snip = rm.length > maxLen ? rm.slice(0, maxLen) + "…" : rm;
+                    note += " · " + snip;
+                  }
+                  todayNote.textContent = note;
                 }
-                todayNote.textContent = note;
               } else if (checked && v === true) {
-                todayNote.textContent = isHabitRoutineCompactMobile() ? "已打卡" : "今日已打卡";
+                todayNote.textContent = isHabitRoutineCompactMobile() ? "" : "今日已打卡";
               } else {
                 todayNote.textContent = "";
               }
@@ -47348,7 +47359,7 @@
               const sv = dayData[key];
               const tc = getSimpleHabitStampTimes(sv);
               if (isHabitRoutineCompactMobile()) {
-                todayNote.textContent = tc > 0 ? String(tc) + "次" : "已打卡";
+                todayNote.textContent = tc > 0 ? String(tc) : "";
               } else {
                 todayNote.textContent = tc > 0 ? "今日打卡 " + String(tc) + " 次" : "今日已打卡";
               }
