@@ -12623,6 +12623,11 @@
         text-overflow: ellipsis;
       }
 
+      /* 手机端：关键路径习惯标题省略「今日」前缀（与 isHabitRoutineCompactMobile ≤767px 一致） */
+      #habitRoutineModule .habit-en-row[data-habit-key="criticalPathToClosedList"] .habit-critical-path-title-prefix {
+        display: none;
+      }
+
       #habitRoutineModule .habit-en-row:not(.habit-health-weight-row) .habit-en-remark-input {
         grid-column: 1 / -1;
         grid-row: 2;
@@ -24641,7 +24646,7 @@
                 <section class="submodule-card submodule-card-nested habit-en-row" data-habit-key="criticalPathToClosedList">
                   <div class="habit-en-icon habit-en-icon--closed-list" aria-hidden="true">📋</div>
                   <div class="habit-en-body">
-                    <h3 class="submodule-title">今日【关键路径】任务 → Closed-List</h3>
+                    <h3 class="submodule-title"><span class="habit-critical-path-title-prefix">今日</span>【关键路径】任务 → Closed-List</h3>
                   </div>
                   <div class="habit-en-actions">
                     <span class="habit-en-today-note" aria-live="polite"></span>
@@ -35137,9 +35142,7 @@
         closedListInput.focus();
         return;
       }
-      const sameDayCount = state.closedList.filter((item) =>
-        isSameDate(item.createdAt, selectedClosedListDate)
-      ).length;
+      const sameDayCount = getClosedListItemsVisibleForViewDate(selectedClosedListDate).length;
       if (sameDayCount >= 3) {
         alert("Closed-List 每天最多 3 条，请先删除一条再添加。");
         return;
@@ -42432,6 +42435,28 @@
       render();
     }
 
+    /**
+     * Closed-List：条目归属日为 viewDateStr（createdAt）。若已勾选完成且 completedAt 的日历日早于查看日，
+     * 则不在该日视图展示（例如查看「今天」时不显示「完成日在昨天或更早」的条目）。
+     */
+    function isClosedListItemVisibleForViewDate(item, viewDateStr) {
+      if (!item || !viewDateStr) return false;
+      if (!isSameDate(item.createdAt, viewDateStr)) return false;
+      if (item.completed && item.completedAt != null) {
+        const ts = Number(item.completedAt);
+        if (Number.isFinite(ts)) {
+          const completedDay = formatDateInputValue(new Date(ts));
+          if (completedDay < viewDateStr) return false;
+        }
+      }
+      return true;
+    }
+
+    function getClosedListItemsVisibleForViewDate(viewDateStr) {
+      if (!Array.isArray(state.closedList)) return [];
+      return state.closedList.filter((item) => isClosedListItemVisibleForViewDate(item, viewDateStr));
+    }
+
     function compareClosedListItemsForSort(a, b, allHaveListOrder) {
       if (allHaveListOrder) {
         return (typeof a.listOrder === "number" ? a.listOrder : 0) -
@@ -42452,7 +42477,7 @@
     function applyClosedListReorder(dragId, anchorId, insertBefore) {
       const dateStr = selectedClosedListDate;
       if (!dateStr || dragId === anchorId) return;
-      const sameDay = state.closedList.filter((item) => isSameDate(item.createdAt, dateStr));
+      const sameDay = getClosedListItemsVisibleForViewDate(dateStr);
       if (sameDay.length < 2) return;
       const allHaveListOrder =
         sameDay.length > 0 && sameDay.every((x) => typeof x.listOrder === "number");
@@ -42550,7 +42575,7 @@
       const mainT = String(task.text || "").trim() || "（主任务）";
       const lineText = "【自周计划】" + mainT;
       const dateStr = selectedClosedListDate;
-      const sameDay = state.closedList.filter((item) => isSameDate(item.createdAt, dateStr));
+      const sameDay = getClosedListItemsVisibleForViewDate(dateStr);
       if (sameDay.length >= 3) {
         alert("Closed-List 每天最多 3 条，请先删除一条再加入。");
         return;
@@ -45803,9 +45828,7 @@
       const filteredDoneTasks = state.done.filter((task) => isSameDate(task.completedAt, selectedDoneDate));
       const filteredDoneTasksForStats = filteredDoneTasks.filter(isDoneCountedAsDayProduction);
       const filteredMemoItems = state.memo.slice();
-      const filteredClosedListItemsRaw = state.closedList.filter((item) =>
-        isSameDate(item.createdAt, selectedClosedListDate)
-      );
+      const filteredClosedListItemsRaw = getClosedListItemsVisibleForViewDate(selectedClosedListDate);
       const allClosedListHaveListOrder =
         filteredClosedListItemsRaw.length > 0 &&
         filteredClosedListItemsRaw.every((x) => typeof x.listOrder === "number");
