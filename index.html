@@ -26742,6 +26742,7 @@
                 ></button>
               </div>
               <div class="submodule-nested-grid rule100-sub-wrap">
+                <template id="rule100DayCardTemplate"></template>
                 <div id="rule100DayProjectsHost" class="rule100-card-list">
             <section
               class="submodule-card rule100-card rule100-card--hours rule100-card--days"
@@ -26849,6 +26850,7 @@
                   <option value="分钟"></option>
                   <option value="次"></option>
                 </datalist>
+                <template id="rule100UnitCardTemplate"></template>
                 <div id="rule100UnitProjectsHost" class="rule100-card-list">
             <section class="submodule-card rule100-card rule100-card--hours" data-rule100-key="rule100D">
               <div class="rule100-hours-name-row">
@@ -34092,7 +34094,7 @@
         seen.add(k);
         out.push(k);
       });
-      return out.length ? out : [defaultKey];
+      return out;
     }
 
     function clearRule100CardKeyTombstone(key) {
@@ -34990,12 +34992,6 @@
     function mergeRule100KeyArrays(locArr, remArr, defaultKey, isCategory) {
       const L = Array.isArray(locArr) ? locArr.filter(isCategory) : [];
       const R = Array.isArray(remArr) ? remArr.filter(isCategory) : [];
-      if (L.length === 0) {
-        L.push(defaultKey);
-      }
-      if (R.length === 0) {
-        R.push(defaultKey);
-      }
       const seen = new Set();
       const out = [];
       L.forEach(function (k) {
@@ -35010,7 +35006,7 @@
           out.push(k);
         }
       });
-      return out.length ? out : [defaultKey];
+      return out;
     }
 
     /**
@@ -35576,10 +35572,10 @@
           if (!state.ruleOf100 || typeof state.ruleOf100 !== "object") {
             state.ruleOf100 = {};
           }
-          if (!Array.isArray(state.rule100DayProjectKeys) || state.rule100DayProjectKeys.length === 0) {
+          if (!Array.isArray(state.rule100DayProjectKeys)) {
             state.rule100DayProjectKeys = ["rule100A"];
           }
-          if (!Array.isArray(state.rule100UnitProjectKeys) || state.rule100UnitProjectKeys.length === 0) {
+          if (!Array.isArray(state.rule100UnitProjectKeys)) {
             state.rule100UnitProjectKeys = ["rule100D"];
           }
           if (!state.ageGoals || typeof state.ageGoals !== "object") {
@@ -37196,94 +37192,53 @@
         const keys = state.rule100DayProjectKeys;
         const idx = keys.indexOf(key);
         if (idx < 0) return;
-        if (keys.length <= 1) {
-          pushTrashEntry({
-            sourceList: "rule100Card",
-            originalId: key,
-            payload: { key: key },
-            meta: {
-              key: key,
-              restoreMode: "clearSlot",
-              isDay: true,
-              previousEntry: deepCloneForTrash(getRule100Entry(key))
-            }
-          });
-          const ent = getRule100Entry(key);
-          ent.checkins = [];
-          ent.name = "";
-          purgeRule100DoneForKey(key);
-          const hostReset = document.getElementById("rule100DayProjectsHost");
-          const nodeReset =
-            hostReset && hostReset.querySelector('[data-rule100-key="' + key + '"]');
-          if (nodeReset) nodeReset.classList.remove("rule100-card--name-editing");
-        } else {
-          pushTrashEntry({
-            sourceList: "rule100Card",
-            originalId: key,
-            payload: { key: key },
-            meta: {
-              key: key,
-              restoreMode: "removeKey",
-              isDay: true,
-              insertIndex: idx,
-              entrySnapshot: deepCloneForTrash(getRule100Entry(key))
-            }
-          });
-          keys.splice(idx, 1);
-          delete state.ruleOf100[key];
-          recordSyncTombstone(rule100CardKeyTombstoneId(key));
-          purgeRule100DoneForKey(key);
-          const host = document.getElementById("rule100DayProjectsHost");
-          const node = host && host.querySelector('[data-rule100-key="' + key + '"]');
-          if (node) node.remove();
+        pushTrashEntry({
+          sourceList: "rule100Card",
+          originalId: key,
+          payload: { key: key },
+          meta: {
+            key: key,
+            restoreMode: "removeKey",
+            isDay: true,
+            insertIndex: idx,
+            entrySnapshot: deepCloneForTrash(getRule100Entry(key))
+          }
+        });
+        keys.splice(idx, 1);
+        delete state.ruleOf100[key];
+        recordSyncTombstone(rule100CardKeyTombstoneId(key));
+        purgeRule100DoneForKey(key);
+        const host = document.getElementById("rule100DayProjectsHost");
+        const node = host && host.querySelector('[data-rule100-key="' + key + '"]');
+        if (node) {
+          seedRule100TemplateFromRemovedCard(node, true);
+          node.remove();
         }
       } else if (isRule100UnitKey(key)) {
         const keys = state.rule100UnitProjectKeys;
         const idx = keys.indexOf(key);
         if (idx < 0) return;
-        if (keys.length <= 1) {
-          pushTrashEntry({
-            sourceList: "rule100Card",
-            originalId: key,
-            payload: { key: key },
-            meta: {
-              key: key,
-              restoreMode: "clearSlot",
-              isDay: false,
-              previousEntry: deepCloneForTrash(getRule100HoursEntry(key))
-            }
-          });
-          const ent = getRule100HoursEntry(key);
-          ent.name = "";
-          ent.hoursTotal = 0;
-          ent.hourSlots = "0".repeat(100);
-          ent.unit = "hours";
-          ent.unitLocked = false;
-          purgeRule100DoneForKey(key);
-          const hostReset = document.getElementById("rule100UnitProjectsHost");
-          const nodeReset =
-            hostReset && hostReset.querySelector('[data-rule100-key="' + key + '"]');
-          if (nodeReset) nodeReset.classList.remove("rule100-card--name-editing");
-        } else {
-          pushTrashEntry({
-            sourceList: "rule100Card",
-            originalId: key,
-            payload: { key: key },
-            meta: {
-              key: key,
-              restoreMode: "removeKey",
-              isDay: false,
-              insertIndex: idx,
-              entrySnapshot: deepCloneForTrash(getRule100HoursEntry(key))
-            }
-          });
-          keys.splice(idx, 1);
-          delete state.ruleOf100[key];
-          recordSyncTombstone(rule100CardKeyTombstoneId(key));
-          purgeRule100DoneForKey(key);
-          const host = document.getElementById("rule100UnitProjectsHost");
-          const node = host && host.querySelector('[data-rule100-key="' + key + '"]');
-          if (node) node.remove();
+        pushTrashEntry({
+          sourceList: "rule100Card",
+          originalId: key,
+          payload: { key: key },
+          meta: {
+            key: key,
+            restoreMode: "removeKey",
+            isDay: false,
+            insertIndex: idx,
+            entrySnapshot: deepCloneForTrash(getRule100HoursEntry(key))
+          }
+        });
+        keys.splice(idx, 1);
+        delete state.ruleOf100[key];
+        recordSyncTombstone(rule100CardKeyTombstoneId(key));
+        purgeRule100DoneForKey(key);
+        const host = document.getElementById("rule100UnitProjectsHost");
+        const node = host && host.querySelector('[data-rule100-key="' + key + '"]');
+        if (node) {
+          seedRule100TemplateFromRemovedCard(node, false);
+          node.remove();
         }
       }
       if (typeof bumpDoneFilterToTaskDay === "function") bumpDoneFilterToTaskDay(Date.now());
@@ -37439,12 +37394,74 @@
     }
 
     function ensureRule100ProjectLists() {
-      if (!Array.isArray(state.rule100DayProjectKeys) || state.rule100DayProjectKeys.length === 0) {
-        state.rule100DayProjectKeys = ["rule100A"];
+      if (!Array.isArray(state.rule100DayProjectKeys)) {
+        state.rule100DayProjectKeys = [];
       }
-      if (!Array.isArray(state.rule100UnitProjectKeys) || state.rule100UnitProjectKeys.length === 0) {
-        state.rule100UnitProjectKeys = ["rule100D"];
+      if (!Array.isArray(state.rule100UnitProjectKeys)) {
+        state.rule100UnitProjectKeys = [];
       }
+    }
+
+    function seedRule100CardTemplatesIfNeeded() {
+      const dayT = document.getElementById("rule100DayCardTemplate");
+      const dayHost = document.getElementById("rule100DayProjectsHost");
+      if (dayT && dayHost && !String(dayT.innerHTML || "").trim()) {
+        const sample = dayHost.querySelector(".rule100-card.rule100-card--days");
+        if (sample) {
+          dayT.innerHTML = sample.outerHTML;
+        }
+      }
+      const unitT = document.getElementById("rule100UnitCardTemplate");
+      const unitHost = document.getElementById("rule100UnitProjectsHost");
+      if (unitT && unitHost && !String(unitT.innerHTML || "").trim()) {
+        const sample = unitHost.querySelector(".rule100-card.rule100-card--hours:not(.rule100-card--days)");
+        if (sample) {
+          unitT.innerHTML = sample.outerHTML;
+        }
+      }
+    }
+
+    function seedRule100TemplateFromRemovedCard(cardEl, isDay) {
+      const tid = isDay ? "rule100DayCardTemplate" : "rule100UnitCardTemplate";
+      const tmpl = document.getElementById(tid);
+      if (!tmpl || String(tmpl.innerHTML || "").trim() || !cardEl) {
+        return;
+      }
+      tmpl.innerHTML = cardEl.outerHTML;
+    }
+
+    function getRule100DayCardPrototypeEl(dayHost) {
+      seedRule100CardTemplatesIfNeeded();
+      if (!dayHost) {
+        return null;
+      }
+      let el = dayHost.querySelector('[data-rule100-key="rule100A"]');
+      if (el) {
+        return el;
+      }
+      el = dayHost.querySelector(".rule100-card.rule100-card--days");
+      if (el) {
+        return el;
+      }
+      const tmpl = document.getElementById("rule100DayCardTemplate");
+      return tmpl && tmpl.content && tmpl.content.firstElementChild ? tmpl.content.firstElementChild : null;
+    }
+
+    function getRule100UnitCardPrototypeEl(unitHost) {
+      seedRule100CardTemplatesIfNeeded();
+      if (!unitHost) {
+        return null;
+      }
+      let el = unitHost.querySelector('[data-rule100-key="rule100D"]');
+      if (el) {
+        return el;
+      }
+      el = unitHost.querySelector(".rule100-card.rule100-card--hours:not(.rule100-card--days)");
+      if (el) {
+        return el;
+      }
+      const tmpl = document.getElementById("rule100UnitCardTemplate");
+      return tmpl && tmpl.content && tmpl.content.firstElementChild ? tmpl.content.firstElementChild : null;
     }
 
     function stripIdsFromRule100Clone(el) {
@@ -37475,13 +37492,24 @@
 
     function syncRule100DomFromState() {
       ensureRule100ProjectLists();
+      seedRule100CardTemplatesIfNeeded();
       const dayHost = document.getElementById("rule100DayProjectsHost");
       const unitHost = document.getElementById("rule100UnitProjectsHost");
       if (!dayHost || !unitHost) return;
+
+      Array.from(dayHost.children).forEach((card) => {
+        if (!card.classList || !card.classList.contains("rule100-card")) {
+          return;
+        }
+        const k = card.dataset.rule100Key;
+        if (!k || state.rule100DayProjectKeys.indexOf(k) === -1) {
+          card.remove();
+        }
+      });
+
       state.rule100DayProjectKeys.forEach((key) => {
-        if (key === "rule100A") return;
         if (dayHost.querySelector('[data-rule100-key="' + key + '"]')) return;
-        const proto = dayHost.querySelector('[data-rule100-key="rule100A"]');
+        const proto = getRule100DayCardPrototypeEl(dayHost);
         if (!proto) return;
         const node = proto.cloneNode(true);
         node.dataset.rule100Key = key;
@@ -37489,26 +37517,39 @@
         clearRule100BindingDataset(node);
         dayHost.appendChild(node);
       });
+
+      Array.from(unitHost.children).forEach((card) => {
+        if (!card.classList || !card.classList.contains("rule100-card")) {
+          return;
+        }
+        const k = card.dataset.rule100Key;
+        if (!k || state.rule100UnitProjectKeys.indexOf(k) === -1) {
+          card.remove();
+        }
+      });
+
       state.rule100UnitProjectKeys.forEach((key) => {
-        if (key === "rule100D") return;
         if (unitHost.querySelector('[data-rule100-key="' + key + '"]')) return;
-        const proto = unitHost.querySelector('[data-rule100-key="rule100D"]');
+        const proto = getRule100UnitCardPrototypeEl(unitHost);
         if (!proto) return;
         const node = proto.cloneNode(true);
         node.dataset.rule100Key = key;
         stripIdsFromRule100Clone(node);
         clearRule100BindingDataset(node);
+        const unitInp = node.querySelector("[data-rule100-unit-input]");
+        if (unitInp) unitInp.removeAttribute("id");
         unitHost.appendChild(node);
       });
     }
 
     function addRule100DayProject() {
       ensureRule100ProjectLists();
+      seedRule100CardTemplatesIfNeeded();
       const id = "rule100Day_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       state.rule100DayProjectKeys.push(id);
       state.ruleOf100[id] = { checkins: [], name: "" };
       const host = document.getElementById("rule100DayProjectsHost");
-      const proto = host && host.querySelector('[data-rule100-key="rule100A"]');
+      const proto = getRule100DayCardPrototypeEl(host);
       if (!host || !proto) return;
       const node = proto.cloneNode(true);
       node.dataset.rule100Key = id;
@@ -37521,11 +37562,12 @@
 
     function addRule100UnitProject() {
       ensureRule100ProjectLists();
+      seedRule100CardTemplatesIfNeeded();
       const id = "rule100Unit_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       state.rule100UnitProjectKeys.push(id);
       state.ruleOf100[id] = { name: "", hoursTotal: 0, hourSlots: "0".repeat(100), unit: "hours" };
       const host = document.getElementById("rule100UnitProjectsHost");
-      const proto = host && host.querySelector('[data-rule100-key="rule100D"]');
+      const proto = getRule100UnitCardPrototypeEl(host);
       if (!host || !proto) return;
       const node = proto.cloneNode(true);
       node.dataset.rule100Key = id;
@@ -49612,7 +49654,7 @@
             closeAllRule100CardMenus();
             if (
               !confirm(
-                "确定删除本条 Rule of 100 项目？进度与名称将清空；若仅剩一条则重置为空白。"
+                "确定删除本条 Rule of 100 项目？进度与名称将从列表中移除（可按侧栏垃圾箱恢复）。"
               )
             ) {
               return;
