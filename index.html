@@ -33707,6 +33707,42 @@
       return out;
     }
 
+    /** Rule of 100：整卡删除（removeKey）时写入 syncTombstones，避免云同步把远端旧键并回本地 */
+    function rule100CardKeyTombstoneId(key) {
+      return "rule100Key:" + String(key || "");
+    }
+
+    function omitTombstonedRuleOf100Keys(ruleOf100Obj, tombstones) {
+      const ts = tombstones && typeof tombstones === "object" ? tombstones : {};
+      const ro = ruleOf100Obj && typeof ruleOf100Obj === "object" ? ruleOf100Obj : {};
+      const out = {};
+      Object.keys(ro).forEach(function (key) {
+        if (Object.prototype.hasOwnProperty.call(ts, rule100CardKeyTombstoneId(key))) return;
+        out[key] = ro[key];
+      });
+      return out;
+    }
+
+    function filterRule100ProjectKeysAfterSyncMerge(arr, tombstones, isCategory, defaultKey) {
+      const ts = tombstones && typeof tombstones === "object" ? tombstones : {};
+      const A = Array.isArray(arr) ? arr.filter(isCategory) : [];
+      const out = [];
+      const seen = new Set();
+      A.forEach(function (k) {
+        if (!k || !isCategory(k) || seen.has(k)) return;
+        if (Object.prototype.hasOwnProperty.call(ts, rule100CardKeyTombstoneId(k))) return;
+        seen.add(k);
+        out.push(k);
+      });
+      return out.length ? out : [defaultKey];
+    }
+
+    function clearRule100CardKeyTombstone(key) {
+      if (key == null) return;
+      if (!state.syncTombstones || typeof state.syncTombstones !== "object") return;
+      delete state.syncTombstones[rule100CardKeyTombstoneId(key)];
+    }
+
     /** 垃圾箱：删除后保留时长（30 天），过期自动清除 */
     const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -34081,6 +34117,7 @@
             const ins = Math.min(Math.max(0, Number(m.insertIndex) || 0), arr.length);
             arr.splice(ins, 0, key);
             state.ruleOf100[key] = deepCloneForTrash(m.entrySnapshot) || {};
+            clearRule100CardKeyTombstone(key);
             okRemoveTrash();
             saveState();
             render();
@@ -34727,6 +34764,20 @@
         remoteState.rule100UnitProjectKeys,
         "rule100D",
         isRule100UnitKey
+      );
+
+      base.ruleOf100 = omitTombstonedRuleOf100Keys(base.ruleOf100, ts);
+      base.rule100DayProjectKeys = filterRule100ProjectKeysAfterSyncMerge(
+        base.rule100DayProjectKeys,
+        ts,
+        isRule100DayKey,
+        "rule100A"
+      );
+      base.rule100UnitProjectKeys = filterRule100ProjectKeysAfterSyncMerge(
+        base.rule100UnitProjectKeys,
+        ts,
+        isRule100UnitKey,
+        "rule100D"
       );
 
       base.trash = mergeIdRecordArraysPreferLocalOnTie(
@@ -36821,6 +36872,7 @@
           });
           keys.splice(idx, 1);
           delete state.ruleOf100[key];
+          recordSyncTombstone(rule100CardKeyTombstoneId(key));
           purgeRule100DoneForKey(key);
           const host = document.getElementById("rule100DayProjectsHost");
           const node = host && host.querySelector('[data-rule100-key="' + key + '"]');
@@ -36868,6 +36920,7 @@
           });
           keys.splice(idx, 1);
           delete state.ruleOf100[key];
+          recordSyncTombstone(rule100CardKeyTombstoneId(key));
           purgeRule100DoneForKey(key);
           const host = document.getElementById("rule100UnitProjectsHost");
           const node = host && host.querySelector('[data-rule100-key="' + key + '"]');
