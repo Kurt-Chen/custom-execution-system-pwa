@@ -2706,13 +2706,40 @@
       max-width: 100%;
     }
 
+    .habit-backward-period-readonly {
+      min-height: 34px;
+      padding: 4px 10px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      color: #0f172a;
+      background: #f8fafc;
+      box-sizing: border-box;
+      max-width: 100%;
+      display: inline-flex;
+      align-items: center;
+      flex: 1;
+      min-width: 0;
+    }
+
+    #habitBasicGroup #habitMeasureTabStrip .habit-measure-tab.habit-measure-tab--due-today .habit-measure-tab__name {
+      color: #dc2626 !important;
+      font-weight: 800;
+    }
+
+    #habitBasicGroup .habit-backward-subfold-title.habit-backward-title-due-today {
+      color: #dc2626 !important;
+      font-weight: 800;
+    }
+
     .habit-backward-period-input:focus,
     .habit-backward-period-select:focus {
       outline: none;
       border-color: #94a3b8;
     }
 
-    #habitRoutineModule .habit-backward-period-row--quarter .habit-backward-period-select {
+    #habitRoutineModule .habit-backward-period-row--quarter .habit-backward-period-readonly {
       flex: 1;
       min-width: 0;
     }
@@ -25562,13 +25589,12 @@
                   </button>
                   <div id="backwardWeeklySubpanel" class="habit-backward-subfold-panel" hidden>
                     <div class="habit-backward-period-row">
-                      <label class="habit-backward-period-label" for="backwardWeeklyPeriodPicker">周期（周六锚点）</label>
-                      <input
-                        type="date"
-                        id="backwardWeeklyPeriodPicker"
-                        class="habit-backward-period-input"
-                        title="任选一日期，将自动对齐到该周所在周六"
-                      />
+                      <span class="habit-backward-period-label">下次填写截止</span>
+                      <span
+                        id="backwardWeeklyDueReadonly"
+                        class="habit-backward-period-readonly"
+                        aria-live="polite"
+                      ></span>
                     </div>
                     <p class="habit-sub-backward-hint" id="backwardWeeklyHint"></p>
                     <textarea
@@ -25616,8 +25642,12 @@
                   </button>
                   <div id="backwardMonthlySubpanel" class="habit-backward-subfold-panel" hidden>
                     <div class="habit-backward-period-row">
-                      <label class="habit-backward-period-label" for="backwardMonthlyPeriodPicker">月份</label>
-                      <input type="month" id="backwardMonthlyPeriodPicker" class="habit-backward-period-input" title="选择要回顾的月份" />
+                      <span class="habit-backward-period-label">下次填写截止（月末）</span>
+                      <span
+                        id="backwardMonthlyDueReadonly"
+                        class="habit-backward-period-readonly"
+                        aria-live="polite"
+                      ></span>
                     </div>
                     <p class="habit-sub-backward-hint" id="backwardMonthlyHint"></p>
                     <textarea
@@ -25665,15 +25695,12 @@
                   </button>
                   <div id="backwardQuarterlySubpanel" class="habit-backward-subfold-panel" hidden>
                     <div class="habit-backward-period-row habit-backward-period-row--quarter">
-                      <label class="habit-backward-period-label" for="backwardQuarterlyYear">年份</label>
-                      <select id="backwardQuarterlyYear" class="habit-backward-period-select" aria-label="年份"></select>
-                      <label class="habit-backward-period-label" for="backwardQuarterlyQ">季度</label>
-                      <select id="backwardQuarterlyQ" class="habit-backward-period-select" aria-label="季度">
-                        <option value="1">Q1（1–3 月）</option>
-                        <option value="2">Q2（4–6 月）</option>
-                        <option value="3">Q3（7–9 月）</option>
-                        <option value="4">Q4（10–12 月）</option>
-                      </select>
+                      <span class="habit-backward-period-label">下次填写截止（季末）</span>
+                      <span
+                        id="backwardQuarterlyDueReadonly"
+                        class="habit-backward-period-readonly"
+                        aria-live="polite"
+                      ></span>
                     </div>
                     <p class="habit-sub-backward-hint" id="backwardQuarterlyHint"></p>
                     <textarea
@@ -25722,7 +25749,7 @@
                   <div id="thinkDaySubpanel" class="habit-backward-subfold-panel" hidden>
                     <p class="habit-sub-backward-hint" id="thinkDayHint"></p>
                     <p class="think-day-lead">
-                      与上方「每月向后衡量」<em class="think-day-em">共用同一月份</em>，无单独月份选择。请在「每月向后衡量」中选定月份后，于每月最后一天在此作答。
+                      与上方「每月向后衡量」<em class="think-day-em">共用同一月份</em>（系统按截止日自动对齐）。请在每月最后一天前在此作答。
                     </p>
                     <div class="think-day-card" data-idx="1">
                       <h4 class="think-day-q">
@@ -47416,6 +47443,35 @@
       return { y: Number(m[1]), q: Number(m[2]) };
     }
 
+    /** 下一个月末截止所对应的「回顾月份」键（截止月为 M，则回顾上一自然月） */
+    function getBackwardMonthlyReviewKeyFromNextDue(nowRef) {
+      const dueM = getNextMonthEndDueDate(nowRef);
+      const y = dueM.getFullYear();
+      const m0 = dueM.getMonth();
+      let prevM0 = m0 - 1;
+      let y2 = y;
+      if (prevM0 < 0) {
+        prevM0 = 11;
+        y2--;
+      }
+      return String(y2) + "-" + String(prevM0 + 1).padStart(2, "0");
+    }
+
+    /** 下一个季末截止所在季度（与该季度回顾条目对齐） */
+    function getBackwardQuarterKeyFromNextDue(nowRef) {
+      const dueQ = getNextQuarterEndDueDate(nowRef);
+      const y = dueQ.getFullYear();
+      const q = Math.floor(dueQ.getMonth() / 3) + 1;
+      return String(y) + "-Q" + q;
+    }
+
+    function syncBackwardMeasurePeriodKeysFromSchedule(nowRef) {
+      const dueW = getNextWeeklySaturdayDueDate(nowRef);
+      state.backwardMeasurePeriod.weekly = formatDateInputValue(getBackwardWeekSaturdayKey(dueW));
+      state.backwardMeasurePeriod.monthly = getBackwardMonthlyReviewKeyFromNextDue(nowRef);
+      state.backwardMeasurePeriod.quarterly = getBackwardQuarterKeyFromNextDue(nowRef);
+    }
+
     /** 本地正午，避免夏令时边界问题 */
     function backwardMeasureLocalNoon(y, monthIndex0, day) {
       return new Date(y, monthIndex0, day, 12, 0, 0, 0);
@@ -47496,39 +47552,11 @@
       el.classList.toggle("habit-backward-next-due--today", isBackwardDueDateToday(d));
     }
 
-    let backwardQuarterlyYearOptionsPopulated = false;
-
-    function populateBackwardQuarterlyYearSelectIfNeeded() {
-      const ySel = document.getElementById("backwardQuarterlyYear");
-      if (!ySel || backwardQuarterlyYearOptionsPopulated) return;
-      const cy = new Date().getFullYear();
-      ySel.innerHTML = "";
-      for (let y = cy - 12; y <= cy + 12; y++) {
-        const opt = document.createElement("option");
-        opt.value = String(y);
-        opt.textContent = String(y) + " 年";
-        ySel.appendChild(opt);
-      }
-      backwardQuarterlyYearOptionsPopulated = true;
-    }
-
-    function ensureBackwardQuarterYearOption(y) {
-      const ySel = document.getElementById("backwardQuarterlyYear");
-      if (!ySel || !Number.isFinite(Number(y))) return;
-      const ys = String(y);
-      if ([...ySel.options].some((o) => o.value === ys)) return;
-      const opt = document.createElement("option");
-      opt.value = ys;
-      opt.textContent = ys + " 年";
-      ySel.appendChild(opt);
-    }
-
     function ensureBackwardMeasurePeriod() {
       ensureBackwardMeasureState();
       if (!state.backwardMeasurePeriod || typeof state.backwardMeasurePeriod !== "object") {
         state.backwardMeasurePeriod = { weekly: "", monthly: "", quarterly: "" };
       }
-      const now = new Date();
       if (typeof state.backwardMeasurePeriod.weekly !== "string") {
         state.backwardMeasurePeriod.weekly = "";
       }
@@ -47538,22 +47566,7 @@
       if (typeof state.backwardMeasurePeriod.quarterly !== "string") {
         state.backwardMeasurePeriod.quarterly = "";
       }
-      if (!state.backwardMeasurePeriod.weekly || !/^\d{4}-\d{2}-\d{2}$/.test(state.backwardMeasurePeriod.weekly)) {
-        state.backwardMeasurePeriod.weekly = getBackwardWeekSaturdayKey(now);
-      } else {
-        const wd = parseDateInputToLocalNoon(state.backwardMeasurePeriod.weekly);
-        if (wd) {
-          state.backwardMeasurePeriod.weekly = getBackwardWeekSaturdayKey(wd);
-        } else {
-          state.backwardMeasurePeriod.weekly = getBackwardWeekSaturdayKey(now);
-        }
-      }
-      if (!state.backwardMeasurePeriod.monthly || !/^\d{4}-\d{2}$/.test(state.backwardMeasurePeriod.monthly)) {
-        state.backwardMeasurePeriod.monthly = getBackwardMonthKey(now);
-      }
-      if (!state.backwardMeasurePeriod.quarterly || !/^\d{4}-Q[1-4]$/.test(state.backwardMeasurePeriod.quarterly)) {
-        state.backwardMeasurePeriod.quarterly = getBackwardQuarterKey(now);
-      }
+      syncBackwardMeasurePeriodKeysFromSchedule(new Date());
     }
 
     function formatBackwardSavedAt(ts) {
@@ -47563,13 +47576,77 @@
       return d.getFullYear() + "/" + pad(d.getMonth() + 1) + "/" + pad(d.getDate()) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
     }
 
+    function updateBackwardMeasureDueAlerts(nowRef) {
+      const root = document.getElementById("habitBasicGroup");
+      if (!root) {
+        return;
+      }
+      const dueW = getNextWeeklySaturdayDueDate(nowRef);
+      const dueM = getNextMonthEndDueDate(nowRef);
+      const dueQ = getNextQuarterEndDueDate(nowRef);
+      const wToday = isBackwardDueDateToday(dueW);
+      const mToday = isBackwardDueDateToday(dueM);
+      const qToday = isBackwardDueDateToday(dueQ);
+
+      const tabWeekly = document.getElementById("habitMeasureTabBtnWeekly");
+      const tabMonthly = document.getElementById("habitMeasureTabBtnMonthly");
+      const tabQuarterly = document.getElementById("habitMeasureTabBtnQuarterly");
+      const tabThink = document.getElementById("habitMeasureTabBtnThinkDay");
+      if (tabWeekly) {
+        tabWeekly.classList.toggle("habit-measure-tab--due-today", wToday);
+      }
+      if (tabMonthly) {
+        tabMonthly.classList.toggle("habit-measure-tab--due-today", mToday);
+      }
+      if (tabQuarterly) {
+        tabQuarterly.classList.toggle("habit-measure-tab--due-today", qToday);
+      }
+      if (tabThink) {
+        tabThink.classList.toggle("habit-measure-tab--due-today", mToday);
+      }
+
+      const tw = root.querySelector(".habit-sub-backward--weekly .habit-backward-subfold-title");
+      const tm = root.querySelector(".habit-sub-backward--monthly .habit-backward-subfold-title");
+      const tq = root.querySelector(".habit-sub-backward--quarterly .habit-backward-subfold-title");
+      const tt = root.querySelector(".habit-sub-backward--thinkday .habit-backward-subfold-title");
+      if (tw) {
+        tw.classList.toggle("habit-backward-title-due-today", wToday);
+      }
+      if (tm) {
+        tm.classList.toggle("habit-backward-title-due-today", mToday);
+      }
+      if (tq) {
+        tq.classList.toggle("habit-backward-title-due-today", qToday);
+      }
+      if (tt) {
+        tt.classList.toggle("habit-backward-title-due-today", mToday);
+      }
+    }
+
     function renderBackwardMeasure() {
       ensureBackwardMeasurePeriod();
       const nowRef = new Date();
-      setBackwardNextDueEl("backwardWeeklyNextDue", getNextWeeklySaturdayDueDate(nowRef));
-      setBackwardNextDueEl("backwardMonthlyNextDue", getNextMonthEndDueDate(nowRef));
-      setBackwardNextDueEl("backwardQuarterlyNextDue", getNextQuarterEndDueDate(nowRef));
-      setBackwardNextDueEl("thinkDayNextDue", getNextMonthEndDueDate(nowRef));
+      const dueWeekly = getNextWeeklySaturdayDueDate(nowRef);
+      const dueMonthlyEnd = getNextMonthEndDueDate(nowRef);
+      const dueQuarterEnd = getNextQuarterEndDueDate(nowRef);
+      setBackwardNextDueEl("backwardWeeklyNextDue", dueWeekly);
+      setBackwardNextDueEl("backwardMonthlyNextDue", dueMonthlyEnd);
+      setBackwardNextDueEl("backwardQuarterlyNextDue", dueQuarterEnd);
+      setBackwardNextDueEl("thinkDayNextDue", dueMonthlyEnd);
+
+      const roW = document.getElementById("backwardWeeklyDueReadonly");
+      if (roW) {
+        roW.textContent = formatBackwardNextDueDisplay(dueWeekly);
+      }
+      const roM = document.getElementById("backwardMonthlyDueReadonly");
+      if (roM) {
+        roM.textContent = formatBackwardNextDueDisplay(dueMonthlyEnd);
+      }
+      const roQ = document.getElementById("backwardQuarterlyDueReadonly");
+      if (roQ) {
+        roQ.textContent = formatBackwardNextDueDisplay(dueQuarterEnd);
+      }
+
       const wk = state.backwardMeasurePeriod.weekly;
       const mk = state.backwardMeasurePeriod.monthly;
       const qk = state.backwardMeasurePeriod.quarterly;
@@ -47577,36 +47654,12 @@
       const qIndex = Math.max(0, Math.min(3, qParsed.q - 1));
       const qCn = ["一", "二", "三", "四"];
 
-      const wPick = document.getElementById("backwardWeeklyPeriodPicker");
-      if (wPick && document.activeElement !== wPick) {
-        wPick.value = wk;
-      }
-      const mPick = document.getElementById("backwardMonthlyPeriodPicker");
-      if (mPick && document.activeElement !== mPick) {
-        mPick.value = mk;
-      }
-      populateBackwardQuarterlyYearSelectIfNeeded();
-      ensureBackwardQuarterYearOption(qParsed.y);
-      const ySel = document.getElementById("backwardQuarterlyYear");
-      const qSel = document.getElementById("backwardQuarterlyQ");
-      if (ySel && document.activeElement !== ySel) {
-        ySel.value = String(qParsed.y);
-      }
-      if (qSel && document.activeElement !== qSel) {
-        qSel.value = String(qParsed.q);
-      }
-
-      const deskMeasTabs =
-        typeof habitMeasureUsesDesktopSegmentTabs === "function" && habitMeasureUsesDesktopSegmentTabs();
-
       const hintW = document.getElementById("backwardWeeklyHint");
       if (hintW) {
-        let t =
-          "当前周期（周六锚点）：" + wk.replace(/-/g, "/") + " · 可更改上方日期切换周期";
-        if (deskMeasTabs) {
-          t += " · 建议填写截止：" + formatBackwardNextDueDisplay(getNextWeeklySaturdayDueDate(nowRef));
-        }
-        hintW.textContent = t;
+        hintW.textContent =
+          "当前周期（周六锚点）：" +
+          wk.replace(/-/g, "/") +
+          " · 已按上方「下次填写截止」自动对齐，无需手动选择";
       }
       const hintM = document.getElementById("backwardMonthlyHint");
       if (hintM) {
@@ -47614,29 +47667,21 @@
         const y = mp[0] || "";
         const mo = mp[1] || "";
         const moNum = Number(mo);
-        let t =
-          "当前月份：" +
+        hintM.textContent =
+          "当前回顾月份：" +
           y +
           "年" +
           (Number.isFinite(moNum) ? moNum : "") +
-          "月 · 建议在每月最后一天回顾 · The Think Day 与此月份共用";
-        if (deskMeasTabs) {
-          t += " · 建议填写截止：" + formatBackwardNextDueDisplay(getNextMonthEndDueDate(nowRef));
-        }
-        hintM.textContent = t;
+          "月 · 与截止月末对齐 · The Think Day 与此月份共用";
       }
       const hintQ = document.getElementById("backwardQuarterlyHint");
       if (hintQ) {
-        let t =
+        hintQ.textContent =
           "当前季度：第" +
           qCn[qIndex] +
           "季度（" +
           qk +
-          "）· 建议在每季最后一天回顾";
-        if (deskMeasTabs) {
-          t += " · 建议填写截止：" + formatBackwardNextDueDisplay(getNextQuarterEndDueDate(nowRef));
-        }
-        hintQ.textContent = t;
+          "）· 与截止季末对齐 · 建议在每季最后一天回顾";
       }
 
       const bindText = (inputId, metaId, kind, key) => {
@@ -47664,16 +47709,12 @@
         const y = mp[0] || "";
         const mo = mp[1] || "";
         const moNum = Number(mo);
-        let t =
+        thinkHint.textContent =
           "所选月份与「每月向后衡量」一致：" +
           y +
           "年" +
           (Number.isFinite(moNum) ? moNum : "") +
-          "月 · The Think Day 建议在每月最后一天填写";
-        if (deskMeasTabs) {
-          t += " · 建议填写截止：" + formatBackwardNextDueDisplay(getNextMonthEndDueDate(nowRef));
-        }
-        thinkHint.textContent = t;
+          "月 · 截止日与每月向后衡量相同（见上方「下次填写截止」）";
       }
 
       const tdRaw = state.backwardMeasure.thinkDay && typeof state.backwardMeasure.thinkDay === "object"
@@ -47695,6 +47736,8 @@
         const u = td && Number.isFinite(Number(td.updatedAt)) ? Number(td.updatedAt) : 0;
         thinkMeta.textContent = u > 0 ? "已保存 · " + formatBackwardSavedAt(u) : "";
       }
+
+      updateBackwardMeasureDueAlerts(nowRef);
     }
 
     function saveThinkDay() {
@@ -48715,47 +48758,6 @@
     if (backwardQuarterlySave) backwardQuarterlySave.addEventListener("click", () => saveBackwardMeasure("quarterly"));
     const thinkDaySave = document.getElementById("thinkDaySave");
     if (thinkDaySave) thinkDaySave.addEventListener("click", saveThinkDay);
-
-    const backwardWeeklyPeriodPicker = document.getElementById("backwardWeeklyPeriodPicker");
-    if (backwardWeeklyPeriodPicker) {
-      backwardWeeklyPeriodPicker.addEventListener("change", () => {
-        ensureBackwardMeasurePeriod();
-        const raw = backwardWeeklyPeriodPicker.value;
-        if (!raw) return;
-        const d = parseDateInputToLocalNoon(raw);
-        if (!d) return;
-        state.backwardMeasurePeriod.weekly = getBackwardWeekSaturdayKey(d);
-        saveState();
-        render();
-      });
-    }
-    const backwardMonthlyPeriodPicker = document.getElementById("backwardMonthlyPeriodPicker");
-    if (backwardMonthlyPeriodPicker) {
-      backwardMonthlyPeriodPicker.addEventListener("change", () => {
-        ensureBackwardMeasurePeriod();
-        const v = backwardMonthlyPeriodPicker.value;
-        if (!v || !/^\d{4}-\d{2}$/.test(v)) return;
-        state.backwardMeasurePeriod.monthly = v;
-        saveState();
-        render();
-      });
-    }
-    function applyBackwardQuarterlyPeriodFromUi() {
-      ensureBackwardMeasurePeriod();
-      const ySel = document.getElementById("backwardQuarterlyYear");
-      const qSel = document.getElementById("backwardQuarterlyQ");
-      if (!ySel || !qSel) return;
-      const yi = Number(ySel.value);
-      const qi = Number(qSel.value);
-      if (!Number.isFinite(yi) || !Number.isFinite(qi) || qi < 1 || qi > 4) return;
-      state.backwardMeasurePeriod.quarterly = String(yi) + "-Q" + qi;
-      saveState();
-      render();
-    }
-    const backwardQuarterlyYearEl = document.getElementById("backwardQuarterlyYear");
-    const backwardQuarterlyQEl = document.getElementById("backwardQuarterlyQ");
-    if (backwardQuarterlyYearEl) backwardQuarterlyYearEl.addEventListener("change", applyBackwardQuarterlyPeriodFromUi);
-    if (backwardQuarterlyQEl) backwardQuarterlyQEl.addEventListener("change", applyBackwardQuarterlyPeriodFromUi);
 
     addDoneManualBtn.addEventListener("click", addManualDone);
     addStopDoingBtn.addEventListener("click", addStopDoingItem);
