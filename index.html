@@ -19777,24 +19777,24 @@
       color: #dc2626;
     }
 
-    #habitRoutineModule #habitRule100Group .submodule-group-rule100-block .submodule-group-toggle.submodule-group-toggle {
+    /* Rule of 100：横条即手风琴控制，三角标置于标题栏末端（由 aria-expanded 驱动） */
+    #habitRoutineModule #habitRule100Group .submodule-group-rule100-block > .submodule-group-header::after {
+      content: "▼";
       flex-shrink: 0;
-      min-width: 38px;
-      min-height: 38px;
-      margin: 0;
-      padding: 0 10px;
-      border-radius: 10px;
-      border: 1px solid #cbd5e1;
-      background: #fff;
-      color: #0f766e;
       font-size: 12px;
       line-height: 1;
-      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+      color: #0f766e;
+      user-select: none;
+      pointer-events: none;
     }
 
-    #habitRoutineModule #habitRule100Group .submodule-group-rule100-block .submodule-group-header:hover .submodule-group-toggle {
-      border-color: #99f6e4;
-      background: #f0fdfa;
+    #habitRoutineModule #habitRule100Group .submodule-group-rule100-block > .submodule-group-header[aria-expanded="true"]::after {
+      content: "▲";
+    }
+
+    #habitRoutineModule #habitRule100Group .submodule-group-rule100-block > .submodule-group-header:focus-visible {
+      outline: 2px solid #14b8a6;
+      outline-offset: 2px;
     }
 
     @media (max-width: 640px) {
@@ -26682,16 +26682,16 @@
           <div
             class="submodule-group submodule-group-rule100-block submodule-group-rule100-intro collapsed"
           >
-            <div class="submodule-group-header">
+            <div
+              class="submodule-group-header"
+              role="button"
+              tabindex="0"
+              aria-expanded="false"
+              aria-label="切换「极短时间 × 极高频率的重复 = 超越天赋的竞争优势」说明与公式"
+            >
               <h3 class="submodule-group-title">
                 极短时间&nbsp;×&nbsp;极高频率的重复&nbsp;=&nbsp;超越天赋的竞争优势
               </h3>
-              <button
-                type="button"
-                class="toggle-btn toggle-chevron submodule-group-toggle"
-                aria-label="切换「极短时间 × 极高频率的重复 = 超越天赋的竞争优势」说明与公式"
-                aria-expanded="false"
-              ></button>
             </div>
             <div class="rule100-intro-body">
               <div class="rule100-declaration" role="region" aria-label="Rule of 100 核心宣言">
@@ -26724,7 +26724,13 @@
           <h2 class="visually-hidden">Rule of 100</h2>
           <div class="rule100-split">
             <div class="submodule-group submodule-group-rule100-block collapsed">
-              <div class="submodule-group-header">
+              <div
+                class="submodule-group-header"
+                role="button"
+                tabindex="0"
+                aria-expanded="false"
+                aria-label="切换「按天·连续100天」与 Don't Break the Chain 区块"
+              >
                 <h3 class="submodule-group-title rule100-split-section-title">
                   <span class="rule100-split-section-title__zh">按天·连续100天</span>
                   <span class="rule100-split-section-title__en" lang="en">Don't Break the Chain</span>
@@ -26734,12 +26740,6 @@
                   class="rule100-section-ratio"
                   aria-label="已毕业项目数/项目总数"
                   >0/1</span>
-                <button
-                  type="button"
-                  class="toggle-btn toggle-chevron submodule-group-toggle"
-                  aria-label="切换「按天·连续100天」与 Don't Break the Chain 区块"
-                  aria-expanded="false"
-                ></button>
               </div>
               <div class="submodule-nested-grid rule100-sub-wrap">
                 <template id="rule100DayCardTemplate"></template>
@@ -26830,19 +26830,19 @@
               </div>
             </div>
             <div class="submodule-group submodule-group-rule100-block collapsed">
-              <div class="submodule-group-header">
+              <div
+                class="submodule-group-header"
+                role="button"
+                tabindex="0"
+                aria-expanded="false"
+                aria-label="切换「按量·累计100单位」区块"
+              >
                 <h3 class="submodule-group-title">按量·累计100单位</h3>
                 <span
                   id="rule100UnitSectionRatio"
                   class="rule100-section-ratio"
                   aria-label="已毕业项目数/项目总数"
                   >0/1</span>
-                <button
-                  type="button"
-                  class="toggle-btn toggle-chevron submodule-group-toggle"
-                  aria-label="切换「按量·累计100单位」区块"
-                  aria-expanded="false"
-                ></button>
               </div>
               <div class="submodule-nested-grid rule100-sub-wrap">
                 <datalist id="rule100UnitPresets">
@@ -49723,29 +49723,55 @@
       });
     }
 
+    function isRule100BlockHeaderOnlyDisclosure(group) {
+      return (
+        habitRule100Group &&
+        group &&
+        habitRule100Group.contains(group) &&
+        group.classList.contains("submodule-group-rule100-block") &&
+        !group.querySelector(".submodule-group-toggle")
+      );
+    }
+
+    function syncSubmoduleGroupToggleUi(group, isExpanded) {
+      if (!group) return;
+      const btn = group.querySelector(".submodule-group-toggle");
+      if (btn) {
+        setDisclosureToggleState(btn, isExpanded);
+        return;
+      }
+      if (isRule100BlockHeaderOnlyDisclosure(group)) {
+        const header = group.querySelector(":scope > .submodule-group-header");
+        if (header) header.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+      }
+    }
+
+    function toggleSubmoduleGroupCollapsed(group) {
+      if (!group || group.classList.contains("module-tab-panel")) return;
+      const wasCollapsed = group.classList.contains("collapsed");
+      group.classList.toggle("collapsed");
+      const collapsed = group.classList.contains("collapsed");
+      syncSubmoduleGroupToggleUi(group, !collapsed);
+      if (!collapsed && wasCollapsed) {
+        const grid = group.closest(".submodule-grid");
+        if (grid) {
+          grid.querySelectorAll(":scope > .submodule-group").forEach((g) => {
+            if (g === group) return;
+            if (!g.classList.contains("collapsed")) {
+              g.classList.add("collapsed");
+              syncSubmoduleGroupToggleUi(g, false);
+            }
+          });
+        }
+        scrollHabitRoutineDisclosureIntoView(group);
+      }
+      renderHabitCheckins();
+    }
+
     document.querySelectorAll(".submodule-group-toggle").forEach((btn) => {
       btn.addEventListener("click", () => {
         const group = btn.closest(".submodule-group");
-        if (group && group.classList.contains("module-tab-panel")) return;
-        const wasCollapsed = group.classList.contains("collapsed");
-        group.classList.toggle("collapsed");
-        const collapsed = group.classList.contains("collapsed");
-        setDisclosureToggleState(btn, !collapsed);
-        if (!collapsed && wasCollapsed) {
-          const grid = group.closest(".submodule-grid");
-          if (grid) {
-            grid.querySelectorAll(":scope > .submodule-group").forEach((g) => {
-              if (g === group) return;
-              if (!g.classList.contains("collapsed")) {
-                g.classList.add("collapsed");
-                const b = g.querySelector(".submodule-group-toggle");
-                if (b) setDisclosureToggleState(b, false);
-              }
-            });
-          }
-          scrollHabitRoutineDisclosureIntoView(group);
-        }
-        renderHabitCheckins();
+        toggleSubmoduleGroupCollapsed(group);
       });
     });
 
@@ -49768,6 +49794,11 @@
       document.querySelectorAll(".submodule-group-toggle.toggle-chevron").forEach((btn) => {
         const g = btn.closest(".submodule-group");
         if (g) setDisclosureToggleState(btn, !g.classList.contains("collapsed"));
+      });
+      document.querySelectorAll("#habitRule100Group .submodule-group-rule100-block").forEach((g) => {
+        if (!g.querySelector(".submodule-group-toggle")) {
+          syncSubmoduleGroupToggleUi(g, !g.classList.contains("collapsed"));
+        }
       });
       if (dynamicModule && toggleDynamicModuleBtn) {
         setDisclosureToggleState(
@@ -51300,9 +51331,26 @@
         const group = headerEl.closest(".submodule-group");
         if (group && group.classList.contains("module-tab-panel")) return;
         const btn = group ? group.querySelector(".submodule-group-toggle") : null;
-        if (btn) btn.click();
+        if (btn) {
+          btn.click();
+        } else if (group && isRule100BlockHeaderOnlyDisclosure(group)) {
+          toggleSubmoduleGroupCollapsed(group);
+        }
       });
     });
+
+    document
+      .querySelectorAll("#habitRule100Group .submodule-group-rule100-block > .submodule-group-header[role='button']")
+      .forEach((headerEl) => {
+        headerEl.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          const group = headerEl.closest(".submodule-group");
+          if (group && !group.classList.contains("module-tab-panel")) {
+            toggleSubmoduleGroupCollapsed(group);
+          }
+        });
+      });
 
     bindModuleHeaderToggle(dynamicModule, toggleDynamicModuleBtn);
     bindModuleHeaderToggle(habitRoutineModule, toggleHabitRoutineModuleBtn);
