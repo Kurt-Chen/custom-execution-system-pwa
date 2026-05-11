@@ -3469,6 +3469,107 @@
       min-width: 0;
     }
 
+    /* 极端截止期限（周计划 / 封闭清单 / 十二周年 TW020），≤1 小时 urgent 类见 .app-extreme-deadline-chip--urgent */
+    .app-extreme-deadline-chip {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: #64748b;
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: rgba(241, 245, 249, 0.95);
+      border: 1px solid #e2e8f0;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: middle;
+      flex-shrink: 1;
+    }
+
+    .app-extreme-deadline-chip--urgent {
+      color: #dc2626 !important;
+      border-color: #fecaca;
+      background: #fef2f2;
+    }
+
+    .app-extreme-deadline-input {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 6px;
+      border: 1px solid #cbd5e1;
+      color: #334155;
+      max-width: 168px;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+
+    .app-extreme-deadline-input:disabled,
+    .weekly-plan-deadline-input--readonly,
+    .closed-list-deadline-input--readonly,
+    .tw020-deadline-input--readonly {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
+
+    #weeklyPlanSection .weekly-plan-deadline-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+      margin-left: auto;
+      max-width: min(280px, 42%);
+    }
+
+    #closedList .closed-list-deadline-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+      max-width: min(240px, 48%);
+    }
+
+    #anniversaryModule .tw020-deadline-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+      max-width: min(220px, 38%);
+    }
+
+    @media (max-width: 767px) {
+      .app-extreme-deadline-chip {
+        font-size: 10px;
+        padding: 1px 4px;
+      }
+
+      .app-extreme-deadline-input {
+        font-size: 10px;
+        max-width: 148px;
+      }
+
+      #weeklyPlanSection .weekly-plan-title-row {
+        flex-wrap: wrap;
+      }
+
+      #weeklyPlanSection .weekly-plan-deadline-wrap {
+        margin-left: 0;
+        max-width: 100%;
+        flex-basis: 100%;
+        justify-content: flex-end;
+      }
+
+      #closedList .closed-list-deadline-wrap {
+        max-width: 100%;
+      }
+
+      #anniversaryModule .tw020-deadline-wrap {
+        max-width: 100%;
+        flex-wrap: wrap;
+      }
+    }
+
     .weekly-plan-lead-cluster {
       display: inline-flex;
       align-items: flex-start;
@@ -35323,16 +35424,98 @@
         .filter(Boolean);
     }
 
+    const EXTREME_DEADLINE_ONE_HOUR_MS = 3600000;
+
+    function normalizeDeadlineAtMs(v) {
+      if (v == null || v === "") return null;
+      const n = typeof v === "number" ? v : Number(v);
+      if (!Number.isFinite(n) || n <= 0) return null;
+      return Math.round(n);
+    }
+
+    function msToDatetimeLocalValue(ms) {
+      if (ms == null || !Number.isFinite(ms)) return "";
+      const d = new Date(ms);
+      const pad = function (x) {
+        return String(x).padStart(2, "0");
+      };
+      return (
+        d.getFullYear() +
+        "-" +
+        pad(d.getMonth() + 1) +
+        "-" +
+        pad(d.getDate()) +
+        "T" +
+        pad(d.getHours()) +
+        ":" +
+        pad(d.getMinutes())
+      );
+    }
+
+    function formatExtremeDeadlineShort(ms) {
+      const d = new Date(ms);
+      const pad = function (x) {
+        return String(x).padStart(2, "0");
+      };
+      return pad(d.getMonth() + 1) + "/" + pad(d.getDate()) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+    }
+
+    function formatExtremeDeadlineFull(ms) {
+      const d = new Date(ms);
+      return (
+        d.getFullYear() +
+        "年" +
+        (d.getMonth() + 1) +
+        "月" +
+        d.getDate() +
+        "日 " +
+        String(d.getHours()).padStart(2, "0") +
+        ":" +
+        String(d.getMinutes()).padStart(2, "0")
+      );
+    }
+
+    function isExtremeDeadlineUrgent(deadlineMs, nowMs, completed) {
+      if (completed) return false;
+      const d = normalizeDeadlineAtMs(deadlineMs);
+      if (d == null) return false;
+      const now = Number(nowMs) || Date.now();
+      const remain = d - now;
+      return remain > 0 && remain <= EXTREME_DEADLINE_ONE_HOUR_MS;
+    }
+
+    function syncExtremeDeadlineChipsInDocument() {
+      document.querySelectorAll(".app-extreme-deadline-chip").forEach(function (chip) {
+        const raw = chip.getAttribute("data-extreme-deadline-ms");
+        const ms = raw != null && raw !== "" ? Number(raw) : NaN;
+        const done = chip.getAttribute("data-extreme-deadline-done") === "1";
+        if (!Number.isFinite(ms) || ms <= 0) {
+          chip.textContent = "";
+          chip.removeAttribute("title");
+          chip.classList.remove("app-extreme-deadline-chip--urgent");
+          chip.hidden = true;
+          return;
+        }
+        chip.hidden = false;
+        chip.textContent = formatExtremeDeadlineShort(ms);
+        chip.title = formatExtremeDeadlineFull(ms);
+        chip.classList.toggle("app-extreme-deadline-chip--urgent", isExtremeDeadlineUrgent(ms, Date.now(), done));
+      });
+    }
+
     function cloneTwTaskForMerge(t) {
       if (!t || typeof t !== "object") {
         return { id: newTw020Id(), text: "", subs: [], done: false };
       }
-      return {
+      const out = {
         id: typeof t.id === "string" && t.id ? t.id : newTw020Id(),
         text: typeof t.text === "string" ? t.text : "",
         done: Boolean(t.done),
         subs: mergeTwSubsForSync(t.subs || [], [], false)
       };
+      const d = normalizeDeadlineAtMs(t.deadlineAt);
+      if (d != null) out.deadlineAt = d;
+      return out;
     }
 
     function mergeTwOneTask(remBase, locTask, preferRemote) {
@@ -35346,7 +35529,17 @@
       const lDone = Boolean(l.done);
       const done = rDone !== lDone ? (preferRemote ? rDone : lDone) : lDone;
       const subs = mergeTwSubsForSync(r.subs || [], l.subs || [], preferRemote);
-      return { id: id, text: text, subs: subs, done: done };
+      const rD = normalizeDeadlineAtMs(r.deadlineAt);
+      const lD = normalizeDeadlineAtMs(l.deadlineAt);
+      let deadlineAt = null;
+      if (rD != null && lD != null) {
+        deadlineAt = preferRemote ? rD : lD;
+      } else if (rD != null || lD != null) {
+        deadlineAt = rD != null ? rD : lD;
+      }
+      const out = { id: id, text: text, subs: subs, done: done };
+      if (deadlineAt != null) out.deadlineAt = deadlineAt;
+      return out;
     }
 
     function mergeTwWeekTasksForSync(remWeekArr, locWeekArr, preferRemote) {
@@ -37393,14 +37586,29 @@
 
     function parseClosedListInput(raw) {
       const t = String(raw || "").trim();
-      const i = t.indexOf("|");
-      if (i === -1) {
-        return { text: t, miniStep: "" };
+      let deadlinePart = "";
+      let rest = t;
+      const dbl = t.indexOf("||");
+      if (dbl !== -1) {
+        rest = t.slice(0, dbl).trim();
+        deadlinePart = t.slice(dbl + 2).trim();
       }
-      return {
-        text: t.slice(0, i).trim(),
-        miniStep: t.slice(i + 1).trim()
-      };
+      const i = rest.indexOf("|");
+      let text;
+      let miniStep;
+      if (i === -1) {
+        text = rest;
+        miniStep = "";
+      } else {
+        text = rest.slice(0, i).trim();
+        miniStep = rest.slice(i + 1).trim();
+      }
+      let deadlineAt = null;
+      if (deadlinePart) {
+        const parsed = Date.parse(deadlinePart.replace(/\//g, "-"));
+        if (!isNaN(parsed)) deadlineAt = parsed;
+      }
+      return { text: text, miniStep: miniStep, deadlineAt: deadlineAt };
     }
 
     function addClosedList() {
@@ -37420,9 +37628,10 @@
           isSameDate(item.createdAt, selectedClosedListDate) &&
           typeof item.listOrder === "number"
       );
-      state.closedList.unshift(
-        createClosedListItem(parsed.text, selectedClosedListDate, miniStep)
-      );
+      const newItem = createClosedListItem(parsed.text, selectedClosedListDate, miniStep);
+      const dl = normalizeDeadlineAtMs(parsed.deadlineAt);
+      if (dl != null) newItem.deadlineAt = dl;
+      state.closedList.unshift(newItem);
       if (hadManualOrder) {
         state.closedList.forEach((item) => {
           if (isSameDate(item.createdAt, selectedClosedListDate)) {
@@ -37906,6 +38115,33 @@
       if (!item) return;
       item.miniStep = String(value || "").trim();
       saveState();
+    }
+
+    function updateClosedListDeadline(id, msOrNull) {
+      const item = state.closedList.find((x) => x.id === id);
+      if (!item) return;
+      const n = normalizeDeadlineAtMs(msOrNull);
+      if (n == null) delete item.deadlineAt;
+      else item.deadlineAt = n;
+      const mo = item.mirrorOf;
+      if (mo && mo.kind === "weeklyPlan") {
+        const resolved = resolveWeeklyPlanMirrorLocation(mo);
+        if (resolved) {
+          const wk = resolved.weekKey;
+          const tasks = getWeeklyPlanTasksForWeekKey(wk);
+          const wt = tasks.find((x) => x.id === mo.id);
+          if (wt) {
+            if (n == null) delete wt.deadlineAt;
+            else wt.deadlineAt = n;
+            saveWeeklyPlanTasksForWeek(tasks, wk);
+          }
+          if (mo.weekKey !== wk) {
+            repointWeeklyPlanMirrorWeekKeys(mo.id, wk);
+          }
+        }
+      }
+      saveState();
+      render();
     }
 
     function isClosedListDateEditable() {
@@ -43884,6 +44120,45 @@
           mainRow.className = "closed-list-main-row";
           mainRow.appendChild(textEl);
 
+          const clDlMs = normalizeDeadlineAtMs(task.deadlineAt);
+          const clDlWrap = document.createElement("span");
+          clDlWrap.className = "closed-list-deadline-wrap";
+          const clDlChip = document.createElement("span");
+          clDlChip.className = "app-extreme-deadline-chip";
+          if (clDlMs != null) clDlChip.setAttribute("data-extreme-deadline-ms", String(clDlMs));
+          clDlChip.setAttribute("data-extreme-deadline-done", task.completed ? "1" : "0");
+          if (clDlMs != null) {
+            clDlChip.textContent = formatExtremeDeadlineShort(clDlMs);
+            clDlChip.title = formatExtremeDeadlineFull(clDlMs);
+            clDlChip.classList.toggle(
+              "app-extreme-deadline-chip--urgent",
+              isExtremeDeadlineUrgent(clDlMs, Date.now(), Boolean(task.completed))
+            );
+          } else {
+            clDlChip.hidden = true;
+          }
+          const clDlInput = document.createElement("input");
+          clDlInput.type = "datetime-local";
+          clDlInput.className = "closed-list-deadline-input app-extreme-deadline-input";
+          clDlInput.setAttribute("aria-label", "极端截止期限");
+          clDlInput.value = msToDatetimeLocalValue(clDlMs);
+          const clDlEditable = isClosedListDateEditable() && !task.completed;
+          if (!clDlEditable) {
+            clDlInput.disabled = true;
+            clDlInput.classList.add("closed-list-deadline-input--readonly");
+          }
+          clDlInput.addEventListener("change", () => {
+            let ms = null;
+            if (clDlInput.value) {
+              const p = new Date(clDlInput.value);
+              if (!isNaN(p.getTime())) ms = p.getTime();
+            }
+            updateClosedListDeadline(task.id, ms);
+          });
+          clDlWrap.appendChild(clDlChip);
+          clDlWrap.appendChild(clDlInput);
+          mainRow.appendChild(clDlWrap);
+
           const miniStepField = document.createElement("div");
           miniStepField.className = "closed-list-mini-step-field";
           if (task.completed) {
@@ -44801,6 +45076,9 @@
         }
         const task = tasks.find((t) => t.id === mo.id);
         if (!task) return;
+        const dMirror = normalizeDeadlineAtMs(task.deadlineAt);
+        if (dMirror != null) item.deadlineAt = dMirror;
+        else delete item.deadlineAt;
         const want = isWeeklyPlanMainComplete(task);
         if (Boolean(item.completed) === want) return;
         item.completed = want;
@@ -45319,7 +45597,8 @@
 
     function normalizeWeeklyPlanTask(task) {
       const lane = task && task.lane === "work" ? "work" : "life";
-      return {
+      const dAt = normalizeDeadlineAtMs(task && task.deadlineAt);
+      const base = {
         id: task.id,
         text: String(task.text || ""),
         lane: lane,
@@ -45333,6 +45612,8 @@
             }))
           : []
       };
+      if (dAt != null) base.deadlineAt = dAt;
+      return base;
     }
 
     function getWeeklyPlanTaskLane(task) {
@@ -45603,6 +45884,8 @@
       }
       const li = createClosedListItem(lineText, dateStr, "");
       li.mirrorOf = { kind: "weeklyPlan", id: task.id, weekKey: weekKey };
+      const promoteDl = normalizeDeadlineAtMs(task.deadlineAt);
+      if (promoteDl != null) li.deadlineAt = promoteDl;
       if (isWeeklyPlanMainComplete(task)) {
         li.completed = true;
         li.completedAt = Date.now();
@@ -45625,6 +45908,19 @@
       if (!task) return;
       task.text = text;
       saveWeeklyPlanTasksForWeek(tasks);
+      render();
+    }
+
+    function updateWeeklyPlanDeadline(taskId, msOrNull) {
+      const tasks = getWeeklyPlanTasksForViewWeek();
+      const task = tasks.find((t) => t.id === taskId);
+      if (!task) return;
+      const n = normalizeDeadlineAtMs(msOrNull);
+      if (n == null) delete task.deadlineAt;
+      else task.deadlineAt = n;
+      saveWeeklyPlanTasksForWeek(tasks);
+      syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewWeekKey());
+      saveState();
       render();
     }
 
@@ -46089,6 +46385,47 @@
         titleRow.appendChild(leadCluster);
         titleRow.appendChild(mainChk);
         titleRow.appendChild(titleInput);
+
+        const wpDlMs = normalizeDeadlineAtMs(task.deadlineAt);
+        const wpDlWrap = document.createElement("span");
+        wpDlWrap.className = "weekly-plan-deadline-wrap";
+        const wpDlChip = document.createElement("span");
+        wpDlChip.className = "app-extreme-deadline-chip";
+        if (wpDlMs != null) wpDlChip.setAttribute("data-extreme-deadline-ms", String(wpDlMs));
+        wpDlChip.setAttribute(
+          "data-extreme-deadline-done",
+          isWeeklyPlanMainComplete(task) ? "1" : "0"
+        );
+        if (wpDlMs != null) {
+          wpDlChip.textContent = formatExtremeDeadlineShort(wpDlMs);
+          wpDlChip.title = formatExtremeDeadlineFull(wpDlMs);
+          wpDlChip.classList.toggle(
+            "app-extreme-deadline-chip--urgent",
+            isExtremeDeadlineUrgent(wpDlMs, Date.now(), isWeeklyPlanMainComplete(task))
+          );
+        } else {
+          wpDlChip.hidden = true;
+        }
+        const wpDlInput = document.createElement("input");
+        wpDlInput.type = "datetime-local";
+        wpDlInput.className = "weekly-plan-deadline-input app-extreme-deadline-input";
+        wpDlInput.setAttribute("aria-label", "极端截止期限");
+        wpDlInput.value = msToDatetimeLocalValue(wpDlMs);
+        if (isWeeklyPlanMainComplete(task)) {
+          wpDlInput.disabled = true;
+          wpDlInput.classList.add("weekly-plan-deadline-input--readonly");
+        }
+        wpDlInput.addEventListener("change", () => {
+          let ms = null;
+          if (wpDlInput.value) {
+            const p = new Date(wpDlInput.value);
+            if (!isNaN(p.getTime())) ms = p.getTime();
+          }
+          updateWeeklyPlanDeadline(task.id, ms);
+        });
+        wpDlWrap.appendChild(wpDlChip);
+        wpDlWrap.appendChild(wpDlInput);
+        titleRow.appendChild(wpDlWrap);
 
         const micros = task.microTasks || [];
         const mTotal = micros.length;
@@ -46663,6 +47000,9 @@
               text: typeof s.text === "string" ? s.text : "",
               done: typeof s.done === "boolean" ? s.done : false
             }));
+          const dlNorm = normalizeDeadlineAtMs(task.deadlineAt);
+          if (dlNorm != null) task.deadlineAt = dlNorm;
+          else delete task.deadlineAt;
         });
       }
       ensureAnniversaryTwModuleUi(state.anniversaryTw020);
@@ -46701,6 +47041,18 @@
       }
       task.text = String(text || "").trim();
       saveState();
+    }
+
+    function updateTw020TaskDeadline(weekNum, taskId, msOrNull) {
+      const task = getTw020WeekTasks(weekNum).find((x) => x.id === taskId);
+      if (!task) {
+        return;
+      }
+      const n = normalizeDeadlineAtMs(msOrNull);
+      if (n == null) delete task.deadlineAt;
+      else task.deadlineAt = n;
+      saveState();
+      render();
     }
 
     function deleteTw020Task(weekNum, taskId) {
@@ -47246,8 +47598,45 @@
           delTaskBtn.innerHTML = ICON_BTN_DELETE_SVG;
           delTaskBtn.setAttribute("aria-label", "删除任务");
           delTaskBtn.addEventListener("click", () => deleteTw020Task(w, task.id));
+          const twDlMs = normalizeDeadlineAtMs(task.deadlineAt);
+          const twDlWrap = document.createElement("span");
+          twDlWrap.className = "tw020-deadline-wrap";
+          const twDlChip = document.createElement("span");
+          twDlChip.className = "app-extreme-deadline-chip";
+          if (twDlMs != null) twDlChip.setAttribute("data-extreme-deadline-ms", String(twDlMs));
+          twDlChip.setAttribute("data-extreme-deadline-done", task.done ? "1" : "0");
+          if (twDlMs != null) {
+            twDlChip.textContent = formatExtremeDeadlineShort(twDlMs);
+            twDlChip.title = formatExtremeDeadlineFull(twDlMs);
+            twDlChip.classList.toggle(
+              "app-extreme-deadline-chip--urgent",
+              isExtremeDeadlineUrgent(twDlMs, Date.now(), Boolean(task.done))
+            );
+          } else {
+            twDlChip.hidden = true;
+          }
+          const twDlInput = document.createElement("input");
+          twDlInput.type = "datetime-local";
+          twDlInput.className = "tw020-deadline-input app-extreme-deadline-input";
+          twDlInput.setAttribute("aria-label", "极端截止期限");
+          twDlInput.value = msToDatetimeLocalValue(twDlMs);
+          if (task.done) {
+            twDlInput.disabled = true;
+            twDlInput.classList.add("tw020-deadline-input--readonly");
+          }
+          twDlInput.addEventListener("change", () => {
+            let ms = null;
+            if (twDlInput.value) {
+              const p = new Date(twDlInput.value);
+              if (!isNaN(p.getTime())) ms = p.getTime();
+            }
+            updateTw020TaskDeadline(w, task.id, ms);
+          });
+          twDlWrap.appendChild(twDlChip);
+          twDlWrap.appendChild(twDlInput);
           row.appendChild(taskCb);
           row.appendChild(taskInp);
+          row.appendChild(twDlWrap);
           row.appendChild(subToggle);
           appendManualDeleteOnlyWrap(row, delTaskBtn);
 
@@ -49023,6 +49412,7 @@
       refreshAllForgeTodayTaskRowsFromDone();
       renderForgeTodaysForgeList();
       renderForgeWeeklyMinRows();
+      syncExtremeDeadlineChipsInDocument();
     }
 
     function formatFuelDateLineCN(dateStr) {
@@ -49980,12 +50370,16 @@
     }));
     state.closedList = state.closedList.map((item) => {
       const base = item.createdAt ? item : { ...item, createdAt: Date.now() };
-      return {
+      const dl = normalizeDeadlineAtMs(base.deadlineAt);
+      const out = {
         ...base,
         completed: Boolean(base.completed),
         miniStep: typeof base.miniStep === "string" ? base.miniStep : "",
         avoidance: normalizeClosedListAvoidance(base.avoidance)
       };
+      if (dl != null) out.deadlineAt = dl;
+      else delete out.deadlineAt;
+      return out;
     });
     repointStaleWeeklyPlanMirrorsInClosedList();
     if (tickClosedListDayRollover()) {
@@ -50066,6 +50460,7 @@
       if (getLocalHourBucket() !== lastRenderedDailyReminderHourBucket) {
         renderDailyReminder();
       }
+      syncExtremeDeadlineChipsInDocument();
     }, 30000);
 
     setInterval(function () {
