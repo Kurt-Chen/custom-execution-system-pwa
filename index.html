@@ -8226,11 +8226,22 @@
       --axis-icon-bg: #ffffff;
     }
 
-    /* 当日视图：已结束 / 未到时段整块灰阶（冲刺 DOM 仅 ≥768px 插入） */
-    ul.app-done-time-timeline.done-time-block-list > li.done-time-block.done-time-block--sprint-future,
-    ul.app-done-time-timeline.done-time-block-list > li.done-time-block.done-time-block--sprint-past {
+    /* 当日视图：未到时段整块灰阶；已结束时段改为折叠（见 --past-expanded），不再灰阶 */
+    ul.app-done-time-timeline.done-time-block-list > li.done-time-block.done-time-block--sprint-future {
       filter: grayscale(100%);
       opacity: 0.5;
+    }
+
+    /* 当日 + 已结束：默认收起任务列表（仅隐藏 .done-time-content，head 文案不动） */
+    ul.app-done-time-timeline.done-time-block-list
+      > li.done-time-block.done-time-block--sprint-past:not(.done-time-block--past-expanded)
+      > .done-time-block-body
+      > .done-time-content {
+      display: none !important;
+    }
+
+    ul.app-done-time-timeline.done-time-block-list > li.done-time-block.done-time-block--sprint-past .done-time-block-head {
+      cursor: pointer;
     }
 
     /* 桌面/平板：当日 My Done 时段「当前冲刺」叠加（不改原有 head 内样式） */
@@ -41630,6 +41641,25 @@
       });
     }
 
+    /** 当日已结束时段：点击标题行切换展开（仅 #doneList、sprint-past；历史日期不打 sprint 类，不受影响） */
+    function ensureDonePastFoldClickSetup() {
+      const ul = document.getElementById("doneList");
+      if (!ul || ul.dataset.donePastFoldBound === "1") return;
+      ul.dataset.donePastFoldBound = "1";
+      ul.addEventListener("click", function (ev) {
+        const head = ev.target.closest(".done-time-block-head");
+        if (!head || !ul.contains(head)) return;
+        const li = head.closest("li.done-time-block");
+        if (!li || !li.classList.contains("done-time-block--sprint-past")) return;
+        ev.preventDefault();
+        const expanded = li.classList.toggle("done-time-block--past-expanded");
+        head.setAttribute("aria-expanded", expanded ? "true" : "false");
+        if (typeof syncAllDoneTimeBlockRowHeights === "function") {
+          syncAllDoneTimeBlockRowHeights(ul);
+        }
+      });
+    }
+
     function ensureDoneTimeBlockSprintTicker() {
       const todayKey = formatDateInputValue(new Date());
       if (typeof selectedDoneDate !== "undefined" && selectedDoneDate !== todayKey) {
@@ -41643,13 +41673,14 @@
     }
 
     /**
-     * 今日 + 桌面/平板：过去/未来灰阶；当前边框/顶条/冲刺行/进度（不改 head 内原有节点）
+     * 今日：未来灰阶；过去折叠（CSS）不设灰阶；当前边框/顶条/冲刺行/进度（冲刺 DOM 仅桌面）
      */
     function applyDoneTimeBlockSprintLayer(blockLi, body, block) {
       blockLi.classList.remove(
         "done-time-block--sprint-future",
         "done-time-block--sprint-past",
-        "done-time-block--sprint-current"
+        "done-time-block--sprint-current",
+        "done-time-block--past-expanded"
       );
       blockLi.removeAttribute("data-done-block-start-min");
       blockLi.removeAttribute("data-done-block-end-min");
@@ -41657,6 +41688,10 @@
       body.querySelectorAll(".done-time-block-sprint-insert").forEach(function (n) {
         n.remove();
       });
+      const headAriaReset = body.querySelector(".done-time-block-head");
+      if (headAriaReset) {
+        headAriaReset.removeAttribute("aria-expanded");
+      }
 
       const todayKey = formatDateInputValue(new Date());
       if (typeof selectedDoneDate !== "undefined" && selectedDoneDate !== todayKey) {
@@ -41680,6 +41715,10 @@
         blockLi.classList.add("done-time-block--sprint-future");
       } else if (phase === "past") {
         blockLi.classList.add("done-time-block--sprint-past");
+        const headPast = body.querySelector(".done-time-block-head");
+        if (headPast) {
+          headPast.setAttribute("aria-expanded", "false");
+        }
       } else {
         blockLi.classList.add("done-time-block--sprint-current");
         blockLi.setAttribute("data-done-block-start-min", String(sm));
@@ -48579,6 +48618,7 @@
       closedList.classList.toggle("closed-list-over-cap", filteredClosedListItems.length > 3);
       renderList(doneList, filteredDoneTasks, "done");
       renderList(dailyWinList, filteredDailyWinTasks, "dailyWin");
+      ensureDonePastFoldClickSetup();
       ensureDoneTimeBlockSprintTicker();
 
       stopDoingCount.textContent = state.stopDoing.length;
