@@ -8226,13 +8226,15 @@
       --axis-icon-bg: #ffffff;
     }
 
+    /* 当日视图：已结束 / 未到时段整块灰阶（冲刺 DOM 仅 ≥768px 插入） */
+    ul.app-done-time-timeline.done-time-block-list > li.done-time-block.done-time-block--sprint-future,
+    ul.app-done-time-timeline.done-time-block-list > li.done-time-block.done-time-block--sprint-past {
+      filter: grayscale(100%);
+      opacity: 0.5;
+    }
+
     /* 桌面/平板：当日 My Done 时段「当前冲刺」叠加（不改原有 head 内样式） */
     @media (min-width: 768px) {
-      ul.app-done-time-timeline.done-time-block-list > li.done-time-block.done-time-block--sprint-future {
-        filter: grayscale(100%);
-        opacity: 0.5;
-      }
-
       ul.app-done-time-timeline.done-time-block-list > li.done-time-block.done-time-block--sprint-current {
         border-width: 3px;
         border-style: solid;
@@ -41641,10 +41643,14 @@
     }
 
     /**
-     * 今日 + 桌面/平板：过去不变；未来灰阶；当前边框/顶条/冲刺行/进度（不改 head 内原有节点）
+     * 今日 + 桌面/平板：过去/未来灰阶；当前边框/顶条/冲刺行/进度（不改 head 内原有节点）
      */
     function applyDoneTimeBlockSprintLayer(blockLi, body, block) {
-      blockLi.classList.remove("done-time-block--sprint-future", "done-time-block--sprint-current");
+      blockLi.classList.remove(
+        "done-time-block--sprint-future",
+        "done-time-block--sprint-past",
+        "done-time-block--sprint-current"
+      );
       blockLi.removeAttribute("data-done-block-start-min");
       blockLi.removeAttribute("data-done-block-end-min");
       blockLi.removeAttribute("data-sprint-phase");
@@ -41652,9 +41658,6 @@
         n.remove();
       });
 
-      if (!doneTimeBlockSprintDesktopActive()) {
-        return;
-      }
       const todayKey = formatDateInputValue(new Date());
       if (typeof selectedDoneDate !== "undefined" && selectedDoneDate !== todayKey) {
         return;
@@ -41675,15 +41678,20 @@
 
       if (phase === "future") {
         blockLi.classList.add("done-time-block--sprint-future");
-        return;
-      }
-      if (phase === "past") {
-        return;
+      } else if (phase === "past") {
+        blockLi.classList.add("done-time-block--sprint-past");
+      } else {
+        blockLi.classList.add("done-time-block--sprint-current");
+        blockLi.setAttribute("data-done-block-start-min", String(sm));
+        blockLi.setAttribute("data-done-block-end-min", String(em));
       }
 
-      blockLi.classList.add("done-time-block--sprint-current");
-      blockLi.setAttribute("data-done-block-start-min", String(sm));
-      blockLi.setAttribute("data-done-block-end-min", String(em));
+      if (!doneTimeBlockSprintDesktopActive()) {
+        return;
+      }
+      if (phase !== "current") {
+        return;
+      }
 
       const top = document.createElement("div");
       top.className = "done-time-block-sprint-insert done-time-block-sprint-insert--top";
