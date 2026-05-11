@@ -41595,6 +41595,33 @@
       }
     ];
 
+    /** 当日 My Done：未到时段默认不渲染；「下一块」在 start 前 N 分钟出现 */
+    const DONE_BLOCK_PREVIEW_LEAD_MIN = 15;
+
+    function shouldShowDoneTimeBlockOnToday(block, nowMin) {
+      if (typeof block.startMin !== "number" || typeof block.endMin !== "number") return true;
+      const sm = block.startMin;
+      const em = block.endMin;
+      if (nowMin >= em) return true;
+      if (nowMin >= sm && nowMin < em) return true;
+      const futureStarts = [];
+      for (let i = 0; i < DONE_TIME_BLOCKS.length; i++) {
+        const b = DONE_TIME_BLOCKS[i];
+        if (typeof b.startMin !== "number") continue;
+        if (nowMin < b.startMin) futureStarts.push(b.startMin);
+      }
+      if (futureStarts.length === 0) return true;
+      const nextStart = Math.min.apply(null, futureStarts);
+      if (block.startMin !== nextStart) return false;
+      return nowMin >= block.startMin - DONE_BLOCK_PREVIEW_LEAD_MIN;
+    }
+
+    function getDoneTodayVisibilityDigest(nowMin) {
+      return DONE_TIME_BLOCKS.map(function (b) {
+        return shouldShowDoneTimeBlockOnToday(b, nowMin) ? "1" : "0";
+      }).join("");
+    }
+
     /** 早晨/白天/晚间：Day 1～3（手机 Sprint 与全端角标）；凌晨/深夜：桌面角标「深度休息 · N」，≤767px 仅数字以免挤两行 */
     const DONE_TIME_BLOCK_MOBILE_DAY_FIXED = { morning: 1, day: 2, evening: 3 };
     /** 手机 Sprint：时间段 + 胶囊位（默认无文案；可按 block.key 单独赋值；空胶囊由 CSS :empty 隐藏） */
@@ -41632,12 +41659,14 @@
     }
 
     let doneTimeBlockSprintTickerId = null;
+    let doneTodayVisibilityDigest = null;
 
     function stopDoneTimeBlockSprintTicker() {
       if (doneTimeBlockSprintTickerId) {
         clearInterval(doneTimeBlockSprintTickerId);
         doneTimeBlockSprintTickerId = null;
       }
+      doneTodayVisibilityDigest = null;
     }
 
     function fillDoneSprintMetaLine(lineEl, prefix, valueText) {
@@ -41684,14 +41713,22 @@
         stopDoneTimeBlockSprintTicker();
         return;
       }
-      if (!doneTimeBlockSprintDesktopActive()) {
-        return;
-      }
       const ul = document.getElementById("doneList");
       if (!ul || !ul.classList.contains("done-time-block-list")) {
         return;
       }
       const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+      const vis = getDoneTodayVisibilityDigest(nowMin);
+      if (doneTodayVisibilityDigest === null) {
+        doneTodayVisibilityDigest = vis;
+      } else if (vis !== doneTodayVisibilityDigest) {
+        doneTodayVisibilityDigest = vis;
+        if (typeof render === "function") render();
+        return;
+      }
+      if (!doneTimeBlockSprintDesktopActive()) {
+        return;
+      }
       let needFullRender = false;
       ul.querySelectorAll("li.done-time-block[data-done-block-key]").forEach(function (li) {
         const key = li.getAttribute("data-done-block-key");
@@ -44123,7 +44160,14 @@
         const arr = grouped.get(key);
         if (arr) arr.push(task);
       });
+      const todayKeyRender = formatDateInputValue(new Date());
+      const viewIsToday =
+        typeof selectedDoneDate === "undefined" || selectedDoneDate === todayKeyRender;
+      const nowMinRender = new Date().getHours() * 60 + new Date().getMinutes();
       DONE_TIME_BLOCKS.forEach((block) => {
+        if (viewIsToday && !shouldShowDoneTimeBlockOnToday(block, nowMinRender)) {
+          return;
+        }
         const blockTasks = grouped.get(block.key) || [];
         const blockLi = document.createElement("li");
         blockLi.className = "done-time-block done-time-block--" + block.key + " done-time-block--flex-axis";
