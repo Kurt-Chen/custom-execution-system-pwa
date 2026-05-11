@@ -3513,13 +3513,48 @@
       cursor: not-allowed;
     }
 
+    .app-extreme-deadline-slot {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .app-extreme-deadline-add-btn {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 8px;
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      color: #475569;
+      cursor: pointer;
+      white-space: nowrap;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .app-extreme-deadline-add-btn:hover {
+      background: #f1f5f9;
+      border-color: #94a3b8;
+      color: #334155;
+    }
+
+    #weeklyPlanSection .weekly-plan-deadline-row {
+      display: flex;
+      justify-content: flex-end;
+      width: 100%;
+      min-width: 0;
+      padding: 2px 0 0;
+      box-sizing: border-box;
+    }
+
     #weeklyPlanSection .weekly-plan-deadline-wrap {
       display: inline-flex;
       align-items: center;
       gap: 6px;
       flex-shrink: 0;
-      margin-left: auto;
-      max-width: min(280px, 42%);
+      max-width: min(280px, 100%);
     }
 
     #closedList .closed-list-deadline-wrap {
@@ -3527,7 +3562,17 @@
       align-items: center;
       gap: 6px;
       flex-shrink: 0;
-      max-width: min(240px, 48%);
+      margin-left: auto;
+      max-width: min(260px, 55%);
+    }
+
+    #anniversaryModule .tw020-task-deadline-row {
+      display: flex;
+      justify-content: flex-end;
+      width: 100%;
+      min-width: 0;
+      padding: 4px 6px 6px 38px;
+      box-sizing: border-box;
     }
 
     #anniversaryModule .tw020-deadline-wrap {
@@ -3535,7 +3580,7 @@
       align-items: center;
       gap: 6px;
       flex-shrink: 0;
-      max-width: min(220px, 38%);
+      max-width: min(240px, 100%);
     }
 
     @media (max-width: 767px) {
@@ -3553,20 +3598,34 @@
         flex-wrap: wrap;
       }
 
-      #weeklyPlanSection .weekly-plan-deadline-wrap {
-        margin-left: 0;
-        max-width: 100%;
-        flex-basis: 100%;
+      #weeklyPlanSection .weekly-plan-deadline-row {
+        flex-wrap: wrap;
         justify-content: flex-end;
       }
 
-      #closedList .closed-list-deadline-wrap {
+      #weeklyPlanSection .weekly-plan-deadline-wrap {
         max-width: 100%;
+        justify-content: flex-end;
+      }
+
+      #closedList .closed-list-mini-step-field {
+        flex-wrap: wrap;
+      }
+
+      #closedList .closed-list-deadline-wrap {
+        margin-left: auto;
+        max-width: 100%;
+        flex-basis: auto;
+      }
+
+      #anniversaryModule .tw020-task-deadline-row {
+        padding-left: 10px;
       }
 
       #anniversaryModule .tw020-deadline-wrap {
         max-width: 100%;
         flex-wrap: wrap;
+        justify-content: flex-end;
       }
     }
 
@@ -35503,6 +35562,48 @@
       });
     }
 
+    /**
+     * 无截止日期且可编辑时只显示「添加」；点击展开 datetime；失焦且仍为空则收起。
+     * wrap 设 data-extreme-deadline-empty：渲染时是否尚无截止。
+     */
+    function configureExtremeDeadlineSlotUi(wrapEl, chipEl, inputEl, addBtnEl, opts) {
+      const hasDl = Boolean(opts.hasDeadlineMs);
+      const editable = Boolean(opts.editable);
+      wrapEl.classList.add("app-extreme-deadline-slot");
+      wrapEl.setAttribute("data-extreme-deadline-empty", hasDl ? "0" : "1");
+      if (!editable && !hasDl) {
+        wrapEl.hidden = true;
+        return;
+      }
+      wrapEl.hidden = false;
+      chipEl.hidden = !hasDl;
+      addBtnEl.hidden = hasDl || !editable;
+      inputEl.hidden = !hasDl && editable;
+
+      addBtnEl.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        addBtnEl.hidden = true;
+        inputEl.hidden = false;
+        try {
+          inputEl.focus();
+        } catch (_) {}
+        try {
+          if (typeof inputEl.showPicker === "function") {
+            inputEl.showPicker();
+          }
+        } catch (_) {}
+      });
+      inputEl.addEventListener("blur", function () {
+        window.requestAnimationFrame(function () {
+          if (!inputEl.value && wrapEl.getAttribute("data-extreme-deadline-empty") === "1") {
+            addBtnEl.hidden = false;
+            inputEl.hidden = true;
+          }
+        });
+      });
+    }
+
     function cloneTwTaskForMerge(t) {
       if (!t || typeof t !== "object") {
         return { id: newTw020Id(), text: "", subs: [], done: false };
@@ -44120,7 +44221,37 @@
           mainRow.className = "closed-list-main-row";
           mainRow.appendChild(textEl);
 
+          const miniStepField = document.createElement("div");
+          miniStepField.className = "closed-list-mini-step-field";
+          if (task.completed) {
+            miniStepField.classList.add("closed-list-mini-step-field--completed");
+          }
+          const miniStepBolt = document.createElement("span");
+          miniStepBolt.className = "closed-list-mini-step-icon";
+          miniStepBolt.setAttribute("aria-hidden", "true");
+          miniStepBolt.innerHTML =
+            "<svg class=\"closed-list-mini-step-clock\" viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"9\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\"/><path d=\"M12 7.25v5l3.25 2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\"/></svg>";
+          const miniStepInput = document.createElement("input");
+          miniStepInput.type = "text";
+          miniStepInput.className = "closed-list-mini-step-input";
+          miniStepInput.placeholder = "第一步 点击填写启动动作...";
+          miniStepInput.value = String(task.miniStep || "").trim();
+          miniStepInput.setAttribute("aria-label", "第一步");
+          if (!isClosedListDateEditable()) {
+            miniStepInput.readOnly = true;
+            miniStepInput.classList.add("closed-list-mini-step-input--readonly");
+          }
+          miniStepInput.addEventListener("change", () => {
+            updateClosedListMiniStep(task.id, miniStepInput.value);
+          });
+          miniStepInput.addEventListener("blur", () => {
+            updateClosedListMiniStep(task.id, miniStepInput.value);
+          });
+          miniStepField.appendChild(miniStepBolt);
+          miniStepField.appendChild(miniStepInput);
+
           const clDlMs = normalizeDeadlineAtMs(task.deadlineAt);
+          const clDlHas = clDlMs != null;
           const clDlWrap = document.createElement("span");
           clDlWrap.className = "closed-list-deadline-wrap";
           const clDlChip = document.createElement("span");
@@ -44155,38 +44286,19 @@
             }
             updateClosedListDeadline(task.id, ms);
           });
+          const clDlAddBtn = document.createElement("button");
+          clDlAddBtn.type = "button";
+          clDlAddBtn.className = "app-extreme-deadline-add-btn";
+          clDlAddBtn.textContent = "添加";
+          clDlAddBtn.setAttribute("aria-label", "添加截止日期");
           clDlWrap.appendChild(clDlChip);
+          clDlWrap.appendChild(clDlAddBtn);
           clDlWrap.appendChild(clDlInput);
-          mainRow.appendChild(clDlWrap);
-
-          const miniStepField = document.createElement("div");
-          miniStepField.className = "closed-list-mini-step-field";
-          if (task.completed) {
-            miniStepField.classList.add("closed-list-mini-step-field--completed");
-          }
-          const miniStepBolt = document.createElement("span");
-          miniStepBolt.className = "closed-list-mini-step-icon";
-          miniStepBolt.setAttribute("aria-hidden", "true");
-          miniStepBolt.innerHTML =
-            "<svg class=\"closed-list-mini-step-clock\" viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"9\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\"/><path d=\"M12 7.25v5l3.25 2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\"/></svg>";
-          const miniStepInput = document.createElement("input");
-          miniStepInput.type = "text";
-          miniStepInput.className = "closed-list-mini-step-input";
-          miniStepInput.placeholder = "第一步 点击填写启动动作...";
-          miniStepInput.value = String(task.miniStep || "").trim();
-          miniStepInput.setAttribute("aria-label", "第一步");
-          if (!isClosedListDateEditable()) {
-            miniStepInput.readOnly = true;
-            miniStepInput.classList.add("closed-list-mini-step-input--readonly");
-          }
-          miniStepInput.addEventListener("change", () => {
-            updateClosedListMiniStep(task.id, miniStepInput.value);
+          configureExtremeDeadlineSlotUi(clDlWrap, clDlChip, clDlInput, clDlAddBtn, {
+            hasDeadlineMs: clDlHas,
+            editable: clDlEditable
           });
-          miniStepInput.addEventListener("blur", () => {
-            updateClosedListMiniStep(task.id, miniStepInput.value);
-          });
-          miniStepField.appendChild(miniStepBolt);
-          miniStepField.appendChild(miniStepInput);
+          miniStepField.appendChild(clDlWrap);
 
           ensureManualItemActionsGlobalDismiss();
           const actionsSlot = document.createElement("div");
@@ -46387,6 +46499,7 @@
         titleRow.appendChild(titleInput);
 
         const wpDlMs = normalizeDeadlineAtMs(task.deadlineAt);
+        const wpDlHas = wpDlMs != null;
         const wpDlWrap = document.createElement("span");
         wpDlWrap.className = "weekly-plan-deadline-wrap";
         const wpDlChip = document.createElement("span");
@@ -46423,9 +46536,21 @@
           }
           updateWeeklyPlanDeadline(task.id, ms);
         });
+        const wpDlAddBtn = document.createElement("button");
+        wpDlAddBtn.type = "button";
+        wpDlAddBtn.className = "app-extreme-deadline-add-btn";
+        wpDlAddBtn.textContent = "添加";
+        wpDlAddBtn.setAttribute("aria-label", "添加截止日期");
         wpDlWrap.appendChild(wpDlChip);
+        wpDlWrap.appendChild(wpDlAddBtn);
         wpDlWrap.appendChild(wpDlInput);
-        titleRow.appendChild(wpDlWrap);
+        configureExtremeDeadlineSlotUi(wpDlWrap, wpDlChip, wpDlInput, wpDlAddBtn, {
+          hasDeadlineMs: wpDlHas,
+          editable: !isWeeklyPlanMainComplete(task)
+        });
+        const wpDlRow = document.createElement("div");
+        wpDlRow.className = "weekly-plan-deadline-row";
+        wpDlRow.appendChild(wpDlWrap);
 
         const micros = task.microTasks || [];
         const mTotal = micros.length;
@@ -46500,6 +46625,7 @@
         headTop.appendChild(titleRow);
         headTop.appendChild(headActions);
         head.appendChild(headTop);
+        head.appendChild(wpDlRow);
 
         li.appendChild(head);
 
@@ -47599,6 +47725,7 @@
           delTaskBtn.setAttribute("aria-label", "删除任务");
           delTaskBtn.addEventListener("click", () => deleteTw020Task(w, task.id));
           const twDlMs = normalizeDeadlineAtMs(task.deadlineAt);
+          const twDlHas = twDlMs != null;
           const twDlWrap = document.createElement("span");
           twDlWrap.className = "tw020-deadline-wrap";
           const twDlChip = document.createElement("span");
@@ -47632,11 +47759,23 @@
             }
             updateTw020TaskDeadline(w, task.id, ms);
           });
+          const twDlAddBtn = document.createElement("button");
+          twDlAddBtn.type = "button";
+          twDlAddBtn.className = "app-extreme-deadline-add-btn";
+          twDlAddBtn.textContent = "添加";
+          twDlAddBtn.setAttribute("aria-label", "添加截止日期");
           twDlWrap.appendChild(twDlChip);
+          twDlWrap.appendChild(twDlAddBtn);
           twDlWrap.appendChild(twDlInput);
+          configureExtremeDeadlineSlotUi(twDlWrap, twDlChip, twDlInput, twDlAddBtn, {
+            hasDeadlineMs: twDlHas,
+            editable: !task.done
+          });
+          const twDlRow = document.createElement("div");
+          twDlRow.className = "tw020-task-deadline-row";
+          twDlRow.appendChild(twDlWrap);
           row.appendChild(taskCb);
           row.appendChild(taskInp);
-          row.appendChild(twDlWrap);
           row.appendChild(subToggle);
           appendManualDeleteOnlyWrap(row, delTaskBtn);
 
@@ -47705,6 +47844,7 @@
           bindAnniversaryTwTaskRowMobileTap(row, taskCb, taskInp, subToggle, taskBody);
 
           block.appendChild(row);
+          block.appendChild(twDlRow);
           block.appendChild(taskBody);
           tasksWrap.appendChild(block);
         });
