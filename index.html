@@ -8341,41 +8341,72 @@
         animation: done-time-block-sprint-pulse-dot-kf 1.35s ease-in-out infinite;
       }
 
+      /* 仅当前冲刺：整条底栏左右分色（左已过比例 / 右未到），非冲刺时段无此 DOM */
       ul.app-done-time-timeline .done-time-block-sprint-insert--bottom {
-        padding: 0 12px 10px;
+        padding: 0;
         box-sizing: border-box;
         width: 100%;
       }
 
-      ul.app-done-time-timeline .done-time-block-sprint-track {
-        height: 7px;
-        border-radius: 999px;
-        background: rgba(15, 23, 42, 0.08);
+      ul.app-done-time-timeline .done-time-block-sprint-split-bar {
+        display: flex;
+        flex-direction: row;
+        align-items: stretch;
+        width: 100%;
+        min-height: 36px;
+        border-radius: 0 0 8px 8px;
         overflow: hidden;
-        margin-bottom: 6px;
       }
 
-      ul.app-done-time-timeline .done-time-block-sprint-fill {
-        height: 100%;
+      ul.app-done-time-timeline .done-time-block-sprint-split-done {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        padding: 8px 10px;
+        box-sizing: border-box;
+        min-width: 0;
         width: 0%;
-        border-radius: inherit;
-        background: var(--done-sprint-accent, #64748b);
+        background: #dcfce7;
         transition: width 0.35s ease;
       }
 
-      ul.app-done-time-timeline .done-time-block-sprint-meta {
+      ul.app-done-time-timeline .done-time-block-sprint-split-rest {
+        flex: 1 1 auto;
         display: flex;
         flex-direction: row;
         align-items: center;
-        justify-content: space-between;
-        gap: 8px;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 10px 12px;
+        padding: 8px 10px;
+        box-sizing: border-box;
+        min-width: 0;
+        background: #faf8f3;
+      }
+
+      ul.app-done-time-timeline .done-time-block-sprint-elapsed,
+      ul.app-done-time-timeline .done-time-block-sprint-pct,
+      ul.app-done-time-timeline .done-time-block-sprint-remain {
         font-size: 11px;
         font-weight: 600;
-        color: #475569;
+        color: #166534;
+        font-variant-numeric: tabular-nums;
+      }
+
+      ul.app-done-time-timeline .done-time-block-sprint-elapsed {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      ul.app-done-time-timeline .done-time-block-sprint-pct {
+        flex-shrink: 0;
       }
 
       ul.app-done-time-timeline .done-time-block-sprint-remain {
         text-align: right;
+        flex-shrink: 0;
       }
     }
 
@@ -41590,14 +41621,18 @@
       const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
       const span = em - sm;
       const pct = span <= 0 ? 0 : Math.min(1, Math.max(0, (nowMin - sm) / span));
-      const fill = blockLi.querySelector(".done-time-block-sprint-fill");
-      if (fill) {
-        fill.style.width = String(Math.round(pct * 100)) + "%";
+      const splitDone = blockLi.querySelector(".done-time-block-sprint-split-done");
+      if (splitDone) {
+        splitDone.style.width = String(Math.round(pct * 100)) + "%";
       }
+      const pctEl = blockLi.querySelector(".done-time-block-sprint-pct");
       const el = blockLi.querySelector(".done-time-block-sprint-elapsed");
       const rm = blockLi.querySelector(".done-time-block-sprint-remain");
       if (el) {
         el.textContent = "已过去 " + formatDoneSprintDurMinutes(nowMin - sm);
+      }
+      if (pctEl) {
+        pctEl.textContent = String(Math.round(pct * 100)) + "%";
       }
       if (rm) {
         rm.textContent = "剩余 " + formatDoneSprintDurMinutes(em - nowMin);
@@ -41756,22 +41791,25 @@
 
       const prog = document.createElement("div");
       prog.className = "done-time-block-sprint-insert done-time-block-sprint-insert--bottom";
-      const track = document.createElement("div");
-      track.className = "done-time-block-sprint-track";
-      track.setAttribute("role", "presentation");
-      const fill = document.createElement("div");
-      fill.className = "done-time-block-sprint-fill";
-      track.appendChild(fill);
-      const meta = document.createElement("div");
-      meta.className = "done-time-block-sprint-meta";
+      const splitBar = document.createElement("div");
+      splitBar.className = "done-time-block-sprint-split-bar";
+      splitBar.setAttribute("role", "presentation");
+      const splitDone = document.createElement("div");
+      splitDone.className = "done-time-block-sprint-split-done";
       const elapsed = document.createElement("span");
       elapsed.className = "done-time-block-sprint-elapsed";
+      splitDone.appendChild(elapsed);
+      const splitRest = document.createElement("div");
+      splitRest.className = "done-time-block-sprint-split-rest";
+      const pctSpan = document.createElement("span");
+      pctSpan.className = "done-time-block-sprint-pct";
       const remain = document.createElement("span");
       remain.className = "done-time-block-sprint-remain";
-      meta.appendChild(elapsed);
-      meta.appendChild(remain);
-      prog.appendChild(track);
-      prog.appendChild(meta);
+      splitRest.appendChild(pctSpan);
+      splitRest.appendChild(remain);
+      splitBar.appendChild(splitDone);
+      splitBar.appendChild(splitRest);
+      prog.appendChild(splitBar);
 
       body.insertBefore(top, body.firstChild);
       const headEl = body.querySelector(".done-time-block-head");
