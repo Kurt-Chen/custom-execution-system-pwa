@@ -12239,6 +12239,91 @@
       border-radius: 6px;
     }
 
+    #closedList .closed-list-step-row.is-sub-done .closed-list-step-input {
+      text-decoration: line-through;
+      color: #94a3b8;
+    }
+
+    #closedList .closed-list-step-row.is-sub-done .closed-list-step-num {
+      opacity: 0.55;
+    }
+
+    #closedList .closed-list-step-check-label {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      width: 22px;
+      height: 22px;
+      margin: 0;
+      cursor: pointer;
+    }
+
+    #closedList .closed-list-step-check {
+      position: absolute;
+      inset: 0;
+      width: 22px;
+      height: 22px;
+      margin: 0;
+      opacity: 0;
+      cursor: pointer;
+      z-index: 1;
+    }
+
+    #closedList .closed-list-step-check:disabled {
+      cursor: default;
+    }
+
+    #closedList .closed-list-step-check-visual {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 2px solid #cbd5e1;
+      background: #ffffff;
+      box-sizing: border-box;
+      transition: background 0.2s ease, border-color 0.2s ease;
+      pointer-events: none;
+    }
+
+    #closedList .closed-list-step-check-svg {
+      width: 12px;
+      height: 12px;
+      display: block;
+    }
+
+    #closedList .closed-list-step-check-path {
+      fill: none;
+      stroke: #ffffff;
+      stroke-width: 2.4;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-dasharray: 20;
+      stroke-dashoffset: 20;
+      opacity: 0;
+      transition:
+        stroke-dashoffset 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+        opacity 0.12s ease;
+    }
+
+    #closedList .closed-list-step-check:checked + .closed-list-step-check-visual .closed-list-step-check-path {
+      stroke-dashoffset: 0;
+      opacity: 1;
+    }
+
+    #closedList .closed-list-step-check:checked + .closed-list-step-check-visual {
+      background: #534ab7;
+      border-color: #534ab7;
+    }
+
+    #closedList .closed-list-step-check:focus-visible + .closed-list-step-check-visual {
+      outline: 2px solid #a5b4fc;
+      outline-offset: 1px;
+    }
+
     #closedList .closed-list-step-add-row {
       display: flex;
       align-items: center;
@@ -30267,9 +30352,9 @@
             <details class="habit-habits-attention-lead">
               <summary class="habit-attention-lead-summary">
                 <span class="habit-habits-attention-lead__green habit-habits-attention-lead__summary-left"
-                  >注意力管理 = 意识管理 = 现实管理</span
+                  >注意力管理=意识管理=现实管理</span
                 ><span class="habit-habits-attention-lead__green habit-habits-attention-lead__summary-right"
-                  >决策速度 = 行动速度 = 结果速度</span
+                  >决策速度=行动速度=结果速度</span
                 >
               </summary>
               <div class="habit-attention-lead-panel">
@@ -42324,25 +42409,59 @@
       render();
     }
 
-    function getClosedListSubStepLinesRaw(task) {
-      if (!task) return [];
-      if (Array.isArray(task.subSteps)) return task.subSteps.map((s) => String(s));
-      const m = String(task.miniStep || "").trim();
-      return m ? [m] : [];
+    function parseClosedListSubStepStored(entry) {
+      if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+        const text = String(entry.text ?? "").trim();
+        return { text: text, completed: Boolean(entry.completed) };
+      }
+      const text = String(entry ?? "").trim();
+      return { text: text, completed: false };
     }
 
-    function persistClosedListSubSteps(taskId, lines) {
+    function serializeClosedListSubStepEntry(entry) {
+      const text = String(entry.text || "").trim();
+      if (!text) return null;
+      if (entry.completed) return { text: text, completed: true };
+      return text;
+    }
+
+    function getClosedListSubStepsNormalized(task) {
+      if (!task) return [];
+      if (Array.isArray(task.subSteps) && task.subSteps.length) {
+        return task.subSteps.map(parseClosedListSubStepStored).filter(function (e) {
+          return Boolean(e.text);
+        });
+      }
+      const m = String(task.miniStep || "").trim();
+      return m ? [{ text: m, completed: false }] : [];
+    }
+
+    function getClosedListSubStepLinesRaw(task) {
+      return getClosedListSubStepsNormalized(task).map(function (e) {
+        return e.text;
+      });
+    }
+
+    function persistClosedListSubSteps(taskId, entries) {
       const item = state.closedList.find((x) => x.id === taskId);
       if (!item) return;
-      let arr = (Array.isArray(lines) ? lines : []).map((s) => String(s || "").trim());
-      while (arr.length && !arr[arr.length - 1]) arr.pop();
-      arr = arr.filter(Boolean);
+      let arr = (Array.isArray(entries) ? entries : []).map(function (e) {
+        if (typeof e === "string") return parseClosedListSubStepStored(e);
+        if (e && typeof e === "object") return parseClosedListSubStepStored(e);
+        return { text: "", completed: false };
+      });
+      while (arr.length && !arr[arr.length - 1].text) arr.pop();
+      arr = arr.filter(function (e) {
+        return Boolean(e.text);
+      });
       if (!arr.length) {
         delete item.subSteps;
         item.miniStep = "";
       } else {
-        item.subSteps = arr;
-        item.miniStep = arr[0];
+        item.subSteps = arr.map(serializeClosedListSubStepEntry).filter(function (x) {
+          return x != null && x !== "";
+        });
+        item.miniStep = arr[0].text;
       }
       saveState();
       render();
@@ -42353,8 +42472,8 @@
       if (!item) return;
       const v = String(lineText || "").trim();
       if (!v) return;
-      const cur = getClosedListSubStepLinesRaw(item);
-      cur.push(v);
+      const cur = getClosedListSubStepsNormalized(item);
+      cur.push({ text: v, completed: false });
       persistClosedListSubSteps(taskId, cur);
     }
 
@@ -42363,20 +42482,26 @@
       if (!item) return;
       const v = String(value || "").trim();
       item.miniStep = v;
-      const cur = getClosedListSubStepLinesRaw(item);
-      if (cur.length === 0) {
+      const norm = getClosedListSubStepsNormalized(item);
+      if (norm.length === 0) {
         if (v) item.subSteps = [v];
         else delete item.subSteps;
       } else {
-        const next = cur.slice();
-        next[0] = v;
-        const trimmed = next.map((s) => String(s || "").trim());
-        const nonempty = trimmed.filter(Boolean);
-        if (nonempty.length) item.subSteps = next.map((s, i) => (i === 0 ? v : s));
-        else delete item.subSteps;
+        norm[0] = { text: v, completed: norm[0].completed };
+        item.subSteps = norm
+          .map(serializeClosedListSubStepEntry)
+          .filter(function (x) {
+            return x != null && x !== "";
+          });
+        const nonempty = norm
+          .map(function (e) {
+            return e.text.trim();
+          })
+          .filter(Boolean);
         item.miniStep = nonempty[0] || "";
       }
       saveState();
+      render();
     }
 
     function updateClosedListDeadline(id, msOrNull) {
@@ -46412,7 +46537,7 @@
     const DONE_TIME_BLOCK_SPRINT_HEAD_TAGLINE = "生活在「日密舱」中";
     /** 冲刺底栏分色条正中叠加文案 */
     const DONE_TIME_BLOCK_SPRINT_URGENCY_LABEL = "Urgency";
-    const DONE_TIME_BLOCK_SPRINT_URGENCY_LABEL_WIDE = "注意力管理 = 意识管理 = 现实管理";
+    const DONE_TIME_BLOCK_SPRINT_URGENCY_LABEL_WIDE = "注意力管理=意识管理=现实管理";
 
     /** My Done 分隔条：从「HH:MM - HH:MM」取结束时刻（手机专用文案） */
     function formatDoneTimeBlockRangeEnd(block) {
@@ -48551,8 +48676,10 @@
           cardShell.className = "closed-list-card-shell";
 
           const isExpanded = closedListExpandedTaskIds.has(task.id);
-          let stepLinesUi = getClosedListSubStepLinesRaw(task);
-          if (isExpanded && stepLinesUi.length === 0) stepLinesUi = [""];
+          let stepEntriesUi = getClosedListSubStepsNormalized(task);
+          if (isExpanded && stepEntriesUi.length === 0) {
+            stepEntriesUi = [{ text: "", completed: false }];
+          }
 
           const headerRow = document.createElement("div");
           headerRow.className = "closed-list-header-row";
@@ -48698,16 +48825,41 @@
           const stepsWrap = document.createElement("div");
           stepsWrap.className = "closed-list-steps";
 
-          function collectStepValuesFromPanel() {
-            const inputs = stepsWrap.querySelectorAll("input.closed-list-step-input");
-            return Array.prototype.map.call(inputs, function (inp) {
-              return String(inp.value || "");
+          function collectSubStepsFromPanel() {
+            const rows = stepsWrap.querySelectorAll(".closed-list-step-row");
+            return Array.prototype.map.call(rows, function (row) {
+              const inp = row.querySelector("input.closed-list-step-input");
+              const cb = row.querySelector("input.closed-list-step-check");
+              return {
+                text: String((inp && inp.value) || ""),
+                completed: Boolean(cb && cb.checked)
+              };
             });
           }
 
-          stepLinesUi.forEach(function (lineVal, idx) {
+          stepEntriesUi.forEach(function (entry, idx) {
+            const lineVal = entry.text;
+            const lineDone = Boolean(entry.completed);
             const row = document.createElement("div");
             row.className = "closed-list-step-row";
+            if (lineDone) row.classList.add("is-sub-done");
+
+            const stepCheckLabel = document.createElement("label");
+            stepCheckLabel.className = "closed-list-step-check-label";
+            const stepCb = document.createElement("input");
+            stepCb.type = "checkbox";
+            stepCb.className = "closed-list-step-check";
+            stepCb.checked = lineDone;
+            stepCb.disabled = !isClosedListDateEditable() || task.completed;
+            stepCb.setAttribute("aria-label", "子任务完成");
+            const stepCheckVis = document.createElement("span");
+            stepCheckVis.className = "closed-list-step-check-visual";
+            stepCheckVis.setAttribute("aria-hidden", "true");
+            stepCheckVis.innerHTML =
+              "<svg class=\"closed-list-step-check-svg\" viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\"><path class=\"closed-list-step-check-path\" d=\"M6.2 12.2l3.4 3.3 8.2-8.2\"/></svg>";
+            stepCheckLabel.appendChild(stepCb);
+            stepCheckLabel.appendChild(stepCheckVis);
+
             const badge = document.createElement("span");
             badge.className = "closed-list-step-num";
             badge.textContent = String(idx + 1);
@@ -48722,10 +48874,15 @@
               inp.classList.add("closed-list-step-input--readonly");
             }
             inp.addEventListener("change", function () {
-              persistClosedListSubSteps(task.id, collectStepValuesFromPanel());
+              persistClosedListSubSteps(task.id, collectSubStepsFromPanel());
             });
             inp.addEventListener("blur", function () {
-              persistClosedListSubSteps(task.id, collectStepValuesFromPanel());
+              persistClosedListSubSteps(task.id, collectSubStepsFromPanel());
+            });
+            stepCb.addEventListener("change", function (ev) {
+              ev.stopPropagation();
+              row.classList.toggle("is-sub-done", Boolean(stepCb.checked));
+              persistClosedListSubSteps(task.id, collectSubStepsFromPanel());
             });
             const delStepBtn = document.createElement("button");
             delStepBtn.type = "button";
@@ -48736,10 +48893,11 @@
             delStepBtn.addEventListener("click", function (ev) {
               ev.preventDefault();
               ev.stopPropagation();
-              const lines = collectStepValuesFromPanel();
+              const lines = collectSubStepsFromPanel();
               lines.splice(idx, 1);
               persistClosedListSubSteps(task.id, lines);
             });
+            row.appendChild(stepCheckLabel);
             row.appendChild(badge);
             row.appendChild(inp);
             row.appendChild(delStepBtn);
@@ -55806,7 +55964,17 @@
         avoidance: normalizeClosedListAvoidance(base.avoidance)
       };
       if (Array.isArray(base.subSteps) && base.subSteps.length) {
-        out.subSteps = base.subSteps.map((s) => String(s));
+        out.subSteps = base.subSteps
+          .map(function (s) {
+            if (s && typeof s === "object" && !Array.isArray(s)) {
+              const text = String(s.text ?? "").trim();
+              if (!text) return null;
+              return s.completed ? { text: text, completed: true } : text;
+            }
+            const t = String(s ?? "").trim();
+            return t || null;
+          })
+          .filter(Boolean);
       } else {
         const ms = String(out.miniStep || "").trim();
         if (ms) out.subSteps = [ms];
