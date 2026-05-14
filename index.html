@@ -4041,6 +4041,8 @@
     #weeklyPlanSection .weekly-plan-head-actions .weekly-plan-main-actions-wrap.manual-item-actions-wrap {
       margin-left: 0;
       align-self: center;
+      position: relative;
+      z-index: 3;
     }
 
     #weeklyPlanSection .weekly-plan-main-actions-wrap .compact-manual-item-icons {
@@ -4422,7 +4424,7 @@
       transition: opacity 0.2s ease;
     }
 
-    /* 微任务仅删除一项：不必经「⋯」折叠，删除钮常驻 */
+    /* 微任务仅删除一项：不必经「⋯」折叠，删除钮常显 */
     #weeklyPlanSection .weekly-plan-micro-actions-wrap.manual-item-actions-wrap:not(.is-expanded) .compact-manual-item-icons {
       display: inline-flex !important;
     }
@@ -4431,7 +4433,33 @@
       display: none !important;
     }
 
+    #weeklyPlanSection .weekly-plan-micro-actions-wrap {
+      flex-shrink: 0;
+      margin-left: 2px;
+    }
+
     /* 主任务：六点仅拖拽，「⋯」在旁单独展开编辑/保存/删除 */
+
+    @media (pointer: coarse) {
+      #weeklyPlanSection .weekly-plan-micro-item .weekly-plan-micro-del-btn.btn-icon-action {
+        width: 40px;
+        height: 40px;
+        min-width: 40px;
+        min-height: 40px;
+      }
+
+      #weeklyPlanSection .weekly-plan-micro-item .weekly-plan-micro-del-btn.btn-icon-action svg {
+        width: 18px;
+        height: 18px;
+      }
+
+      #weeklyPlanSection .weekly-plan-main-actions-wrap .compact-manual-item-icons > .btn-icon-action {
+        width: 40px;
+        height: 40px;
+        min-width: 40px;
+        min-height: 40px;
+      }
+    }
 
     .weekly-plan-micro-text:focus {
       outline: 2px solid rgba(37, 99, 235, 0.35);
@@ -14105,26 +14133,51 @@
       box-sizing: border-box !important;
     }
 
-    /* 全屏专注：主任务 / 微任务删除钮保持垃圾桶图标（勿伪装成 ⋮，避免误删） */
-    body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection .weekly-plan-micro-item .weekly-plan-micro-del-btn.btn-delete.btn-icon-action {
+    /* 全屏专注：微任务删除在「⋯」内，与主任务一致 */
+    body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection .weekly-plan-micro-actions-wrap .weekly-plan-micro-del-btn.btn-delete.btn-icon-action,
+    body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection .weekly-plan-micro-actions-wrap .manual-item-more-btn {
       opacity: 1;
       pointer-events: auto;
-      width: 18px;
-      height: 18px;
-      min-width: 18px;
-      min-height: 18px;
-      font-size: 10px;
       border-radius: 6px;
+    }
+
+    body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection .weekly-plan-micro-actions-wrap .weekly-plan-micro-del-btn.btn-delete.btn-icon-action {
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      min-height: 32px;
+      font-size: 10px;
+    }
+
+    body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection .weekly-plan-micro-actions-wrap .manual-item-more-btn {
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      min-height: 32px;
     }
 
     body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection .weekly-plan-del-btn.btn-delete.btn-icon-action {
       opacity: 1;
       pointer-events: auto;
-      width: 22px;
-      height: 22px;
-      min-width: 22px;
-      min-height: 22px;
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      min-height: 32px;
       border-radius: 6px;
+    }
+
+    body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection .weekly-plan-main-actions-wrap .compact-manual-item-icons > .btn-icon-action {
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      min-height: 32px;
+    }
+
+    body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection .weekly-plan-micro-item .weekly-plan-micro-del-btn.btn-delete.btn-icon-action {
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      min-height: 32px;
     }
 
     body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection .weekly-plan-micro-toggle-btn {
@@ -46122,10 +46175,11 @@
       });
     }
 
-    function appendManualDeleteOnlyWrap(containerEl, delBtn) {
+    function appendManualDeleteOnlyWrap(containerEl, delBtn, extraWrapClasses) {
       ensureManualItemActionsGlobalDismiss();
       const wrap = document.createElement("div");
-      wrap.className = "manual-item-actions-wrap";
+      wrap.className =
+        "manual-item-actions-wrap" + (extraWrapClasses ? " " + String(extraWrapClasses).trim() : "");
       const iconGroup = document.createElement("span");
       iconGroup.className = "compact-manual-item-icons";
       iconGroup.appendChild(delBtn);
@@ -51103,19 +51157,30 @@
           syncWeeklyPlanMainActionButtons();
         }
 
-        saveMain.addEventListener("mousedown", (ev) => {
-          ev.preventDefault();
-        });
-        saveMain.addEventListener("click", (ev) => {
-          ev.stopPropagation();
+        function commitWeeklyPlanMainTitleSave(ev) {
+          if (ev) ev.stopPropagation();
           const v = String(titleInput.value || "").trim();
-          if (!v) return;
+          if (!v || titleInput.readOnly) return;
           updateWeeklyPlanTaskText(task.id, v);
           titleValueBeforeEdit = v;
           exitTitleEditMode();
           titleInput.blur();
           mainActWrap.classList.remove("is-expanded");
           mainMoreBtn.setAttribute("aria-expanded", "false");
+        }
+        saveMain.addEventListener(
+          "pointerdown",
+          (ev) => {
+            if (saveMain.disabled || titleInput.readOnly) return;
+            if (!String(titleInput.value || "").trim()) return;
+            commitWeeklyPlanMainTitleSave(ev);
+          },
+          true
+        );
+        saveMain.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          if (saveMain.disabled) return;
+          commitWeeklyPlanMainTitleSave(ev);
         });
 
         editMain.addEventListener("click", (ev) => {
@@ -51148,8 +51213,23 @@
           event.preventDefault();
           enterTitleEditMode();
         });
-        titleInput.addEventListener("blur", () => {
-          exitTitleEditMode();
+        titleInput.addEventListener("blur", (ev) => {
+          const rt = ev.relatedTarget;
+          if (
+            rt &&
+            typeof rt.closest === "function" &&
+            rt.closest(".manual-item-actions-wrap") === mainActWrap
+          ) {
+            return;
+          }
+          window.requestAnimationFrame(() => {
+            window.setTimeout(() => {
+              if (titleInput.readOnly) return;
+              const ae = document.activeElement;
+              if (ae && mainActWrap.contains(ae)) return;
+              exitTitleEditMode();
+            }, 0);
+          });
         });
         titleInput.addEventListener("input", () => {
           syncWeeklyPlanMainActionButtons();
@@ -51290,7 +51370,7 @@
           delM.type = "button";
           delM.className = "btn-delete btn-icon-action weekly-plan-micro-del-btn";
           delM.innerHTML = ICON_BTN_DELETE_SVG;
-          delM.setAttribute("aria-label", "删除微任务");
+          delM.setAttribute("aria-label", "删除");
           delM.addEventListener("click", (ev) => {
             ev.stopPropagation();
             deleteWeeklyPlanMicroTask(task.id, m.id);
@@ -51298,7 +51378,7 @@
           mLi.appendChild(stepNum);
           mLi.appendChild(chk);
           mLi.appendChild(txt);
-          mLi.appendChild(delM);
+          appendManualDeleteOnlyWrap(mLi, delM, "weekly-plan-micro-actions-wrap");
           microUl.appendChild(mLi);
         });
         expandPane.appendChild(microUl);
