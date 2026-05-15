@@ -3956,6 +3956,13 @@
 
     #closedList .closed-list-header-row {
       position: relative;
+      cursor: pointer;
+    }
+
+    /* 展开/收起仅点横条；▼ 键已移除 */
+    #closedList .closed-list-expand-btn,
+    #weeklyPlanSection .weekly-plan-card-expand-btn {
+      display: none !important;
     }
 
     #closedList .closed-list-deadline-trigger,
@@ -4375,7 +4382,7 @@
         gap: 6px;
         flex: 1;
         min-width: 0;
-        padding-right: 48px;
+        padding-right: 28px;
         box-sizing: border-box;
       }
 
@@ -5618,6 +5625,7 @@
       border: none;
       padding: 10px 12px 8px;
       gap: 4px;
+      cursor: pointer;
     }
 
     #weeklyPlanSection .weekly-plan-main-progress {
@@ -6894,6 +6902,75 @@
       max-width: 42%;
     }
 
+    /* 周最低：桌面/平板在动作卡标题与右侧打卡区之间显示本周累计/目标；手机端隐藏 */
+    @media (min-width: 768px) {
+      #forgeModule .forge-task-week-min-progress:not(.forge-task-week-min-progress--hide) {
+        flex: none;
+        align-self: center;
+        justify-self: center;
+        font-size: 15px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        line-height: 1.2;
+        color: #2563eb;
+        white-space: nowrap;
+        pointer-events: none;
+      }
+
+      #forgeModule #forgeMindCardBody .forge-task-card-top {
+        grid-template-columns: minmax(0, 1fr) auto auto;
+      }
+
+      #forgeModule #forgeMindCardBody .forge-task-week-min-progress:not(.forge-task-week-min-progress--hide) {
+        grid-column: 2;
+        grid-row: 1 / -1;
+        align-self: center;
+        justify-self: center;
+      }
+
+      #forgeModule #forgeMindCardBody .forge-task-card-top .forge-task-val {
+        grid-column: 3;
+      }
+
+      #forgeModule #forgeMindCardBody .forge-task-card-top .forge-task-card-checkin-slot {
+        grid-column: 3;
+      }
+
+      #forgeModule .forge-task-card--body .forge-task-card-top {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto auto;
+        align-items: center;
+        gap: 6px 10px;
+      }
+
+      #forgeModule .forge-task-card--body .forge-task-card-top > .forge-task-card-icon--body {
+        grid-column: 1;
+        grid-row: 1;
+      }
+
+      #forgeModule .forge-task-card--body .forge-task-card-title-wrap {
+        grid-column: 2;
+        grid-row: 1;
+      }
+
+      #forgeModule .forge-task-card--body .forge-task-week-min-progress:not(.forge-task-week-min-progress--hide) {
+        grid-column: 3;
+        grid-row: 1;
+      }
+
+      #forgeModule .forge-task-card--body .forge-task-card-right,
+      #forgeModule .forge-task-card--body .forge-kb-result-cell {
+        grid-column: 4;
+        grid-row: 1;
+      }
+    }
+
+    @media (max-width: 767px) {
+      #forgeModule .forge-task-week-min-progress {
+        display: none !important;
+      }
+    }
+
     #forgeModule .forge-task-card-right .forge-task-val {
       font-size: 13px;
       font-weight: 700;
@@ -7254,11 +7331,6 @@
 
       #forgeModule .forge-task-card--body .forge-kb-result-cell {
         gap: 1px;
-      }
-
-      #forgeModule .forge-kb-task-row.forge-task-card--body .forge-kb-week-min-progress:not(.forge-kb-week-min-progress--hide) {
-        font-size: 11px;
-        padding-top: 1px;
       }
 
       #forgeModule .forge-kb-task-row.forge-task-card--body .forge-kb-result-main .forge-kb-inline-weight {
@@ -47486,17 +47558,25 @@
       return el;
     }
 
-    /** 周最低标准（Body）中与该行动作名（规范化键）匹配的数值目标；无有效目标则 null */
-    function forgeGetWeeklyMinBodyTargetForNormalizedKey(nKey) {
-      if (!nKey) return null;
+    /** Mind / Body 今日训练卡是否展示周最低中部进度 */
+    function forgeTaskRowWeekMinRealm(row) {
+      if (!row || !row.classList || !row.classList.contains("forge-task-card")) return null;
+      if (row.closest("#forgeMindCardBody")) return "mind";
+      if (row.classList.contains("forge-task-card--body")) return "body";
+      return null;
+    }
+
+    /** 周最低标准中与该行动作名（规范化键）匹配的数值目标；无有效目标则 null */
+    function forgeGetWeeklyMinTargetForNormalizedKey(nKey, realm) {
+      if (!nKey || (realm !== "mind" && realm !== "body")) return null;
       ensureForgeWeeklyMinimumsState();
       if (!state.forge || !Array.isArray(state.forge.weeklyMinimums)) return null;
       const list = state.forge.weeklyMinimums;
       for (let i = 0; i < list.length; i++) {
         const r = list[i];
         if (!r || typeof r !== "object") continue;
-        const realm = r.realm === "mind" ? "mind" : r.realm === "spt" ? "spt" : "body";
-        if (realm !== "body") continue;
+        const rowRealm = r.realm === "mind" ? "mind" : r.realm === "spt" ? "spt" : "body";
+        if (rowRealm !== realm) continue;
         const lb = String(r.label || "").trim();
         if (!lb) continue;
         if (forgeWpNormalizeTaskKey(lb) !== nKey) continue;
@@ -47507,59 +47587,37 @@
       return null;
     }
 
-    /** 壶铃行：周最低已配置时在标题区与右侧之间显示「本周累计/目标」（如 60/100）；否则若有当日数字目标则显示「当日/目标」 */
-    function syncForgeKbWeekMinProgressUi(row, dateKey) {
-      if (!row || !row.getAttribute || !row.getAttribute("data-forge-kb")) return;
+    /** 已配置周最低时，在标题与右侧打卡区之间显示「本周累计/目标」（如 60/100） */
+    function syncForgeTaskWeekMinProgressUi(row) {
+      const realm = forgeTaskRowWeekMinRealm(row);
+      if (!realm) return;
       const top = row.querySelector(".forge-task-card-top");
       const titleWrap = row.querySelector(".forge-task-card-title-wrap");
       if (!top || !titleWrap) return;
-      let el = row.querySelector(".forge-kb-week-min-progress");
+      let el = row.querySelector(".forge-task-week-min-progress");
       if (!el) {
         el = document.createElement("span");
-        el.className = "forge-kb-week-min-progress forge-kb-week-min-progress--hide";
+        el.className = "forge-task-week-min-progress forge-task-week-min-progress--hide";
+        el.setAttribute("aria-hidden", "true");
         titleWrap.insertAdjacentElement("afterend", el);
       }
       const nKey = forgeWpNormalizeTaskKey(forgeWpRowBeforeSlashFromDom(row));
-      const wm = nKey ? forgeGetWeeklyMinBodyTargetForNormalizedKey(nKey) : null;
-      if (wm) {
-        const weekKey = forgeGetThisWeekSundayKeyFromSelectedOrToday();
-        const weekAgg = aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "body");
-        const agg = nKey ? weekAgg[nKey] : null;
-        const cur = agg && typeof agg.sum === "number" && !Number.isNaN(agg.sum) ? agg.sum : 0;
-        el.textContent = forgeWpFormatProgressNum(cur) + "/" + forgeWpFormatProgressNum(wm.target);
-        el.classList.remove("forge-kb-week-min-progress--hide");
-        el.setAttribute("title", "本周累计 / 周最低标准");
-        return;
-      }
-      if (!dateKey || !nKey) {
+      const wm = nKey ? forgeGetWeeklyMinTargetForNormalizedKey(nKey, realm) : null;
+      if (!wm) {
         el.textContent = "";
-        el.classList.add("forge-kb-week-min-progress--hide");
+        el.classList.add("forge-task-week-min-progress--hide");
+        el.setAttribute("aria-hidden", "true");
         el.removeAttribute("title");
         return;
       }
-      const valEl = row.querySelector(".forge-task-val");
-      const idle = valEl && valEl.getAttribute("data-forge-idle");
-      const goalRight = forgeParseTaskValGoalRight(idle || "");
-      if (!forgeGoalRightHasNumericTarget(goalRight)) {
-        el.textContent = "";
-        el.classList.add("forge-kb-week-min-progress--hide");
-        el.removeAttribute("title");
-        return;
-      }
-      const m = String(goalRight).match(/(\d+(?:\.\d+)?)/);
-      const g = m ? parseFloat(m[1]) : NaN;
-      if (Number.isNaN(g) || g <= 0) {
-        el.textContent = "";
-        el.classList.add("forge-kb-week-min-progress--hide");
-        el.removeAttribute("title");
-        return;
-      }
-      const dayMap = aggregateForgeCheckinsByNormalizedLabel(dateKey, "body");
-      const agg = dayMap[nKey];
+      const weekKey = forgeGetThisWeekSundayKeyFromSelectedOrToday();
+      const weekAgg = aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, realm);
+      const agg = nKey ? weekAgg[nKey] : null;
       const cur = agg && typeof agg.sum === "number" && !Number.isNaN(agg.sum) ? agg.sum : 0;
-      el.textContent = forgeWpFormatProgressNum(cur) + "/" + forgeWpFormatProgressNum(g);
-      el.classList.remove("forge-kb-week-min-progress--hide");
-      el.setAttribute("title", "当日累计 / 目标");
+      el.textContent = forgeWpFormatProgressNum(cur) + "/" + forgeWpFormatProgressNum(wm.target);
+      el.classList.remove("forge-task-week-min-progress--hide");
+      el.setAttribute("aria-hidden", "false");
+      el.setAttribute("title", "本周累计 / 周最低标准");
     }
 
     function syncForgeTaskRowValFromDoneAggregates(row, dateKey) {
@@ -47571,7 +47629,7 @@
       const beforeSlash = forgeWpRowBeforeSlashFromDom(row);
       const key = forgeWpNormalizeTaskKey(beforeSlash);
       if (!key) {
-        syncForgeKbWeekMinProgressUi(row, dateKey);
+        syncForgeTaskWeekMinProgressUi(row);
         return;
       }
       const cntEl = ensureForgeTaskCheckinCountEl(row);
@@ -47644,7 +47702,7 @@
           track.classList.add("forge-task-card-track--partial");
         }
       }
-      syncForgeKbWeekMinProgressUi(row, dateKey);
+      syncForgeTaskWeekMinProgressUi(row);
     }
 
     function applyForgeTaskIdlePlaceholdersNoDailyGoal() {
@@ -51044,34 +51102,22 @@
             }
           });
 
-          const expandBtn = document.createElement("button");
-          expandBtn.type = "button";
-          expandBtn.className = "closed-list-expand-btn";
-          expandBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
-          expandBtn.setAttribute(
-            "aria-label",
-            isExpanded ? "收起步骤" : "展开步骤"
-          );
-          expandBtn.innerHTML =
-            "<svg class=\"closed-list-expand-ic\" viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\"><path d=\"M6 9l6 6 6-6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>";
-          if (isExpanded) expandBtn.classList.add("is-expanded");
-
           function toggleClosedListCardExpanded() {
             if (closedListExpandedTaskIds.has(task.id)) closedListExpandedTaskIds.delete(task.id);
             else closedListExpandedTaskIds.add(task.id);
             render();
           }
 
-          expandBtn.addEventListener("click", function (ev) {
-            ev.preventDefault();
-            ev.stopPropagation();
-            toggleClosedListCardExpanded();
-          });
+          headerRow.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+          headerRow.setAttribute("role", "button");
+          headerRow.setAttribute("tabindex", "0");
+          headerRow.setAttribute("aria-label", isExpanded ? "收起步骤，点击横条" : "展开步骤，点击横条");
 
           headerRow.addEventListener("click", function (ev) {
             if (ev.target.closest("button")) return;
             if (ev.target.closest(".manual-item-actions-wrap")) return;
             if (ev.target.closest("input")) return;
+            if (ev.target.closest(".closed-list-check-label")) return;
             if (ev.target.closest(".closed-list-header-deadline-tag")) return;
             if (ev.target.closest(".closed-list-deadline-trigger")) return;
             if (ev.target.closest(".app-extreme-deadline-popover")) return;
@@ -51080,8 +51126,14 @@
             toggleClosedListCardExpanded();
           });
 
+          headerRow.addEventListener("keydown", function (ev) {
+            if (ev.key !== "Enter" && ev.key !== " ") return;
+            if (ev.target.closest("input") || ev.target.closest("button")) return;
+            ev.preventDefault();
+            toggleClosedListCardExpanded();
+          });
+
           headerSwipeable.appendChild(titleArea);
-          headerSwipeable.appendChild(expandBtn);
           headerRow.appendChild(headerSwipeable);
           headerRow.appendChild(actionsSlot);
 
@@ -53839,23 +53891,6 @@
         expandPane.appendChild(microAdd);
         microWrap.appendChild(expandPane);
 
-        const expandBtn = document.createElement("button");
-        expandBtn.type = "button";
-        expandBtn.className = "closed-list-expand-btn weekly-plan-card-expand-btn";
-        expandBtn.setAttribute("aria-expanded", microExpanded ? "true" : "false");
-        expandBtn.setAttribute("aria-label", microExpanded ? "收起子任务" : "展开子任务");
-        expandBtn.innerHTML =
-          "<svg class=\"closed-list-expand-ic\" viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\"><path d=\"M6 9l6 6 6-6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>";
-        if (microExpanded) expandBtn.classList.add("is-expanded");
-
-        expandBtn.addEventListener("click", (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-          const opening = microWrap.classList.contains("collapsed");
-          setWeeklyPlanMicroSectionExpanded(task.id, opening);
-          render();
-        });
-
         const titleLine1 = document.createElement("div");
         titleLine1.className = "weekly-plan-title-line1";
         titleLine1.appendChild(mainChk);
@@ -53883,7 +53918,6 @@
         const cardActionsWrap = document.createElement("div");
         cardActionsWrap.className = "weekly-plan-card-actions-wrap";
         cardActionsWrap.appendChild(mainActWrap);
-        cardActionsWrap.appendChild(expandBtn);
         titleLine2.appendChild(cardActionsWrap);
 
         applyWeeklyPlanDeadlineTagToHost(
@@ -53913,6 +53947,14 @@
         headTop.appendChild(titleRow);
         head.appendChild(headTop);
 
+        head.setAttribute("aria-expanded", microExpanded ? "true" : "false");
+        head.setAttribute("role", "button");
+        head.setAttribute("tabindex", "0");
+        head.setAttribute(
+          "aria-label",
+          microExpanded ? "收起子任务，点击横条" : "展开子任务，点击横条"
+        );
+
         li.appendChild(head);
 
         head.addEventListener("click", (event) => {
@@ -53921,10 +53963,19 @@
           if (event.target.closest(".manual-item-actions-wrap")) return;
           if (event.target.closest(".weekly-plan-main-check")) return;
           if (event.target.closest(".weekly-plan-main-title-input")) return;
-        if (event.target.closest(".weekly-plan-header-deadline-tag")) return;
-        if (event.target.closest(".weekly-plan-deadline-slot")) return;
-        if (event.target.closest(".weekly-plan-deadline-trigger")) return;
+          if (event.target.closest(".weekly-plan-header-deadline-tag")) return;
+          if (event.target.closest(".weekly-plan-deadline-slot")) return;
+          if (event.target.closest(".weekly-plan-deadline-trigger")) return;
           if (event.target.closest(".app-extreme-deadline-popover")) return;
+          const opening = microWrap.classList.contains("collapsed");
+          setWeeklyPlanMicroSectionExpanded(task.id, opening);
+          render();
+        });
+
+        head.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          if (event.target.closest("input") || event.target.closest("button")) return;
+          event.preventDefault();
           const opening = microWrap.classList.contains("collapsed");
           setWeeklyPlanMicroSectionExpanded(task.id, opening);
           render();
@@ -60242,6 +60293,7 @@
           });
           saveState();
           renderForgeWeeklyMinRows();
+          refreshAllForgeTodayTaskRowsFromDone();
         });
         wrap.appendChild(el);
       });
