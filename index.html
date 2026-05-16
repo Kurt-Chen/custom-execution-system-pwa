@@ -7011,6 +7011,11 @@
         display: inline !important;
       }
 
+      /* 性表现：与 Body 同卡样式，窄屏同样显示周进度 */
+      #forgeModule #forgeSptCardBody .forge-task-card--body .forge-task-week-min-progress:not(.forge-task-week-min-progress--hide) {
+        display: inline !important;
+      }
+
       /* Mind 窄屏：两列两行（与改前一致）；周进度隐藏 */
       #forgeModule #forgeMindCardBody .forge-task-card-top {
         display: grid;
@@ -47666,17 +47671,18 @@
       return el;
     }
 
-    /** Mind / Body 今日训练卡是否展示周最低中部进度 */
+    /** Mind / Body / 性表现 今日训练卡是否展示周最低中部进度（SPT 卡也带 forge-task-card--body，须先判 SPT） */
     function forgeTaskRowWeekMinRealm(row) {
       if (!row || !row.classList || !row.classList.contains("forge-task-card")) return null;
       if (row.closest("#forgeMindCardBody")) return "mind";
+      if (row.closest("#forgeSptCardBody")) return "spt";
       if (row.classList.contains("forge-task-card--body")) return "body";
       return null;
     }
 
     /** 周最低标准中与该行动作名（规范化键）匹配的数值目标；无有效目标则 null */
     function forgeGetWeeklyMinTargetForNormalizedKey(nKey, realm) {
-      if (!nKey || (realm !== "mind" && realm !== "body")) return null;
+      if (!nKey || (realm !== "mind" && realm !== "body" && realm !== "spt")) return null;
       ensureForgeWeeklyMinimumsState();
       if (!state.forge || !Array.isArray(state.forge.weeklyMinimums)) return null;
       const list = state.forge.weeklyMinimums;
@@ -47731,7 +47737,7 @@
         el.setAttribute(
           "title",
           "本周累计（尚未在「今日训练 → 周最低标准」的 " +
-            (realm === "mind" ? "Mind" : "Body") +
+            (realm === "mind" ? "Mind" : realm === "spt" ? "性表现" : "Body") +
             " 中为该动作设置周最低）"
         );
         return;
@@ -47744,7 +47750,7 @@
         el.setAttribute(
           "title",
           "本周尚无打卡或未设标准：在「今日训练 → 周最低标准」的 " +
-            (realm === "mind" ? "Mind" : "Body") +
+            (realm === "mind" ? "Mind" : realm === "spt" ? "性表现" : "Body") +
             " 中填写与本行一致的动作名与本周最低后，此处显示累计/目标。"
         );
         return;
@@ -60117,8 +60123,15 @@
         const isMind = !!task.forgeMindMeta;
         if (realmFilter === "mind" && !isMind) return;
         if (realmFilter === "body" && isMind) return;
+        if (realmFilter === "spt" && isMind) return;
         const key = isMind ? forgeMindDoneAggregateKey(task) : forgeBodyDoneAggregateKey(task);
         if (!key) return;
+        if (realmFilter === "spt" && !isMind) {
+          if (!forgeWpIsSptExclusiveWeeklyMinName(key)) return;
+        }
+        if (realmFilter === "body" && !isMind) {
+          if (forgeWpIsSptExclusiveWeeklyMinName(key)) return;
+        }
         const info = getForgeDoneLineInfo(task);
         let labelHint = "";
         if (info && info.stripped) {
@@ -60312,6 +60325,7 @@
       if (!mindWrap && !bodyWrap && !sptWrap) return;
       const aggMind = aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "mind");
       const aggBody = aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "body");
+      const aggSpt = aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "spt");
       if (mindWrap) mindWrap.innerHTML = "";
       if (bodyWrap) bodyWrap.innerHTML = "";
       if (sptWrap) sptWrap.innerHTML = "";
@@ -60320,7 +60334,7 @@
         const id = row.id;
         const realm = row.realm === "mind" ? "mind" : row.realm === "spt" ? "spt" : "body";
         const wrap = realm === "mind" ? mindWrap : realm === "spt" ? sptWrap : bodyWrap;
-        const weekAgg = realm === "mind" ? aggMind : aggBody;
+        const weekAgg = realm === "mind" ? aggMind : realm === "spt" ? aggSpt : aggBody;
         if (!wrap) return;
 
         const label = String(row.label || "").trim();
