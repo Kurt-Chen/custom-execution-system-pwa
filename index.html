@@ -4343,7 +4343,7 @@
         max-width: 148px;
       }
 
-      #weeklyPlanSection .weekly-plan-title-row {
+      #weeklyPlanSection:not(.weekly-plan-ui-v2) .weekly-plan-title-row {
         display: flex !important;
         flex-direction: row !important;
         flex-wrap: nowrap !important;
@@ -4490,7 +4490,16 @@
 
       :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2) .weekly-plan-title-row {
         display: grid !important;
+        grid-template-columns: auto minmax(0, 1fr) auto auto !important;
+        grid-template-rows: auto auto !important;
         align-items: center !important;
+        column-gap: 6px !important;
+        row-gap: 4px !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        box-sizing: border-box !important;
+        flex-wrap: nowrap !important;
       }
 
       :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2) .weekly-plan-title-line1,
@@ -4498,12 +4507,57 @@
         display: contents !important;
       }
 
+      :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2) .weekly-plan-main-check {
+        grid-column: 1 !important;
+        grid-row: 1 !important;
+        align-self: start !important;
+      }
+
+      :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2) .weekly-plan-title-stack {
+        grid-column: 2 / -1 !important;
+        grid-row: 1 !important;
+        min-width: 0 !important;
+        width: auto !important;
+        max-width: 100% !important;
+      }
+
+      :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2) .weekly-plan-deadline-lead,
+      :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2) .weekly-plan-deadline-slot {
+        display: contents !important;
+      }
+
+      :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2) .weekly-plan-header-deadline-tag,
+      :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2) .weekly-plan-deadline-trigger {
+        grid-column: 1 !important;
+        grid-row: 2 !important;
+        justify-self: start !important;
+      }
+
+      :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2) .weekly-plan-deadline-remain {
+        grid-column: 2 !important;
+        grid-row: 2 !important;
+        justify-self: end !important;
+        display: inline !important;
+        max-width: 100% !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+      }
+
+      :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2) .weekly-plan-deadline-remain[hidden] {
+        display: none !important;
+      }
+
       :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2) .weekly-plan-card-actions-wrap {
-        grid-column: 3 !important;
+        grid-column: 3 / -1 !important;
         grid-row: 2 !important;
         justify-self: end !important;
         margin-left: 0 !important;
         margin-inline-start: 0 !important;
+      }
+
+      :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2) .weekly-plan-deadline-popover {
+        grid-column: 1 / -1 !important;
+        grid-row: 3 !important;
       }
 
       :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2) .weekly-plan-title-line2 .weekly-plan-card-actions-wrap .manual-item-more-btn,
@@ -50086,10 +50140,14 @@
       if (!wpTask) return;
       if (meta.kind === "micro" && meta.microId) {
         const m = (wpTask.microTasks || []).find((x) => x.id === meta.microId);
-        if (m) m.done = false;
+        if (m) {
+          m.done = false;
+          stampWeeklyPlanMicroDone(m, false);
+        }
         applyWeeklyPlanMainDoneFromMicros(wpTask);
       } else {
         wpTask.mainDone = false;
+        stampWeeklyPlanMainDone(wpTask, false);
       }
       saveWeeklyPlanTasksForWeek(tasks, weekKey);
     }
@@ -54388,12 +54446,62 @@
       return { total, done, pct };
     }
 
+    function normalizeWeeklyPlanCompletedAtMs(v) {
+      const n = Number(v);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    }
+
+    function stampWeeklyPlanMicroDone(micro, done) {
+      if (!micro) return;
+      if (done) {
+        if (!normalizeWeeklyPlanCompletedAtMs(micro.completedAt)) {
+          micro.completedAt = Date.now();
+        }
+      } else {
+        delete micro.completedAt;
+      }
+    }
+
+    function stampWeeklyPlanMainDone(task, done) {
+      if (!task) return;
+      if (done) {
+        if (!normalizeWeeklyPlanCompletedAtMs(task.completedAt)) {
+          task.completedAt = Date.now();
+        }
+      } else {
+        delete task.completedAt;
+      }
+    }
+
+    function clearWeeklyPlanCompletionStamps(task) {
+      if (!task) return;
+      task.mainDone = false;
+      delete task.completedAt;
+      (task.microTasks || []).forEach(function (m) {
+        m.done = false;
+        delete m.completedAt;
+      });
+    }
+
+    function getWeeklyPlanDoneSyncTimestampMs(task, microId) {
+      if (!task) return null;
+      if (microId) {
+        const m = (task.microTasks || []).find(function (x) {
+          return x.id === microId;
+        });
+        return m ? normalizeWeeklyPlanCompletedAtMs(m.completedAt) : null;
+      }
+      return normalizeWeeklyPlanCompletedAtMs(task.completedAt);
+    }
+
     function applyWeeklyPlanMainDoneFromMicros(task) {
       if (!Array.isArray(task.microTasks) || task.microTasks.length === 0) return;
       if (task.microTasks.every((m) => m.done)) {
         task.mainDone = true;
+        stampWeeklyPlanMainDone(task, true);
       } else {
         task.mainDone = false;
+        delete task.completedAt;
       }
     }
 
@@ -54561,12 +54669,16 @@
         task.mainDone = true;
         (task.microTasks || []).forEach(function (m) {
           m.done = true;
+          stampWeeklyPlanMicroDone(m, true);
         });
+        stampWeeklyPlanMainDone(task, true);
       } else {
         task.mainDone = false;
         (task.microTasks || []).forEach(function (m) {
           m.done = false;
+          stampWeeklyPlanMicroDone(m, false);
         });
+        stampWeeklyPlanMainDone(task, false);
       }
       saveWeeklyPlanTasksForWeek(tasks, wk);
     }
@@ -54688,7 +54800,9 @@
               return;
             }
             destIdSet.add(t.id);
-            rolled.push(normalizeWeeklyPlanTask(task));
+            const rolledTask = normalizeWeeklyPlanTask(task);
+            clearWeeklyPlanCompletionStamps(rolledTask);
+            rolled.push(rolledTask);
             changed = true;
           }
         });
@@ -54729,17 +54843,16 @@
         const micros = task.microTasks || [];
         const hasMicro = micros.length > 0;
         micros.forEach((m) => {
-          if (m.done) {
+          if (m.done && normalizeWeeklyPlanCompletedAtMs(m.completedAt)) {
             desiredKeys.add("micro:" + task.id + ":" + m.id);
           }
         });
-        const allMicroDone = hasMicro && micros.every((m) => m.done);
-        if (isWeeklyPlanMainComplete(task)) {
-          if (!hasMicro) {
-            desiredKeys.add("main:" + task.id);
-          } else if (!allMicroDone) {
-            desiredKeys.add("main:" + task.id);
-          }
+        if (
+          !hasMicro &&
+          isWeeklyPlanMainComplete(task) &&
+          normalizeWeeklyPlanCompletedAtMs(task.completedAt)
+        ) {
+          desiredKeys.add("main:" + task.id);
         }
       });
 
@@ -54757,18 +54870,14 @@
       });
 
       desiredKeys.forEach((syncKey) => {
-        if (items[syncKey]) return;
-        const ts = habitDateToCompletedAt(
-          selectedDoneDate || formatDateInputValue(new Date())
-        );
-        const newId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
         let text = "";
         let kind = "main";
         let taskId = "";
         let microId = null;
+        let t = null;
         if (syncKey.startsWith("main:")) {
           taskId = syncKey.slice(5);
-          const t = tasks.find((x) => x.id === taskId);
+          t = tasks.find((x) => x.id === taskId);
           text = "【周计划】" + rangeLabel + " · " + (t && t.text ? t.text : "（主任务）");
           kind = "main";
         } else if (syncKey.startsWith("micro:")) {
@@ -54777,12 +54886,36 @@
           const c = rest.indexOf(":");
           taskId = rest.slice(0, c);
           microId = rest.slice(c + 1);
-          const t = tasks.find((x) => x.id === taskId);
+          t = tasks.find((x) => x.id === taskId);
           const m = t && t.microTasks ? t.microTasks.find((x) => x.id === microId) : null;
           const mainT = t && t.text ? t.text : "";
           const microT = m && String(m.text || "").trim() ? m.text : "（微任务）";
           text = "【周计划】" + rangeLabel + " · " + mainT + " › " + microT;
+        } else {
+          return;
         }
+        const ts = getWeeklyPlanDoneSyncTimestampMs(t, microId);
+        if (!ts) {
+          return;
+        }
+        const existingId = items[syncKey];
+        if (existingId) {
+          const entry = state.done.find(function (d) {
+            return d.id === existingId;
+          });
+          if (entry) {
+            if (entry.text !== text) {
+              entry.text = text;
+              changed = true;
+            }
+            if (entry.completedAt !== ts) {
+              entry.completedAt = ts;
+              changed = true;
+            }
+          }
+          return;
+        }
+        const newId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
         state.done.unshift({
           id: newId,
           text,
@@ -55241,13 +55374,23 @@
         mainDone: Boolean(task.mainDone),
         microSectionExpanded: task.microSectionExpanded === true,
         microTasks: Array.isArray(task.microTasks)
-          ? task.microTasks.map((m) => ({
-              id: m.id,
-              text: String(m.text || ""),
-              done: Boolean(m.done)
-            }))
+          ? task.microTasks.map((m) => {
+              const microBase = {
+                id: m.id,
+                text: String(m.text || ""),
+                done: Boolean(m.done)
+              };
+              const microAt = normalizeWeeklyPlanCompletedAtMs(m.completedAt);
+              if (microAt) microBase.completedAt = microAt;
+              return microBase;
+            })
           : []
       };
+      const mainAt = normalizeWeeklyPlanCompletedAtMs(task.completedAt);
+      if (mainAt) base.completedAt = mainAt;
+      if (base.mainDone && !mainAt && base.microTasks.length === 0) {
+        base.mainDone = false;
+      }
       if (dAt != null) base.deadlineAt = dAt;
       return base;
     }
@@ -55609,10 +55752,12 @@
       if (micros.length > 0) {
         micros.forEach((m) => {
           m.done = Boolean(checked);
+          stampWeeklyPlanMicroDone(m, Boolean(checked));
         });
         applyWeeklyPlanMainDoneFromMicros(task);
       } else {
         task.mainDone = Boolean(checked);
+        stampWeeklyPlanMainDone(task, Boolean(checked));
       }
       saveWeeklyPlanTasksForWeek(tasks);
       syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewWeekKey());
@@ -55627,6 +55772,7 @@
       const m = task.microTasks.find((x) => x.id === microId);
       if (!m) return;
       m.done = checked;
+      stampWeeklyPlanMicroDone(m, Boolean(checked));
       applyWeeklyPlanMainDoneFromMicros(task);
       saveWeeklyPlanTasksForWeek(tasks);
       syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewWeekKey());
