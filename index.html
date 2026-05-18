@@ -34400,7 +34400,7 @@
                 <section class="submodule-card submodule-card-nested habit-en-row" data-habit-key="aiDeepResearch">
                   <div class="habit-en-icon habit-en-icon--deep-research" aria-hidden="true">🔍</div>
                   <div class="habit-en-body">
-                    <h3 class="submodule-title">AI深度调研</h3>
+                    <h3 class="submodule-title">深度思考、深度调研（用最强大模型）</h3>
                   </div>
                   <div class="habit-en-actions">
                     <div class="habit-en-punch-meta">
@@ -45089,7 +45089,7 @@
       aiChat: "与AI聊天",
       vibeCoding: "Vibe Coding",
       workflowAutomationAiAgent: '工作流自动化【AI Agent】(每天尝试"让自己失业")',
-      aiDeepResearch: "AI深度调研",
+      aiDeepResearch: "深度思考、深度调研（用最强大模型）",
       aiIllustration: "AI图解",
       fiveSecondRule: "5 Second Rule",
       highFiveHabit: "High 5 Habit",
@@ -46465,6 +46465,18 @@
     function toggleClosedListComplete(id, checked) {
       const item = state.closedList.find((x) => x.id === id);
       if (!item) return;
+      const subStepsNorm = getClosedListSubStepsNormalized(item);
+      if (subStepsNorm.length > 0) {
+        subStepsNorm.forEach(function (s) {
+          s.completed = Boolean(checked);
+        });
+        item.subSteps = subStepsNorm
+          .map(serializeClosedListSubStepEntry)
+          .filter(function (x) {
+            return x != null && x !== "";
+          });
+        item.miniStep = subStepsNorm[0] ? subStepsNorm[0].text : "";
+      }
       const mirrorJustAttached = tryAttachMirrorFromClosedListText(item);
       /**
        * 避免同一交互内重复触发（click 双射、触摸合成事件）把已完成立刻打回：目标状态与内存一致则不再写。
@@ -46549,6 +46561,68 @@
       return m ? [{ text: m, completed: false }] : [];
     }
 
+    function isClosedListItemEffectivelyComplete(item) {
+      if (!item) return false;
+      const steps = getClosedListSubStepsNormalized(item);
+      if (steps.length > 0) {
+        return steps.every(function (s) {
+          return Boolean(s.completed);
+        });
+      }
+      return Boolean(item.completed);
+    }
+
+    /** 封闭清单日进度：有子步骤只计子步骤；无子步骤计主条目 */
+    function countClosedListProgressUnits(items) {
+      let total = 0;
+      let done = 0;
+      (Array.isArray(items) ? items : []).forEach(function (item) {
+        const steps = getClosedListSubStepsNormalized(item);
+        if (steps.length > 0) {
+          steps.forEach(function (s) {
+            total += 1;
+            if (s.completed) done += 1;
+          });
+        } else {
+          total += 1;
+          if (item.completed) done += 1;
+        }
+      });
+      const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+      return { total, done, pct };
+    }
+
+    function syncClosedListParentCompleteFromSubSteps(item) {
+      if (!item) return false;
+      const steps = getClosedListSubStepsNormalized(item);
+      if (!steps.length) return false;
+      const want = steps.every(function (s) {
+        return Boolean(s.completed);
+      });
+      if (Boolean(item.completed) === want) return false;
+      item.completed = want;
+      if (want) {
+        closedListExpandedTaskIds.delete(item.id);
+        item.completedAt = Date.now();
+        closedListCompleteAnimIds.add(item.id);
+        window.setTimeout(function () {
+          closedListCompleteAnimIds.delete(item.id);
+          render();
+        }, 750);
+        syncClosedListToDone(item);
+      } else {
+        closedListCompleteAnimIds.delete(item.id);
+        delete item.completedAt;
+        removeClosedListDoneCopy(item.id);
+      }
+      const mo = item.mirrorOf;
+      if (mo && mo.kind === "weeklyPlan") {
+        applyWeeklyPlanCompletionFromMirror(mo, want);
+        syncAllWeeklyPlanMirrorsForWeek(mo.weekKey);
+      }
+      return true;
+    }
+
     function getClosedListSubStepLinesRaw(task) {
       return getClosedListSubStepsNormalized(task).map(function (e) {
         return e.text;
@@ -46576,6 +46650,7 @@
         });
         item.miniStep = arr[0].text;
       }
+      syncClosedListParentCompleteFromSubSteps(item);
       saveState();
       render();
     }
@@ -50019,6 +50094,29 @@
       saveWeeklyPlanTasksForWeek(tasks, weekKey);
     }
 
+    /** 从 My Done 删除深度时间镜像时，清除对应日历日的打卡小时数 */
+    function revertAnniversaryDeepTimeFromDoneMeta(meta) {
+      if (!meta || typeof meta !== "object" || !meta.module || !meta.dateKey) {
+        return;
+      }
+      const modId = String(meta.module);
+      let suffix = "";
+      if (modId === "tw020") {
+        suffix = "020";
+      } else if (modId === "tw021") {
+        suffix = "021";
+      } else if (modId === "tw022") {
+        suffix = "022";
+      } else {
+        return;
+      }
+      const mod = getAnniversaryTwStateMod(suffix);
+      if (!mod) {
+        return;
+      }
+      setDeepTimeHoursForDate(mod, meta.dateKey, 0);
+    }
+
     /** 从 My Done 删除/恢复十二周年镜像时，撤销对应主/子任务的完成态，避免 syncAnniversaryTw*DoneList 立刻补回 */
     function revertAnniversaryCompletionFromDoneMeta(meta) {
       if (!meta || typeof meta !== "object") {
@@ -50099,6 +50197,22 @@
         revertAnniversaryCompletionFromDoneMeta(task.anniversaryTwMeta);
         const mod = task.anniversaryTwMeta.module;
         const sk = task.anniversaryTwMeta.syncKey;
+        if (!state.anniversaryDoneRef || typeof state.anniversaryDoneRef !== "object") {
+          state.anniversaryDoneRef = { tw020: { items: {} }, tw021: { items: {} }, tw022: { items: {} } };
+        }
+        const r = state.anniversaryDoneRef[mod];
+        if (r && r.items && sk) {
+          delete r.items[sk];
+        }
+        state.done.splice(idx, 1);
+        saveState();
+        render();
+        return;
+      }
+      if (task.anniversaryDeepTimeMeta && task.anniversaryDeepTimeMeta.module) {
+        revertAnniversaryDeepTimeFromDoneMeta(task.anniversaryDeepTimeMeta);
+        const mod = task.anniversaryDeepTimeMeta.module;
+        const sk = task.anniversaryDeepTimeMeta.syncKey;
         if (!state.anniversaryDoneRef || typeof state.anniversaryDoneRef !== "object") {
           state.anniversaryDoneRef = { tw020: { items: {} }, tw021: { items: {} }, tw022: { items: {} } };
         }
@@ -50300,6 +50414,18 @@
           revertAnniversaryCompletionFromDoneMeta(task.anniversaryTwMeta);
           const mod = task.anniversaryTwMeta.module;
           const sk = task.anniversaryTwMeta.syncKey;
+          if (!state.anniversaryDoneRef || typeof state.anniversaryDoneRef !== "object") {
+            state.anniversaryDoneRef = { tw020: { items: {} }, tw021: { items: {} }, tw022: { items: {} } };
+          }
+          const r = state.anniversaryDoneRef[mod];
+          if (r && r.items && sk) {
+            delete r.items[sk];
+          }
+        }
+        if (task.anniversaryDeepTimeMeta && task.anniversaryDeepTimeMeta.module && task.anniversaryDeepTimeMeta.syncKey) {
+          revertAnniversaryDeepTimeFromDoneMeta(task.anniversaryDeepTimeMeta);
+          const mod = task.anniversaryDeepTimeMeta.module;
+          const sk = task.anniversaryDeepTimeMeta.syncKey;
           if (!state.anniversaryDoneRef || typeof state.anniversaryDoneRef !== "object") {
             state.anniversaryDoneRef = { tw020: { items: {} }, tw021: { items: {} }, tw022: { items: {} } };
           }
@@ -52618,7 +52744,7 @@
       if (listName === "memo" && task.completed) {
         li.classList.add("memo-completed");
       }
-      if (listName === "closedList" && task.completed) {
+      if (listName === "closedList" && isClosedListItemEffectivelyComplete(task)) {
         li.classList.add("closed-list-completed");
       }
 
@@ -52631,7 +52757,7 @@
         closedListCheckEl = document.createElement("input");
         closedListCheckEl.type = "checkbox";
         closedListCheckEl.className = "closed-list-check";
-        closedListCheckEl.checked = Boolean(task.completed);
+        closedListCheckEl.checked = isClosedListItemEffectivelyComplete(task);
         closedListCheckEl.addEventListener("change", (event) => {
           event.stopPropagation();
           const want = Boolean(event.target.checked);
@@ -53024,14 +53150,15 @@
         }
       } else {
         if (listName === "closedList") {
-          if (task.completed && closedListCompleteAnimIds.has(task.id)) {
+          const clItemDone = isClosedListItemEffectivelyComplete(task);
+          if (clItemDone && closedListCompleteAnimIds.has(task.id)) {
             li.classList.add("closed-list-complete-enter");
           }
           const clDlMs = normalizeDeadlineAtMs(task.deadlineAt);
           const nowMs = Date.now();
-          const overdue = clDlMs != null && !task.completed && clDlMs < nowMs;
-          const urgent = isExtremeDeadlineUrgent(clDlMs, nowMs, Boolean(task.completed));
-          if (!task.completed) {
+          const overdue = clDlMs != null && !clItemDone && clDlMs < nowMs;
+          const urgent = isExtremeDeadlineUrgent(clDlMs, nowMs, clItemDone);
+          if (!clItemDone) {
             if (overdue || urgent) li.classList.add("closed-list-item--accent-hot");
             else li.classList.add("closed-list-item--accent-neutral");
           }
@@ -53070,7 +53197,7 @@
           headerDeadlineTag.setAttribute("data-deadline-header-tag", "1");
           headerDeadlineTag.setAttribute("data-closed-list-deadline", "1");
           headerDeadlineTag.setAttribute("data-extreme-deadline-ms", clDlMs != null ? String(clDlMs) : "");
-          headerDeadlineTag.setAttribute("data-extreme-deadline-done", task.completed ? "1" : "0");
+          headerDeadlineTag.setAttribute("data-extreme-deadline-done", clItemDone ? "1" : "0");
           headerDeadlineTag.innerHTML =
             "<svg class=\"task-deadline-tag-ic\" viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"9\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\"/><path d=\"M12 7.25v5l3.25 2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\"/></svg><span class=\"task-deadline-tag-txt\"></span>";
           deadlineCluster.appendChild(headerDeadlineTag);
@@ -53079,7 +53206,7 @@
           deadlineRemainSpan.setAttribute("aria-hidden", "true");
           metaLeft.appendChild(deadlineCluster);
 
-          const clDlEditablePre = isClosedListDateEditable() && !task.completed;
+          const clDlEditablePre = isClosedListDateEditable() && !clItemDone;
           let closedListDeadlineTrigger = null;
           if (clDlEditablePre) {
             closedListDeadlineTrigger = document.createElement("button");
@@ -53097,7 +53224,7 @@
           titleArea.appendChild(titleMainRow);
           titleArea.appendChild(headerMetaRow);
 
-          applyClosedListDeadlineHeaderTag(headerDeadlineTag, clDlMs, Date.now(), Boolean(task.completed));
+          applyClosedListDeadlineHeaderTag(headerDeadlineTag, clDlMs, Date.now(), clItemDone);
 
           ensureManualItemActionsGlobalDismiss();
           const actionsSlot = document.createElement("div");
@@ -53159,7 +53286,7 @@
           clDlInput.className = "closed-list-deadline-input app-extreme-deadline-input";
           clDlInput.setAttribute("aria-label", "极端截止期限");
           clDlInput.value = msToDatetimeLocalValue(clDlMs);
-          const clDlEditable = isClosedListDateEditable() && !task.completed;
+          const clDlEditable = isClosedListDateEditable() && !clItemDone;
           if (!clDlEditable) {
             clDlInput.disabled = true;
             clDlInput.classList.add("closed-list-deadline-input--readonly");
@@ -53229,7 +53356,7 @@
             stepCb.type = "checkbox";
             stepCb.className = "closed-list-step-check";
             stepCb.checked = lineDone;
-            stepCb.disabled = !isClosedListDateEditable() || task.completed;
+            stepCb.disabled = !isClosedListDateEditable() || clItemDone;
             stepCb.setAttribute("aria-label", "子任务完成");
             const stepCheckVis = document.createElement("span");
             stepCheckVis.className = "closed-list-step-check-visual";
@@ -53245,7 +53372,7 @@
             inp.value = String(lineVal || "");
             inp.placeholder = "添加子步骤…";
             inp.setAttribute("aria-label", "子步骤");
-            const canEditSteps = isClosedListDateEditable() && !task.completed;
+            const canEditSteps = isClosedListDateEditable() && !clItemDone;
             if (!canEditSteps) {
               inp.readOnly = true;
               inp.classList.add("closed-list-step-input--readonly");
@@ -53321,19 +53448,19 @@
           stepAddPlus.className = "closed-list-step-add-plus";
           stepAddPlus.setAttribute("aria-label", "聚焦添加子步骤");
           stepAddPlus.textContent = "+";
-          stepAddPlus.disabled = !isClosedListDateEditable() || task.completed;
+          stepAddPlus.disabled = !isClosedListDateEditable() || clItemDone;
           const stepMicroInput = document.createElement("input");
           stepMicroInput.type = "text";
           stepMicroInput.className = "closed-list-step-add-input done-filter";
           stepMicroInput.placeholder = "添加子步骤…";
           stepMicroInput.setAttribute("aria-label", "添加子步骤");
-          stepMicroInput.disabled = !isClosedListDateEditable() || task.completed;
+          stepMicroInput.disabled = !isClosedListDateEditable() || clItemDone;
           const stepMicroBtn = document.createElement("button");
           stepMicroBtn.type = "button";
           stepMicroBtn.className = "closed-list-step-add-submit btn-primary";
           stepMicroBtn.textContent = "添加";
           stepMicroBtn.setAttribute("aria-label", "添加子步骤");
-          stepMicroBtn.disabled = !isClosedListDateEditable() || task.completed;
+          stepMicroBtn.disabled = !isClosedListDateEditable() || clItemDone;
           const stepAddHintMobile = document.createElement("span");
           stepAddHintMobile.className = "closed-list-step-add-hint closed-list-step-add-hint--mobile";
           stepAddHintMobile.textContent = "↵";
@@ -54234,12 +54361,31 @@
     }
 
     function isWeeklyPlanMainComplete(task) {
-      if (Boolean(task.mainDone)) return true;
-      return (
-        Array.isArray(task.microTasks) &&
-        task.microTasks.length > 0 &&
-        task.microTasks.every((m) => m.done)
-      );
+      const micros = Array.isArray(task.microTasks) ? task.microTasks : [];
+      if (micros.length > 0) {
+        return micros.every((m) => m.done);
+      }
+      return Boolean(task.mainDone);
+    }
+
+    /** 周计划进度：有子任务只计子任务；无子任务计主任务 */
+    function countWeeklyPlanTaskUnits(tasks) {
+      let total = 0;
+      let done = 0;
+      (Array.isArray(tasks) ? tasks : []).forEach((t) => {
+        const micros = t.microTasks || [];
+        if (micros.length > 0) {
+          micros.forEach((m) => {
+            total += 1;
+            if (m.done) done += 1;
+          });
+        } else {
+          total += 1;
+          if (isWeeklyPlanMainComplete(t)) done += 1;
+        }
+      });
+      const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+      return { total, done, pct };
     }
 
     function applyWeeklyPlanMainDoneFromMicros(task) {
@@ -54716,6 +54862,9 @@
       }
       let changed = false;
       Object.keys(items).forEach((k) => {
+        if (k.indexOf("deepTime:") === 0) {
+          return;
+        }
         if (!desiredKeys.has(k)) {
           const doneId = items[k];
           if (doneId) {
@@ -54804,6 +54953,9 @@
       }
       let changed = false;
       Object.keys(items).forEach((k) => {
+        if (k.indexOf("deepTime:") === 0) {
+          return;
+        }
         if (!desiredKeys.has(k)) {
           const doneId = items[k];
           if (doneId) {
@@ -54892,6 +55044,9 @@
       }
       let changed = false;
       Object.keys(items).forEach((k) => {
+        if (k.indexOf("deepTime:") === 0) {
+          return;
+        }
         if (!desiredKeys.has(k)) {
           const doneId = items[k];
           if (doneId) {
@@ -54947,6 +55102,125 @@
             taskId,
             subId,
             kind
+          }
+        });
+        items[syncKey] = newId;
+        changed = true;
+      });
+      if (changed) {
+        saveState();
+      }
+    }
+
+    function getAnniversaryDeepTimeDonePrefix(suffix) {
+      if (suffix === "020") {
+        return "【" + ANNIVERSARY_TW020_FULL_NAME + "·深度时间】";
+      }
+      if (suffix === "021") {
+        return "【十二周年#21·深度时间】";
+      }
+      return "【十二周年#22·深度时间】";
+    }
+
+    function formatDeepTimeDoneDateLabel(dateKey) {
+      const d = new Date(String(dateKey) + "T12:00:00");
+      if (isNaN(d.getTime())) {
+        return String(dateKey || "").replace(/-/g, "/");
+      }
+      return formatDeepTimeShortDate(d);
+    }
+
+    function buildAnniversaryDeepTimeDoneText(suffix, dateKey, hours) {
+      return (
+        getAnniversaryDeepTimeDonePrefix(suffix) +
+        formatDeepTimeDoneDateLabel(dateKey) +
+        " · " +
+        formatDeepTimeHoursWithUnit(hours)
+      );
+    }
+
+    /** 深度时间打卡 → My Done（按打卡日历日 completedAt 归档） */
+    function syncAnniversaryDeepTimeDoneList(moduleId, suffix) {
+      normalizeAnniversaryTwStateBySuffix(suffix);
+      const mod = getAnniversaryTwStateMod(suffix);
+      if (!mod) {
+        return;
+      }
+      ensureAnniversaryDeepTimeOnModule(mod);
+      const ref = ensureAnniversaryDoneModuleRef(moduleId);
+      const items = ref.items;
+      const desiredKeys = new Set();
+      Object.keys(mod.deepTime.days || {}).forEach(function (dateKey) {
+        const hours = getDeepTimeHoursForDate(mod, dateKey);
+        if (hours > 0) {
+          desiredKeys.add("deepTime:" + dateKey);
+        }
+      });
+      let changed = false;
+      Object.keys(items).forEach(function (k) {
+        if (k.indexOf("deepTime:") !== 0) {
+          return;
+        }
+        if (!desiredKeys.has(k)) {
+          const doneId = items[k];
+          if (doneId) {
+            state.done = state.done.filter(function (d) {
+              return d.id !== doneId;
+            });
+          }
+          delete items[k];
+          changed = true;
+        }
+      });
+      desiredKeys.forEach(function (syncKey) {
+        const dateKey = syncKey.slice("deepTime:".length);
+        const hours = getDeepTimeHoursForDate(mod, dateKey);
+        if (hours <= 0) {
+          return;
+        }
+        const ts = habitDateToCompletedAt(dateKey);
+        const text = buildAnniversaryDeepTimeDoneText(suffix, dateKey, hours);
+        const existingId = items[syncKey];
+        if (existingId) {
+          const entry = state.done.find(function (d) {
+            return d.id === existingId;
+          });
+          if (entry) {
+            if (entry.text !== text) {
+              entry.text = text;
+              changed = true;
+            }
+            if (entry.completedAt !== ts) {
+              entry.completedAt = ts;
+              changed = true;
+            }
+            if (!entry.anniversaryDeepTimeMeta) {
+              entry.anniversaryDeepTimeMeta = {
+                module: moduleId,
+                syncKey: syncKey,
+                dateKey: dateKey,
+                hours: hours
+              };
+              changed = true;
+            } else if (entry.anniversaryDeepTimeMeta.hours !== hours) {
+              entry.anniversaryDeepTimeMeta.hours = hours;
+              changed = true;
+            }
+            return;
+          }
+          delete items[syncKey];
+        }
+        const newId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+        state.done.unshift({
+          id: newId,
+          text: text,
+          createdAt: ts,
+          completedAt: ts,
+          anniversaryDeepTimeMeta: {
+            module: moduleId,
+            syncKey: syncKey,
+            dateKey: dateKey,
+            hours: hours
           }
         });
         items[syncKey] = newId;
@@ -55331,11 +55605,14 @@
       const tasks = getWeeklyPlanTasksForViewWeek();
       const task = tasks.find((t) => t.id === taskId);
       if (!task) return;
-      task.mainDone = checked;
-      if (!checked && task.microTasks.length) {
-        task.microTasks.forEach((m) => {
-          m.done = false;
+      const micros = task.microTasks || [];
+      if (micros.length > 0) {
+        micros.forEach((m) => {
+          m.done = Boolean(checked);
         });
+        applyWeeklyPlanMainDoneFromMicros(task);
+      } else {
+        task.mainDone = Boolean(checked);
       }
       saveWeeklyPlanTasksForWeek(tasks);
       syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewWeekKey());
@@ -55405,8 +55682,12 @@
         jump.value = viewKey;
       }
       const tasks = getWeeklyPlanTasksForViewWeek();
-      const done = tasks.filter(isWeeklyPlanMainComplete).length;
-      const total = tasks.length;
+      tasks.forEach(function (t) {
+        applyWeeklyPlanMainDoneFromMicros(t);
+      });
+      const unitProgress = countWeeklyPlanTaskUnits(tasks);
+      const done = unitProgress.done;
+      const total = unitProgress.total;
       let mainLifeTotal = 0;
       let mainLifeDone = 0;
       let mainWorkTotal = 0;
@@ -55419,26 +55700,28 @@
       let microWorkDone = 0;
       tasks.forEach((t) => {
         const lane = getWeeklyPlanTaskLane(t);
-        if (lane === "work") {
+        const micros = t.microTasks || [];
+        if (micros.length > 0) {
+          micros.forEach((m) => {
+            microTotal += 1;
+            if (m.done) microDone += 1;
+            if (lane === "work") {
+              microWorkTotal += 1;
+              if (m.done) microWorkDone += 1;
+            } else {
+              microLifeTotal += 1;
+              if (m.done) microLifeDone += 1;
+            }
+          });
+        } else if (lane === "work") {
           mainWorkTotal += 1;
           if (isWeeklyPlanMainComplete(t)) mainWorkDone += 1;
         } else {
           mainLifeTotal += 1;
           if (isWeeklyPlanMainComplete(t)) mainLifeDone += 1;
         }
-        (t.microTasks || []).forEach((m) => {
-          microTotal += 1;
-          if (m.done) microDone += 1;
-          if (lane === "work") {
-            microWorkTotal += 1;
-            if (m.done) microWorkDone += 1;
-          } else {
-            microLifeTotal += 1;
-            if (m.done) microLifeDone += 1;
-          }
-        });
       });
-      const pMain = total === 0 ? 0 : Math.round((done / total) * 100);
+      const pMain = unitProgress.pct;
       const pMicro = microTotal === 0 ? 0 : Math.round((microDone / microTotal) * 100);
       const lifeMainNumsTxt = mainLifeDone + "/" + mainLifeTotal;
       const lifeMicroNumsTxt =
@@ -55489,7 +55772,7 @@
       }
       if (weeklyPlanSection) {
         weeklyPlanSection.classList.remove("weekly-plan-all-micros-done");
-        if ((microTotal > 0 && microDone === microTotal) || (microTotal === 0 && total > 0 && done === total)) {
+        if (total > 0 && done === total) {
           weeklyPlanSection.classList.add("weekly-plan-all-micros-done");
         }
       }
@@ -60206,6 +60489,9 @@
       syncAnniversaryTw020DoneList();
       syncAnniversaryTw021DoneList();
       syncAnniversaryTw022DoneList();
+      syncAnniversaryDeepTimeDoneList("tw020", "020");
+      syncAnniversaryDeepTimeDoneList("tw021", "021");
+      syncAnniversaryDeepTimeDoneList("tw022", "022");
       ensureTimeReflectionPromptsForToday();
       ensureAgeGoalMilestonePromptsForToday();
       ensureAnniversaryTw020PromptsForToday();
@@ -60233,6 +60519,15 @@
       const filteredClosedListItems = filteredClosedListItemsRaw.slice().sort((a, b) =>
         compareClosedListItemsForSort(a, b, allClosedListHaveListOrder)
       );
+      let closedListParentSyncChanged = false;
+      filteredClosedListItems.forEach(function (item) {
+        if (syncClosedListParentCompleteFromSubSteps(item)) {
+          closedListParentSyncChanged = true;
+        }
+      });
+      if (closedListParentSyncChanged) {
+        saveState();
+      }
       const baseDailyWinDate = selectedDailyWinDate || formatDateInputValue(new Date());
       const dailyWinTomorrowKey = getDailyWinTomorrowKey(baseDailyWinDate);
       const filteredDailyWinTodayTasks = getDailyWinTasksForDate(baseDailyWinDate);
@@ -60262,9 +60557,10 @@
         closedListDayQuota.textContent = String(filteredClosedListItems.length) + "/3";
       }
       {
-        const closedDone = filteredClosedListItems.filter((t) => t.completed).length;
-        const closedTotal = filteredClosedListItems.length;
-        const pct = closedTotal === 0 ? 0 : Math.round((closedDone / closedTotal) * 100);
+        const closedProgress = countClosedListProgressUnits(filteredClosedListItems);
+        const closedDone = closedProgress.done;
+        const closedTotal = closedProgress.total;
+        const pct = closedProgress.pct;
         const allClosedDone = closedTotal > 0 && closedDone === closedTotal;
         if (closedListDayProgressFill) {
           closedListDayProgressFill.style.width = pct + "%";
