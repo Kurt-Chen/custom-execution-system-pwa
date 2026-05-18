@@ -24511,11 +24511,97 @@
       padding: 4px 2px 12px;
     }
 
-    #anniversaryModule .anniversary-deep-time-intro {
+    #anniversaryModule .anniversary-deep-time-stats {
       margin: 0 0 12px;
+    }
+
+    #anniversaryModule .anniversary-deep-time-stats-total {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #fbcfe8;
+      background: linear-gradient(165deg, #fdf2f8 0%, #ffffff 70%);
+    }
+
+    #anniversaryModule .anniversary-deep-time-stats-total__label {
+      font-size: 13px;
+      font-weight: 700;
+      color: #9d174d;
+    }
+
+    #anniversaryModule .anniversary-deep-time-stats-total__value {
+      font-size: 26px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      color: #831843;
+      line-height: 1.1;
+    }
+
+    #anniversaryModule .anniversary-deep-time-stats-total__unit {
+      font-size: 14px;
+      font-weight: 600;
+      color: #be185d;
+      margin-left: 2px;
+    }
+
+    #anniversaryModule .anniversary-deep-time-stats-weeks {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    #anniversaryModule .anniversary-deep-time-stats-week {
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      padding: 6px 8px;
+      text-align: center;
+      box-sizing: border-box;
+    }
+
+    #anniversaryModule .anniversary-deep-time-stats-week--summary {
+      border-color: #ddd6fe;
+      background: #faf5ff;
+    }
+
+    #anniversaryModule .anniversary-deep-time-stats-week__label {
+      display: block;
+      font-size: 10px;
+      font-weight: 700;
+      color: #64748b;
+      line-height: 1.2;
+    }
+
+    #anniversaryModule .anniversary-deep-time-stats-week--summary .anniversary-deep-time-stats-week__label {
+      color: #7c3aed;
+    }
+
+    #anniversaryModule .anniversary-deep-time-stats-week__hours {
+      display: block;
+      margin-top: 2px;
+      font-size: 14px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: #0f172a;
+      line-height: 1.2;
+    }
+
+    #anniversaryModule .anniversary-deep-time-intro {
+      margin: 12px 0 0;
       font-size: 12px;
       line-height: 1.5;
       color: #64748b;
+    }
+
+    @media (max-width: 640px) {
+      #anniversaryModule .anniversary-deep-time-stats-weeks {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
     }
 
     #anniversaryModule .anniversary-deep-time-grid {
@@ -57441,6 +57527,21 @@
       }
     }
 
+    function sumDeepTimeHoursFromMap(dayKeys, hoursByKey) {
+      let sum = 0;
+      (dayKeys || []).forEach(function (k) {
+        const n = Number(hoursByKey[k]);
+        if (Number.isFinite(n) && n > 0) {
+          sum += n;
+        }
+      });
+      return Math.round(sum * 10) / 10;
+    }
+
+    function formatDeepTimeHoursWithUnit(hours) {
+      return formatDeepTimeHoursDisplay(hours) + " 小时";
+    }
+
     function promptDeepTimeHoursInput(currentHours) {
       const raw = window.prompt(
         "输入当日深度时间累计（小时，0–24）",
@@ -57484,24 +57585,79 @@
         return;
       }
 
-      const intro = document.createElement("p");
-      intro.className = "anniversary-deep-time-intro submodule-note";
-      intro.textContent =
-        "13 周共 91 天（第 1–12 周为执行周，第 13 周为总结周）。点击格子录入当日深度时间累计；达到 " +
-        String(ANNIVERSARY_DEEP_TIME_GOAL_HOURS) +
-        " 小时显示浅绿，未达标显示浅红。";
-      mount.appendChild(intro);
-
-      const grid = document.createElement("div");
-      grid.className = "anniversary-deep-time-grid";
-      grid.setAttribute("role", "group");
-      grid.setAttribute("aria-label", "深度时间 91 天打卡网格");
-
       const todayKey = formatDateInputValue(new Date());
       const hoursByKey = {};
       series.forEach(function (dm) {
         hoursByKey[dm.dateKey] = getDeepTimeHoursForDate(mod, dm.dateKey);
       });
+
+      const totalHours = sumDeepTimeHoursFromMap(
+        series.map(function (dm) {
+          return dm.dateKey;
+        }),
+        hoursByKey
+      );
+
+      const stats = document.createElement("section");
+      stats.className = "anniversary-deep-time-stats";
+      stats.setAttribute("aria-label", "深度时间统计");
+
+      const totalRow = document.createElement("div");
+      totalRow.className = "anniversary-deep-time-stats-total";
+      const totalLabel = document.createElement("span");
+      totalLabel.className = "anniversary-deep-time-stats-total__label";
+      totalLabel.textContent = "总深度时间";
+      const totalValWrap = document.createElement("span");
+      const totalVal = document.createElement("span");
+      totalVal.className = "anniversary-deep-time-stats-total__value";
+      totalVal.textContent = formatDeepTimeHoursDisplay(totalHours);
+      const totalUnit = document.createElement("span");
+      totalUnit.className = "anniversary-deep-time-stats-total__unit";
+      totalUnit.textContent = "小时";
+      totalValWrap.appendChild(totalVal);
+      totalValWrap.appendChild(totalUnit);
+      totalRow.appendChild(totalLabel);
+      totalRow.appendChild(totalValWrap);
+      stats.appendChild(totalRow);
+
+      const weeksStats = document.createElement("div");
+      weeksStats.className = "anniversary-deep-time-stats-weeks";
+      weeksStats.setAttribute("role", "list");
+      weeksStats.setAttribute("aria-label", "每周深度时间");
+      for (let ws = 1; ws <= 13; ws++) {
+        const wHours = sumDeepTimeHoursFromMap(
+          series
+            .filter(function (dm) {
+              return dm.weekNum === ws;
+            })
+            .map(function (dm) {
+              return dm.dateKey;
+            }),
+          hoursByKey
+        );
+        const wItem = document.createElement("div");
+        wItem.className = "anniversary-deep-time-stats-week";
+        wItem.setAttribute("role", "listitem");
+        if (ws === 13) {
+          wItem.classList.add("anniversary-deep-time-stats-week--summary");
+        }
+        const wLab = document.createElement("span");
+        wLab.className = "anniversary-deep-time-stats-week__label";
+        wLab.textContent = ws === 13 ? "第13周" : "第" + String(ws) + "周";
+        const wH = document.createElement("span");
+        wH.className = "anniversary-deep-time-stats-week__hours";
+        wH.textContent = formatDeepTimeHoursDisplay(wHours);
+        wItem.appendChild(wLab);
+        wItem.appendChild(wH);
+        weeksStats.appendChild(wItem);
+      }
+      stats.appendChild(weeksStats);
+      mount.appendChild(stats);
+
+      const grid = document.createElement("div");
+      grid.className = "anniversary-deep-time-grid";
+      grid.setAttribute("role", "group");
+      grid.setAttribute("aria-label", "深度时间 91 天打卡网格");
 
       for (let w = 1; w <= 13; w++) {
         const weekDays = series.filter(function (dm) {
@@ -57587,6 +57743,14 @@
       }
 
       mount.appendChild(grid);
+
+      const intro = document.createElement("p");
+      intro.className = "anniversary-deep-time-intro submodule-note";
+      intro.textContent =
+        "13 周共 91 天（第 1–12 周为执行周，第 13 周为总结周）。点击格子录入当日深度时间累计；达到 " +
+        String(ANNIVERSARY_DEEP_TIME_GOAL_HOURS) +
+        " 小时显示浅绿，未达标显示浅红。";
+      mount.appendChild(intro);
     }
 
     function renderAnniversaryTw020() {
