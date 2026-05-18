@@ -22,10 +22,11 @@ if ($porcelain) {
 
   Write-Host ">> git commit" -ForegroundColor Cyan
   $msg = @"
-feat(12wy): deep time stats header, intro at bottom
+feat(ui): deep time fold, weekly plan sort and input polish
 
-- Top: total deep hours and per-week summary (13 weeks)
-- Usage note moved below the 91-day grid
+- Deep time: collapsible stats (total centered), compact grid
+- Weekly plan: sort by deadline nearest-first; stronger input border, red placeholder
+- Task row: single-line title, deadline and menu on the right
 "@
   Invoke-Git @("commit", "-m", $msg.Trim())
 }
