@@ -8062,29 +8062,6 @@
       text-align: left;
     }
 
-    /* Body：式数 / 公斤备注次行（对齐 Mind forge-task-card-mind-subline 观感） */
-    #forgeModule .forge-task-card--body .forge-task-card-body-subline {
-      display: block;
-      min-width: 0;
-      font-size: 12px;
-      line-height: 1.35;
-      font-weight: 400;
-      color: #64748b;
-      margin-top: 1px;
-    }
-
-    #forgeModule .forge-cc-art-steps .forge-task-card--body .forge-task-card-body-subline {
-      font-size: 11px;
-      margin-top: 0;
-    }
-
-    @media (max-width: 480px) {
-      #forgeModule .forge-task-card--body .forge-task-card-body-subline {
-        font-size: 11px;
-        line-height: 1.25;
-      }
-    }
-
     /* Body 训练卡右侧：与囚徒十式一致，完成量与打卡入口同一行横向分组（全宽断点适用） */
     #forgeModule .forge-task-card--body .forge-task-card-right {
       flex-direction: row;
@@ -9017,6 +8994,10 @@
       }
 
       #forgeModule .forge-wm-t-name {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1px;
         min-width: 0;
         font-size: 13px;
         font-weight: 600;
@@ -9024,8 +9005,15 @@
       }
 
       #forgeModule .forge-wm-t-name-sub {
+        display: block;
+        font-size: 11px;
         font-weight: 500;
+        line-height: 1.35;
         color: #64748b;
+      }
+
+      #forgeModule .forge-wm-t-name-sub:empty {
+        display: none;
       }
 
       #forgeModule .forge-wm-t-goal {
@@ -9153,7 +9141,24 @@
       word-break: break-word;
     }
 
+    #forgeModule .forge-wm-name-remark {
+      display: block;
+      margin-top: 1px;
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1.35;
+      color: #64748b;
+    }
+
+    #forgeModule .forge-wm-name-remark:empty {
+      display: none;
+    }
+
     #forgeModule .forge-weekly-min-row--complete .forge-wm-name-display {
+      color: #94a3b8;
+    }
+
+    #forgeModule .forge-weekly-min-row--complete .forge-wm-name-remark {
       color: #94a3b8;
     }
 
@@ -41835,7 +41840,7 @@
   <script>
     const STORAGE_KEY = "todo-app-data-v1";
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260519s";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260519t";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** My Done 手机端行高：{ padY, minHeight }，与 :root 中 --done-list-row-* 对应 */
@@ -64863,12 +64868,35 @@
       return s;
     }
 
+    /** 周最低标准动作名：主标题 + 次行备注（第几式、16kg/24kg 等） */
     function forgeWmSplitLabelSubtitle(labelRaw) {
-      const cleaned = forgeWmStripTrailingEnglishParen(String(labelRaw || ""));
-      const parts = cleaned.split("/");
-      const primary = parts[0].trim();
-      const sub = parts.length > 1 ? parts.slice(1).join("/").trim() : "";
-      return { primary: primary, sub: sub };
+      const cleaned = forgeWmStripTrailingEnglishParen(String(labelRaw || "")).replace(/\s+/g, " ").trim();
+      if (!cleaned) return { primary: "", sub: "" };
+      let primary = cleaned;
+      const remarks = [];
+      const slashIdx = primary.indexOf("/");
+      if (slashIdx !== -1) {
+        const tail = primary.slice(slashIdx + 1).trim();
+        if (tail) remarks.push(tail);
+        primary = primary.slice(0, slashIdx).trim();
+      }
+      let m = primary.match(/^(第[一二三四五六七八九十百\d]+式)\s+(.+)$/);
+      if (m) {
+        remarks.unshift(m[1].trim());
+        primary = m[2].trim();
+      }
+      m = primary.match(/^(.+?)\s*[（(]\s*(\d+)\s*kg\s*[）)]\s*$/i);
+      if (m) {
+        primary = m[1].trim();
+        remarks.push("(" + m[2] + "kg)");
+      } else {
+        m = primary.match(/^(.+?)[·・](\d+)\s*$/);
+        if (m) {
+          primary = m[1].trim();
+          remarks.push("(" + m[2] + "kg)");
+        }
+      }
+      return { primary: primary || cleaned, sub: remarks.join(" ") };
     }
 
     function normalizeForgeWeeklyMinLabelsInState() {
@@ -65068,6 +65096,7 @@
           nameInpAttrs +
           ' />' +
           '<span class="forge-wm-name-display"></span>' +
+          '<span class="forge-wm-name-remark"></span>' +
           "</div>" +
           '<div class="forge-wm-d-cell forge-wm-d-cell--goal">' +
           '<span class="forge-wm-goal-display"></span><input ' +
@@ -65122,7 +65151,10 @@
             d.textContent = parts.primary || nm || "\u2014";
           });
           el.querySelectorAll(".forge-wm-t-name-sub").forEach(function (d) {
-            d.textContent = parts.sub ? " \u00b7 " + parts.sub : "";
+            d.textContent = parts.sub || "";
+          });
+          el.querySelectorAll(".forge-wm-name-remark").forEach(function (d) {
+            d.textContent = parts.sub || "";
           });
           el.querySelectorAll(".forge-wm-subtitle").forEach(function (d) {
             d.textContent = parts.sub || "";
@@ -65414,72 +65446,6 @@
       expandAllForgeSubCardsForDesktop();
     }
 
-    /** Body 训练卡：式数 / 公斤数移到标题下第二行小字（与 Mind 时长备注一致） */
-    function applyForgeBodyTaskTitleLayout(root) {
-      if (!root) return;
-      root.querySelectorAll(".forge-task-card--body .forge-task-card-title-wrap").forEach(function (wrap) {
-        if (wrap.getAttribute("data-forge-body-title-layout") === "1") return;
-        const textCell = wrap.querySelector(".forge-task-text");
-        if (!textCell) return;
-
-        let subline = "";
-        const stepLabel = textCell.querySelector(".forge-cc-step-label");
-        if (stepLabel) {
-          subline = String(stepLabel.textContent || "").trim();
-          stepLabel.remove();
-        } else {
-          const cn = textCell.querySelector(":scope > .forge-task-text-cn");
-          const primaryNode = cn || textCell;
-          let primary = "";
-          if (cn) {
-            primary = String(cn.textContent || "").replace(/\s+/g, " ").trim();
-          } else {
-            primary = String(textCell.textContent || "")
-              .replace(/\s+/g, " ")
-              .trim();
-            const em = textCell.querySelector("em");
-            if (em) {
-              primary = primary.replace(String(em.textContent || "").trim(), "").trim();
-            }
-          }
-          let m = primary.match(/^(.+?)[·・](\d+)\s*$/);
-          if (m) {
-            subline = "(" + m[2] + "kg)";
-            primary = m[1].trim();
-          } else {
-            m = primary.match(/^(.+?)\s*[（(]\s*(\d+)\s*kg\s*[）)]\s*$/i);
-            if (m) {
-              subline = "(" + m[2] + "kg)";
-              primary = m[1].trim();
-            } else {
-              m = primary.match(/^(第[一二三四五六七八九十\d]+式)\s+(.+)$/);
-              if (m) {
-                subline = m[1].trim();
-                primary = m[2].trim();
-              }
-            }
-          }
-          if (cn) {
-            cn.textContent = primary;
-          } else if (primary !== String(textCell.textContent || "").replace(/\s+/g, " ").trim()) {
-            const em = textCell.querySelector("em");
-            textCell.textContent = primary;
-            if (em) textCell.appendChild(em);
-          }
-        }
-
-        const oldSub = wrap.querySelector(".forge-task-card-body-subline");
-        if (oldSub) oldSub.remove();
-        if (subline) {
-          const sub = document.createElement("div");
-          sub.className = "forge-task-card-body-subline";
-          sub.textContent = subline;
-          wrap.appendChild(sub);
-        }
-        wrap.setAttribute("data-forge-body-title-layout", "1");
-      });
-    }
-
     function initForgeModule() {
       if (!forgeModule) return;
       ensureForgeKbWeightsState();
@@ -65495,7 +65461,6 @@
       bindForgeKbStandardsSelects();
       syncForgeCcProgressUi();
       bindForgeCcProgressSelects();
-      applyForgeBodyTaskTitleLayout(forgeModule);
       if (forgeModule) captureForgeTaskValIdleDisplays(forgeModule);
       forgeModule.querySelectorAll("#forgeMindCardBody .forge-task-title-note").forEach(function (el) {
         el.remove();
