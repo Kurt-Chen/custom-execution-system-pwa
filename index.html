@@ -1341,6 +1341,30 @@
       color: #2563eb;
     }
 
+    /* Forge 主 Tab · 今日训练：橙/火焰色，与其余四 Tab（蓝）区分 */
+    #forgeModule .forge-main-tabs > #moduleSubTabBtn-forge-today {
+      color: #c2410c;
+    }
+
+    #forgeModule .forge-main-tabs > #moduleSubTabBtn-forge-today:hover {
+      background: rgba(255, 247, 237, 0.95);
+      color: #9a3412;
+    }
+
+    #forgeModule .forge-main-tabs > #moduleSubTabBtn-forge-today[aria-selected="true"] {
+      background: #fff7ed;
+      color: #ea580c;
+      box-shadow: inset 0 -2px 0 #ea580c;
+    }
+
+    #forgeModule .forge-main-tabs > #moduleSubTabBtn-forge-today[aria-selected="true"] .forge-main-tab-icon {
+      color: #ea580c;
+    }
+
+    #forgeModule .forge-main-tabs > #moduleSubTabBtn-forge-today:focus-visible {
+      outline-color: rgba(234, 88, 12, 0.45);
+    }
+
     #forgeModule .forge-main-tab-label {
       display: none;
       max-width: 100%;
@@ -70654,6 +70678,131 @@
       return { primary: primary || cleaned, sub: remarks.join(" ") };
     }
 
+    function forgeWmChineseStepToNum(stepStr) {
+      const s = String(stepStr || "").trim();
+      if (!s) return 0;
+      let m = s.match(/第\s*(\d+)\s*式/);
+      if (m) return parseInt(m[1], 10) || 0;
+      m = s.match(/第([一二三四五六七八九十百]+)式/);
+      if (!m) return 0;
+      const cn = m[1];
+      const digit = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+      if (cn.length === 1 && digit[cn]) return digit[cn];
+      if (cn === "十") return 10;
+      if (cn.charAt(0) === "十" && cn.length === 2 && digit[cn.charAt(1)]) return 10 + digit[cn.charAt(1)];
+      if (cn.length === 2 && cn.charAt(1) === "十" && digit[cn.charAt(0)]) return digit[cn.charAt(0)] * 10;
+      return 0;
+    }
+
+    function forgeWmExtractStepNumFromLabel(labelRaw) {
+      const label = String(labelRaw || "").trim();
+      if (!label) return 0;
+      const parts = forgeWmSplitLabelSubtitle(label);
+      const hay = (parts.sub + " " + label).trim();
+      let m = hay.match(/第\s*(\d+)\s*式/);
+      if (m) return parseInt(m[1], 10) || 0;
+      m = hay.match(/第([一二三四五六七八九十百]+)式/);
+      if (m) return forgeWmChineseStepToNum(m[0]);
+      return 0;
+    }
+
+    /** 周最低去重键：realm + 主名 + 式数 + 重量（兼容「第5式 标准深蹲」与「第五式 标准深蹲」等写法） */
+    function forgeWmSemanticDedupeKey(labelRaw, realm) {
+      const label = String(labelRaw || "").trim();
+      if (!label) return "";
+      const parts = forgeWmSplitLabelSubtitle(label);
+      const primary = forgeWpNormalizeTaskKey(parts.primary || label);
+      const stepNum = forgeWmExtractStepNumFromLabel(label);
+      const kgMatch = label.match(/[（(]\s*(\d+)\s*kg\s*[）)]|[·・](\d+)\s*$/i);
+      const kg = kgMatch ? String(kgMatch[1] || kgMatch[2] || "") : "";
+      return realm + "\0" + primary + "\0s" + stepNum + "\0k" + kg;
+    }
+
+    function forgeWmWeeklyMinRowProgressCur(row, weekAgg) {
+      const nKey = forgeWpNormalizeTaskKey(String(row.label || "").trim());
+      const agg = nKey ? weekAgg[nKey] : null;
+      return agg && typeof agg.sum === "number" && !Number.isNaN(agg.sum) ? agg.sum : 0;
+    }
+
+    function dedupeForgeWeeklyMinimumsInState() {
+      if (!state.forge || !Array.isArray(state.forge.weeklyMinimums)) return false;
+      const list = state.forge.weeklyMinimums;
+      if (list.length < 2) return false;
+      const weekKey = forgeGetThisWeekSundayKeyFromSelectedOrToday();
+      const aggByRealm = {
+        mind: aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "mind"),
+        body: aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "body"),
+        spt: aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "spt")
+      };
+      const groups = Object.create(null);
+      list.forEach(function (r) {
+        if (!r || typeof r !== "object") return;
+        const lb = String(r.label || "").trim();
+        if (!lb) return;
+        const realm = r.realm === "mind" ? "mind" : r.realm === "spt" ? "spt" : "body";
+        const parts = forgeWmSplitLabelSubtitle(lb);
+        const primary = forgeWpNormalizeTaskKey(parts.primary || lb);
+        const stepNum = forgeWmExtractStepNumFromLabel(lb);
+        const kgMatch = lb.match(/[（(]\s*(\d+)\s*kg\s*[）)]|[·・](\d+)\s*$/i);
+        const kg = kgMatch ? String(kgMatch[1] || kgMatch[2] || "") : "";
+        const exactKey = realm + "\0exact\0" + forgeWpNormalizeTaskKey(lb);
+        const semanticKey = forgeWmSemanticDedupeKey(lb, realm);
+        const keys = [exactKey, semanticKey];
+        if (stepNum > 0) {
+          keys.push(realm + "\0" + primary + "\0s0\0k" + kg);
+        }
+        keys.forEach(function (key) {
+          if (!key) return;
+          if (!groups[key]) groups[key] = [];
+          if (groups[key].indexOf(r) === -1) groups[key].push(r);
+        });
+      });
+      const toRemove = Object.create(null);
+      Object.keys(groups).forEach(function (key) {
+        const g = groups[key];
+        if (g.length <= 1) return;
+        const realm = g[0].realm === "mind" ? "mind" : g[0].realm === "spt" ? "spt" : "body";
+        const weekAgg = aggByRealm[realm];
+        let best = g[0];
+        let bestCur = forgeWmWeeklyMinRowProgressCur(best, weekAgg);
+        for (let i = 1; i < g.length; i++) {
+          const row = g[i];
+          const cur = forgeWmWeeklyMinRowProgressCur(row, weekAgg);
+          if (cur > bestCur) {
+            best = row;
+            bestCur = cur;
+            continue;
+          }
+          if (cur < bestCur) continue;
+          const bestLabel = String(best.label || "").trim();
+          const rowLabel = String(row.label || "").trim();
+          const bestStep = forgeWmExtractStepNumFromLabel(bestLabel);
+          const rowStep = forgeWmExtractStepNumFromLabel(rowLabel);
+          if (rowStep > bestStep) {
+            best = row;
+          } else if (rowStep === bestStep && rowLabel.length > bestLabel.length) {
+            best = row;
+          }
+        }
+        g.forEach(function (row) {
+          if (row !== best && row.id) toRemove[row.id] = true;
+        });
+      });
+      const removeIds = Object.keys(toRemove);
+      if (removeIds.length === 0) return false;
+      state.forge.weeklyMinimums = list.filter(function (r) {
+        return r && r.id && !toRemove[r.id];
+      });
+      return true;
+    }
+
+    function migrateForgeWeeklyMinimumsHygiene() {
+      let changed = false;
+      if (normalizeForgeWeeklyMinLabelsInState()) changed = true;
+      if (dedupeForgeWeeklyMinimumsInState()) changed = true;
+      return changed;
+    }
+
     function normalizeForgeWeeklyMinLabelsInState() {
       if (!state.forge || !Array.isArray(state.forge.weeklyMinimums)) return false;
       let changed = false;
@@ -70755,7 +70904,7 @@
 
     function renderForgeWeeklyMinRows() {
       ensureManualItemActionsGlobalDismiss();
-      if (normalizeForgeWeeklyMinLabelsInState()) {
+      if (migrateForgeWeeklyMinimumsHygiene()) {
         saveState();
       }
       const mindWrap = document.getElementById("forgeWeeklyMinRowsMind");
@@ -71258,8 +71407,8 @@
         initModuleSubTabs(
           forgeModule,
           [
-            { key: "forge-today-forge", label: "Today's Forge", panelEl: forgeTodayForgePanel, toggleBtn: null },
-            { key: "forge-today-standards", label: "周最低标准", panelEl: forgeTodayStandardsPanel, toggleBtn: null }
+            { key: "forge-today-forge", label: "Forge Log", panelEl: forgeTodayForgePanel, toggleBtn: null },
+            { key: "forge-today-standards", label: "Weekly Minimum", panelEl: forgeTodayStandardsPanel, toggleBtn: null }
           ],
           "今日训练"
         );
