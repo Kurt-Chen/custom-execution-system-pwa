@@ -18855,8 +18855,20 @@
         flex-wrap: nowrap;
       }
 
-      #habitRoutineModule .habit-en-row:not(.habit-health-weight-row) .habit-en-body > .submodule-note {
+      #habitRoutineModule .habit-en-row:not(.habit-health-weight-row) .habit-en-body > .submodule-note,
+      #habitRoutineModule .habit-en-row:not(.habit-health-weight-row) .habit-en-body > .habit-en-card-subhint {
         display: none;
+      }
+
+      #habitRoutineModule .habit-en-row:not(.habit-health-weight-row) .habit-en-remark-toggle {
+        font-size: 10px;
+        padding: 1px 7px;
+      }
+
+      #habitRoutineModule .habit-en-row:not(.habit-health-weight-row) .habit-en-remark-panel .submodule-note,
+      #habitRoutineModule .habit-en-row:not(.habit-health-weight-row) .habit-en-remark-panel .habit-en-card-subhint {
+        font-size: 10px;
+        line-height: 1.35;
       }
 
       #habitRoutineModule .habit-en-row:not(.habit-health-weight-row) .habit-en-minutes-input,
@@ -19656,6 +19668,7 @@
     }
 
     /* 正文列含说明（如目标副标题）时顶对齐，便于标题+说明自上而下阅读 */
+    #habitRoutineModule .habit-en-row:has(.habit-en-body .habit-en-remark-disclosure),
     #habitRoutineModule .habit-en-row:has(.habit-en-body .submodule-note),
     #habitRoutineModule .habit-en-row:has(.habit-en-body .habit-en-card-subhint) {
       align-items: flex-start;
@@ -19841,6 +19854,70 @@
       font-weight: 500;
       color: #64748b;
       line-height: 1.35;
+    }
+
+    /* 习惯静态说明：默认折叠，点「备注」展开 */
+    #habitRoutineModule .habit-en-body > .submodule-note,
+    #habitRoutineModule .habit-en-body > .habit-en-card-subhint {
+      display: none;
+    }
+
+    #habitRoutineModule .habit-en-remark-disclosure {
+      margin: 2px 0 0;
+      max-width: 100%;
+    }
+
+    #habitRoutineModule .habit-en-remark-toggle {
+      appearance: none;
+      margin: 0;
+      padding: 1px 8px;
+      border: 1px solid #e2e8f0;
+      border-radius: 999px;
+      background: #f8fafc;
+      color: #64748b;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.45;
+      cursor: pointer;
+      transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    }
+
+    #habitRoutineModule .habit-en-remark-toggle:hover {
+      background: #f1f5f9;
+      border-color: #cbd5e1;
+      color: #475569;
+    }
+
+    #habitRoutineModule .habit-en-remark-toggle:focus-visible {
+      outline: 2px solid rgba(99, 102, 241, 0.45);
+      outline-offset: 1px;
+    }
+
+    #habitRoutineModule .habit-en-remark-disclosure.is-open .habit-en-remark-toggle {
+      background: #eef2ff;
+      border-color: #c7d2fe;
+      color: #4338ca;
+    }
+
+    #habitRoutineModule .habit-en-remark-panel {
+      margin-top: 4px;
+    }
+
+    #habitRoutineModule .habit-en-remark-panel[hidden] {
+      display: none !important;
+    }
+
+    #habitRoutineModule .habit-en-remark-panel .submodule-note,
+    #habitRoutineModule .habit-en-remark-panel .habit-en-card-subhint {
+      display: block;
+      margin: 0;
+      font-size: 11px;
+      color: #64748b;
+      line-height: 1.4;
+    }
+
+    #habitRoutineModule .habit-en-remark-panel .habit-title-lang--desktop {
+      display: inline;
     }
 
     #habitRoutineModule .habit-en-row > .habit-en-week-bar {
@@ -68275,6 +68352,59 @@
       }
     }
 
+    function initHabitEnRemarkDisclosures() {
+      const bundle = document.getElementById("habitHabitsBundle");
+      if (!bundle || bundle.dataset.habitRemarkDisclosureInit === "1") return;
+      bundle.dataset.habitRemarkDisclosureInit = "1";
+      bundle.querySelectorAll(".habit-en-row").forEach(function (row) {
+        const body = row.querySelector(":scope > .habit-en-body");
+        if (!body || body.querySelector(".habit-en-remark-disclosure")) return;
+        const notes = Array.from(
+          body.querySelectorAll(":scope > .submodule-note, :scope > .habit-en-card-subhint")
+        );
+        if (!notes.length) return;
+        let hasText = false;
+        notes.forEach(function (node) {
+          if (String(node.textContent || "").replace(/\s+/g, " ").trim()) hasText = true;
+        });
+        if (!hasText) {
+          notes.forEach(function (node) {
+            node.remove();
+          });
+          return;
+        }
+        const wrap = document.createElement("div");
+        wrap.className = "habit-en-remark-disclosure";
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "habit-en-remark-toggle";
+        btn.setAttribute("aria-expanded", "false");
+        btn.textContent = "备注";
+        const panel = document.createElement("div");
+        panel.className = "habit-en-remark-panel";
+        panel.hidden = true;
+        notes.forEach(function (node) {
+          panel.appendChild(node);
+        });
+        btn.addEventListener("click", function () {
+          const open = !wrap.classList.contains("is-open");
+          wrap.classList.toggle("is-open", open);
+          btn.setAttribute("aria-expanded", open ? "true" : "false");
+          panel.hidden = !open;
+        });
+        wrap.appendChild(btn);
+        wrap.appendChild(panel);
+        const title = body.querySelector(
+          ":scope > .submodule-title, :scope > .habit-en-experiment-title-wrap"
+        );
+        if (title) {
+          title.insertAdjacentElement("afterend", wrap);
+        } else {
+          body.appendChild(wrap);
+        }
+      });
+    }
+
     function initHabitCategoryDesktopTabs() {
       const strip = document.getElementById("habitCategoryTabStrip");
       if (!strip || strip.dataset.habitDesktopTabsInit === "1") {
@@ -68915,6 +69045,7 @@
     const FORGE_WP_SPT_TASK_NAME_EXTRAS = ["腹肌轮", "凯格尔", "边缘控制"];
 
     syncMyGoalsHeaderTitleForViewport();
+    initHabitEnRemarkDisclosures();
     render();
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState !== "visible") return;
