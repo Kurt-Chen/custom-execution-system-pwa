@@ -1520,13 +1520,13 @@
         border-radius: 0 !important;
         border: none !important;
         border-right: 1px solid #cbd5e1 !important;
-        padding: 10px 6px !important;
-        min-height: 40px !important;
-        font-size: 11px !important;
+        padding: 9px 4px !important;
+        min-height: 38px !important;
+        font-size: clamp(9px, 2.7vw, 10px) !important;
         font-weight: 600 !important;
-        line-height: 1.2 !important;
+        line-height: 1.15 !important;
         box-shadow: none !important;
-        white-space: normal !important;
+        white-space: nowrap !important;
       }
 
       #forgePanelToday > .module-sub-tabs > .module-sub-tab-btn:last-of-type {
@@ -7908,6 +7908,14 @@
       color: #0f172a;
     }
 
+    #forgeModule .forge-task-card.forge-task-card--daily-min-shortfall .forge-task-text-cn,
+    #forgeModule
+      .forge-task-card.forge-task-card--daily-min-shortfall
+      .forge-task-card-title-wrap
+      > .forge-task-text:not(:has(> .forge-task-text-cn)) {
+      color: #dc2626;
+    }
+
     #forgeModule .forge-task-card .forge-task-text em {
       display: block;
       margin-top: 2px;
@@ -9573,6 +9581,11 @@
 
     #forgeModule .forge-weekly-min-row--complete .forge-wm-name-display {
       color: #94a3b8;
+    }
+
+    #forgeModule .forge-weekly-min-row--daily-min-shortfall .forge-wm-name-display,
+    #forgeModule .forge-weekly-min-row--daily-min-shortfall .forge-wm-t-name-primary {
+      color: #dc2626;
     }
 
     #forgeModule .forge-weekly-min-row--complete .forge-wm-name-remark {
@@ -18803,8 +18816,9 @@
         vertical-align: baseline;
       }
 
-      /* 手机端：不展示习惯终身累计（× 胶囊）与分类周目标进度 */
+      /* 手机端：不展示习惯终身累计（× 胶囊）、日最低与分类周目标进度 */
       #habitRoutineModule .submodule-title .habit-title-lifetime-num,
+      #habitRoutineModule .submodule-title .habit-title-daily-min,
       #habitRoutineModule .habit-category-panel .habit-en-experiment-lifetime-ratio,
       #habitRoutineModule .habit-group-header-progress,
       #habitRoutineModule .habit-en-learning-progress.habit-group-header-progress {
@@ -19509,6 +19523,34 @@
       color: #4338ca;
       background: #eef2ff;
       border: 1px solid rgba(99, 102, 241, 0.18);
+    }
+
+    #habitRoutineModule .submodule-title .habit-title-daily-min {
+      display: inline-flex;
+      align-items: center;
+      margin-left: 1ch;
+      padding: 2px 8px 2px 7px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.2;
+      white-space: nowrap;
+      flex-shrink: 0;
+      vertical-align: baseline;
+      color: #b45309;
+      background: #fffbeb;
+      border: 1px solid rgba(245, 158, 11, 0.35);
+    }
+
+    #habitRoutineModule .submodule-title .habit-title-daily-min.habit-title-daily-min--complete {
+      color: #047857;
+      background: #ecfdf5;
+      border-color: rgba(16, 185, 129, 0.35);
+    }
+
+    #habitRoutineModule .submodule-title.habit-title--daily-min-shortfall .habit-title-text-wrap {
+      color: #dc2626;
     }
 
     #habitRoutineModule .habit-category-panel[data-habit-category="focus"] .habit-title-lifetime-num,
@@ -51819,6 +51861,33 @@
       return habitKey === "exmindVocab";
     }
 
+    /** 习惯日最低（写死在代码；桌面标题 × 累计后显示 cur/target） */
+    const HABIT_DAILY_MINIMUMS = {
+      exmindVocab: 200,
+      miraaShadowing: 60,
+      audibleMeditation: 30
+    };
+
+    function getHabitDailyMinTarget(habitKey) {
+      const t = HABIT_DAILY_MINIMUMS[habitKey];
+      return typeof t === "number" && !Number.isNaN(t) && t > 0 ? t : null;
+    }
+
+    function getHabitTodayNumericTotal(habitKey, dateKey) {
+      const hc = state.habitCheckins && typeof state.habitCheckins === "object" ? state.habitCheckins : {};
+      const day = hc[dateKey];
+      if (!day || typeof day !== "object") return 0;
+      const v = day[habitKey];
+      if (!v || typeof v !== "object") return 0;
+      if (isHabitWordCountKey(habitKey) && Number.isFinite(v.wordCount) && v.wordCount > 0) {
+        return v.wordCount;
+      }
+      if (isHabitMinutesKey(habitKey) && Number.isFinite(v.minutes) && v.minutes > 0) {
+        return v.minutes;
+      }
+      return 0;
+    }
+
     const EXPERIMENT_LAB_HABIT_KEY = "experimentLab10000";
     const EXPERIMENT_LAB_GOAL = 10000;
 
@@ -52050,15 +52119,58 @@
         return;
       }
       const lifetime = titleEl.querySelector(":scope > .habit-title-lifetime-num");
+      const dailyMin = titleEl.querySelector(":scope > .habit-title-daily-min");
+      const anchor = lifetime || dailyMin;
       const wrap = document.createElement("span");
       wrap.className = "habit-title-text-wrap";
-      while (titleEl.firstChild && titleEl.firstChild !== lifetime) {
+      while (titleEl.firstChild && titleEl.firstChild !== anchor) {
         wrap.appendChild(titleEl.firstChild);
       }
       if (!wrap.childNodes.length) {
         return;
       }
-      titleEl.insertBefore(wrap, lifetime || null);
+      titleEl.insertBefore(wrap, anchor || null);
+    }
+
+    function ensureAndUpdateHabitTitleDailyMin(card, habitKey, dateKey) {
+      if (!card || !habitKey) {
+        return;
+      }
+      const target = getHabitDailyMinTarget(habitKey);
+      const titleEl = getHabitCardTitleElementForLifetimeCount(card);
+      if (!titleEl) {
+        return;
+      }
+      let dailyEl = titleEl.querySelector(":scope > .habit-title-daily-min");
+      if (!target) {
+        if (dailyEl) {
+          dailyEl.remove();
+        }
+        titleEl.classList.remove("habit-title--daily-min-shortfall");
+        return;
+      }
+      ensureHabitTitleTextWrap(titleEl);
+      if (!dailyEl) {
+        dailyEl = document.createElement("span");
+        dailyEl.className = "habit-title-daily-min";
+        dailyEl.setAttribute("aria-label", "今日累计 / 日最低标准");
+        const lifeEl = titleEl.querySelector(":scope > .habit-title-lifetime-num");
+        if (lifeEl) {
+          lifeEl.insertAdjacentElement("afterend", dailyEl);
+        } else {
+          titleEl.appendChild(dailyEl);
+        }
+      } else {
+        const lifeEl = titleEl.querySelector(":scope > .habit-title-lifetime-num");
+        if (lifeEl && dailyEl.previousElementSibling !== lifeEl) {
+          lifeEl.insertAdjacentElement("afterend", dailyEl);
+        }
+      }
+      const cur = getHabitTodayNumericTotal(habitKey, dateKey || formatDateInputValue(new Date()));
+      const complete = cur >= target;
+      dailyEl.textContent = String(cur) + "/" + String(target);
+      dailyEl.classList.toggle("habit-title-daily-min--complete", complete);
+      titleEl.classList.toggle("habit-title--daily-min-shortfall", !complete);
     }
 
     function ensureAndUpdateHabitTitleLifetimeCount(card, habitKey) {
@@ -56753,10 +56865,16 @@
     /** Mind：×累计紧挨主标题；Body/性表现：中文+×累计第一行、英文第二行；日/周进度在卡头中列（桌面） */
     function syncForgeTaskWeekMinProgressUi(row) {
       const realm = forgeTaskRowWeekMinRealm(row);
-      if (!realm) return;
+      if (!realm) {
+        row.classList.remove("forge-task-card--daily-min-shortfall");
+        return;
+      }
       const top = row.querySelector(".forge-task-card-top");
       const titleWrap = row.querySelector(".forge-task-card-title-wrap");
-      if (!top || !titleWrap) return;
+      if (!top || !titleWrap) {
+        row.classList.remove("forge-task-card--daily-min-shortfall");
+        return;
+      }
 
       const taskText = titleWrap.querySelector(".forge-task-text");
       const bodyLike = realm === "body" || realm === "spt";
@@ -56833,6 +56951,7 @@
         groupEl.setAttribute("aria-hidden", "true");
         lifeEl.textContent = "";
         lifeEl.classList.add("forge-task-lifetime-total--hide");
+        row.classList.remove("forge-task-card--daily-min-shortfall");
         return;
       }
 
@@ -56919,6 +57038,8 @@
         groupEl.classList.add("forge-task-min-progress-group--hide");
         groupEl.setAttribute("aria-hidden", "true");
       }
+
+      row.classList.toggle("forge-task-card--daily-min-shortfall", !!(dm && dayCur < dm.target));
     }
 
     function syncForgeTaskRowValFromDoneAggregates(row, dateKey) {
@@ -69012,6 +69133,7 @@
         const key = card.dataset.habitKey;
         if (key) {
           ensureAndUpdateHabitTitleLifetimeCount(card, key);
+          ensureAndUpdateHabitTitleDailyMin(card, key, todayKey);
         }
         const dayData = state.habitCheckins[todayKey] || {};
         const checked = isHabitCheckedOnDate(todayKey, key);
@@ -72150,6 +72272,7 @@
         }
         syncWmDisplayFromInputs();
         applyForgeWeeklyMinProgressUI(el, prog, unitDisp, "今日进度");
+        el.classList.toggle("forge-weekly-min-row--daily-min-shortfall", target > 0 && cur < target);
         nameInputs.forEach(function (inp) {
           inp.addEventListener("input", function () {
             syncAllWmInputsFrom(inp);
