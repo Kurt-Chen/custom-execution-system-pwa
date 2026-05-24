@@ -57397,6 +57397,7 @@
 
     function refreshAllForgeTodayTaskRowsFromDone() {
       migrateForgeMindMetaRowKeysIfNeeded();
+      if (migrateForgeDailyMinimumsHygiene()) saveState();
       applyForgeTaskIdlePlaceholdersNoDailyGoal();
       const mod = document.getElementById("forgeModule");
       if (!mod) return;
@@ -71505,6 +71506,58 @@
       if (migratedRealm) saveState();
     }
 
+    /** 写死在代码中的 Forge 日最低（首次加载写入 dailyMinimums，之后可在 Daily Minimum Tab 调整） */
+    const FORGE_BUILTIN_DAILY_MINIMUMS = [
+      { realm: "body", label: "第3式 折刀引体", dailyMin: 10, unit: "reps" },
+      { realm: "body", label: "第2式 平卧抬膝", dailyMin: 10, unit: "reps" }
+    ];
+
+    function ensureForgeBuiltinDailyMinimumsSeeded() {
+      ensureForgeDailyMinimumsState();
+      let changed = false;
+      FORGE_BUILTIN_DAILY_MINIMUMS.forEach(function (spec) {
+        if (!spec || !spec.label) return;
+        const nKey = forgeWpNormalizeTaskKey(spec.label);
+        if (!nKey) return;
+        const realm = spec.realm === "mind" ? "mind" : spec.realm === "spt" ? "spt" : "body";
+        let row = null;
+        for (let i = 0; i < state.forge.dailyMinimums.length; i++) {
+          const r = state.forge.dailyMinimums[i];
+          if (!r || typeof r !== "object") continue;
+          const rowRealm = r.realm === "mind" ? "mind" : r.realm === "spt" ? "spt" : "body";
+          if (rowRealm !== realm) continue;
+          if (forgeWpNormalizeTaskKey(String(r.label || "")) === nKey) {
+            row = r;
+            break;
+          }
+        }
+        if (!row) {
+          state.forge.dailyMinimums.push({
+            id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+            realm: realm,
+            label: spec.label,
+            dailyMin: String(spec.dailyMin),
+            unit: spec.unit || "reps"
+          });
+          changed = true;
+          return;
+        }
+        if (String(row.dailyMin || "").trim() !== String(spec.dailyMin)) {
+          row.dailyMin = String(spec.dailyMin);
+          changed = true;
+        }
+        if (spec.unit && String(row.unit || "").trim() !== spec.unit) {
+          row.unit = spec.unit;
+          changed = true;
+        }
+        if (row.realm !== realm) {
+          row.realm = realm;
+          changed = true;
+        }
+      });
+      return changed;
+    }
+
     function ensureForgeDailyMinimumsState() {
       if (!state.forge || typeof state.forge !== "object") state.forge = {};
       if (!Array.isArray(state.forge.dailyMinimums)) state.forge.dailyMinimums = [];
@@ -71579,7 +71632,9 @@
     }
 
     function migrateForgeDailyMinimumsHygiene() {
-      return normalizeForgeDailyMinLabelsInState();
+      let changed = normalizeForgeDailyMinLabelsInState();
+      if (ensureForgeBuiltinDailyMinimumsSeeded()) changed = true;
+      return changed;
     }
 
     function refreshForgeDailyMinTaskDatalist() {
