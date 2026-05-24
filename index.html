@@ -48059,6 +48059,9 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
   <script>
     const STORAGE_KEY = "todo-app-data-v1";
+    /** 最近一次成功落盘的全量备份（仅 localStorage，用于主存储损坏/被空云端覆盖时自救） */
+    const STATE_EMERGENCY_BACKUP_KEY = "todo-app-data-emergency-backup-v1";
+    const STATE_EMERGENCY_BACKUP_MAX_CHARS = 4500000;
     /** 主数据存 IndexedDB（容量远大于 localStorage）；小配置仍用 localStorage */
     const IDB_APP_NAME = "exec-system-app-db";
     const IDB_APP_VERSION = 1;
@@ -48185,7 +48188,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260527c";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260527d";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** My Done 手机端行高：{ padY, minHeight }，与 :root 中 --done-list-row-* 对应 */
@@ -52021,31 +52024,7 @@
             const remoteAt = coerceCloudUpdatedAt(payload.updatedAt);
             const merged = mergeLocalStateWithRemotePayloadBeforePush(payload.state, remoteAt, lastSeen);
             if (merged) {
-              let mergedJson = "";
-              try {
-                mergedJson = JSON.stringify(merged);
-              } catch (_e) {
-                mergedJson = "";
-              }
-              const beforeJson = serializeStateForCloud();
-              if (mergedJson && mergedJson !== beforeJson) {
-                cloudSyncSuppressPush = true;
-                try {
-                  const persistRes = applyStateJsonToLocalStorage(mergedJson);
-                  if (persistRes.ok) {
-                    setCloudSyncHashFromCurrentState();
-                    render();
-                    if (!persistRes.localPersisted && persistRes.quotaError) {
-                      cloudSyncLastErrorMsg = formatCloudSyncError(
-                        persistRes.quotaError,
-                        "本地存储空间不足"
-                      );
-                    }
-                  }
-                } finally {
-                  cloudSyncSuppressPush = false;
-                }
-              }
+              applyMergedCloudStateInMemory(merged, { skipRender: true });
             }
           }
           nextHash = serializeStateForCloud();
@@ -52099,6 +52078,93 @@
             }
           }
         });
+    }
+
+    function maybeWriteStateEmergencyBackup(json) {
+      const s = String(json || "");
+      if (!s.length || s.length > STATE_EMERGENCY_BACKUP_MAX_CHARS) return;
+      try {
+        localStorage.setItem(STATE_EMERGENCY_BACKUP_KEY, s);
+      } catch (_e) {}
+    }
+
+    function tryRestoreStateFromEmergencyBackup() {
+      let curDone = 0;
+      try {
+        const raw = getPersistedStateJsonFromCache();
+        if (raw) {
+          const p = JSON.parse(raw);
+          if (Array.isArray(p.done)) curDone = p.done.length;
+        }
+      } catch (_e) {}
+      if (curDone > 0) return false;
+      let bak = null;
+      try {
+        bak = localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY);
+      } catch (_e) {}
+      if (!bak) return false;
+      try {
+        const p = JSON.parse(bak);
+        if (!Array.isArray(p.done) || p.done.length === 0) return false;
+        const persistRes = applyStateJsonToLocalStorage(bak);
+        if (!persistRes.ok) return false;
+        console.warn("[存储] 已从紧急备份恢复 " + p.done.length + " 条 My Done 记录。");
+        return true;
+      } catch (_e) {
+        return false;
+      }
+    }
+
+    function applyMergedCloudStateInMemory(merged, opts) {
+      if (!merged || !Array.isArray(merged.done)) return { ok: false };
+      const skipRender = Boolean(opts && opts.skipRender);
+      cloudSyncApplyingRemote = true;
+      cloudSyncSuppressPush = true;
+      try {
+        state = merged;
+        normalizeDoneListJournalFieldsInState();
+        normalizeDoneOutcomeKindsInState();
+        reconcileDerivedCheckinsFromDoneAfterLoad();
+        repairDoneListCompletedAtFromHabitMeta();
+        restoreDoneListFromHabitCheckinsIfMissing();
+        if (reconcileWeeklyPlanTasksToDeadlineWeeks()) {
+          /* 不写 saveState，避免合并过程中再次 push */
+        }
+        setCloudSyncHashFromCurrentState();
+        const r = persistStateToLocalStorage();
+        if (!skipRender) render();
+        return r;
+      } finally {
+        cloudSyncSuppressPush = false;
+        cloudSyncApplyingRemote = false;
+      }
+    }
+
+    /**
+     * 合并云端 payload：禁止用「空远端 Done」覆盖本机；force 时整包覆盖（拉取最新）。
+     */
+    function applyCloudPayloadWithMerge(payload, opts) {
+      if (!payload || !payload.state || !Array.isArray(payload.state.done)) return false;
+      const force = Boolean(opts && opts.force);
+      if (force) {
+        return applyRemoteState(payload.state, true);
+      }
+      const localLen = Array.isArray(state.done) ? state.done.length : 0;
+      const remoteLen = payload.state.done.length;
+      if (remoteLen === 0 && localLen > 0) {
+        cloudSyncLastErrorMsg =
+          "云端 Done 为空，已保留本机记录。请检查网络/代理后点角标重试同步，或在电脑端确认已成功上传。";
+        setCloudSyncStatus("同步错误", "status-error");
+        return false;
+      }
+      const merged = mergeLocalStateWithRemotePayloadBeforePush(
+        payload.state,
+        coerceCloudUpdatedAt(payload.updatedAt),
+        getCloudLastSeenUpdatedAt()
+      );
+      if (!merged) return false;
+      const r = applyMergedCloudStateInMemory(merged, opts);
+      return Boolean(r && r.ok);
     }
 
     function applyRemoteState(remoteState, force) {
@@ -52211,18 +52277,32 @@
         }
         /* 部分 Android 平板 WebView 上匿名登录可能长时间不 resolve，导致一直「连接中…」 */
         const authTimeoutMs = getCloudSyncAuthTimeoutMs();
-        await promiseWithTimeout(
-          firebase.auth().signInAnonymously(),
-          authTimeoutMs,
-          new Error(
-            "Firebase 匿名登录超时（约 " +
-              Math.round(authTimeoutMs / 1000) +
-              " 秒）。请检查 Wi‑Fi/流量、是否禁止本浏览器联网，或关闭 Private DNS/省电限制后重试。"
-          )
-        );
+        let authed = false;
+        for (let authAttempt = 0; authAttempt < 2 && !authed; authAttempt++) {
+          try {
+            await promiseWithTimeout(
+              firebase.auth().signInAnonymously(),
+              authTimeoutMs,
+              new Error(
+                "Firebase 匿名登录超时（约 " +
+                  Math.round(authTimeoutMs / 1000) +
+                  " 秒）。请检查 Wi‑Fi/流量、是否禁止本浏览器联网，或关闭 Private DNS/省电限制后重试。"
+              )
+            );
+            authed = true;
+          } catch (authErr) {
+            if (authAttempt === 0 && isTransientCloudSyncError(authErr)) {
+              await new Promise(function (r) {
+                window.setTimeout(r, 1200);
+              });
+              continue;
+            }
+            throw authErr;
+          }
+        }
         cloudSyncRef = firebase.database().ref("rooms/" + cloudSyncRoomId + "/state");
         /* 先读房间快照；与 push 相同做按条合并 + 全局 LWW，避免「remoteAt≤lastSeen」时拒绝拉取导致落后本机丢他端打卡 */
-        const initialSnap = await readRealtimeDbSnapshotOnce(cloudSyncRef);
+        const initialSnap = await readRealtimeDbSnapshotOnceWithRetry(cloudSyncRef, 2);
         const initialPayload =
           initialSnap && typeof initialSnap.val === "function"
             ? initialSnap.val()
@@ -52231,35 +52311,7 @@
         let initRemoteStateForPush = null;
         if (initialPayload && initialPayload.state && Array.isArray(initialPayload.state.done)) {
           const remoteAt = coerceCloudUpdatedAt(initialPayload.updatedAt);
-          const lastSeen = getCloudLastSeenUpdatedAt();
-          const merged = mergeLocalStateWithRemotePayloadBeforePush(initialPayload.state, remoteAt, lastSeen);
-          if (merged) {
-            let mergedJson = "";
-            try {
-              mergedJson = JSON.stringify(merged);
-            } catch (_e) {
-              mergedJson = "";
-            }
-            const beforeJson = serializeStateForCloud();
-            if (mergedJson && mergedJson !== beforeJson) {
-              cloudSyncSuppressPush = true;
-              try {
-                const persistRes = applyStateJsonToLocalStorage(mergedJson);
-                if (persistRes.ok) {
-                  setCloudSyncHashFromCurrentState();
-                  render();
-                  if (!persistRes.localPersisted && persistRes.quotaError) {
-                    cloudSyncLastErrorMsg = formatCloudSyncError(
-                      persistRes.quotaError,
-                      "本地存储空间不足"
-                    );
-                  }
-                }
-              } finally {
-                cloudSyncSuppressPush = false;
-              }
-            }
-          }
+          applyCloudPayloadWithMerge(initialPayload);
           if (remoteAt > 0) {
             setCloudLastSeenUpdatedAt(remoteAt);
           }
@@ -52267,8 +52319,9 @@
         }
         setCloudSyncHashFromCurrentState();
         cloudSyncReady = true;
-        cloudSyncLastErrorMsg = "";
-        setCloudSyncStatus("已连接 ✓", "status-connected");
+        if (!cloudSyncLastErrorMsg) {
+          setCloudSyncStatus("已连接 ✓", "status-connected");
+        }
         if (initRemoteStateForPush) {
           scheduleCloudSyncPushIfMergedDiffersFromRemote(initRemoteStateForPush);
         }
@@ -52285,42 +52338,14 @@
             return;
           }
           setCloudSyncStatus("同步中...", "status-syncing");
-          const lastSeenVal = getCloudLastSeenUpdatedAt();
-          const mergedVal = mergeLocalStateWithRemotePayloadBeforePush(payload.state, ua, lastSeenVal);
-          if (mergedVal) {
-            let mj = "";
-            try {
-              mj = JSON.stringify(mergedVal);
-            } catch (_e) {
-              mj = "";
-            }
-            const bj = serializeStateForCloud();
-            if (mj && mj !== bj) {
-              cloudSyncSuppressPush = true;
-              try {
-                const persistRes = applyStateJsonToLocalStorage(mj);
-                if (persistRes.ok) {
-                  setCloudSyncHashFromCurrentState();
-                  render();
-                  if (!persistRes.localPersisted && persistRes.quotaError) {
-                    cloudSyncLastErrorMsg = formatCloudSyncError(
-                      persistRes.quotaError,
-                      "本地存储空间不足"
-                    );
-                  }
-                }
-              } finally {
-                cloudSyncSuppressPush = false;
-              }
-            }
-          } else if (payload.state && Array.isArray(payload.state.done)) {
-            applyRemoteState(payload.state, false);
-          }
+          applyCloudPayloadWithMerge(payload);
           if (ua > 0) {
             setCloudLastSeenUpdatedAt(ua);
           }
           scheduleCloudSyncPushIfMergedDiffersFromRemote(payload.state);
-          setCloudSyncStatus("已连接 ✓", "status-connected");
+          if (!cloudSyncLastErrorMsg) {
+            setCloudSyncStatus("已连接 ✓", "status-connected");
+          }
         });
         /* 延后首次 push，让 on('value') 先处理他端写入，避免 get 与 push 之间的窄窗口把旧本机盖掉云端 */
         window.setTimeout(() => {
@@ -52331,10 +52356,39 @@
       } catch (err) {
         console.warn("云同步初始化失败:", err);
         setCloudSyncError(err, "云同步初始化失败");
+        if (tryRestoreStateFromEmergencyBackup()) {
+          repairDoneListCompletedAtFromHabitMeta();
+          restoreDoneListFromHabitCheckinsIfMissing();
+          render();
+        }
       } finally {
         cloudSyncInitInFlight = false;
       }
     }
+
+    window.retryCloudSync = function retryCloudSync() {
+      cloudSyncReady = false;
+      cloudSyncRef = null;
+      cloudSyncInitInFlight = false;
+      return initCloudSync();
+    };
+
+    window.debugExecutionState = function debugExecutionState() {
+      const today = formatDateInputValue(new Date());
+      const todayDone = (state.done || []).filter(function (t) {
+        return doneTaskMatchesFilterDate(t, today);
+      }).length;
+      return {
+        storage: typeof getStateStorageInfo === "function" ? getStateStorageInfo() : null,
+        doneTotal: Array.isArray(state.done) ? state.done.length : 0,
+        todayDone: todayDone,
+        selectedDoneDate: selectedDoneDate,
+        habitCheckinDates: Object.keys(state.habitCheckins || {}).length,
+        cloudSyncReady: cloudSyncReady,
+        cloudSyncError: cloudSyncLastErrorMsg || null,
+        hasEmergencyBackup: Boolean(localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY))
+      };
+    };
 
     window.configureFirebaseCloudSync = function configureFirebaseCloudSync(configObjOrJson, roomId) {
       try {
@@ -52400,13 +52454,16 @@
       function syncWriteLocalOnly() {
         localStorage.setItem(STORAGE_KEY, json);
         _stateJsonCache = json;
+        maybeWriteStateEmergencyBackup(json);
       }
 
       function enqueueIdbWrite() {
         _stateJsonCache = json;
         statePersistQueue = statePersistQueue
           .then(function () {
-            return writeStateJsonToBackend(json);
+            return writeStateJsonToBackend(json).then(function () {
+              maybeWriteStateEmergencyBackup(json);
+            });
           })
           .catch(function (idbErr) {
             console.warn("[存储] IndexedDB 写入失败，回退 localStorage:", idbErr);
@@ -70573,6 +70630,10 @@
         stateStorageReady = true;
       }
       loadState();
+      if (tryRestoreStateFromEmergencyBackup()) {
+        repairDoneListCompletedAtFromHabitMeta();
+        restoreDoneListFromHabitCheckinsIfMissing();
+      }
       if (repairDoneListCompletedAtFromHabitMeta() || restoreDoneListFromHabitCheckinsIfMissing()) {
         try {
           persistStateToLocalStorage();
