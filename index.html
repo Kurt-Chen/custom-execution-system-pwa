@@ -48060,7 +48060,7 @@
   <script>
     const STORAGE_KEY = "todo-app-data-v1";
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260525a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260525b";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** My Done 手机端行高：{ padY, minHeight }，与 :root 中 --done-list-row-* 对应 */
@@ -48671,6 +48671,7 @@
     let cloudSyncSuppressPush = false;
     /** 最近一次成功的云端快照（推送前合并用；平板弱网读失败时回退） */
     let cloudSyncCachedRemotePayload = null;
+    let cloudSyncCacheUpdatedAt = 0;
     let cloudSyncPushBackoffUntil = 0;
     let cloudSyncConsecutivePushFailures = 0;
 
@@ -48874,28 +48875,36 @@
     }
 
     function isTransientCloudSyncError(err) {
-      const msg = formatCloudSyncError(err, "").toLowerCase();
-      if (!msg) return false;
+      const raw =
+        err && typeof err === "object"
+          ? (typeof err.code === "string" ? err.code + " " : "") +
+            (typeof err.message === "string" ? err.message : String(err))
+          : String(err || "");
+      const low = raw.toLowerCase();
+      if (!low) return false;
       return (
-        msg.includes("超时") ||
-        msg.includes("timeout") ||
-        msg.includes("network") ||
-        msg.includes("unavailable") ||
-        msg.includes("offline") ||
-        msg.includes("aborterror") ||
-        msg.includes("failed to fetch") ||
-        msg.includes("connection") ||
-        msg.includes("disconnected")
+        low.includes("超时") ||
+        low.includes("timeout") ||
+        low.includes("network") ||
+        low.includes("unavailable") ||
+        low.includes("offline") ||
+        low.includes("aborterror") ||
+        low.includes("failed to fetch") ||
+        low.includes("connection") ||
+        low.includes("disconnected")
       );
     }
 
     function rememberCloudSyncRemotePayload(payload) {
       if (!payload || !payload.state || !Array.isArray(payload.state.done)) return;
-      cloudSyncCachedRemotePayload = {
-        state: payload.state,
-        updatedAt: coerceCloudUpdatedAt(payload.updatedAt),
-        updatedBy: payload.updatedBy
-      };
+      try {
+        cloudSyncCachedRemotePayload = {
+          state: JSON.parse(JSON.stringify(payload.state)),
+          updatedAt: coerceCloudUpdatedAt(payload.updatedAt),
+          updatedBy: payload.updatedBy
+        };
+        cloudSyncCacheUpdatedAt = Date.now();
+      } catch (_e) {}
     }
 
     async function readRealtimeDbSnapshotOnce(ref) {
@@ -48934,21 +48943,35 @@
       throw lastErr || new Error("读取云端失败");
     }
 
-    async function fetchRemotePayloadForPushMerge() {
+    /** 推送前取远端：优先用 onValue/初始化留下的快照，减少每次 push 都 get 导致的失败 */
+    async function getRemotePayloadForPushMerge() {
       if (!cloudSyncRef) {
         throw new Error("Firebase ref 无效");
       }
+      const cacheAge = Date.now() - (cloudSyncCacheUpdatedAt || 0);
+      if (cloudSyncCachedRemotePayload && cloudSyncCachedRemotePayload.state && cacheAge < 20000) {
+        return cloudSyncCachedRemotePayload;
+      }
       try {
-        const snap = await readRealtimeDbSnapshotOnceWithRetry(cloudSyncRef);
+        const snap = await readRealtimeDbSnapshotOnce(cloudSyncRef);
         const payload = snap && typeof snap.val === "function" ? snap.val() : null;
         rememberCloudSyncRemotePayload(payload);
-        return payload;
+        return payload || cloudSyncCachedRemotePayload;
       } catch (readErr) {
         if (cloudSyncCachedRemotePayload && cloudSyncCachedRemotePayload.state) {
           console.warn("云同步：读取云端失败，使用最近一次快照合并后上传。", readErr);
           return cloudSyncCachedRemotePayload;
         }
         throw readErr;
+      }
+    }
+
+    /** Realtime Database 拒绝含 undefined 的对象；须与 JSON.stringify 一致地去掉 undefined */
+    function cloneStateForFirebaseUpload(src) {
+      try {
+        return JSON.parse(JSON.stringify(src != null ? src : state));
+      } catch (_e) {
+        return null;
       }
     }
 
@@ -49032,6 +49055,12 @@
         return (
           raw +
           " — 单次上传数据过大。可尝试：在电脑端清理 My Done / 垃圾桶中的旧记录，或导出备份后删减历史再同步。"
+        );
+      }
+      if (low.includes("undefined") && (low.includes("property") || low.includes("contains"))) {
+        return (
+          raw +
+          " — 上传数据含无效字段（undefined）。请刷新到最新版本后重试；若仍失败请反馈。"
         );
       }
       return raw;
@@ -51664,7 +51693,7 @@
           ? firebase.database.ServerValue.TIMESTAMP
           : Date.now();
 
-      fetchRemotePayloadForPushMerge()
+      getRemotePayloadForPushMerge()
         .then((payload) => {
           const lastSeen = getCloudLastSeenUpdatedAt();
           if (payload && payload.state && Array.isArray(payload.state.done)) {
@@ -51696,8 +51725,12 @@
             setCloudSyncStatus("已连接 ✓", "status-connected");
             return null;
           }
+          const uploadState = cloneStateForFirebaseUpload(state);
+          if (!uploadState) {
+            throw new Error("本机数据无法序列化（可能含循环引用），无法上传。");
+          }
           return cloudSyncRef.set({
-            state: state,
+            state: uploadState,
             updatedAt: serverTs,
             updatedBy: cloudSyncClientId
           });
@@ -51711,22 +51744,17 @@
           cloudSyncConsecutivePushFailures = 0;
           cloudSyncPushBackoffUntil = 0;
           setCloudSyncStatus("已连接 ✓", "status-connected");
-          return readRealtimeDbSnapshotOnceWithRetry(cloudSyncRef, 2)
-            .then((snap) => {
-              const payload = snap && typeof snap.val === "function" ? snap.val() : null;
-              rememberCloudSyncRemotePayload(payload);
-              const ua = coerceCloudUpdatedAt(payload && payload.updatedAt);
-              if (ua > 0) {
-                setCloudLastSeenUpdatedAt(ua);
-              }
-            })
-            .catch(() => {});
         })
         .catch((err) => {
-          console.warn("云同步写入失败:", err);
+          console.warn("云同步失败:", err);
           cloudSyncConsecutivePushFailures = Math.min(12, cloudSyncConsecutivePushFailures + 1);
           cloudSyncPushBackoffUntil = Date.now() + Math.min(60000, 2000 * cloudSyncConsecutivePushFailures);
-          setCloudSyncError(err, "写入云端失败");
+          const hint = formatCloudSyncError(err, "");
+          const fallback =
+            hint.includes("读取云端") || hint.includes("超时") || isTransientCloudSyncError(err)
+              ? "读取或合并云端数据失败"
+              : "写入云端失败";
+          setCloudSyncError(err, fallback);
         })
         .finally(() => {
           cloudSyncPushing = false;
@@ -51850,7 +51878,7 @@
         );
         cloudSyncRef = firebase.database().ref("rooms/" + cloudSyncRoomId + "/state");
         /* 先读房间快照；与 push 相同做按条合并 + 全局 LWW，避免「remoteAt≤lastSeen」时拒绝拉取导致落后本机丢他端打卡 */
-        const initialSnap = await readRealtimeDbSnapshotOnceWithRetry(cloudSyncRef);
+        const initialSnap = await readRealtimeDbSnapshotOnce(cloudSyncRef);
         const initialPayload =
           initialSnap && typeof initialSnap.val === "function"
             ? initialSnap.val()
