@@ -16393,11 +16393,11 @@
     /* 十二周年 #020/#021 用自建折叠头，须排除，否则会连展开按钮一并隐藏 */
     /* Kinetic 二级 Tab：面板用 .kinetic-tab-hidden 控制显隐；勿用「折叠」规则藏子节点，否则会整片空白（手机端常见） */
     /* My Goals 嵌套子块（goal-nested-sub）用 .goal-nested-sub-head 折叠，须排除，否则会连子模块标题一并隐藏 */
-    section.collapsed:not(.submodule-card):not(.goal-card):not(.goal-nested-sub):not(.anniversary-tw020-card):not(.kinetic-tab-panel) > *:not(.section-title) {
+    section.collapsed:not(.submodule-card):not(.goal-card):not(.goal-nested-sub):not(.anniversary-tw020-card):not(.anniversary-genuine-desire-block):not(.kinetic-tab-panel) > *:not(.section-title) {
       display: none !important;
     }
 
-    section.collapsed:not(.submodule-card):not(.goal-card):not(.goal-nested-sub):not(.anniversary-tw020-card):not(.kinetic-tab-panel) .section-title .count {
+    section.collapsed:not(.submodule-card):not(.goal-card):not(.goal-nested-sub):not(.anniversary-tw020-card):not(.anniversary-genuine-desire-block):not(.kinetic-tab-panel) .section-title .count {
       display: none;
     }
 
@@ -18281,6 +18281,11 @@
 
     .module-collapsed .module-content {
       display: none;
+    }
+
+    /* 有底栏时：五大主模块不用顶栏手风琴，仅底栏切换 */
+    body:has(#primaryModuleBottomNav) .module-stack > .card[id$="Module"] > .module-header .module-header-right .toggle-btn.toggle-chevron {
+      display: none !important;
     }
 
     .submodule-grid {
@@ -69888,6 +69893,7 @@
     syncMyGoalsHeaderTitleForViewport();
     initHabitEnRemarkDisclosures();
     render();
+    initPrimaryModuleBottomNav();
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState !== "visible") return;
       if (tickClosedListDayRollover()) {
@@ -70822,11 +70828,6 @@
           !forgeModule.classList.contains("module-collapsed")
         );
       }
-      document.querySelectorAll(".module-header button.toggle-chevron").forEach((btn) => {
-        const card = btn.closest(".card");
-        if (!card) return;
-        setDisclosureToggleState(btn, !card.classList.contains("module-collapsed"));
-      });
       document
         .querySelectorAll("#anniversaryModule .anniversary-genuine-desire-head button.toggle-chevron")
         .forEach((btn) => {
@@ -73069,6 +73070,10 @@
       }
       if (toggleForgeModuleBtn) {
         toggleForgeModuleBtn.addEventListener("click", () => {
+          if (primaryModuleBottomNav) {
+            setPrimaryModuleFocus("forge");
+            return;
+          }
           toggleModuleCard(forgeModule, toggleForgeModuleBtn);
         });
       }
@@ -73498,11 +73503,14 @@
       const navButtons = Array.from(primaryModuleBottomNav.querySelectorAll("button[data-module-key]"));
       if (!navButtons.length) return;
 
-      navButtons.forEach((btn) => {
-        btn.addEventListener("click", () => {
-          setPrimaryModuleFocus(btn.dataset.moduleKey || "dynamic");
+      if (primaryModuleBottomNav.dataset.bound !== "1") {
+        primaryModuleBottomNav.dataset.bound = "1";
+        navButtons.forEach((btn) => {
+          btn.addEventListener("click", () => {
+            setPrimaryModuleFocus(btn.dataset.moduleKey || "dynamic");
+          });
         });
-      });
+      }
 
       const defaultBtn =
         navButtons.find((btn) => btn.classList.contains("is-active")) || navButtons[0];
@@ -73512,28 +73520,60 @@
 
     function bindModuleHeaderToggle(moduleEl, btnEl) {
       const headerEl = moduleEl ? moduleEl.querySelector(".module-header") : null;
-      if (!headerEl) return;
+      if (!headerEl || headerEl.dataset.moduleHeaderToggleBound === "1") return;
+      headerEl.dataset.moduleHeaderToggleBound = "1";
       headerEl.addEventListener("click", (event) => {
         if (event.target.closest("button, .module-header-cloud-sync, .module-header-right")) return;
+        if (primaryModuleBottomNav) {
+          const def = primaryModuleDefs.find((item) => item.moduleEl === moduleEl);
+          if (def) {
+            setPrimaryModuleFocus(def.key);
+            return;
+          }
+        }
         toggleModuleCard(moduleEl, btnEl);
       });
     }
 
-    toggleDynamicModuleBtn.addEventListener("click", () => {
-      toggleModuleCard(dynamicModule, toggleDynamicModuleBtn);
-    });
+    if (toggleDynamicModuleBtn) {
+      toggleDynamicModuleBtn.addEventListener("click", () => {
+        if (primaryModuleBottomNav) {
+          setPrimaryModuleFocus("dynamic");
+          return;
+        }
+        toggleModuleCard(dynamicModule, toggleDynamicModuleBtn);
+      });
+    }
 
-    toggleHabitRoutineModuleBtn.addEventListener("click", () => {
-      toggleModuleCard(habitRoutineModule, toggleHabitRoutineModuleBtn);
-    });
+    if (toggleHabitRoutineModuleBtn) {
+      toggleHabitRoutineModuleBtn.addEventListener("click", () => {
+        if (primaryModuleBottomNav) {
+          setPrimaryModuleFocus("habit");
+          return;
+        }
+        toggleModuleCard(habitRoutineModule, toggleHabitRoutineModuleBtn);
+      });
+    }
 
-    toggleMyGoalsModuleBtn.addEventListener("click", () => {
-      toggleModuleCard(myGoalsModule, toggleMyGoalsModuleBtn);
-    });
+    if (toggleMyGoalsModuleBtn) {
+      toggleMyGoalsModuleBtn.addEventListener("click", () => {
+        if (primaryModuleBottomNav) {
+          setPrimaryModuleFocus("goals");
+          return;
+        }
+        toggleModuleCard(myGoalsModule, toggleMyGoalsModuleBtn);
+      });
+    }
 
-    togglePurposeValuesIdentityModuleBtn.addEventListener("click", () => {
-      toggleModuleCard(purposeValuesIdentityModule, togglePurposeValuesIdentityModuleBtn);
-    });
+    if (togglePurposeValuesIdentityModuleBtn) {
+      togglePurposeValuesIdentityModuleBtn.addEventListener("click", () => {
+        if (primaryModuleBottomNav) {
+          setPrimaryModuleFocus("purpose");
+          return;
+        }
+        toggleModuleCard(purposeValuesIdentityModule, togglePurposeValuesIdentityModuleBtn);
+      });
+    }
 
     toggleAnniversaryModuleBtn.addEventListener("click", () => {
       switchKineticTabOrToggle("anniversary", anniversaryModule, toggleAnniversaryModuleBtn);
@@ -73601,8 +73641,6 @@
     bindModuleHeaderToggle(habitRoutineModule, toggleHabitRoutineModuleBtn);
     bindModuleHeaderToggle(myGoalsModule, toggleMyGoalsModuleBtn);
     bindModuleHeaderToggle(purposeValuesIdentityModule, togglePurposeValuesIdentityModuleBtn);
-
-    initPrimaryModuleBottomNav();
 
     function initDoneKineticShortcuts() {
       const missionBtn = document.getElementById("doneShortcutMissionBtn");
