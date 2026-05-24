@@ -18284,7 +18284,7 @@
     }
 
     /* 有底栏时：五大主模块不用顶栏手风琴，仅底栏切换 */
-    body:has(#primaryModuleBottomNav) .module-stack > .card[id$="Module"] > .module-header .module-header-right .toggle-btn.toggle-chevron {
+    body.has-primary-bottom-nav .module-stack > .card[id$="Module"] > .module-header .module-header-right .toggle-btn.toggle-chevron {
       display: none !important;
     }
 
@@ -48035,7 +48035,7 @@
   <script>
     const STORAGE_KEY = "todo-app-data-v1";
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260520e";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260524a";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** My Done 手机端行高：{ padY, minHeight }，与 :root 中 --done-list-row-* 对应 */
@@ -69893,7 +69893,6 @@
     syncMyGoalsHeaderTitleForViewport();
     initHabitEnRemarkDisclosures();
     render();
-    initPrimaryModuleBottomNav();
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState !== "visible") return;
       if (tickClosedListDayRollover()) {
@@ -73473,6 +73472,7 @@
 
       activePrimaryModuleKey = target.key;
       document.body.classList.add("primary-module-fullscreen");
+      document.body.classList.add("has-primary-bottom-nav");
 
       validDefs.forEach((item) => {
         const active = item.key === activePrimaryModuleKey;
@@ -73498,8 +73498,39 @@
       render();
     }
 
+    function bootstrapPrimaryModuleShell(moduleKey) {
+      if (!primaryModuleBottomNav) return false;
+      document.body.classList.add("has-primary-bottom-nav");
+      document.body.classList.add("primary-module-fullscreen");
+      const key = moduleKey || activePrimaryModuleKey || "dynamic";
+      const idMap = {
+        dynamic: "dynamicModule",
+        habit: "habitRoutineModule",
+        forge: "forgeModule",
+        goals: "myGoalsModule",
+        purpose: "purposeValuesIdentityModule"
+      };
+      Object.keys(idMap).forEach(function (k) {
+        const el = document.getElementById(idMap[k]);
+        if (!el) return;
+        const on = k === key;
+        el.classList.toggle("module-focus-active", on);
+        el.classList.toggle("module-collapsed", !on);
+      });
+      if (primaryModuleBottomNav) {
+        primaryModuleBottomNav.querySelectorAll("button[data-module-key]").forEach(function (btn) {
+          const active = btn.dataset.moduleKey === key;
+          btn.classList.toggle("is-active", active);
+          btn.setAttribute("aria-current", active ? "page" : "false");
+        });
+      }
+      activePrimaryModuleKey = key;
+      return true;
+    }
+
     function initPrimaryModuleBottomNav() {
       if (!primaryModuleBottomNav) return;
+      document.body.classList.add("has-primary-bottom-nav");
       const navButtons = Array.from(primaryModuleBottomNav.querySelectorAll("button[data-module-key]"));
       if (!navButtons.length) return;
 
@@ -73515,7 +73546,11 @@
       const defaultBtn =
         navButtons.find((btn) => btn.classList.contains("is-active")) || navButtons[0];
       const defaultKey = defaultBtn ? defaultBtn.dataset.moduleKey || "dynamic" : "dynamic";
-      setPrimaryModuleFocus(defaultKey);
+      try {
+        setPrimaryModuleFocus(defaultKey);
+      } catch (_err) {
+        bootstrapPrimaryModuleShell(defaultKey);
+      }
     }
 
     function bindModuleHeaderToggle(moduleEl, btnEl) {
@@ -73575,9 +73610,10 @@
       });
     }
 
-    toggleAnniversaryModuleBtn.addEventListener("click", () => {
-      switchKineticTabOrToggle("anniversary", anniversaryModule, toggleAnniversaryModuleBtn);
-    });
+    toggleAnniversaryModuleBtn &&
+      toggleAnniversaryModuleBtn.addEventListener("click", () => {
+        switchKineticTabOrToggle("anniversary", anniversaryModule, toggleAnniversaryModuleBtn);
+      });
 
     if (!activateKineticTab) {
       bindSectionHeaderToggle(doneSection, toggleDoneBtn);
@@ -73676,8 +73712,66 @@
     bindAnniversaryGenuineDesireBlock();
     initDisclosureToggleGlyphs();
 
+    try {
+      initPrimaryModuleBottomNav();
+    } catch (_primaryNavErr) {
+      bootstrapPrimaryModuleShell("dynamic");
+    }
+
     setInterval(renderKineticCountdowns, 60000);
     setInterval(renderDailyReminder, 3600000);
+  </script>
+  <script>
+    (function () {
+      function applyPrimaryModuleShellFallback() {
+        if (document.body.classList.contains("primary-module-fullscreen")) return;
+        var nav = document.getElementById("primaryModuleBottomNav");
+        if (!nav) return;
+        var activeKey = "dynamic";
+        var activeBtn = nav.querySelector("button[data-module-key].is-active");
+        if (activeBtn) activeKey = activeBtn.getAttribute("data-module-key") || "dynamic";
+        var map = {
+          dynamic: "dynamicModule",
+          habit: "habitRoutineModule",
+          forge: "forgeModule",
+          goals: "myGoalsModule",
+          purpose: "purposeValuesIdentityModule"
+        };
+        document.body.classList.add("has-primary-bottom-nav");
+        document.body.classList.add("primary-module-fullscreen");
+        Object.keys(map).forEach(function (k) {
+          var el = document.getElementById(map[k]);
+          if (!el) return;
+          var on = k === activeKey;
+          el.classList.toggle("module-focus-active", on);
+          if (on) el.classList.remove("module-collapsed");
+          else el.classList.add("module-collapsed");
+        });
+        if (nav.dataset.fallbackBound !== "1") {
+          nav.dataset.fallbackBound = "1";
+          nav.querySelectorAll("button[data-module-key]").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+              var key = btn.getAttribute("data-module-key") || "dynamic";
+              nav.querySelectorAll("button[data-module-key]").forEach(function (b) {
+                var active = b === btn;
+                b.classList.toggle("is-active", active);
+                b.setAttribute("aria-current", active ? "page" : "false");
+              });
+              Object.keys(map).forEach(function (k) {
+                var el = document.getElementById(map[k]);
+                if (!el) return;
+                var on = k === key;
+                el.classList.toggle("module-focus-active", on);
+                if (on) el.classList.remove("module-collapsed");
+                else el.classList.add("module-collapsed");
+              });
+            });
+          });
+        }
+      }
+      applyPrimaryModuleShellFallback();
+      window.addEventListener("load", applyPrimaryModuleShellFallback);
+    })();
   </script>
   <script>
     if ("serviceWorker" in navigator) {
