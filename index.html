@@ -48060,7 +48060,7 @@
   <script>
     const STORAGE_KEY = "todo-app-data-v1";
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260524c";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260524d";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** My Done 手机端行高：{ padY, minHeight }，与 :root 中 --done-list-row-* 对应 */
@@ -48808,6 +48808,20 @@
               void initCloudSync();
             }
           }, 400);
+        } else if (cloudSyncReady && cloudSyncRef && !cloudSyncSuppressPush) {
+          const pendingHash = serializeStateForCloud();
+          if (pendingHash && pendingHash !== cloudSyncLastHash) {
+            scheduleCloudSyncPush();
+          }
+        }
+      });
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState !== "visible") return;
+        refresh();
+        if (!cloudSyncReady || !cloudSyncRef || cloudSyncSuppressPush) return;
+        const pendingHash = serializeStateForCloud();
+        if (pendingHash && pendingHash !== cloudSyncLastHash) {
+          scheduleCloudSyncPush();
         }
       });
       window.addEventListener("offline", refresh);
@@ -50006,8 +50020,31 @@
         }
       });
       if (Array.isArray(a.batches) || Array.isArray(b.batches)) {
-        const pick = scoreA >= scoreB ? a : b;
-        if (Array.isArray(pick.batches)) out.batches = pick.batches.slice();
+        const mergedBatches = (Array.isArray(a.batches) ? a.batches : []).concat(
+          Array.isArray(b.batches) ? b.batches : []
+        );
+        if (mergedBatches.length) {
+          out.batches = mergedBatches;
+          if (Number.isFinite(out.wordCount) || a.wordCount != null || b.wordCount != null) {
+            out.wordCount = mergedBatches.reduce(function (sum, n) {
+              const v = Number(n);
+              return sum + (Number.isFinite(v) && v > 0 ? v : 0);
+            }, 0);
+            out.times = mergedBatches.length;
+          } else if (Number.isFinite(out.minutes) || a.minutes != null || b.minutes != null) {
+            out.minutes = mergedBatches.reduce(function (sum, n) {
+              const v = Number(n);
+              return sum + (Number.isFinite(v) && v > 0 ? v : 0);
+            }, 0);
+            out.times = mergedBatches.length;
+          } else if (Number.isFinite(out.experiments) || a.experiments != null || b.experiments != null) {
+            out.experiments = mergedBatches.reduce(function (sum, n) {
+              const v = Number(n);
+              return sum + (Number.isFinite(v) && v > 0 ? v : 0);
+            }, 0);
+            out.times = mergedBatches.length;
+          }
+        }
       }
       const rmA = typeof a.remark === "string" ? a.remark.trim() : "";
       const rmB = typeof b.remark === "string" ? b.remark.trim() : "";
@@ -50220,6 +50257,17 @@
       return out;
     }
 
+    function mergeAnniversaryDoneRefItemsForSync(itemsA, itemsB) {
+      const a = itemsA && typeof itemsA === "object" ? itemsA : {};
+      const b = itemsB && typeof itemsB === "object" ? itemsB : {};
+      const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+      const out = {};
+      keys.forEach(function (k) {
+        out[k] = Boolean(a[k]) || Boolean(b[k]);
+      });
+      return out;
+    }
+
     function mergeAnniversaryDoneRefForSync(loc, rem) {
       const modules = ["tw020", "tw021", "tw022"];
       const lo = loc && typeof loc === "object" ? loc : {};
@@ -50230,7 +50278,9 @@
         const b = ro[mod] && typeof ro[mod] === "object" ? ro[mod] : {};
         const itemsA = a.items && typeof a.items === "object" ? a.items : {};
         const itemsB = b.items && typeof b.items === "object" ? b.items : {};
-        out[mod] = { ...b, ...a, items: { ...itemsB, ...itemsA } };
+        out[mod] = Object.assign({}, b, a, {
+          items: mergeAnniversaryDoneRefItemsForSync(itemsA, itemsB)
+        });
       });
       return out;
     }
@@ -50284,7 +50334,7 @@
         const rt = ex.text;
         const lt = loc.text;
         const text = rt !== lt ? (preferRemote ? rt : lt) : lt;
-        const done = ex.done !== loc.done ? (preferRemote ? ex.done : loc.done) : loc.done;
+        const done = Boolean(ex.done) || Boolean(loc.done);
         map.set(loc.id, { id: loc.id, text: text, done: done });
       });
       const order = [];
@@ -51465,7 +51515,20 @@
         }
       }
 
+      reconcileDerivedCheckinsOnStateObject(base);
       return base;
+    }
+
+    /** 在指定 state 对象上，用 My Done 条目重建 habitCheckins / rule100 等派生打卡（云合并专用） */
+    function reconcileDerivedCheckinsOnStateObject(st) {
+      if (!st || typeof st !== "object" || !Array.isArray(st.done)) return;
+      const saved = state;
+      state = st;
+      try {
+        reconcileDerivedCheckinsFromDoneAfterLoad();
+      } finally {
+        state = saved;
+      }
     }
 
     function scheduleCloudSyncPush() {
@@ -52086,6 +52149,14 @@
           if (Array.isArray(state.closedList) && rolloverIncompleteClosedListPastDaysToToday()) {
             saveState();
           }
+          const preReconcileJson = localStorage.getItem(STORAGE_KEY);
+          reconcileDerivedCheckinsFromDoneAfterLoad();
+          try {
+            const postReconcileJson = JSON.stringify(state);
+            if (postReconcileJson && postReconcileJson !== preReconcileJson && !cloudSyncSuppressPush) {
+              localStorage.setItem(STORAGE_KEY, postReconcileJson);
+            }
+          } catch (_reconcilePersistErr) {}
         }
       } catch (err) {
         console.error("读取本地数据失败:", err);
@@ -53030,6 +53101,50 @@
         if (refreshDailyWinCheckin(dateStr)) changed = true;
       });
       return changed;
+    }
+
+    /** 云同步 / 载入后：以 My Done 为准重建 habitCheckins 与 Rule of 100 日打卡，避免两端合并后累计不一致 */
+    function reconcileDerivedCheckinsFromDoneAfterLoad() {
+      if (!state.habitCheckins || typeof state.habitCheckins !== "object") {
+        state.habitCheckins = {};
+      }
+      const pairs = new Set();
+      const dailyWinDates = new Set();
+      (Array.isArray(state.done) ? state.done : []).forEach(function (item) {
+        if (!item || !item.habitMeta || !item.habitMeta.key || !item.habitMeta.date) return;
+        if (item.habitMeta.key === "dailyThreeWins") {
+          dailyWinDates.add(item.habitMeta.date);
+          return;
+        }
+        pairs.add(item.habitMeta.key + "\x00" + item.habitMeta.date);
+      });
+      pairs.forEach(function (pair) {
+        const sep = pair.indexOf("\x00");
+        rebuildHabitCheckinFromDoneList(pair.slice(0, sep), pair.slice(sep + 1));
+      });
+      dailyWinDates.forEach(function (dateStr) {
+        if (!state.habitCheckins[dateStr]) state.habitCheckins[dateStr] = {};
+        state.habitCheckins[dateStr].dailyThreeWins = countDailyWinEntriesForDate(dateStr) >= 3;
+      });
+      if (state.ruleOf100 && typeof state.ruleOf100 === "object") {
+        const dayCheckins = {};
+        (Array.isArray(state.done) ? state.done : []).forEach(function (item) {
+          if (!item || !item.rule100Meta) return;
+          const m = item.rule100Meta;
+          if (!m.key || !m.date || m.kind === "hours" || isRule100UnitKey(m.key)) return;
+          if (!dayCheckins[m.key]) dayCheckins[m.key] = new Set();
+          dayCheckins[m.key].add(m.date);
+        });
+        Object.keys(dayCheckins).forEach(function (ruleKey) {
+          const entry = getRule100Entry(ruleKey);
+          if (!entry) return;
+          if (!Array.isArray(entry.checkins)) entry.checkins = [];
+          dayCheckins[ruleKey].forEach(function (dateStr) {
+            if (entry.checkins.indexOf(dateStr) === -1) entry.checkins.push(dateStr);
+          });
+          entry.checkins = Array.from(new Set(entry.checkins)).sort();
+        });
+      }
     }
 
     function clearHabitCheckinSlot(habitKey, dateStr) {
