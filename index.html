@@ -8917,6 +8917,16 @@
       min-width: 0;
     }
 
+    #forgeModule .forge-cc-art-details.forge-cc-art-details--daily-min-shortfall > .forge-cc-art-summary,
+    #forgeModule .forge-cc-art-details.forge-cc-art-details--daily-min-shortfall .forge-cc-art-summary-title {
+      color: #dc2626;
+    }
+
+    #forgeModule .forge-cc-art-details.forge-cc-art-details--daily-min-shortfall .forge-cc-art-summary-title .forge-cc-art-summary-note,
+    #forgeModule .forge-cc-art-details.forge-cc-art-details--daily-min-shortfall .forge-cc-art-summary-title .forge-cc-art-summary-en {
+      color: #dc2626;
+    }
+
     #forgeModule .forge-cc-art-summary .forge-cc-art-summary-title {
       flex: 1 1 auto;
       min-width: 0;
@@ -49839,6 +49849,53 @@
       return Array.from(map.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)));
     }
 
+    function mergeHabitCheckinEntrySyncScore(obj) {
+      if (!obj || typeof obj !== "object") return 0;
+      return Math.max(
+        Number(obj.wordCount) || 0,
+        Number(obj.minutes) || 0,
+        Number(obj.experiments) || 0,
+        Number(obj.times) || 0
+      );
+    }
+
+    /** 同一习惯、同一日：取累计量较大侧，避免推送合并时本地旧快照盖掉他端新打卡 */
+    function mergeHabitCheckinValueForSync(localVal, remoteVal) {
+      if (localVal === true || remoteVal === true) return true;
+      if (localVal === false || localVal == null) {
+        if (remoteVal === false || remoteVal == null) return false;
+        return remoteVal;
+      }
+      if (remoteVal === false || remoteVal == null) return localVal;
+      if (typeof localVal !== "object" || typeof remoteVal !== "object") {
+        return localVal != null ? localVal : remoteVal;
+      }
+      const a = localVal;
+      const b = remoteVal;
+      const scoreA = mergeHabitCheckinEntrySyncScore(a);
+      const scoreB = mergeHabitCheckinEntrySyncScore(b);
+      const primary = scoreA >= scoreB ? a : b;
+      const secondary = scoreA >= scoreB ? b : a;
+      const out = Object.assign({}, secondary, primary);
+      ["wordCount", "minutes", "experiments", "times"].forEach(function (field) {
+        const av = Number(a[field]);
+        const bv = Number(b[field]);
+        if (Number.isFinite(av) || Number.isFinite(bv)) {
+          out[field] = Math.max(Number.isFinite(av) ? av : 0, Number.isFinite(bv) ? bv : 0);
+        }
+      });
+      if (Array.isArray(a.batches) || Array.isArray(b.batches)) {
+        const pick = scoreA >= scoreB ? a : b;
+        if (Array.isArray(pick.batches)) out.batches = pick.batches.slice();
+      }
+      const rmA = typeof a.remark === "string" ? a.remark.trim() : "";
+      const rmB = typeof b.remark === "string" ? b.remark.trim() : "";
+      const remark = rmA.length >= rmB.length ? rmA : rmB;
+      if (remark) out.remark = remark;
+      else delete out.remark;
+      return out;
+    }
+
     function mergeHabitCheckinsForSync(localHc, remoteHc) {
       const lo = localHc && typeof localHc === "object" ? localHc : {};
       const ro = remoteHc && typeof remoteHc === "object" ? remoteHc : {};
@@ -49847,9 +49904,63 @@
       dates.forEach((d) => {
         const a = lo[d] && typeof lo[d] === "object" ? lo[d] : {};
         const b = ro[d] && typeof ro[d] === "object" ? ro[d] : {};
-        out[d] = { ...b, ...a };
+        const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+        const day = {};
+        keys.forEach((k) => {
+          day[k] = mergeHabitCheckinValueForSync(a[k], b[k]);
+        });
+        out[d] = day;
       });
       return out;
+    }
+
+    function mergeForgeShallowMapsForSync(localMap, remoteMap, preferRemote) {
+      const l = localMap && typeof localMap === "object" ? localMap : {};
+      const r = remoteMap && typeof remoteMap === "object" ? remoteMap : {};
+      const keys = new Set([...Object.keys(l), ...Object.keys(r)]);
+      const out = {};
+      keys.forEach(function (k) {
+        if (preferRemote && Object.prototype.hasOwnProperty.call(r, k)) {
+          out[k] = r[k];
+        } else if (Object.prototype.hasOwnProperty.call(l, k)) {
+          out[k] = l[k];
+        } else {
+          out[k] = r[k];
+        }
+      });
+      return out;
+    }
+
+    /** Forge：日/周最低按 id 并集；其余 UI 键在 serverNewer 时偏远端 */
+    function mergeForgeForSync(localForge, remoteForge, preferRemote) {
+      const lo = localForge && typeof localForge === "object" ? localForge : {};
+      const ro = remoteForge && typeof remoteForge === "object" ? remoteForge : {};
+      const out = preferRemote ? Object.assign({}, lo, ro) : Object.assign({}, ro, lo);
+      out.dailyMinimums = mergeIdRecordArraysPreferLocalOnTie(
+        Array.isArray(lo.dailyMinimums) ? lo.dailyMinimums : [],
+        Array.isArray(ro.dailyMinimums) ? ro.dailyMinimums : []
+      );
+      out.weeklyMinimums = mergeIdRecordArraysPreferLocalOnTie(
+        Array.isArray(lo.weeklyMinimums) ? lo.weeklyMinimums : [],
+        Array.isArray(ro.weeklyMinimums) ? ro.weeklyMinimums : []
+      );
+      out.kbWeightKg = mergeForgeShallowMapsForSync(lo.kbWeightKg, ro.kbWeightKg, preferRemote);
+      out.ccProgressStep = mergeForgeShallowMapsForSync(lo.ccProgressStep, ro.ccProgressStep, preferRemote);
+      return out;
+    }
+
+    function scheduleCloudSyncPushIfMergedDiffersFromRemote(remoteState) {
+      if (!cloudSyncReady || cloudSyncApplyingRemote || !cloudSyncRef || !remoteState) return;
+      let remoteJson = "";
+      try {
+        remoteJson = JSON.stringify(remoteState);
+      } catch (_e) {
+        return;
+      }
+      const cur = serializeStateForCloud();
+      if (cur && remoteJson && cur !== remoteJson) {
+        scheduleCloudSyncPush();
+      }
     }
 
     function mergeDailyWinTomorrowRefForSync(loc, rem) {
@@ -49865,6 +49976,17 @@
       return out;
     }
 
+    function mergeWeeklyPlanDoneRefItemsForSync(itemsA, itemsB) {
+      const a = itemsA && typeof itemsA === "object" ? itemsA : {};
+      const b = itemsB && typeof itemsB === "object" ? itemsB : {};
+      const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+      const out = {};
+      keys.forEach(function (k) {
+        out[k] = Boolean(a[k]) || Boolean(b[k]);
+      });
+      return out;
+    }
+
     function mergeWeeklyPlanDoneRefForSync(loc, rem) {
       const lo = loc && typeof loc === "object" ? loc : {};
       const ro = rem && typeof rem === "object" ? rem : {};
@@ -49875,9 +49997,23 @@
         const b = ro[wk] && typeof ro[wk] === "object" ? ro[wk] : {};
         const itemsA = a.items && typeof a.items === "object" ? a.items : {};
         const itemsB = b.items && typeof b.items === "object" ? b.items : {};
-        out[wk] = { ...b, ...a, items: { ...itemsB, ...itemsA } };
+        out[wk] = Object.assign({}, b, a, {
+          items: mergeWeeklyPlanDoneRefItemsForSync(itemsA, itemsB)
+        });
       });
       return out;
+    }
+
+    function weeklyPlanMicroTombstoneId(microId) {
+      return "weeklyPlanMicro:" + String(microId || "");
+    }
+
+    function omitTombstonedWeeklyPlanMicros(arr, tombstones) {
+      const ts = tombstones && typeof tombstones === "object" ? tombstones : {};
+      return (Array.isArray(arr) ? arr : []).filter(function (m) {
+        if (!m || m.id == null) return false;
+        return !Object.prototype.hasOwnProperty.call(ts, weeklyPlanMicroTombstoneId(m.id));
+      });
     }
 
     function mergeWeeklyPlanMicroTasksForSync(locMicros, remMicros, preferRemote) {
@@ -49897,9 +50033,9 @@
         const done = Boolean(l.done) || Boolean(m.done);
         const merged = preferRemote ? Object.assign({}, l, m) : Object.assign({}, m, l);
         merged.done = done;
-        const at =
-          normalizeWeeklyPlanCompletedAtMs(l.completedAt) ||
-          normalizeWeeklyPlanCompletedAtMs(m.completedAt);
+        const la = normalizeWeeklyPlanCompletedAtMs(l.completedAt);
+        const ra = normalizeWeeklyPlanCompletedAtMs(m.completedAt);
+        const at = la != null && ra != null ? Math.max(la, ra) : la != null ? la : ra;
         if (done && at) merged.completedAt = at;
         else if (!done) delete merged.completedAt;
         map.set(m.id, merged);
@@ -49921,9 +50057,9 @@
       merged.microTasks = mergeWeeklyPlanMicroTasksForSync(l.microTasks, r.microTasks, preferRemote);
       if (lDone && rDone) {
         merged.mainDone = true;
-        const at =
-          normalizeWeeklyPlanCompletedAtMs(l.completedAt) ||
-          normalizeWeeklyPlanCompletedAtMs(r.completedAt);
+        const la = normalizeWeeklyPlanCompletedAtMs(l.completedAt);
+        const ra = normalizeWeeklyPlanCompletedAtMs(r.completedAt);
+        const at = la != null && ra != null ? Math.max(la, ra) : la != null ? la : ra;
         if (at) merged.completedAt = at;
       } else if (!isWeeklyPlanMainComplete(merged)) {
         merged.mainDone = Boolean(merged.mainDone);
@@ -49933,9 +50069,10 @@
     }
 
     /** 云同步：按周、按任务 id 合并；任一侧已完成则保留完成态，避免远端旧数据整包覆盖本机勾选 */
-    function mergeWeeklyPlanBucketsForSync(locPlan, remPlan, preferRemote) {
+    function mergeWeeklyPlanBucketsForSync(locPlan, remPlan, preferRemote, tombstones) {
       const lo = locPlan && typeof locPlan === "object" ? locPlan : {};
       const ro = remPlan && typeof remPlan === "object" ? remPlan : {};
+      const ts = tombstones && typeof tombstones === "object" ? tombstones : {};
       const weekKeys = new Set([...Object.keys(lo), ...Object.keys(ro)]);
       const out = {};
       weekKeys.forEach(function (wk) {
@@ -49953,7 +50090,11 @@
             map.set(t.id, t);
           }
         });
-        out[wk] = Array.from(map.values());
+        out[wk] = omitTombstonedIdRecords(Array.from(map.values()), ts).map(function (task) {
+          const normalized = normalizeWeeklyPlanTask(task);
+          normalized.microTasks = omitTombstonedWeeklyPlanMicros(normalized.microTasks, ts);
+          return normalized;
+        });
       });
       return out;
     }
@@ -51163,18 +51304,21 @@
         Array.isArray(remoteState.trash) ? remoteState.trash : []
       );
 
+      base.forge = mergeForgeForSync(state.forge, remoteState.forge, serverNewer);
+
+      base.weeklyPlan = mergeWeeklyPlanBucketsForSync(
+        state.weeklyPlan,
+        remoteState.weeklyPlan,
+        serverNewer,
+        ts
+      );
+
       if (serverNewer) {
         base.ageGoals = remoteState.ageGoals && typeof remoteState.ageGoals === "object" ? remoteState.ageGoals : {};
         base.moneyGoalLabels =
           remoteState.moneyGoalLabels && typeof remoteState.moneyGoalLabels === "object"
             ? remoteState.moneyGoalLabels
             : {};
-        base.weeklyPlan = mergeWeeklyPlanBucketsForSync(
-          state.weeklyPlan,
-          remoteState.weeklyPlan,
-          true
-        );
-        base.forge = remoteState.forge && typeof remoteState.forge === "object" ? remoteState.forge : {};
         base.backwardMeasure =
           remoteState.backwardMeasure && typeof remoteState.backwardMeasure === "object"
             ? remoteState.backwardMeasure
@@ -51413,6 +51557,7 @@
           initialSnap && typeof initialSnap.val === "function"
             ? initialSnap.val()
             : null;
+        let initRemoteStateForPush = null;
         if (initialPayload && initialPayload.state && Array.isArray(initialPayload.state.done)) {
           const remoteAt = coerceCloudUpdatedAt(initialPayload.updatedAt);
           const lastSeen = getCloudLastSeenUpdatedAt();
@@ -51440,11 +51585,15 @@
           if (remoteAt > 0) {
             setCloudLastSeenUpdatedAt(remoteAt);
           }
+          initRemoteStateForPush = initialPayload.state;
         }
         setCloudSyncHashFromCurrentState();
         cloudSyncReady = true;
         cloudSyncLastErrorMsg = "";
         setCloudSyncStatus("已连接 ✓", "status-connected");
+        if (initRemoteStateForPush) {
+          scheduleCloudSyncPushIfMergedDiffersFromRemote(initRemoteStateForPush);
+        }
         /* onValue 回声：本机 set({ updatedBy: clientId }) 回传时直接忽略，避免用未含最新字段的快照再 merge 覆盖 in-memory state */
         cloudSyncRef.on("value", (snap) => {
           const payload = snap.val();
@@ -51484,6 +51633,7 @@
           if (ua > 0) {
             setCloudLastSeenUpdatedAt(ua);
           }
+          scheduleCloudSyncPushIfMergedDiffersFromRemote(payload.state);
           setCloudSyncStatus("已连接 ✓", "status-connected");
         });
         /* 延后首次 push，让 on('value') 先处理他端写入，避免 get 与 push 之间的窄窗口把旧本机盖掉云端 */
@@ -56630,6 +56780,7 @@
           row.toggleAttribute("hidden", !show);
         });
       });
+      syncAllForgeOuterTitleDailyMinShortfall();
     }
 
     function syncForgeCcProgressUi() {
@@ -56862,6 +57013,28 @@
       }
     }
 
+    /** 囚徒大类外层标题：当前在练卡片日最低未达标时同步变红 */
+    function forgeGroupHasVisibleDailyMinShortfall(container) {
+      if (!container) return false;
+      return !!container.querySelector(
+        ".forge-task-card.forge-task-card--daily-min-shortfall:not([hidden])"
+      );
+    }
+
+    function syncForgeCcArtDetailsDailyMinShortfall(details) {
+      if (!details) return;
+      details.classList.toggle(
+        "forge-cc-art-details--daily-min-shortfall",
+        forgeGroupHasVisibleDailyMinShortfall(details)
+      );
+    }
+
+    function syncAllForgeOuterTitleDailyMinShortfall() {
+      document
+        .querySelectorAll("#forgeModule details.forge-cc-art-details[data-forge-cc-art]")
+        .forEach(syncForgeCcArtDetailsDailyMinShortfall);
+    }
+
     /** Mind：×累计紧挨主标题；Body/性表现：中文+×累计第一行、英文第二行；日/周进度在卡头中列（桌面） */
     function syncForgeTaskWeekMinProgressUi(row) {
       const realm = forgeTaskRowWeekMinRealm(row);
@@ -57040,6 +57213,9 @@
       }
 
       row.classList.toggle("forge-task-card--daily-min-shortfall", !!(dm && dayCur < dm.target));
+
+      const ccArt = row.closest(".forge-cc-art-details");
+      if (ccArt) syncForgeCcArtDetailsDailyMinShortfall(ccArt);
     }
 
     function syncForgeTaskRowValFromDoneAggregates(row, dateKey) {
@@ -57234,6 +57410,7 @@
         syncForgeTaskRowValFromDoneAggregates(row, dateKey);
       });
       forgeLifetimeAggCache = null;
+      syncAllForgeOuterTitleDailyMinShortfall();
     }
 
     /** Forge 顶栏日期：与 My Done 所选日一致（训练行汇总用 selectedDoneDate） */
@@ -63233,6 +63410,9 @@
         });
         removeWeeklyPlanTaskDoneMirrors(weekKey, taskId);
       }
+      if (hit && hit.id) {
+        recordSyncTombstone(hit.id);
+      }
       const tasks = tasksAll.filter((t) => t.id !== taskId);
       saveWeeklyPlanTasksForWeek(tasks, weekKey);
       state.closedList
@@ -63410,6 +63590,7 @@
           payload: deepCloneForTrash(micro),
           meta: { weekKey: wk, taskId: taskId }
         });
+        recordSyncTombstone(weeklyPlanMicroTombstoneId(microId));
       }
       task.microTasks = task.microTasks.filter((x) => x.id !== microId);
       applyWeeklyPlanMainDoneFromMicros(task);
