@@ -1,0 +1,39 @@
+---
+description: 本地历史数据自动保留与定期清理策略（双端共用逻辑，在 index.html 实现）
+globs:
+  - index.html
+  - sw.js
+---
+
+# 数据保留与定期清理
+
+实现位置：`index.html` 内 `DATA_RETENTION`、`runDataRetentionPass()`、`maybeRunScheduledDataRetentionOnStartup()`。
+
+## 触发时机
+
+| 时机 | 行为 |
+|------|------|
+| 启动且距上次 ≥24h | 完整保留策略 + 写回 localStorage |
+| 每 6h（页面可见） | 若满 24h 则同上 |
+| 回到前台（visibility） | 若满 24h 则同上 |
+| 每次 `saveState` / 持久化前 | `compactStateForLocalStorage` → 轻量清理 |
+| 本地存储配额紧急 | `aggressive` 加强裁切 |
+
+上次执行时间键：`todo-app-data-retention-last-run-v1`。
+
+## 保留规则（默认值）
+
+- **垃圾箱**：删除超过 30 天的项；最多保留 80 条（紧急时 40 条）
+- **My Done**：最多 3000 条；且完成时间早于 540 天（约 18 个月）的删除（紧急：365 天 / 1800 条）
+- **习惯打卡日**：无对应 My Done 习惯条目、且日期早于 540 天的 `habitCheckins` 日期键删除
+- **Fuel 分数**：日期早于 400 天的记录删除
+- **同步墓碑** `syncTombstones`：早于 180 天的键删除
+- **备忘录** `memo`：早于 730 天或超过 600 条时裁切
+- **My Done 日记**：完成超过 120 天且 assess/adjust 均为空的 `doneJournal` 删除
+- **去重**：`pruneRedundantDoneEntriesInState`、`dedupeClosedListWeeklyPlanMirrorsInState`（非紧急模式）
+
+## 修改注意
+
+- 调整阈值只改 `DATA_RETENTION` 常量，保持与 `TRASH_RETENTION_MS` 语义一致
+- 云同步合并后的 `state` 也会经 `compactStateForLocalStorage` 清理；勿删除对 `runDataRetentionPass` 的调用
+- 本规则与端别无关：**Desktop / Mobile / Both 同一套逻辑**

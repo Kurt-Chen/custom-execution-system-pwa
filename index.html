@@ -48060,7 +48060,7 @@
   <script>
     const STORAGE_KEY = "todo-app-data-v1";
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260525c";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260526a";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** My Done 手机端行高：{ padY, minHeight }，与 :root 中 --done-list-row-* 对应 */
@@ -49607,6 +49607,205 @@
 
     /** 垃圾箱：删除后保留时长（30 天），过期自动清除 */
     const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+    /** 本地历史数据定期清理（见 .cursor/rules/data-retention.mdc） */
+    const DATA_RETENTION_LAST_RUN_KEY = "todo-app-data-retention-last-run-v1";
+    const DATA_RETENTION = {
+      runIntervalMs: 24 * 60 * 60 * 1000,
+      doneMaxAgeMs: 540 * 24 * 60 * 60 * 1000,
+      doneMaxCount: 3000,
+      trashMaxCount: 80,
+      habitCheckinsMaxAgeMs: 540 * 24 * 60 * 60 * 1000,
+      fuelScoresMaxAgeMs: 400 * 24 * 60 * 60 * 1000,
+      syncTombstoneMaxAgeMs: 180 * 24 * 60 * 60 * 1000,
+      memoMaxCount: 600,
+      memoMaxAgeMs: 730 * 24 * 60 * 60 * 1000,
+      doneJournalStripAgeMs: 120 * 24 * 60 * 60 * 1000,
+      aggressiveDoneMaxAgeMs: 365 * 24 * 60 * 60 * 1000,
+      aggressiveDoneMaxCount: 1800,
+      aggressiveTrashMaxCount: 40
+    };
+
+    function parseDateKeyToMs(dateStr) {
+      if (typeof dateStr !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return NaN;
+      return new Date(dateStr + "T12:00:00").getTime();
+    }
+
+    function shouldRunScheduledDataRetention() {
+      const last = Number(localStorage.getItem(DATA_RETENTION_LAST_RUN_KEY) || "0");
+      return !Number.isFinite(last) || Date.now() - last >= DATA_RETENTION.runIntervalMs;
+    }
+
+    function markDataRetentionRan() {
+      try {
+        localStorage.setItem(DATA_RETENTION_LAST_RUN_KEY, String(Date.now()));
+      } catch (_e) {}
+    }
+
+    function pruneTrashEntryCount(maxCount) {
+      const cap = Math.max(10, Number(maxCount) || DATA_RETENTION.trashMaxCount);
+      if (!Array.isArray(state.trash) || state.trash.length <= cap) return false;
+      state.trash = state.trash.slice(0, cap);
+      return true;
+    }
+
+    function pruneDoneHistoryByRetention(aggressive) {
+      if (!Array.isArray(state.done) || state.done.length < 2) return false;
+      const maxAgeMs = aggressive
+        ? DATA_RETENTION.aggressiveDoneMaxAgeMs
+        : DATA_RETENTION.doneMaxAgeMs;
+      const maxKeep = aggressive ? DATA_RETENTION.aggressiveDoneMaxCount : DATA_RETENTION.doneMaxCount;
+      const cutoff = Date.now() - maxAgeMs;
+      const ranked = state.done
+        .filter((d) => d && d.id != null)
+        .map((d) => ({ d, ts: recordTieTimestampForSync(d) }))
+        .sort((a, b) => b.ts - a.ts);
+      const keepIds = new Set(ranked.slice(0, maxKeep).map((x) => x.d.id));
+      const next = state.done.filter((d) => {
+        if (!d || d.id == null) return false;
+        if (keepIds.has(d.id)) return true;
+        return recordTieTimestampForSync(d) >= cutoff;
+      });
+      if (next.length === state.done.length) return false;
+      state.done = next;
+      return true;
+    }
+
+    function stripEmptyDoneJournalsOnOldEntries() {
+      if (!Array.isArray(state.done)) return false;
+      const cutoff = Date.now() - DATA_RETENTION.doneJournalStripAgeMs;
+      let changed = false;
+      state.done.forEach(function (item) {
+        if (!item || typeof item !== "object" || item.kind === "timeReflection") return;
+        if (recordTieTimestampForSync(item) >= cutoff) return;
+        const j = item.doneJournal;
+        if (!j || typeof j !== "object") return;
+        const assess = typeof j.assess === "string" ? j.assess.trim() : "";
+        const adjust = typeof j.adjust === "string" ? j.adjust.trim() : "";
+        if (!assess && !adjust) {
+          delete item.doneJournal;
+          changed = true;
+        }
+      });
+      return changed;
+    }
+
+    function pruneOldHabitCheckinDays() {
+      if (!state.habitCheckins || typeof state.habitCheckins !== "object") return false;
+      const cutoff = Date.now() - DATA_RETENTION.habitCheckinsMaxAgeMs;
+      const activeDates = new Set();
+      (Array.isArray(state.done) ? state.done : []).forEach(function (item) {
+        if (item && item.habitMeta && item.habitMeta.date) activeDates.add(item.habitMeta.date);
+      });
+      let changed = false;
+      Object.keys(state.habitCheckins).forEach(function (dateStr) {
+        if (activeDates.has(dateStr)) return;
+        const ms = parseDateKeyToMs(dateStr);
+        if (!Number.isFinite(ms) || ms >= cutoff) return;
+        delete state.habitCheckins[dateStr];
+        changed = true;
+      });
+      return changed;
+    }
+
+    function pruneOldFuelScores() {
+      if (!Array.isArray(state.fuelScores) || !state.fuelScores.length) return false;
+      const cutoff = Date.now() - DATA_RETENTION.fuelScoresMaxAgeMs;
+      const next = state.fuelScores.filter(function (item) {
+        if (!item || typeof item.date !== "string") return false;
+        const ms = parseDateKeyToMs(item.date);
+        return Number.isFinite(ms) && ms >= cutoff;
+      });
+      if (next.length === state.fuelScores.length) return false;
+      state.fuelScores = next;
+      return true;
+    }
+
+    function pruneOldSyncTombstones() {
+      if (!state.syncTombstones || typeof state.syncTombstones !== "object") return false;
+      const cutoff = Date.now() - DATA_RETENTION.syncTombstoneMaxAgeMs;
+      let changed = false;
+      Object.keys(state.syncTombstones).forEach(function (key) {
+        const ts = Number(state.syncTombstones[key]);
+        if (Number.isFinite(ts) && ts < cutoff) {
+          delete state.syncTombstones[key];
+          changed = true;
+        }
+      });
+      return changed;
+    }
+
+    function pruneOldMemos() {
+      if (!Array.isArray(state.memo)) return false;
+      const cutoff = Date.now() - DATA_RETENTION.memoMaxAgeMs;
+      let next = state.memo.filter(function (item) {
+        if (!item || typeof item !== "object") return false;
+        const ts = Number(item.createdAt);
+        return !Number.isFinite(ts) || ts <= 0 || ts >= cutoff;
+      });
+      if (next.length > DATA_RETENTION.memoMaxCount) {
+        next = next.slice(0, DATA_RETENTION.memoMaxCount);
+      }
+      if (next.length === state.memo.length) return false;
+      state.memo = next;
+      return true;
+    }
+
+    /**
+     * 定期清理无用历史（启动每 24h、保存前轻量、配额紧急时加强）。
+     * @returns {boolean} 是否改动了 state
+     */
+    function runDataRetentionPass(opts) {
+      const aggressive = Boolean(opts && opts.aggressive);
+      let changed = false;
+      if (purgeExpiredTrash()) changed = true;
+      if (pruneTrashEntryCount(aggressive ? DATA_RETENTION.aggressiveTrashMaxCount : DATA_RETENTION.trashMaxCount)) {
+        changed = true;
+      }
+      if (pruneDoneHistoryByRetention(aggressive)) changed = true;
+      if (stripEmptyDoneJournalsOnOldEntries()) changed = true;
+      if (pruneOldHabitCheckinDays()) changed = true;
+      if (pruneOldFuelScores()) changed = true;
+      if (pruneOldSyncTombstones()) changed = true;
+      if (pruneOldMemos()) changed = true;
+      if (!aggressive) {
+        if (typeof pruneRedundantDoneEntriesInState === "function" && pruneRedundantDoneEntriesInState()) {
+          changed = true;
+        }
+        if (
+          typeof dedupeClosedListWeeklyPlanMirrorsInState === "function" &&
+          dedupeClosedListWeeklyPlanMirrorsInState()
+        ) {
+          changed = true;
+        }
+      }
+      return changed;
+    }
+
+    function maybeRunScheduledDataRetentionOnStartup() {
+      if (!shouldRunScheduledDataRetention()) return;
+      const changed = runDataRetentionPass({ scheduled: true });
+      markDataRetentionRan();
+      if (!changed) return;
+      if (typeof reconcileDerivedCheckinsFromDoneAfterLoad === "function") {
+        reconcileDerivedCheckinsFromDoneAfterLoad();
+      }
+      console.info(
+        "[数据保留] 已按策略清理过期垃圾箱、过旧 My Done、习惯打卡日与备忘录等历史数据。"
+      );
+      try {
+        const r = persistStateToLocalStorage();
+        if (r.quotaRelief) {
+          console.warn("[数据保留] 清理后写入本地时仍触发了额外瘦身。");
+        }
+      } catch (err) {
+        if (isStorageQuotaExceededError(err)) {
+          console.warn("[数据保留] 清理后仍无法写入本地存储:", err);
+        } else {
+          throw err;
+        }
+      }
+    }
 
     function deepCloneForTrash(obj) {
       try {
@@ -52076,46 +52275,8 @@
       return name === "QuotaExceededError" || /quota/i.test(msg);
     }
 
-    /** 本地存储爆满时裁掉过旧 My Done（保留最近约 1800 条且一年内） */
-    function trimDoneHistoryForStorageQuota() {
-      if (!Array.isArray(state.done) || state.done.length < 2) return false;
-      const cutoff = Date.now() - 365 * 24 * 60 * 60 * 1000;
-      const maxKeep = 1800;
-      const ranked = state.done
-        .filter((d) => d && d.id != null)
-        .map((d) => ({ d, ts: recordTieTimestampForSync(d) }))
-        .sort((a, b) => b.ts - a.ts);
-      const keepIds = new Set(ranked.slice(0, maxKeep).map((x) => x.d.id));
-      const next = state.done.filter((d) => {
-        if (!d || d.id == null) return false;
-        if (keepIds.has(d.id)) return true;
-        return recordTieTimestampForSync(d) >= cutoff;
-      });
-      if (next.length === state.done.length) return false;
-      state.done = next;
-      return true;
-    }
-
     function compactStateForLocalStorage(aggressive) {
-      let changed = false;
-      if (purgeExpiredTrash()) changed = true;
-      if (typeof pruneRedundantDoneEntriesInState === "function" && pruneRedundantDoneEntriesInState()) {
-        changed = true;
-      }
-      if (
-        typeof dedupeClosedListWeeklyPlanMirrorsInState === "function" &&
-        dedupeClosedListWeeklyPlanMirrorsInState()
-      ) {
-        changed = true;
-      }
-      if (aggressive) {
-        if (Array.isArray(state.trash) && state.trash.length > 60) {
-          state.trash = state.trash.slice(0, 60);
-          changed = true;
-        }
-        if (trimDoneHistoryForStorageQuota()) changed = true;
-      }
-      return changed;
+      return runDataRetentionPass({ aggressive: aggressive });
     }
 
     function persistStateToLocalStorage(explicitJson) {
@@ -52137,7 +52298,7 @@
           return { ok: true, localPersisted: true, quotaRelief: true };
         } catch (err2) {
           if (!isStorageQuotaExceededError(err2)) throw err2;
-          trimDoneHistoryForStorageQuota();
+          runDataRetentionPass({ aggressive: true });
           if (Array.isArray(state.trash)) state.trash = state.trash.slice(0, 20);
           json = JSON.stringify(state);
           write();
@@ -70241,6 +70402,7 @@
       render();
     });
     loadState();
+    maybeRunScheduledDataRetentionOnStartup();
     bootstrapAppInfrastructure();
     migrateWeightBodyFatHabits();
     if (ensureDefaultAge40Goals()) {
@@ -70381,6 +70543,43 @@
       }
     }, 60000);
     initCloudSyncMobileOfflineHint();
+
+    window.setInterval(function () {
+      if (document.visibilityState !== "visible") return;
+      if (!shouldRunScheduledDataRetention()) return;
+      const changed = runDataRetentionPass({ scheduled: true });
+      markDataRetentionRan();
+      if (changed) {
+        if (typeof reconcileDerivedCheckinsFromDoneAfterLoad === "function") {
+          reconcileDerivedCheckinsFromDoneAfterLoad();
+        }
+        console.info("[数据保留] 定时任务已清理无用历史数据。");
+        saveState();
+      }
+    }, 6 * 60 * 60 * 1000);
+
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState !== "visible") return;
+      if (!shouldRunScheduledDataRetention()) return;
+      const changed = runDataRetentionPass({ scheduled: true });
+      markDataRetentionRan();
+      if (!changed) return;
+      if (typeof reconcileDerivedCheckinsFromDoneAfterLoad === "function") {
+        reconcileDerivedCheckinsFromDoneAfterLoad();
+      }
+      saveState();
+    });
+
+    /** 手动触发一次完整清理（控制台：runDataRetentionNow()） */
+    window.runDataRetentionNow = function runDataRetentionNow() {
+      const changed = runDataRetentionPass({ aggressive: false });
+      markDataRetentionRan();
+      if (changed && typeof reconcileDerivedCheckinsFromDoneAfterLoad === "function") {
+        reconcileDerivedCheckinsFromDoneAfterLoad();
+      }
+      if (changed) saveState();
+      return { changed: changed, policy: Object.assign({}, DATA_RETENTION) };
+    };
 
     bindAnniversaryFutureStoryInputs();
     bindAnniversaryCollapsibles();
