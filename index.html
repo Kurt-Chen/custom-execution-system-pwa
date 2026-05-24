@@ -48060,7 +48060,7 @@
   <script>
     const STORAGE_KEY = "todo-app-data-v1";
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260525b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260525c";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** My Done 手机端行高：{ padY, minHeight }，与 :root 中 --done-list-row-* 对应 */
@@ -49063,6 +49063,16 @@
           " — 上传数据含无效字段（undefined）。请刷新到最新版本后重试；若仍失败请反馈。"
         );
       }
+      if (
+        low.includes("quota") ||
+        low.includes("quotaexceeded") ||
+        raw.includes("exceeded the quota")
+      ) {
+        return (
+          raw +
+          " — 浏览器本地存储已满（通常约 5MB）。已尝试自动清理垃圾箱与过旧 My Done；请在电脑端删除不需要的历史完成记录、清空垃圾桶后刷新。云端若已有备份，可用「从云端拉取最新」恢复。"
+        );
+      }
       return raw;
     }
 
@@ -49081,6 +49091,7 @@
       if (m.includes("SDK 未加载")) return "SDK 失败";
       if (m.includes("离线")) return "离线";
       if (m.includes("过大") || m.toLowerCase().includes("too_large")) return "数据过大";
+      if (m.includes("存储已满") || m.includes("quota") || m.includes("QuotaExceeded")) return "本地存储已满";
       return "同步错误";
     }
 
@@ -51710,10 +51721,17 @@
               if (mergedJson && mergedJson !== beforeJson) {
                 cloudSyncSuppressPush = true;
                 try {
-                  localStorage.setItem(STORAGE_KEY, mergedJson);
-                  loadState();
-                  setCloudSyncHashFromCurrentState();
-                  render();
+                  const persistRes = applyStateJsonToLocalStorage(mergedJson);
+                  if (persistRes.ok) {
+                    setCloudSyncHashFromCurrentState();
+                    render();
+                    if (!persistRes.localPersisted && persistRes.quotaError) {
+                      cloudSyncLastErrorMsg = formatCloudSyncError(
+                        persistRes.quotaError,
+                        "本地存储空间不足"
+                      );
+                    }
+                  }
                 } finally {
                   cloudSyncSuppressPush = false;
                 }
@@ -51750,10 +51768,16 @@
           cloudSyncConsecutivePushFailures = Math.min(12, cloudSyncConsecutivePushFailures + 1);
           cloudSyncPushBackoffUntil = Date.now() + Math.min(60000, 2000 * cloudSyncConsecutivePushFailures);
           const hint = formatCloudSyncError(err, "");
-          const fallback =
-            hint.includes("读取云端") || hint.includes("超时") || isTransientCloudSyncError(err)
-              ? "读取或合并云端数据失败"
-              : "写入云端失败";
+          let fallback = "写入云端失败";
+          if (isStorageQuotaExceededError(err) || hint.includes("存储已满") || hint.includes("quota")) {
+            fallback = "本地存储空间不足";
+          } else if (
+            hint.includes("读取云端") ||
+            hint.includes("超时") ||
+            isTransientCloudSyncError(err)
+          ) {
+            fallback = "读取或合并云端数据失败";
+          }
           setCloudSyncError(err, fallback);
         })
         .finally(() => {
@@ -51781,8 +51805,18 @@
         return false;
       }
       cloudSyncApplyingRemote = true;
-      localStorage.setItem(STORAGE_KEY, remoteRaw);
-      loadState();
+      const persistRes = applyStateJsonToLocalStorage(remoteRaw);
+      if (!persistRes.ok) {
+        cloudSyncApplyingRemote = false;
+        return false;
+      }
+      if (!persistRes.localPersisted) {
+        reconcileDerivedCheckinsFromDoneAfterLoad();
+        cloudSyncLastErrorMsg = formatCloudSyncError(
+          persistRes.quotaError,
+          "本地存储空间不足"
+        );
+      }
       if (reconcileWeeklyPlanTasksToDeadlineWeeks()) {
         saveState();
       }
@@ -51900,10 +51934,17 @@
             if (mergedJson && mergedJson !== beforeJson) {
               cloudSyncSuppressPush = true;
               try {
-                localStorage.setItem(STORAGE_KEY, mergedJson);
-                loadState();
-                setCloudSyncHashFromCurrentState();
-                render();
+                const persistRes = applyStateJsonToLocalStorage(mergedJson);
+                if (persistRes.ok) {
+                  setCloudSyncHashFromCurrentState();
+                  render();
+                  if (!persistRes.localPersisted && persistRes.quotaError) {
+                    cloudSyncLastErrorMsg = formatCloudSyncError(
+                      persistRes.quotaError,
+                      "本地存储空间不足"
+                    );
+                  }
+                }
               } finally {
                 cloudSyncSuppressPush = false;
               }
@@ -51947,10 +51988,17 @@
             if (mj && mj !== bj) {
               cloudSyncSuppressPush = true;
               try {
-                localStorage.setItem(STORAGE_KEY, mj);
-                loadState();
-                setCloudSyncHashFromCurrentState();
-                render();
+                const persistRes = applyStateJsonToLocalStorage(mj);
+                if (persistRes.ok) {
+                  setCloudSyncHashFromCurrentState();
+                  render();
+                  if (!persistRes.localPersisted && persistRes.quotaError) {
+                    cloudSyncLastErrorMsg = formatCloudSyncError(
+                      persistRes.quotaError,
+                      "本地存储空间不足"
+                    );
+                  }
+                }
               } finally {
                 cloudSyncSuppressPush = false;
               }
@@ -52021,9 +52069,121 @@
       });
     }
 
+    function isStorageQuotaExceededError(err) {
+      if (!err) return false;
+      const name = typeof err.name === "string" ? err.name : "";
+      const msg = String(err.message || err);
+      return name === "QuotaExceededError" || /quota/i.test(msg);
+    }
+
+    /** 本地存储爆满时裁掉过旧 My Done（保留最近约 1800 条且一年内） */
+    function trimDoneHistoryForStorageQuota() {
+      if (!Array.isArray(state.done) || state.done.length < 2) return false;
+      const cutoff = Date.now() - 365 * 24 * 60 * 60 * 1000;
+      const maxKeep = 1800;
+      const ranked = state.done
+        .filter((d) => d && d.id != null)
+        .map((d) => ({ d, ts: recordTieTimestampForSync(d) }))
+        .sort((a, b) => b.ts - a.ts);
+      const keepIds = new Set(ranked.slice(0, maxKeep).map((x) => x.d.id));
+      const next = state.done.filter((d) => {
+        if (!d || d.id == null) return false;
+        if (keepIds.has(d.id)) return true;
+        return recordTieTimestampForSync(d) >= cutoff;
+      });
+      if (next.length === state.done.length) return false;
+      state.done = next;
+      return true;
+    }
+
+    function compactStateForLocalStorage(aggressive) {
+      let changed = false;
+      if (purgeExpiredTrash()) changed = true;
+      if (typeof pruneRedundantDoneEntriesInState === "function" && pruneRedundantDoneEntriesInState()) {
+        changed = true;
+      }
+      if (
+        typeof dedupeClosedListWeeklyPlanMirrorsInState === "function" &&
+        dedupeClosedListWeeklyPlanMirrorsInState()
+      ) {
+        changed = true;
+      }
+      if (aggressive) {
+        if (Array.isArray(state.trash) && state.trash.length > 60) {
+          state.trash = state.trash.slice(0, 60);
+          changed = true;
+        }
+        if (trimDoneHistoryForStorageQuota()) changed = true;
+      }
+      return changed;
+    }
+
+    function persistStateToLocalStorage(explicitJson) {
+      compactStateForLocalStorage(false);
+      let json =
+        explicitJson != null && String(explicitJson).length
+          ? String(explicitJson)
+          : JSON.stringify(state);
+      const write = () => localStorage.setItem(STORAGE_KEY, json);
+      try {
+        write();
+        return { ok: true, localPersisted: true, quotaRelief: false };
+      } catch (err) {
+        if (!isStorageQuotaExceededError(err)) throw err;
+        compactStateForLocalStorage(true);
+        json = JSON.stringify(state);
+        try {
+          write();
+          return { ok: true, localPersisted: true, quotaRelief: true };
+        } catch (err2) {
+          if (!isStorageQuotaExceededError(err2)) throw err2;
+          trimDoneHistoryForStorageQuota();
+          if (Array.isArray(state.trash)) state.trash = state.trash.slice(0, 20);
+          json = JSON.stringify(state);
+          write();
+          return { ok: true, localPersisted: true, quotaRelief: true };
+        }
+      }
+    }
+
+    /**
+     * 云合并 / 拉取写入本地：先解析进内存再持久化；配额不足时仍保留内存态以便继续上传云端。
+     */
+    function applyStateJsonToLocalStorage(json) {
+      if (!json) return { ok: false, localPersisted: false };
+      let parsed = null;
+      try {
+        parsed = JSON.parse(json);
+      } catch (_e) {
+        return { ok: false, localPersisted: false };
+      }
+      if (!parsed || !Array.isArray(parsed.done)) return { ok: false, localPersisted: false };
+      state = parsed;
+      try {
+        const r = persistStateToLocalStorage();
+        loadState();
+        return { ok: true, localPersisted: true, quotaRelief: r.quotaRelief };
+      } catch (err) {
+        if (!isStorageQuotaExceededError(err)) throw err;
+        console.warn("本地存储已满，合并结果仅保留在内存:", err);
+        return { ok: true, localPersisted: false, quotaError: err };
+      }
+    }
+
     function saveState() {
-      purgeExpiredTrash();
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      try {
+        const r = persistStateToLocalStorage();
+        if (r.quotaRelief) {
+          console.warn("本地存储曾接近上限，已自动清理部分垃圾箱/历史 My Done。");
+        }
+      } catch (err) {
+        if (isStorageQuotaExceededError(err)) {
+          console.error("本地存储已满，无法保存:", err);
+          setCloudSyncError(err, "本地存储空间不足，无法保存本机数据");
+          return;
+        }
+        throw err;
+      }
       if (!cloudSyncSuppressPush) {
         scheduleCloudSyncPush();
       }
@@ -52297,7 +52457,15 @@
           try {
             const postReconcileJson = JSON.stringify(state);
             if (postReconcileJson && postReconcileJson !== preReconcileJson && !cloudSyncSuppressPush) {
-              localStorage.setItem(STORAGE_KEY, postReconcileJson);
+              try {
+                persistStateToLocalStorage(postReconcileJson);
+              } catch (persistErr) {
+                if (isStorageQuotaExceededError(persistErr)) {
+                  console.warn("载入后校正写入本地失败（存储已满）:", persistErr);
+                } else {
+                  throw persistErr;
+                }
+              }
             }
           } catch (_reconcilePersistErr) {}
         }
