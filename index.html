@@ -48060,7 +48060,7 @@
   <script>
     const STORAGE_KEY = "todo-app-data-v1";
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260524d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260525a";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** My Done 手机端行高：{ padY, minHeight }，与 :root 中 --done-list-row-* 对应 */
@@ -48669,6 +48669,10 @@
     let cloudSyncInitInFlight = false;
     /** 合并远端与内存 state 时避免 saveState → scheduleCloudSyncPush 递归 */
     let cloudSyncSuppressPush = false;
+    /** 最近一次成功的云端快照（推送前合并用；平板弱网读失败时回退） */
+    let cloudSyncCachedRemotePayload = null;
+    let cloudSyncPushBackoffUntil = 0;
+    let cloudSyncConsecutivePushFailures = 0;
 
     if (!cloudSyncClientId) {
       cloudSyncClientId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -48833,32 +48837,119 @@
         timeoutError instanceof Error
           ? timeoutError
           : new Error(timeoutError || "操作超时（" + ms + "ms）");
+      let timer = null;
       return Promise.race([
-        promise,
+        Promise.resolve(promise).then(
+          (value) => {
+            if (timer) clearTimeout(timer);
+            return value;
+          },
+          (rejectErr) => {
+            if (timer) clearTimeout(timer);
+            throw rejectErr;
+          }
+        ),
         new Promise((_, reject) => {
-          setTimeout(() => reject(err), ms);
+          timer = setTimeout(() => reject(err), ms);
         })
       ]);
+    }
+
+    function isCloudSyncLikelySlowClient() {
+      try {
+        if (typeof window.matchMedia === "function") {
+          if (window.matchMedia("(pointer: coarse)").matches) return true;
+          if (window.matchMedia("(max-width: 1366px)").matches) return true;
+        }
+      } catch (_e) {}
+      return false;
+    }
+
+    function getCloudSyncReadTimeoutMs() {
+      return isCloudSyncLikelySlowClient() ? 45000 : 25000;
+    }
+
+    function getCloudSyncAuthTimeoutMs() {
+      return isCloudSyncLikelySlowClient() ? 55000 : 35000;
+    }
+
+    function isTransientCloudSyncError(err) {
+      const msg = formatCloudSyncError(err, "").toLowerCase();
+      if (!msg) return false;
+      return (
+        msg.includes("超时") ||
+        msg.includes("timeout") ||
+        msg.includes("network") ||
+        msg.includes("unavailable") ||
+        msg.includes("offline") ||
+        msg.includes("aborterror") ||
+        msg.includes("failed to fetch") ||
+        msg.includes("connection") ||
+        msg.includes("disconnected")
+      );
+    }
+
+    function rememberCloudSyncRemotePayload(payload) {
+      if (!payload || !payload.state || !Array.isArray(payload.state.done)) return;
+      cloudSyncCachedRemotePayload = {
+        state: payload.state,
+        updatedAt: coerceCloudUpdatedAt(payload.updatedAt),
+        updatedBy: payload.updatedBy
+      };
     }
 
     async function readRealtimeDbSnapshotOnce(ref) {
       if (!ref) {
         throw new Error("Firebase ref 无效");
       }
+      const ms = getCloudSyncReadTimeoutMs();
+      const timeoutErr = new Error("读取云端超时（约 " + Math.round(ms / 1000) + " 秒）。");
       if (typeof ref.get === "function") {
-        return promiseWithTimeout(
-          ref.get(),
-          25000,
-          new Error("读取云端超时（约 25 秒）。")
-        );
+        return promiseWithTimeout(ref.get(), ms, timeoutErr);
       }
       return promiseWithTimeout(
         new Promise((resolve, reject) => {
           ref.once("value", resolve, reject);
         }),
-        25000,
-        new Error("读取云端超时（约 25 秒）。")
+        ms,
+        timeoutErr
       );
+    }
+
+    async function readRealtimeDbSnapshotOnceWithRetry(ref, attempts) {
+      const maxAttempts = Math.max(1, Number(attempts) || (isCloudSyncLikelySlowClient() ? 3 : 2));
+      let lastErr = null;
+      for (let i = 0; i < maxAttempts; i++) {
+        try {
+          return await readRealtimeDbSnapshotOnce(ref);
+        } catch (err) {
+          lastErr = err;
+          if (i < maxAttempts - 1 && isTransientCloudSyncError(err)) {
+            await new Promise((resolve) => window.setTimeout(resolve, 700 * (i + 1)));
+            continue;
+          }
+          throw err;
+        }
+      }
+      throw lastErr || new Error("读取云端失败");
+    }
+
+    async function fetchRemotePayloadForPushMerge() {
+      if (!cloudSyncRef) {
+        throw new Error("Firebase ref 无效");
+      }
+      try {
+        const snap = await readRealtimeDbSnapshotOnceWithRetry(cloudSyncRef);
+        const payload = snap && typeof snap.val === "function" ? snap.val() : null;
+        rememberCloudSyncRemotePayload(payload);
+        return payload;
+      } catch (readErr) {
+        if (cloudSyncCachedRemotePayload && cloudSyncCachedRemotePayload.state) {
+          console.warn("云同步：读取云端失败，使用最近一次快照合并后上传。", readErr);
+          return cloudSyncCachedRemotePayload;
+        }
+        throw readErr;
+      }
     }
 
     function setCloudSyncStatus(text, statusClass) {
@@ -48932,6 +49023,17 @@
           " — 这是「浏览器连不上 Firebase 认证服务」，与数据库规则无关。常见原因：① 当前网络无法访问 Google（大陆网络需可用代理/VPN）；② 公司/校园网或防火墙拦截；③ 广告拦截、安全软件 HTTPS 扫描。可尝试：换网络或手机热点、为浏览器配置系统代理后重试、放行 *.googleapis.com 与 *.firebaseio.com。另请确认粘贴的是 Firebase 控制台「项目设置 → 您的应用」里完整的网页配置 JSON（须含 apiKey、authDomain、projectId、databaseURL）。"
         );
       }
+      if (
+        low.includes("write_too_large") ||
+        low.includes("payload too large") ||
+        low.includes("data size") ||
+        low.includes("exceeds the maximum")
+      ) {
+        return (
+          raw +
+          " — 单次上传数据过大。可尝试：在电脑端清理 My Done / 垃圾桶中的旧记录，或导出备份后删减历史再同步。"
+        );
+      }
       return raw;
     }
 
@@ -48949,6 +49051,7 @@
       if (m.includes("超时")) return "连接超时";
       if (m.includes("SDK 未加载")) return "SDK 失败";
       if (m.includes("离线")) return "离线";
+      if (m.includes("过大") || m.toLowerCase().includes("too_large")) return "数据过大";
       return "同步错误";
     }
 
@@ -51534,11 +51637,13 @@
     function scheduleCloudSyncPush() {
       /* 不在此处判断 cloudSyncPushing：否则正在上传时本地改动会被直接丢弃，直到下一次保存 */
       if (!cloudSyncReady || cloudSyncApplyingRemote || cloudSyncSuppressPush || !cloudSyncRef) return;
+      const now = Date.now();
+      const delay = Math.max(450, cloudSyncPushBackoffUntil > now ? cloudSyncPushBackoffUntil - now : 0);
       if (cloudSyncPushTimer) clearTimeout(cloudSyncPushTimer);
       cloudSyncPushTimer = setTimeout(() => {
         cloudSyncPushTimer = null;
         pushStateToCloud();
-      }, 450);
+      }, delay);
     }
 
     function pushStateToCloud() {
@@ -51559,9 +51664,8 @@
           ? firebase.database.ServerValue.TIMESTAMP
           : Date.now();
 
-      readRealtimeDbSnapshotOnce(cloudSyncRef)
-        .then((snap) => {
-          const payload = snap && typeof snap.val === "function" ? snap.val() : null;
+      fetchRemotePayloadForPushMerge()
+        .then((payload) => {
           const lastSeen = getCloudLastSeenUpdatedAt();
           if (payload && payload.state && Array.isArray(payload.state.done)) {
             const remoteAt = coerceCloudUpdatedAt(payload.updatedAt);
@@ -51604,10 +51708,13 @@
           }
           cloudSyncLastHash = serializeStateForCloud();
           cloudSyncLastErrorMsg = "";
+          cloudSyncConsecutivePushFailures = 0;
+          cloudSyncPushBackoffUntil = 0;
           setCloudSyncStatus("已连接 ✓", "status-connected");
-          return readRealtimeDbSnapshotOnce(cloudSyncRef)
+          return readRealtimeDbSnapshotOnceWithRetry(cloudSyncRef, 2)
             .then((snap) => {
               const payload = snap && typeof snap.val === "function" ? snap.val() : null;
+              rememberCloudSyncRemotePayload(payload);
               const ua = coerceCloudUpdatedAt(payload && payload.updatedAt);
               if (ua > 0) {
                 setCloudLastSeenUpdatedAt(ua);
@@ -51617,6 +51724,8 @@
         })
         .catch((err) => {
           console.warn("云同步写入失败:", err);
+          cloudSyncConsecutivePushFailures = Math.min(12, cloudSyncConsecutivePushFailures + 1);
+          cloudSyncPushBackoffUntil = Date.now() + Math.min(60000, 2000 * cloudSyncConsecutivePushFailures);
           setCloudSyncError(err, "写入云端失败");
         })
         .finally(() => {
@@ -51670,8 +51779,9 @@
       if (!ok) return;
       try {
         setCloudSyncStatus("同步中...", "status-syncing");
-        const snap = await readRealtimeDbSnapshotOnce(cloudSyncRef);
+        const snap = await readRealtimeDbSnapshotOnceWithRetry(cloudSyncRef);
         const payload = snap && typeof snap.val === "function" ? snap.val() : null;
+        rememberCloudSyncRemotePayload(payload);
         if (!payload || !payload.state) {
           cloudSyncLastErrorMsg = "";
           setCloudSyncStatus("已连接 ✓", "status-connected");
@@ -51728,20 +51838,24 @@
           firebase.initializeApp(cfg);
         }
         /* 部分 Android 平板 WebView 上匿名登录可能长时间不 resolve，导致一直「连接中…」 */
+        const authTimeoutMs = getCloudSyncAuthTimeoutMs();
         await promiseWithTimeout(
           firebase.auth().signInAnonymously(),
-          35000,
+          authTimeoutMs,
           new Error(
-            "Firebase 匿名登录超时（约 35 秒）。请检查 Wi‑Fi/流量、是否禁止本浏览器联网，或关闭 Private DNS/省电限制后重试。"
+            "Firebase 匿名登录超时（约 " +
+              Math.round(authTimeoutMs / 1000) +
+              " 秒）。请检查 Wi‑Fi/流量、是否禁止本浏览器联网，或关闭 Private DNS/省电限制后重试。"
           )
         );
         cloudSyncRef = firebase.database().ref("rooms/" + cloudSyncRoomId + "/state");
         /* 先读房间快照；与 push 相同做按条合并 + 全局 LWW，避免「remoteAt≤lastSeen」时拒绝拉取导致落后本机丢他端打卡 */
-        const initialSnap = await readRealtimeDbSnapshotOnce(cloudSyncRef);
+        const initialSnap = await readRealtimeDbSnapshotOnceWithRetry(cloudSyncRef);
         const initialPayload =
           initialSnap && typeof initialSnap.val === "function"
             ? initialSnap.val()
             : null;
+        rememberCloudSyncRemotePayload(initialPayload);
         let initRemoteStateForPush = null;
         if (initialPayload && initialPayload.state && Array.isArray(initialPayload.state.done)) {
           const remoteAt = coerceCloudUpdatedAt(initialPayload.updatedAt);
@@ -51783,6 +51897,7 @@
         cloudSyncRef.on("value", (snap) => {
           const payload = snap.val();
           if (!payload || !payload.state) return;
+          rememberCloudSyncRemotePayload(payload);
           const ua = coerceCloudUpdatedAt(payload.updatedAt);
           if (payload.updatedBy === cloudSyncClientId) {
             if (ua > 0) {
