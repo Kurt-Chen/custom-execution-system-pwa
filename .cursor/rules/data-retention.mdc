@@ -1,45 +1,36 @@
 ---
-description: 本地历史数据自动保留与定期清理策略（双端共用逻辑，在 index.html 实现）
+description: 本地清理与云端历史保留策略（双端共用，index.html 实现）
 globs:
   - index.html
   - sw.js
 ---
 
-# 数据保留与定期清理
+# 数据保留与清理
 
-实现位置：`index.html` 内 `DATA_RETENTION`、`runDataRetentionPass()`、`maybeRunScheduledDataRetentionOnStartup()`。
+**原则**：除用户主动删除（进垃圾箱 / syncTombstones）外，业务记录不自动删；**完整历史以 Firebase 云端房间为准**，本机可用「从云端拉取最新」恢复。
 
-## 主数据存储（非 localStorage）
+实现：`DATA_RETENTION`、`runDataRetentionPass()`、`maybeRunScheduledDataRetentionOnStartup()`。
 
-- 主键 `todo-app-data-v1` 默认写入 **IndexedDB**（`exec-system-app-db` / store `kv`），容量远大于 localStorage（约 5MB）。
-- 首次启动若仅有 localStorage 副本，会自动 **迁移到 IndexedDB** 并移除 localStorage 中的主数据键。
-- IndexedDB 不可用时回退 localStorage；`persistStateToLocalStorage` / `getPersistedStateJsonFromCache` 为统一入口。
+## 主数据存储
 
-## 触发时机
+- 主键 `todo-app-data-v1` 默认 **IndexedDB**（`exec-system-app-db`），容量远大于 localStorage。
+- 首次启动从 localStorage 自动迁移；失败则回退 localStorage。
 
-| 时机 | 行为 |
-|------|------|
-| 启动且距上次 ≥24h | 完整保留策略 + 写回 localStorage |
-| 每 6h（页面可见） | 若满 24h 则同上 |
-| 回到前台（visibility） | 若满 24h 则同上 |
-| 每次 `saveState` / 持久化前 | `compactStateForLocalStorage` → 轻量清理 |
-| 本地存储配额紧急 | `aggressive` 加强裁切 |
+## 例行清理（每 24h / 保存前轻量）
 
-上次执行时间键：`todo-app-data-retention-last-run-v1`。
+仅处理：
 
-## 保留规则（默认值）
+- **垃圾箱**：超过 30 天的删除项清除；条数上限约 500（非业务数据）
+- **重复脏数据**：`pruneRedundantDoneEntriesInState`、`dedupeClosedListWeeklyPlanMirrorsInState`
 
-- **垃圾箱**：删除超过 30 天的项；最多保留 80 条（紧急时 40 条）
-- **My Done**：最多 3000 条；且完成时间早于 540 天（约 18 个月）的删除（紧急：365 天 / 1800 条）
-- **习惯打卡日**：无对应 My Done 习惯条目、且日期早于 540 天的 `habitCheckins` 日期键删除
-- **Fuel 分数**：日期早于 400 天的记录删除
-- **同步墓碑** `syncTombstones`：早于 180 天的键删除
-- **备忘录** `memo`：早于 730 天或超过 600 条时裁切
-- **My Done 日记**：完成超过 120 天且 assess/adjust 均为空的 `doneJournal` 删除
-- **去重**：`pruneRedundantDoneEntriesInState`、`dedupeClosedListWeeklyPlanMirrorsInState`（非紧急模式）
+**不**例行删除：My Done、习惯打卡、Fuel、备忘录、syncTombstones、日记正文。
+
+## 紧急清理（`aggressive`，仅本机存储配额满）
+
+在 IndexedDB/localStorage 仍写不进去时，才可能裁切较旧本机副本（阈值见 `DATA_RETENTION.aggressive*`）。此前应已尝试上传云端；历史查询依赖云端 roomId。
 
 ## 修改注意
 
-- 调整阈值只改 `DATA_RETENTION` 常量，保持与 `TRASH_RETENTION_MS` 语义一致
-- 云同步合并后的 `state` 也会经 `compactStateForLocalStorage` 清理；勿删除对 `runDataRetentionPass` 的调用
-- 本规则与端别无关：**Desktop / Mobile / Both 同一套逻辑**
+- 勿在例行 `runDataRetentionPass` 中恢复按年龄删除 My Done / 备忘录等
+- 调整阈值只改 `DATA_RETENTION` 与 `TRASH_RETENTION_MS`
+- 端别：**Desktop / Mobile / Both** 同一套逻辑
