@@ -48189,7 +48189,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260527f";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260528a";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** My Done 手机端行高：{ padY, minHeight }，与 :root 中 --done-list-row-* 对应 */
@@ -49416,7 +49416,18 @@
       cloudSyncRoomInput.value = room;
       const statusLabel = cfg ? "已配置 Firebase" : "未配置 Firebase";
       const errorLabel = cloudSyncLastErrorMsg ? "\n最后错误: " + cloudSyncLastErrorMsg : "";
-      cloudSyncPanelMeta.textContent = statusLabel + "\n当前 roomId: " + room + errorLabel;
+      const localDoneN = countDoneRecordsInState(state);
+      const remoteDoneN = getCachedRemoteDoneCount();
+      cloudSyncPanelMeta.textContent =
+        statusLabel +
+        "\n当前 roomId: " +
+        room +
+        "\n本机 Done: " +
+        localDoneN +
+        " 条；云端快照 Done: " +
+        remoteDoneN +
+        " 条" +
+        errorLabel;
       cloudSyncPanelOverlay.classList.remove("hidden");
       cloudSyncPanelOverlay.setAttribute("aria-hidden", "false");
       setTimeout(() => cloudSyncConfigInput.focus(), 0);
@@ -52036,6 +52047,31 @@
             }
           }
           nextHash = serializeStateForCloud();
+          const localDoneBeforeUpload = countDoneRecordsInState(state);
+          let remoteDoneBeforeUpload = 0;
+          if (payload && payload.state) {
+            remoteDoneBeforeUpload = countDoneRecordsInState(payload.state);
+          } else {
+            remoteDoneBeforeUpload = getCachedRemoteDoneCount();
+          }
+          if (remoteDoneBeforeUpload > 0 && localDoneBeforeUpload === 0) {
+            if (payload && payload.state) {
+              absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
+            } else if (cloudSyncCachedRemotePayload) {
+              absorbCloudPayloadPreferringRemoteWhenLocalEmpty(cloudSyncCachedRemotePayload, {
+                skipRender: true
+              });
+            }
+            nextHash = serializeStateForCloud();
+            if (countDoneRecordsInState(state) === 0) {
+              cloudSyncLastErrorMsg =
+                "本机暂无完成记录，云端约有 " +
+                remoteDoneBeforeUpload +
+                " 条。已暂停上传以免覆盖云端。请点「从云端拉取最新」；并先在电脑端确认角标为「已连接 ✓」。";
+              setCloudSyncStatus("同步错误", "status-error");
+              return null;
+            }
+          }
           if (!nextHash || nextHash === cloudSyncLastHash) {
             setCloudSyncStatus("已连接 ✓", "status-connected");
             return null;
@@ -52146,6 +52182,34 @@
         cloudSyncSuppressPush = false;
         cloudSyncApplyingRemote = false;
       }
+    }
+
+    function countDoneRecordsInState(st) {
+      return Array.isArray(st && st.done) ? st.done.length : 0;
+    }
+
+    function getCachedRemoteDoneCount() {
+      if (cloudSyncCachedRemotePayload && cloudSyncCachedRemotePayload.state) {
+        return countDoneRecordsInState(cloudSyncCachedRemotePayload.state);
+      }
+      return 0;
+    }
+
+    /**
+     * 本机 Done 为空但云端有记录时：先合并；仍为空则整包拉取，避免平板只连上却看不到电脑数据。
+     */
+    function absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, opts) {
+      if (!payload || !payload.state || !Array.isArray(payload.state.done)) return false;
+      const remoteLen = payload.state.done.length;
+      const localLen = countDoneRecordsInState(state);
+      if (remoteLen === 0) return applyCloudPayloadWithMerge(payload, opts);
+      if (localLen === 0) {
+        const mergedOk = applyCloudPayloadWithMerge(payload, opts);
+        if (mergedOk && countDoneRecordsInState(state) > 0) return true;
+        console.warn("[云同步] 本机 Done 为空，合并后仍为 0，改为整包拉取云端。");
+        return applyRemoteState(payload.state, true);
+      }
+      return applyCloudPayloadWithMerge(payload, opts);
     }
 
     /**
@@ -52319,11 +52383,13 @@
         let initRemoteStateForPush = null;
         if (initialPayload && initialPayload.state && Array.isArray(initialPayload.state.done)) {
           const remoteAt = coerceCloudUpdatedAt(initialPayload.updatedAt);
-          applyCloudPayloadWithMerge(initialPayload);
+          absorbCloudPayloadPreferringRemoteWhenLocalEmpty(initialPayload);
           if (remoteAt > 0) {
             setCloudLastSeenUpdatedAt(remoteAt);
           }
           initRemoteStateForPush = initialPayload.state;
+        } else if (initialPayload && initialPayload.state) {
+          console.warn("云同步：云端 state 缺少 done 数组，跳过合并。");
         }
         setCloudSyncHashFromCurrentState();
         cloudSyncReady = true;
@@ -52346,7 +52412,7 @@
             return;
           }
           setCloudSyncStatus("同步中...", "status-syncing");
-          applyCloudPayloadWithMerge(payload);
+          absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload);
           if (ua > 0) {
             setCloudLastSeenUpdatedAt(ua);
           }
@@ -52394,6 +52460,8 @@
         habitCheckinDates: Object.keys(state.habitCheckins || {}).length,
         cloudSyncReady: cloudSyncReady,
         cloudSyncError: cloudSyncLastErrorMsg || null,
+        cloudRemoteDoneCached: getCachedRemoteDoneCount(),
+        cloudSyncRoom: cloudSyncRoomId || localStorage.getItem(CLOUD_SYNC_ROOM_KEY) || "",
         hasEmergencyBackup: Boolean(localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY))
       };
     };
