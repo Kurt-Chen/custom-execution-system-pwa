@@ -48209,11 +48209,14 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260528i";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260528j";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** 本机已合并的 pulse.updatedAt（今日打卡快通道，远小于整包 v2） */
     const CLOUD_LAST_PULSE_SEEN_KEY = "todo-app-cloud-last-pulse-seen-v1";
+    /** 上次成功拉取并合并 v2/done 历史的时间（避免每次打开都后台全量拉取） */
+    const CLOUD_SYNC_LAST_HISTORY_MERGE_KEY = "todo-app-cloud-last-history-merge-v1";
+    const CLOUD_SYNC_HISTORY_MERGE_MIN_INTERVAL_MS = 6 * 60 * 60 * 1000;
     /** My Done 手机端行高：{ padY, minHeight }，与 :root 中 --done-list-row-* 对应 */
     const DONE_LIST_ROW_STYLE_KEY = "todo-app-done-list-row-v1";
 
@@ -48854,6 +48857,7 @@
     let cloudSyncFullPushTimer = null;
     let cloudSyncPersistDebounceTimer = null;
     let cloudSyncBackgroundHistoryInFlight = false;
+    let cloudSyncRemoteFullMergeInFlight = false;
     const CLOUD_SYNC_REMOTE_MERGE_DEBOUNCE_MS = 2000;
     const CLOUD_SYNC_RENDER_DEBOUNCE_MS = 500;
     const CLOUD_SYNC_PERSIST_DEBOUNCE_MS = 1500;
@@ -49186,13 +49190,30 @@
       };
     }
 
+    function getCloudSyncLastHistoryMergeAt() {
+      try {
+        return Number(localStorage.getItem(CLOUD_SYNC_LAST_HISTORY_MERGE_KEY)) || 0;
+      } catch (_e) {
+        return 0;
+      }
+    }
+
+    function markCloudSyncHistoryMergeRan() {
+      try {
+        localStorage.setItem(CLOUD_SYNC_LAST_HISTORY_MERGE_KEY, String(Date.now()));
+      } catch (_e) {}
+    }
+
+    /** 仅在本机 Done 为空或云端 meta 比 lastSeen 新时后台拉 v2/done；本机已有数据不因「缓存 Done=0」反复拉 */
     function cloudSyncNeedsBackgroundHistoryMerge(metaAt) {
       const localDone = countDoneRecordsInState(state);
-      const cachedRemote = getCachedRemoteDoneCount();
       const lastSeen = getCloudLastSeenUpdatedAt();
+      const meta = Number(metaAt) || 0;
       if (localDone === 0) return true;
-      if (!cloudSyncCachedRemotePayload || cachedRemote === 0) return true;
-      if (metaAt > lastSeen) return true;
+      if (meta > lastSeen) return true;
+      if (Date.now() - getCloudSyncLastHistoryMergeAt() < CLOUD_SYNC_HISTORY_MERGE_MIN_INTERVAL_MS) {
+        return false;
+      }
       return false;
     }
 
@@ -49215,14 +49236,15 @@
         rememberCloudSyncRemotePayload(payload);
         if (payload && payload.state && Array.isArray(payload.state.done)) {
           const remoteAt = coerceCloudUpdatedAt(payload.updatedAt);
-          absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: false });
+          absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
           if (remoteAt > 0) {
             setCloudLastSeenUpdatedAt(remoteAt);
           }
+          markCloudSyncHistoryMergeRan();
           scheduleCloudSyncRenderDebounced();
         }
         cloudSyncLastErrorMsg = "";
-        setCloudSyncStatus("已连接 ✓", "status-connected");
+        restoreCloudSyncConnectedBadgeUnlessError();
       } catch (err) {
         console.warn("云同步后台拉取历史失败:", err);
         if (!hadError) {
@@ -49230,6 +49252,7 @@
         }
       } finally {
         cloudSyncBackgroundHistoryInFlight = false;
+        restoreCloudSyncConnectedBadgeUnlessError();
       }
     }
 
@@ -49752,7 +49775,15 @@
     }
 
     function scheduleDebouncedRemoteFullMerge() {
-      if (!cloudSyncReady || cloudSyncApplyingRemote) return;
+      if (
+        !cloudSyncReady ||
+        cloudSyncApplyingRemote ||
+        cloudSyncRemoteFullMergeInFlight ||
+        cloudSyncBackgroundHistoryInFlight ||
+        cloudSyncPushing
+      ) {
+        return;
+      }
       if (cloudSyncRemoteMergeTimer) clearTimeout(cloudSyncRemoteMergeTimer);
       cloudSyncRemoteMergeTimer = setTimeout(function () {
         cloudSyncRemoteMergeTimer = null;
@@ -49761,10 +49792,18 @@
     }
 
     async function applyRemoteFullMergeFromCloud() {
-      if (!cloudSyncReady || !cloudSyncRoomRef || cloudSyncApplyingRemote) return;
+      if (
+        !cloudSyncReady ||
+        !cloudSyncRoomRef ||
+        cloudSyncApplyingRemote ||
+        cloudSyncRemoteFullMergeInFlight ||
+        cloudSyncBackgroundHistoryInFlight
+      ) {
+        return;
+      }
+      cloudSyncRemoteFullMergeInFlight = true;
       cloudSyncApplyingRemote = true;
       try {
-        setCloudSyncStatus("同步中...", "status-syncing");
         let meta = null;
         try {
           meta = await readCloudSyncRoomChildValue("v2/meta");
@@ -49775,9 +49814,6 @@
           const metaAt = coerceCloudUpdatedAt(meta.updatedAt);
           if (meta.updatedBy === cloudSyncClientId) {
             if (metaAt > 0) setCloudLastSeenUpdatedAt(metaAt);
-            if (!cloudSyncLastErrorMsg) {
-              setCloudSyncStatus("已连接 ✓", "status-connected");
-            }
             return;
           }
           if (
@@ -49786,12 +49822,10 @@
             cloudSyncCachedRemotePayload &&
             cloudSyncCachedRemotePayload.state
           ) {
-            if (!cloudSyncLastErrorMsg) {
-              setCloudSyncStatus("已连接 ✓", "status-connected");
-            }
             return;
           }
         }
+        setCloudSyncStatus("同步中...", "status-syncing");
         const roomVal = await fetchCloudSyncRoomDataPartial({
           includeDone: true,
           includeLegacyState: !meta
@@ -49807,17 +49841,18 @@
           if (ua > 0) setCloudLastSeenUpdatedAt(ua);
           return;
         }
-        absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload);
+        absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
         if (ua > 0) setCloudLastSeenUpdatedAt(ua);
+        markCloudSyncHistoryMergeRan();
         scheduleCloudSyncRenderDebounced();
-        if (!cloudSyncLastErrorMsg) {
-          setCloudSyncStatus("已连接 ✓", "status-connected");
-        }
+        cloudSyncLastErrorMsg = "";
       } catch (err) {
         console.warn("云同步合并远端失败:", err);
         setCloudSyncError(err, "读取或合并云端数据失败");
       } finally {
         cloudSyncApplyingRemote = false;
+        cloudSyncRemoteFullMergeInFlight = false;
+        restoreCloudSyncConnectedBadgeUnlessError();
       }
     }
 
@@ -49836,6 +49871,8 @@
       cloudSyncListenV2MetaRef.on("value", function (snap) {
         const meta = snap.val();
         if (!meta || meta.updatedBy === cloudSyncClientId) return;
+        const metaAt = coerceCloudUpdatedAt(meta.updatedAt);
+        if (metaAt > 0 && metaAt <= getCloudLastSeenUpdatedAt()) return;
         scheduleDebouncedRemoteFullMerge();
       });
       cloudSyncListenLegacyStateRef = cloudSyncRoomRef.child("state");
@@ -49908,6 +49945,12 @@
     function setCloudSyncStatus(text, statusClass) {
       cloudSyncStatusSnapshot = { text: String(text || "未同步"), statusClass: statusClass || "" };
       applyCloudSyncMobileOfflineUi();
+    }
+
+    function restoreCloudSyncConnectedBadgeUnlessError() {
+      if (!cloudSyncLastErrorMsg) {
+        setCloudSyncStatus("已连接 ✓", "status-connected");
+      }
     }
 
     function setAppVersionText(label) {
@@ -52994,6 +53037,7 @@
         })
         .finally(() => {
           cloudSyncPushing = false;
+          restoreCloudSyncConnectedBadgeUnlessError();
         });
     }
 
@@ -53289,7 +53333,7 @@
             pushCloudSyncPulseOnly();
           }
         }, 500);
-        if (!initRoomLight || cloudSyncNeedsBackgroundHistoryMerge(initMetaAt)) {
+        if (cloudSyncNeedsBackgroundHistoryMerge(initMetaAt)) {
           scheduleCloudSyncBackgroundHistoryMerge();
         }
       } catch (err) {
