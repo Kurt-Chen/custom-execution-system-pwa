@@ -48189,7 +48189,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260528e";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260528f";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** 本机已合并的 pulse.updatedAt（今日打卡快通道，远小于整包 v2） */
@@ -48830,9 +48830,13 @@
     let cloudSyncRenderDebounceTimer = null;
     let cloudSyncLastFullPushAt = 0;
     let cloudSyncFullPushInFlight = false;
-    const CLOUD_SYNC_REMOTE_MERGE_DEBOUNCE_MS = 1500;
-    const CLOUD_SYNC_RENDER_DEBOUNCE_MS = 400;
-    const CLOUD_SYNC_FULL_PUSH_MIN_INTERVAL_MS = 120000;
+    let cloudSyncFullPushTimer = null;
+    let cloudSyncPersistDebounceTimer = null;
+    const CLOUD_SYNC_REMOTE_MERGE_DEBOUNCE_MS = 2000;
+    const CLOUD_SYNC_RENDER_DEBOUNCE_MS = 500;
+    const CLOUD_SYNC_PERSIST_DEBOUNCE_MS = 1500;
+    const CLOUD_SYNC_FULL_PUSH_MIN_INTERVAL_MS = 300000;
+    const CLOUD_SYNC_FULL_PUSH_IDLE_MS = 20000;
 
     if (!cloudSyncClientId) {
       cloudSyncClientId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -49340,12 +49344,32 @@
               ? state.syncTombstones
               : {};
           const nextDone = omitTombstonedIdRecords(mergedDone, ts);
-          try {
-            if (JSON.stringify(state.done) !== JSON.stringify(nextDone)) {
-              state.done = nextDone;
-              changed = true;
+          const locDone = Array.isArray(state.done) ? state.done : [];
+          let doneChanged = nextDone.length !== locDone.length;
+          if (!doneChanged) {
+            const sig = function (item) {
+              if (!item || item.id == null) return "";
+              return (
+                String(item.id) +
+                ":" +
+                Number(item.completedAt) +
+                ":" +
+                Boolean(item.completed)
+              );
+            };
+            const sigMap = new Map();
+            locDone.forEach(function (x) {
+              sigMap.set(String(x.id), sig(x));
+            });
+            for (let di = 0; di < nextDone.length; di++) {
+              const m = nextDone[di];
+              if (sigMap.get(String(m.id)) !== sig(m)) {
+                doneChanged = true;
+                break;
+              }
             }
-          } catch (_cmpErr) {
+          }
+          if (doneChanged) {
             state.done = nextDone;
             changed = true;
           }
@@ -49377,11 +49401,25 @@
       if (pu > 0) setCloudLastPulseSeen(pu);
       if (!changed) return false;
       repairDoneListCompletedAtFromHabitMeta();
-      reconcileDerivedCheckinsFromDoneAfterLoad();
       setCloudSyncHashFromCurrentState();
-      const pr = persistStateToLocalStorage();
-      if (pr && pr.ok) scheduleCloudSyncRenderDebounced();
+      scheduleCloudSyncPersistDebounced();
+      scheduleCloudSyncRenderDebounced();
+      window.setTimeout(function () {
+        try {
+          reconcileDerivedCheckinsFromDoneAfterLoad();
+        } catch (_recErr) {}
+      }, 0);
       return true;
+    }
+
+    function scheduleCloudSyncPersistDebounced() {
+      if (cloudSyncPersistDebounceTimer) clearTimeout(cloudSyncPersistDebounceTimer);
+      cloudSyncPersistDebounceTimer = setTimeout(function () {
+        cloudSyncPersistDebounceTimer = null;
+        try {
+          persistStateToLocalStorage();
+        } catch (_persistErr) {}
+      }, CLOUD_SYNC_PERSIST_DEBOUNCE_MS);
     }
 
     function scheduleCloudSyncRenderDebounced() {
@@ -49400,6 +49438,14 @@
       if (cloudSyncRenderDebounceTimer) {
         clearTimeout(cloudSyncRenderDebounceTimer);
         cloudSyncRenderDebounceTimer = null;
+      }
+      if (cloudSyncPersistDebounceTimer) {
+        clearTimeout(cloudSyncPersistDebounceTimer);
+        cloudSyncPersistDebounceTimer = null;
+      }
+      if (cloudSyncFullPushTimer) {
+        clearTimeout(cloudSyncFullPushTimer);
+        cloudSyncFullPushTimer = null;
       }
       if (cloudSyncListenPulseRef) {
         cloudSyncListenPulseRef.off();
@@ -49447,7 +49493,6 @@
         }
         absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload);
         if (ua > 0) setCloudLastSeenUpdatedAt(ua);
-        scheduleCloudSyncPushIfMergedDiffersFromRemote(payload.state);
         scheduleCloudSyncRenderDebounced();
         if (!cloudSyncLastErrorMsg) {
           setCloudSyncStatus("已连接 ✓", "status-connected");
@@ -51032,18 +51077,37 @@
       return out;
     }
 
-    function scheduleCloudSyncPushIfMergedDiffersFromRemote(remoteState) {
-      if (!cloudSyncReady || cloudSyncApplyingRemote || !cloudSyncRef || !remoteState) return;
-      let remoteJson = "";
-      try {
-        remoteJson = JSON.stringify(remoteState);
-      } catch (_e) {
-        return;
-      }
-      const cur = serializeStateForCloud();
-      if (cur && remoteJson && cur !== remoteJson) {
-        scheduleCloudSyncPush();
-      }
+    function scheduleCloudSyncPushIfMergedDiffersFromRemote(_remoteState) {
+      /* 收到远端合并后不再触发全量 push（会下载整房间）；今日改动走 pulse */
+      scheduleCloudSyncPush();
+    }
+
+    function getCloudSyncServerTimestamp() {
+      return window.firebase &&
+        firebase.database &&
+        firebase.database.ServerValue &&
+        firebase.database.ServerValue.TIMESTAMP != null
+        ? firebase.database.ServerValue.TIMESTAMP
+        : Date.now();
+    }
+
+    /** 日常保存只写 pulse（KB 级），不读整房间、不 merge 全状态 */
+    function pushCloudSyncPulseOnly() {
+      if (!cloudSyncReady || cloudSyncApplyingRemote || !cloudSyncRef) return;
+      pushCloudSyncPulseToRoom(getCloudSyncServerTimestamp()).catch(function (err) {
+        console.warn("pulse 同步失败:", err);
+        setCloudSyncError(err, "今日快同步失败");
+      });
+    }
+
+    function scheduleCloudSyncFullPushDeferred() {
+      if (cloudSyncFullPushTimer) clearTimeout(cloudSyncFullPushTimer);
+      cloudSyncFullPushTimer = setTimeout(function () {
+        cloudSyncFullPushTimer = null;
+        if (!cloudSyncReady || cloudSyncApplyingRemote || cloudSyncSuppressPush) return;
+        if (!shouldRunThrottledFullCloudPush()) return;
+        pushStateToCloudFull();
+      }, CLOUD_SYNC_FULL_PUSH_IDLE_MS);
     }
 
     function mergeDailyWinTomorrowRefForSync(loc, rem) {
@@ -52457,34 +52521,28 @@
     }
 
     function scheduleCloudSyncPush() {
-      /* 不在此处判断 cloudSyncPushing：否则正在上传时本地改动会被直接丢弃，直到下一次保存 */
       if (!cloudSyncReady || cloudSyncApplyingRemote || cloudSyncSuppressPush || !cloudSyncRef) return;
       const now = Date.now();
       const delay = Math.max(450, cloudSyncPushBackoffUntil > now ? cloudSyncPushBackoffUntil - now : 0);
       if (cloudSyncPushTimer) clearTimeout(cloudSyncPushTimer);
       cloudSyncPushTimer = setTimeout(() => {
         cloudSyncPushTimer = null;
-        pushStateToCloud();
+        pushCloudSyncPulseOnly();
+        scheduleCloudSyncFullPushDeferred();
       }, delay);
     }
 
-    function pushStateToCloud() {
+    /** 全量上传（读整房间 + merge + v2 分片）；仅重试/空闲时调用，勿在每次 saveState 调用 */
+    function pushStateToCloudFull() {
       if (!cloudSyncReady || cloudSyncApplyingRemote || !cloudSyncRef) return;
       if (cloudSyncPushing) {
-        scheduleCloudSyncPush();
+        scheduleCloudSyncFullPushDeferred();
         return;
       }
-      let nextHash = serializeStateForCloud();
-      if (!nextHash || nextHash === cloudSyncLastHash) return;
       setCloudSyncStatus("同步中...", "status-syncing");
       cloudSyncPushing = true;
-      const serverTs =
-        window.firebase &&
-        firebase.database &&
-        firebase.database.ServerValue &&
-        firebase.database.ServerValue.TIMESTAMP != null
-          ? firebase.database.ServerValue.TIMESTAMP
-          : Date.now();
+      const serverTs = getCloudSyncServerTimestamp();
+      let nextHash = serializeStateForCloud();
 
       getRemotePayloadForPushMerge()
         .then((payload) => {
@@ -52594,13 +52652,12 @@
         })
         .finally(() => {
           cloudSyncPushing = false;
-          if (cloudSyncReady && !cloudSyncApplyingRemote && cloudSyncRef) {
-            const h = serializeStateForCloud();
-            if (h && h !== cloudSyncLastHash) {
-              scheduleCloudSyncPush();
-            }
-          }
         });
+    }
+
+    function pushStateToCloud() {
+      cloudSyncLastFullPushAt = 0;
+      pushStateToCloudFull();
     }
 
     function maybeWriteStateEmergencyBackup(json) {
@@ -52882,15 +52939,11 @@
         if (!cloudSyncLastErrorMsg) {
           setCloudSyncStatus("已连接 ✓", "status-connected");
         }
-        if (initRemoteStateForPush) {
-          scheduleCloudSyncPushIfMergedDiffersFromRemote(initRemoteStateForPush);
-        }
         /* 仅监听 pulse（轻量）与 v2/meta、legacy state（防抖全量合并），避免 v2/done 分片写入触发整房间 9MB 下载 */
         attachCloudSyncListeners();
-        /* 延后首次 push，让 on('value') 先处理他端写入，避免 get 与 push 之间的窄窗口把旧本机盖掉云端 */
         window.setTimeout(() => {
           if (cloudSyncReady && cloudSyncRef) {
-            pushStateToCloud();
+            pushCloudSyncPulseOnly();
           }
         }, 500);
       } catch (err) {
@@ -52913,7 +52966,9 @@
       cloudSyncRoomRef = null;
       cloudSyncInitInFlight = false;
       cloudSyncLastFullPushAt = 0;
-      return initCloudSync();
+      return initCloudSync().then(function () {
+        pushStateToCloud();
+      });
     };
 
     window.debugExecutionState = function debugExecutionState() {
