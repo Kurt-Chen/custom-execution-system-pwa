@@ -48075,6 +48075,7 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
@@ -55558,11 +55559,11 @@
       );
     }
 
-    function persistFuelDay() {
+    function commitFuelDayLocal() {
       const score = fuelEffortDraftScore;
       if (!(score >= 1 && score <= 10)) {
         window.alert("请先选择 1～10 分");
-        return;
+        return false;
       }
       const existingIdx = state.fuelScores.findIndex((item) => item.date === selectedFuelDate);
       const existingItem = existingIdx >= 0 ? state.fuelScores[existingIdx] : null;
@@ -55586,12 +55587,37 @@
       }
       syncFuelScoreToDone(selectedFuelDate, score, note);
       saveState();
-      pushEffortScoreToUserPath(selectedFuelDate, {
+      render();
+      return true;
+    }
+
+    function persistFuelDayCloudSync() {
+      const score = fuelEffortDraftScore;
+      if (!(score >= 1 && score <= 10)) {
+        return;
+      }
+      const existingItem = state.fuelScores.find((item) => item.date === selectedFuelDate);
+      const noteEl = document.getElementById("fuelNoteInput");
+      let note = "";
+      if (noteEl) {
+        note = String(noteEl.value || "").trim();
+      } else if (existingItem && typeof existingItem.note === "string") {
+        note = existingItem.note;
+      }
+      pushEffortScoreToUserPathImmediate(selectedFuelDate, {
         score: score,
         note: note,
-        updatedAt: Date.now()
+        updatedAt: existingItem && existingItem.updatedAt ? existingItem.updatedAt : Date.now()
       });
-      render();
+    }
+
+    const persistFuelDayDebounced = _.debounce(persistFuelDayCloudSync, 600);
+
+    function persistFuelDay() {
+      if (!commitFuelDayLocal()) {
+        return;
+      }
+      persistFuelDayDebounced();
     }
 
     function removeFuelDoneCopy(dateStr) {
@@ -70649,7 +70675,7 @@
       return "清空油箱，全力以赴";
     }
 
-    function pushEffortScoreToUserPath(dateStr, payload) {
+    function pushEffortScoreToUserPathImmediate(dateStr, payload) {
       try {
         if (!window.firebase || !firebase.apps || !firebase.apps.length) {
           return;
@@ -70668,6 +70694,8 @@
         console.warn("effortScore 用户路径写入失败:", err);
       }
     }
+
+    const pushEffortScoreToUserPath = _.debounce(pushEffortScoreToUserPathImmediate, 600);
 
     function updateFuelEffortBarDom() {
       const bar = document.getElementById("fuelEffortBar");
@@ -71559,7 +71587,9 @@
         }
         fuelEffortDraftScore = n;
         updateFuelEffortBarDom();
-        persistFuelDay();
+        if (commitFuelDayLocal()) {
+          persistFuelDayDebounced();
+        }
       });
     });
     memoInput.addEventListener("keydown", (event) => {
