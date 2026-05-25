@@ -48189,7 +48189,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260528b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260528c";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** My Done 手机端行高：{ padY, minHeight }，与 :root 中 --done-list-row-* 对应 */
@@ -48794,6 +48794,7 @@
     let cloudSyncClientId = localStorage.getItem(CLOUD_SYNC_CLIENT_KEY) || "";
     let cloudSyncRoomId = localStorage.getItem(CLOUD_SYNC_ROOM_KEY) || "";
     let cloudSyncRef = null;
+    let cloudSyncRoomRef = null;
     let cloudSyncLastErrorMsg = "";
     let cloudSyncStatusSnapshot = { text: "未同步", statusClass: "" };
     let cloudSyncInitInFlight = false;
@@ -49075,7 +49076,8 @@
 
     /** 推送前取远端：优先用 onValue/初始化留下的快照，减少每次 push 都 get 导致的失败 */
     async function getRemotePayloadForPushMerge() {
-      if (!cloudSyncRef) {
+      const readRef = cloudSyncRoomRef || (cloudSyncRef && cloudSyncRef.parent ? cloudSyncRef.parent() : null);
+      if (!readRef) {
         throw new Error("Firebase ref 无效");
       }
       const cacheAge = Date.now() - (cloudSyncCacheUpdatedAt || 0);
@@ -49083,8 +49085,9 @@
         return cloudSyncCachedRemotePayload;
       }
       try {
-        const snap = await readRealtimeDbSnapshotOnce(cloudSyncRef);
-        const payload = snap && typeof snap.val === "function" ? snap.val() : null;
+        const snap = await readRealtimeDbSnapshotOnce(readRef);
+        const roomData = snap && typeof snap.val === "function" ? snap.val() : null;
+        const payload = resolveCloudPayloadFromRoomData(roomData);
         rememberCloudSyncRemotePayload(payload);
         return payload || cloudSyncCachedRemotePayload;
       } catch (readErr) {
@@ -49098,6 +49101,84 @@
 
     /** Firebase Realtime Database 单节点单次写入上限约 256KB（UTF-8） */
     const FIREBASE_RTDB_SAFE_WRITE_BYTES = 240 * 1024;
+    const CLOUD_SYNC_V2_DONE_CHUNK = 40;
+
+    function cloudSyncSafeDoneKey(id) {
+      return String(id || "").replace(/[.#$/\[\]]/g, "_");
+    }
+
+    function isCloudPayloadTooLarge(uploadState) {
+      return estimateCloudSyncUploadBytes(uploadState) > FIREBASE_RTDB_SAFE_WRITE_BYTES;
+    }
+
+    /** 上传克隆：去掉空 doneJournal，降低整包体积（不修改本机 state） */
+    function compactStateForCloudUpload(src) {
+      const upload = cloneStateForFirebaseUpload(src);
+      if (!upload || !Array.isArray(upload.done)) return upload;
+      upload.done = upload.done.map(function (item) {
+        if (!item || typeof item !== "object") return item;
+        const j = item.doneJournal;
+        if (!j || typeof j !== "object") return item;
+        const assess = typeof j.assess === "string" ? j.assess.trim() : "";
+        const adjust = typeof j.adjust === "string" ? j.adjust.trim() : "";
+        if (assess || adjust) return item;
+        const copy = Object.assign({}, item);
+        delete copy.doneJournal;
+        return copy;
+      });
+      return upload;
+    }
+
+    /**
+     * 从房间根节点解析云端 payload：v2（分片 done）优先于 legacy 单节点 state。
+     */
+    function resolveCloudPayloadFromRoomData(roomData) {
+      if (!roomData || typeof roomData !== "object") return null;
+      let legacyPayload = null;
+      const legacyNode = roomData.state;
+      if (legacyNode && typeof legacyNode === "object") {
+        if (legacyNode.state && Array.isArray(legacyNode.state.done)) {
+          legacyPayload = {
+            state: legacyNode.state,
+            updatedAt: legacyNode.updatedAt,
+            updatedBy: legacyNode.updatedBy
+          };
+        } else if (Array.isArray(legacyNode.done)) {
+          legacyPayload = {
+            state: legacyNode,
+            updatedAt: legacyNode.updatedAt,
+            updatedBy: legacyNode.updatedBy
+          };
+        }
+      }
+      let v2Payload = null;
+      const v2 = roomData.v2;
+      if (v2 && v2.core && typeof v2.core === "object" && v2.meta) {
+        try {
+          const core = JSON.parse(JSON.stringify(v2.core));
+          const doneMap = v2.done && typeof v2.done === "object" ? v2.done : {};
+          const done = [];
+          Object.keys(doneMap).forEach(function (k) {
+            const item = doneMap[k];
+            if (item && typeof item === "object") done.push(item);
+          });
+          core.done = done;
+          v2Payload = {
+            state: core,
+            updatedAt: v2.meta.updatedAt,
+            updatedBy: v2.meta.updatedBy
+          };
+        } catch (_assembleErr) {
+          v2Payload = null;
+        }
+      }
+      const legacyAt = legacyPayload ? coerceCloudUpdatedAt(legacyPayload.updatedAt) : 0;
+      const v2At = v2Payload ? coerceCloudUpdatedAt(v2Payload.updatedAt) : 0;
+      if (v2Payload && (!legacyPayload || v2At >= legacyAt)) {
+        return v2Payload;
+      }
+      return legacyPayload;
+    }
 
     function estimateUtf8JsonBytes(value) {
       try {
@@ -49139,19 +49220,68 @@
       setCloudSyncStatus("已连接 ✓", "status-connected");
     }
 
-    function trySkipCloudPushBecausePayloadTooLarge(uploadState) {
-      if (estimateCloudSyncUploadBytes(uploadState) <= FIREBASE_RTDB_SAFE_WRITE_BYTES) {
-        return false;
+    function cloudSyncOversizeUserMessage(localDone) {
+      const n = Number(localDone) || 0;
+      if (n > 0) {
+        return (
+          "数据量超过 Firebase 单次写入上限（约 256KB）。本机已保留 " +
+          n +
+          " 条完成记录；已尝试分片同步。若仍失败，请在电脑端清理部分旧 My Done / 垃圾箱后重试，或点「从云端拉取最新」。"
+        );
       }
-      const localDone = countDoneRecordsInState(state);
-      const msg =
-        localDone > 0
-          ? "云端整包超过 Firebase 单次写入上限（约 256KB）。本机已保留 " +
-            localDone +
-            " 条完成记录，暂不自动回传。可正常使用本机数据；请在电脑端清理部分旧 My Done / 垃圾箱并成功上传后，再双向同步。"
-          : "云端整包超过 Firebase 单次写入上限（约 256KB）。请先在电脑端清理部分旧完成记录并显示「已连接 ✓」，再在平板点「从云端拉取最新」。";
-      markCloudSyncDownloadOnlyConnected(msg);
-      return true;
+      return (
+        "数据量超过 Firebase 单次写入上限（约 256KB）。请先在电脑端确认角标为「已连接 ✓」，再在平板点「从云端拉取最新」。"
+      );
+    }
+
+    async function pushStateToCloudV2Sharded(uploadState, serverTs) {
+      if (!cloudSyncRoomRef) {
+        cloudSyncRoomRef = firebase.database().ref("rooms/" + cloudSyncRoomId);
+      }
+      const roomRef = cloudSyncRoomRef;
+      const core = cloneStateForFirebaseUpload(uploadState);
+      if (!core) {
+        throw new Error("本机数据无法序列化（可能含循环引用），无法分片上传。");
+      }
+      const doneArr = Array.isArray(core.done) ? core.done : [];
+      core.done = [];
+      await roomRef.child("v2/meta").set({
+        updatedAt: serverTs,
+        updatedBy: cloudSyncClientId,
+        schema: 2
+      });
+      await roomRef.child("v2/core").set(core);
+      let batch = {};
+      let batchCount = 0;
+      async function flushBatch() {
+        if (!batchCount) return;
+        const toWrite = batch;
+        batch = {};
+        batchCount = 0;
+        await roomRef.update(toWrite);
+      }
+      for (let i = 0; i < doneArr.length; i++) {
+        const item = doneArr[i];
+        if (!item || item.id == null) continue;
+        batch["v2/done/" + cloudSyncSafeDoneKey(item.id)] = item;
+        batchCount++;
+        if (batchCount >= CLOUD_SYNC_V2_DONE_CHUNK) {
+          await flushBatch();
+        }
+      }
+      const ts = state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
+      const tombKeys = Object.keys(ts);
+      for (let j = 0; j < tombKeys.length; j++) {
+        const tid = tombKeys[j];
+        if (String(tid).indexOf("rule100Key:") === 0) continue;
+        if (String(tid).indexOf("weeklyPlanMicro:") === 0) continue;
+        batch["v2/done/" + cloudSyncSafeDoneKey(tid)] = null;
+        batchCount++;
+        if (batchCount >= CLOUD_SYNC_V2_DONE_CHUNK) {
+          await flushBatch();
+        }
+      }
+      await flushBatch();
     }
 
     /** Realtime Database 拒绝含 undefined 的对象；须与 JSON.stringify 一致地去掉 undefined */
@@ -49484,7 +49614,7 @@
           "\n预估上传体积: " +
           kb +
           " KB" +
-          (kb > 240 ? "（超过 Firebase 单次上限，本机可能仅下载不回传）" : "");
+          (kb > 240 ? "（超过单次上限时将自动分片同步 v2）" : "");
       } catch (_uploadEstErr) {}
       cloudSyncPanelMeta.textContent =
         statusLabel +
@@ -52131,6 +52261,9 @@
                 skipRender: true
               });
             }
+            if (countDoneRecordsInState(state) > localDoneBeforeUpload) {
+              render();
+            }
             nextHash = serializeStateForCloud();
             if (countDoneRecordsInState(state) === 0) {
               cloudSyncLastErrorMsg =
@@ -52145,12 +52278,12 @@
             setCloudSyncStatus("已连接 ✓", "status-connected");
             return null;
           }
-          const uploadState = cloneStateForFirebaseUpload(state);
+          const uploadState = compactStateForCloudUpload(state);
           if (!uploadState) {
             throw new Error("本机数据无法序列化（可能含循环引用），无法上传。");
           }
-          if (trySkipCloudPushBecausePayloadTooLarge(uploadState)) {
-            return null;
+          if (isCloudPayloadTooLarge(uploadState)) {
+            return pushStateToCloudV2Sharded(uploadState, serverTs);
           }
           return cloudSyncRef.set({
             state: uploadState,
@@ -52170,8 +52303,31 @@
         })
         .catch((err) => {
           console.warn("云同步失败:", err);
-          if (isCloudSyncWriteTooLargeError(err) && countDoneRecordsInState(state) > 0) {
-            markCloudSyncDownloadOnlyConnected(formatCloudSyncError(err, "写入过大"));
+          if (isCloudSyncWriteTooLargeError(err)) {
+            const uploadState = compactStateForCloudUpload(state);
+            if (uploadState) {
+              return pushStateToCloudV2Sharded(uploadState, serverTs)
+                .then(function () {
+                  cloudSyncLastHash = serializeStateForCloud();
+                  cloudSyncLastErrorMsg = "";
+                  cloudSyncConsecutivePushFailures = 0;
+                  cloudSyncPushBackoffUntil = 0;
+                  setCloudSyncStatus("已连接 ✓", "status-connected");
+                })
+                .catch(function (v2Err) {
+                  console.warn("云同步分片上传失败:", v2Err);
+                  markCloudSyncDownloadOnlyConnected(
+                    cloudSyncOversizeUserMessage(countDoneRecordsInState(state)) +
+                      " " +
+                      formatCloudSyncError(v2Err, "分片写入失败")
+                  );
+                });
+            }
+            if (!uploadState) {
+              markCloudSyncDownloadOnlyConnected(
+                cloudSyncOversizeUserMessage(countDoneRecordsInState(state))
+              );
+            }
             return;
           }
           cloudSyncConsecutivePushFailures = Math.min(12, cloudSyncConsecutivePushFailures + 1);
@@ -52365,8 +52521,10 @@
       if (!ok) return;
       try {
         setCloudSyncStatus("同步中...", "status-syncing");
-        const snap = await readRealtimeDbSnapshotOnceWithRetry(cloudSyncRef);
-        const payload = snap && typeof snap.val === "function" ? snap.val() : null;
+        const readRef = cloudSyncRoomRef || cloudSyncRef;
+        const snap = await readRealtimeDbSnapshotOnceWithRetry(readRef);
+        const roomData = snap && typeof snap.val === "function" ? snap.val() : null;
+        const payload = resolveCloudPayloadFromRoomData(roomData);
         rememberCloudSyncRemotePayload(payload);
         if (!payload || !payload.state) {
           cloudSyncLastErrorMsg = "";
@@ -52406,6 +52564,7 @@
       cloudSyncInitInFlight = true;
       cloudSyncReady = false;
       cloudSyncRef = null;
+      cloudSyncRoomRef = null;
       setCloudSyncStatus("连接中...", "status-syncing");
       if (!cloudSyncRoomId) {
         cloudSyncRoomId = "default-room";
@@ -52448,13 +52607,13 @@
             throw authErr;
           }
         }
-        cloudSyncRef = firebase.database().ref("rooms/" + cloudSyncRoomId + "/state");
+        cloudSyncRoomRef = firebase.database().ref("rooms/" + cloudSyncRoomId);
+        cloudSyncRef = cloudSyncRoomRef.child("state");
         /* 先读房间快照；与 push 相同做按条合并 + 全局 LWW，避免「remoteAt≤lastSeen」时拒绝拉取导致落后本机丢他端打卡 */
-        const initialSnap = await readRealtimeDbSnapshotOnceWithRetry(cloudSyncRef, 2);
-        const initialPayload =
-          initialSnap && typeof initialSnap.val === "function"
-            ? initialSnap.val()
-            : null;
+        const initialSnap = await readRealtimeDbSnapshotOnceWithRetry(cloudSyncRoomRef, 2);
+        const initialRoomData =
+          initialSnap && typeof initialSnap.val === "function" ? initialSnap.val() : null;
+        const initialPayload = resolveCloudPayloadFromRoomData(initialRoomData);
         rememberCloudSyncRemotePayload(initialPayload);
         let initRemoteStateForPush = null;
         if (initialPayload && initialPayload.state && Array.isArray(initialPayload.state.done)) {
@@ -52476,8 +52635,8 @@
           scheduleCloudSyncPushIfMergedDiffersFromRemote(initRemoteStateForPush);
         }
         /* onValue 回声：本机 set({ updatedBy: clientId }) 回传时直接忽略，避免用未含最新字段的快照再 merge 覆盖 in-memory state */
-        cloudSyncRef.on("value", (snap) => {
-          const payload = snap.val();
+        cloudSyncRoomRef.on("value", (snap) => {
+          const payload = resolveCloudPayloadFromRoomData(snap.val());
           if (!payload || !payload.state) return;
           rememberCloudSyncRemotePayload(payload);
           const ua = coerceCloudUpdatedAt(payload.updatedAt);
@@ -52519,6 +52678,7 @@
     window.retryCloudSync = function retryCloudSync() {
       cloudSyncReady = false;
       cloudSyncRef = null;
+      cloudSyncRoomRef = null;
       cloudSyncInitInFlight = false;
       return initCloudSync();
     };
