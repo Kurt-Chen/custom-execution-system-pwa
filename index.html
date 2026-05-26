@@ -19068,8 +19068,12 @@
         grid-template-rows: auto auto auto;
       }
 
-      /* 手机端：手写使命/目标 — 去掉书名号「」 */
+      /* 手机端：手写使命/目标 — 去掉书名号「」与桌面专用「（倒计时）」 */
       #habitRoutineModule .habit-title-quote-mark {
+        display: none;
+      }
+
+      #habitRoutineModule .habit-title-countdown--desktop {
         display: none;
       }
 
@@ -19566,6 +19570,17 @@
     }
 
     #habitRoutineModule .habit-title-lang--desktop {
+      display: inline;
+    }
+
+    /* 桌面端：手写使命/目标 — 无书名号，目标后显示（倒计时） */
+    #habitRoutineModule
+      .habit-en-row[data-habit-key="handwriteMissionGoalsWhatIWant"]
+      .habit-title-quote-mark {
+      display: none;
+    }
+
+    #habitRoutineModule .habit-title-countdown--desktop {
       display: inline;
     }
 
@@ -39139,7 +39154,7 @@
                 <section class="submodule-card submodule-card-nested habit-en-row" data-habit-key="handwriteMissionGoalsWhatIWant">
                   <div class="habit-en-icon habit-en-icon--pen" aria-hidden="true">✍️</div>
                   <div class="habit-en-body">
-                    <h3 class="submodule-title">手写<span class="habit-title-quote-mark" aria-hidden="true">「</span>人生使命、目标、<span class="habit-title-lang--desktop">What I Want</span><span class="habit-title-lang--mobile">我想要的</span><span class="habit-title-quote-mark" aria-hidden="true">」</span></h3>
+                    <h3 class="submodule-title">手写<span class="habit-title-quote-mark" aria-hidden="true">「</span>人生使命、目标<span class="habit-title-countdown--desktop">（倒计时）</span>、<span class="habit-title-lang--desktop">What I Want</span><span class="habit-title-lang--mobile">我想要的</span><span class="habit-title-quote-mark" aria-hidden="true">」</span></h3>
                     <p class="submodule-note">起床后、睡觉前各写一遍，迷茫痛苦时也写</p>
                   </div>
                   <div class="habit-en-actions">
@@ -56545,6 +56560,7 @@
           }
         }
       }
+      dedupeWeeklyPlanTasksInStorage();
       saveState();
       render();
     }
@@ -64536,7 +64552,7 @@
       if (!targetKey || targetKey === storeKey) return false;
 
       const fromTasks = readWeeklyPlanBucketNormalized(storeKey).filter((t) => t.id !== task.id);
-      const toTasks = readWeeklyPlanBucketNormalized(targetKey);
+      const toTasks = readWeeklyPlanBucketNormalized(targetKey).filter((t) => t.id !== task.id);
       const merged = insertWeeklyPlanTaskForLane(toTasks, task, getWeeklyPlanTaskLane(task));
 
       if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
@@ -64547,6 +64563,114 @@
       state.weeklyPlan[targetKey] = merged;
       repointWeeklyPlanMirrorWeekKeys(task.id, targetKey);
       return true;
+    }
+
+    /** 同一 taskId 跨周 bucket 重复时合并为一条（保留较新截止日与完成态） */
+    function pickWeeklyPlanDuplicateWinner(copies) {
+      if (!copies || !copies.length) return null;
+      if (copies.length === 1) return normalizeWeeklyPlanTask(copies[0]);
+      let best = normalizeWeeklyPlanTask(copies[0]);
+      for (let i = 1; i < copies.length; i++) {
+        const cur = normalizeWeeklyPlanTask(copies[i]);
+        const bDl = normalizeDeadlineAtMs(best.deadlineAt);
+        const cDl = normalizeDeadlineAtMs(cur.deadlineAt);
+        if (cDl != null && bDl == null) {
+          best = cur;
+          continue;
+        }
+        if (cDl != null && bDl != null && cDl !== bDl) {
+          if (cDl > bDl) best = cur;
+          else if (cDl === bDl) best = mergeWeeklyPlanOneTaskForSync(best, cur, true);
+          continue;
+        }
+        best = mergeWeeklyPlanOneTaskForSync(best, cur, true);
+      }
+      return best;
+    }
+
+    function dedupeWeeklyPlanDuplicateIdsAcrossBuckets() {
+      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
+      const byId = new Map();
+      Object.keys(state.weeklyPlan).forEach(function (wk) {
+        readWeeklyPlanBucketNormalized(wk).forEach(function (t) {
+          if (!t || t.id == null) return;
+          const id = String(t.id);
+          if (!byId.has(id)) byId.set(id, []);
+          byId.get(id).push({ weekKey: wk, task: t });
+        });
+      });
+      let changed = false;
+      byId.forEach(function (entries) {
+        if (entries.length < 2) return;
+        const winner = pickWeeklyPlanDuplicateWinner(
+          entries.map(function (e) {
+            return e.task;
+          })
+        );
+        if (!winner) return;
+        if (
+          removeWeeklyPlanCopiesAndPlaceWinner(
+            winner,
+            entries.map(function (e) {
+              return e.task.id;
+            })
+          )
+        ) {
+          changed = true;
+        }
+      });
+      return changed;
+    }
+
+    /** 同 lane + 同标题但不同 id（改期限/同步残留）时合并为一条 */
+    function dedupeWeeklyPlanDuplicateTitlesAcrossBuckets() {
+      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
+      const byTitle = new Map();
+      Object.keys(state.weeklyPlan).forEach(function (wk) {
+        readWeeklyPlanBucketNormalized(wk).forEach(function (t) {
+          if (!t || t.id == null) return;
+          const key = weeklyPlanTaskTitleDedupeKey(t);
+          if (!key) return;
+          if (!byTitle.has(key)) byTitle.set(key, []);
+          byTitle.get(key).push({ weekKey: wk, task: t });
+        });
+      });
+      let changed = false;
+      byTitle.forEach(function (entries) {
+        if (entries.length < 2) return;
+        const winner = pickWeeklyPlanDuplicateWinner(
+          entries.map(function (e) {
+            return e.task;
+          })
+        );
+        if (!winner) return;
+        const winId = String(winner.id);
+        entries.forEach(function (e) {
+          if (String(e.task.id) === winId) return;
+          recordSyncTombstone(e.task.id);
+          removeWeeklyPlanTaskDoneMirrors(e.weekKey, e.task.id);
+          repointWeeklyPlanMirrorTaskId(e.task.id, winId);
+        });
+        if (
+          removeWeeklyPlanCopiesAndPlaceWinner(
+            winner,
+            entries.map(function (e) {
+              return e.task.id;
+            })
+          )
+        ) {
+          changed = true;
+        }
+      });
+      return changed;
+    }
+
+    function dedupeWeeklyPlanTasksInStorage() {
+      let changed = false;
+      if (dedupeWeeklyPlanDuplicateIdsAcrossBuckets()) changed = true;
+      if (dedupeWeeklyPlanDuplicateTitlesAcrossBuckets()) changed = true;
+      if (changed && dedupeClosedListWeeklyPlanMirrorsInState()) changed = true;
+      return changed;
     }
 
     function reconcileWeeklyPlanTasksToDeadlineWeeks() {
@@ -64561,6 +64685,7 @@
       ids.forEach(function (id) {
         if (relocateWeeklyPlanTaskToDeadlineWeek(id)) changed = true;
       });
+      if (dedupeWeeklyPlanTasksInStorage()) changed = true;
       return changed;
     }
 
@@ -65782,6 +65907,79 @@
       return task && task.lane === "work" ? "work" : "life";
     }
 
+    function normalizeWeeklyPlanTaskTitleKey(text) {
+      return String(text || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+    }
+
+    function weeklyPlanTaskTitleDedupeKey(task) {
+      if (!task) return "";
+      const text = normalizeWeeklyPlanTaskTitleKey(task.text);
+      if (!text) return "";
+      return getWeeklyPlanTaskLane(task) + "\0" + text;
+    }
+
+    /** 合并镜像时把封闭清单 mirrorOf.id 从 loser 改到保留的主任务 id */
+    function repointWeeklyPlanMirrorTaskId(fromId, toId) {
+      const from = String(fromId || "");
+      const to = String(toId || "");
+      if (!from || !to || from === to) return;
+      if (!Array.isArray(state.closedList)) return;
+      state.closedList.forEach(function (item) {
+        const mo = item && item.mirrorOf;
+        if (!mo || mo.kind !== "weeklyPlan" || String(mo.id) !== from) return;
+        mo.id = to;
+      });
+    }
+
+    function removeWeeklyPlanCopiesAndPlaceWinner(winner, idsInGroup) {
+      if (!winner || winner.id == null || !state.weeklyPlan || typeof state.weeklyPlan !== "object") {
+        return false;
+      }
+      const idSet = new Set();
+      (idsInGroup || []).forEach(function (id) {
+        if (id != null) idSet.add(String(id));
+      });
+      idSet.add(String(winner.id));
+      let targetKey = getWeeklyPlanCalendarWeekKeyForDeadline(winner.deadlineAt);
+      if (!targetKey) {
+        Object.keys(state.weeklyPlan).forEach(function (wk) {
+          if (targetKey) return;
+          readWeeklyPlanBucketNormalized(wk).forEach(function (t) {
+            if (!targetKey && idSet.has(String(t.id))) targetKey = wk;
+          });
+        });
+      }
+      if (!targetKey) return false;
+      let changed = false;
+      Object.keys(state.weeklyPlan).forEach(function (wk) {
+        const bucket = readWeeklyPlanBucketNormalized(wk);
+        const hadAny = bucket.some(function (t) {
+          return idSet.has(String(t.id));
+        });
+        if (!hadAny) return;
+        const without = bucket.filter(function (t) {
+          return !idSet.has(String(t.id));
+        });
+        if (wk === targetKey) {
+          state.weeklyPlan[wk] = insertWeeklyPlanTaskForLane(
+            without,
+            winner,
+            getWeeklyPlanTaskLane(winner)
+          );
+        } else if (without.length === 0) {
+          delete state.weeklyPlan[wk];
+        } else {
+          state.weeklyPlan[wk] = without;
+        }
+        changed = true;
+      });
+      if (changed) repointWeeklyPlanMirrorWeekKeys(winner.id, targetKey);
+      return changed;
+    }
+
     function ensureWeeklyPlanUi() {
       if (!state.weeklyPlanUi || typeof state.weeklyPlanUi !== "object") {
         state.weeklyPlanUi = { addLane: "life", shell: "life" };
@@ -65849,8 +66047,10 @@
 
     /** 持久顺序：生活块在前，工作块在后（与同 lane 内未完成→已完成一致）。 */
     function insertWeeklyPlanTaskForLane(tasks, newTask, lane) {
-      const life = tasks.filter((t) => getWeeklyPlanTaskLane(t) === "life");
-      const work = tasks.filter((t) => getWeeklyPlanTaskLane(t) === "work");
+      const tid = newTask && newTask.id != null ? String(newTask.id) : "";
+      const base = tid ? tasks.filter((t) => String(t.id) !== tid) : tasks.slice();
+      const life = base.filter((t) => getWeeklyPlanTaskLane(t) === "life");
+      const work = base.filter((t) => getWeeklyPlanTaskLane(t) === "work");
       if (lane === "work") {
         work.unshift(newTask);
       } else {
@@ -66123,6 +66323,7 @@
       else task.deadlineAt = n;
       saveWeeklyPlanTasksForWeek(tasks, located.weekKey);
       relocateWeeklyPlanTaskToDeadlineWeek(taskId);
+      dedupeWeeklyPlanTasksInStorage();
       const after = findWeeklyPlanTaskInStorage(taskId);
       const syncWeek = after ? after.weekKey : getWeeklyPlanViewWeekKey();
       syncAllWeeklyPlanMirrorsForWeek(syncWeek);
@@ -66384,6 +66585,9 @@
     function renderWeeklyPlanList() {
       if (!weeklyPlanList || !weeklyPlanEmpty) {
         return;
+      }
+      if (dedupeWeeklyPlanTasksInStorage()) {
+        saveState();
       }
       if (getWeeklyPlanShell() === "closed") {
         weeklyPlanList.innerHTML = "";
