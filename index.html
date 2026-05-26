@@ -11836,43 +11836,18 @@
 
       ul.app-done-time-timeline.done-time-block-list
         > li.done-time-block--sprint-current
-        .done-time-block-sprint-remain,
-      ul.app-done-time-timeline.done-time-block-list
-        > li.done-time-block--sprint-current
-        .done-time-block-sprint-urgency {
-        animation: done-time-block-sprint-remain-flash-kf 1s linear infinite;
-      }
-
-      ul.app-done-time-timeline.done-time-block-list
-        > li.done-time-block--sprint-current
         .done-time-block-sprint-remain
         .done-time-block-sprint-num {
         color: #dc2626;
         font-weight: 700;
-      }
-
-      ul.app-done-time-timeline.done-time-block-list
-        > li.done-time-block--sprint-current
-        .done-time-block-sprint-urgency,
-      ul.app-done-time-timeline.done-time-block-list
-        > li.done-time-block--sprint-current
-        .done-time-block-sprint-urgency
-        .done-time-block-sprint-urgency-txt--narrow,
-      ul.app-done-time-timeline.done-time-block-list
-        > li.done-time-block--sprint-current
-        .done-time-block-sprint-urgency
-        .done-time-block-sprint-urgency-txt--wide {
-        color: #dc2626;
-        font-weight: 700;
+        animation: done-time-block-sprint-remain-flash-kf 1s linear infinite;
       }
 
       @media (prefers-reduced-motion: reduce) {
         ul.app-done-time-timeline.done-time-block-list
           > li.done-time-block--sprint-current
-          .done-time-block-sprint-remain,
-        ul.app-done-time-timeline.done-time-block-list
-          > li.done-time-block--sprint-current
-          .done-time-block-sprint-urgency {
+          .done-time-block-sprint-remain
+          .done-time-block-sprint-num {
           animation: none;
         }
       }
@@ -51478,9 +51453,18 @@
         batches = batches.slice(-keep);
       }
       let total = sumSanitizedHabitNumericBatches(batches, maxBatch);
-      if (!batches.length && Number.isFinite(fieldTotal) && fieldTotal > 0 && fieldTotal <= maxBatch) {
+      if (
+        !batches.length &&
+        Number.isFinite(fieldTotal) &&
+        fieldTotal > 0 &&
+        fieldTotal <= maxBatch &&
+        fieldTotal <= maxDaily
+      ) {
         batches.push(fieldTotal);
         total = fieldTotal;
+      }
+      if (Number.isFinite(fieldTotal) && fieldTotal > maxDaily && batches.length) {
+        total = sumSanitizedHabitNumericBatches(batches, maxBatch);
       }
       if (total > maxDaily && Number.isFinite(fieldTotal) && fieldTotal > 0 && fieldTotal <= maxDaily) {
         total = fieldTotal;
@@ -51538,14 +51522,8 @@
           maxBatch = 999;
           maxDaily = 99999;
         }
-        const totalA = Math.max(
-          Number(a[valueKey]) || 0,
-          sumSanitizedHabitNumericBatches(batchesA, maxBatch)
-        );
-        const totalB = Math.max(
-          Number(b[valueKey]) || 0,
-          sumSanitizedHabitNumericBatches(batchesB, maxBatch)
-        );
+        const totalA = sumSanitizedHabitNumericBatches(batchesA, maxBatch);
+        const totalB = sumSanitizedHabitNumericBatches(batchesB, maxBatch);
         const pickA = totalA >= totalB;
         const picked = pickA ? a : b;
         const sanitized = sanitizeHabitNumericCheckinValue(picked, {
@@ -51568,6 +51546,21 @@
       const remark = rmA.length >= rmB.length ? rmA : rmB;
       if (remark) out.remark = remark;
       else delete out.remark;
+      if (out.wordCount != null || out.minutes != null || out.experiments != null) {
+        let mergeOpts = { valueKey: "minutes", maxBatch: 999, maxDaily: 99999 };
+        if (out.wordCount != null) {
+          mergeOpts = { valueKey: "wordCount", maxBatch: 9999, maxDaily: 999999 };
+        } else if (out.experiments != null) {
+          mergeOpts = { valueKey: "experiments", maxBatch: 999, maxDaily: 99999 };
+        }
+        const sanitizedOut = sanitizeHabitNumericCheckinValue(out, mergeOpts);
+        if (sanitizedOut && typeof sanitizedOut === "object") {
+          return sanitizedOut;
+        }
+        if (sanitizedOut === false) {
+          return false;
+        }
+      }
       return out;
     }
 
@@ -54245,56 +54238,84 @@
       return sum;
     }
 
-    function sumHabitMinutesLifetime(habitKey) {
-      const byDate = {};
+    const HABIT_NUMERIC_LIFETIME_KEYS = ["exmindVocab", "miraaShadowing", "audibleMeditation"];
+    const HABIT_NUMERIC_MAX_STAMPS_PER_DAY = 80;
+
+    function getHabitNumericSanitizeOpts(habitKey) {
+      if (isHabitWordCountKey(habitKey)) {
+        return { valueKey: "wordCount", maxBatch: 9999, maxDaily: 999999 };
+      }
+      if (isHabitMinutesKey(habitKey)) {
+        return { valueKey: "minutes", maxBatch: 999, maxDaily: 99999 };
+      }
+      return null;
+    }
+
+    function collectHabitNumericDateKeys(habitKey) {
+      const dates = new Set();
       (Array.isArray(state.done) ? state.done : []).forEach(function (item) {
         if (!item || !item.habitMeta || item.habitMeta.key !== habitKey || !item.habitMeta.date) return;
-        const ba = Number(item.habitMeta.batchAmount);
-        if (!Number.isFinite(ba) || ba <= 0 || ba > 999) return;
-        const dk = item.habitMeta.date;
-        byDate[dk] = (byDate[dk] || 0) + ba;
+        dates.add(item.habitMeta.date);
       });
       const hc = state.habitCheckins && typeof state.habitCheckins === "object" ? state.habitCheckins : {};
-      Object.keys(hc).forEach(function (dateStr) {
-        const day = hc[dateStr];
-        if (!day || typeof day !== "object") return;
-        const sanitized = sanitizeHabitNumericCheckinValue(day[habitKey], {
-          valueKey: "minutes",
-          maxBatch: 999,
-          maxDaily: 99999
-        });
-        if (!sanitized || typeof sanitized !== "object" || !Number.isFinite(sanitized.minutes)) return;
-        byDate[dateStr] = Math.max(byDate[dateStr] || 0, sanitized.minutes);
+      Object.keys(hc).forEach(function (dk) {
+        const day = hc[dk];
+        if (day && day[habitKey] != null && day[habitKey] !== false) {
+          dates.add(dk);
+        }
       });
-      return Object.keys(byDate).reduce(function (sum, dk) {
-        return sum + byDate[dk];
-      }, 0);
+      return dates;
+    }
+
+    /** 单日累计：仅汇总合法 batchAmount，避免 Done 重复行把终身累计撑爆 */
+    function computeHabitNumericDayTotalFromDoneRows(habitKey, dateStr) {
+      const opts = getHabitNumericSanitizeOpts(habitKey);
+      if (!opts) return 0;
+      const rows = getHabitDoneRowsForDay(habitKey, dateStr);
+      const batches = [];
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const ba = rows[i].habitMeta && Number(rows[i].habitMeta.batchAmount);
+        if (Number.isFinite(ba) && ba > 0 && ba <= opts.maxBatch) {
+          batches.push(ba);
+        }
+      }
+      let trimmed = batches;
+      if (trimmed.length > HABIT_NUMERIC_MAX_STAMPS_PER_DAY) {
+        trimmed = trimmed.slice(-HABIT_NUMERIC_MAX_STAMPS_PER_DAY);
+      }
+      return Math.min(sumSanitizedHabitNumericBatches(trimmed, opts.maxBatch), opts.maxDaily);
+    }
+
+    function getHabitNumericDayTotal(habitKey, dateStr) {
+      const opts = getHabitNumericSanitizeOpts(habitKey);
+      if (!opts) return 0;
+      const fromDone = computeHabitNumericDayTotalFromDoneRows(habitKey, dateStr);
+      const hc = state.habitCheckins && typeof state.habitCheckins === "object" ? state.habitCheckins : {};
+      const raw = hc[dateStr] ? hc[dateStr][habitKey] : null;
+      const sanitized = sanitizeHabitNumericCheckinValue(raw, opts);
+      const fromCheckin =
+        sanitized && typeof sanitized === "object" ? Number(sanitized[opts.valueKey]) || 0 : 0;
+      const hasDone = getHabitDoneRowsForDay(habitKey, dateStr).length > 0;
+      if (hasDone) {
+        return fromDone > 0 ? fromDone : Math.min(fromCheckin, opts.maxDaily);
+      }
+      return Math.min(fromCheckin, opts.maxDaily);
+    }
+
+    function sumHabitNumericLifetimeByDay(habitKey) {
+      let sum = 0;
+      collectHabitNumericDateKeys(habitKey).forEach(function (dk) {
+        sum += getHabitNumericDayTotal(habitKey, dk);
+      });
+      return sum;
+    }
+
+    function sumHabitMinutesLifetime(habitKey) {
+      return sumHabitNumericLifetimeByDay(habitKey);
     }
 
     function sumHabitWordCountLifetime(habitKey) {
-      const byDate = {};
-      (Array.isArray(state.done) ? state.done : []).forEach(function (item) {
-        if (!item || !item.habitMeta || item.habitMeta.key !== habitKey || !item.habitMeta.date) return;
-        const ba = Number(item.habitMeta.batchAmount);
-        if (!Number.isFinite(ba) || ba <= 0 || ba > 9999) return;
-        const dk = item.habitMeta.date;
-        byDate[dk] = (byDate[dk] || 0) + ba;
-      });
-      const hc = state.habitCheckins && typeof state.habitCheckins === "object" ? state.habitCheckins : {};
-      Object.keys(hc).forEach(function (dateStr) {
-        const day = hc[dateStr];
-        if (!day || typeof day !== "object") return;
-        const sanitized = sanitizeHabitNumericCheckinValue(day[habitKey], {
-          valueKey: "wordCount",
-          maxBatch: 9999,
-          maxDaily: 999999
-        });
-        if (!sanitized || typeof sanitized !== "object" || !Number.isFinite(sanitized.wordCount)) return;
-        byDate[dateStr] = Math.max(byDate[dateStr] || 0, sanitized.wordCount);
-      });
-      return Object.keys(byDate).reduce(function (sum, dk) {
-        return sum + byDate[dk];
-      }, 0);
+      return sumHabitNumericLifetimeByDay(habitKey);
     }
 
     function getHabitLifetimeDisplayNumber(habitKey) {
@@ -54982,6 +55003,64 @@
       return changed;
     }
 
+    /** 删除习惯 Done 重复镜像行，并按合法 batch 重建当日 checkin */
+    function pruneInflatedHabitNumericDoneRows(habitKey, dateStr) {
+      const opts = getHabitNumericSanitizeOpts(habitKey);
+      if (!opts) return false;
+      const rows = getHabitDoneRowsForDay(habitKey, dateStr);
+      if (!rows.length) return false;
+      const keptIds = new Set();
+      let sum = 0;
+      let stampCount = 0;
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const row = rows[i];
+        const ba = row.habitMeta && Number(row.habitMeta.batchAmount);
+        if (!Number.isFinite(ba) || ba <= 0 || ba > opts.maxBatch) continue;
+        if (stampCount >= HABIT_NUMERIC_MAX_STAMPS_PER_DAY) continue;
+        if (sum + ba > opts.maxDaily) continue;
+        if (row.id != null) keptIds.add(String(row.id));
+        sum += ba;
+        stampCount += 1;
+      }
+      let changed = false;
+      rows.forEach(function (row) {
+        if (row.id == null || keptIds.has(String(row.id))) return;
+        const before = state.done.length;
+        state.done = state.done.filter(function (item) {
+          return String(item.id) !== String(row.id);
+        });
+        if (state.done.length !== before) changed = true;
+      });
+      if (changed) {
+        rebuildHabitCheckinFromDoneList(habitKey, dateStr);
+      }
+      return changed;
+    }
+
+    function repairAllHabitNumericDoneAndCheckins() {
+      let changed = false;
+      HABIT_NUMERIC_LIFETIME_KEYS.forEach(function (habitKey) {
+        collectHabitNumericDateKeys(habitKey).forEach(function (dateStr) {
+          if (pruneInflatedHabitNumericDoneRows(habitKey, dateStr)) changed = true;
+          rebuildHabitCheckinFromDoneList(habitKey, dateStr);
+          if (!state.habitCheckins[dateStr]) return;
+          const opts = getHabitNumericSanitizeOpts(habitKey);
+          const sanitized = sanitizeHabitNumericCheckinValue(state.habitCheckins[dateStr][habitKey], opts);
+          const next = sanitized === false ? false : sanitized;
+          try {
+            if (JSON.stringify(state.habitCheckins[dateStr][habitKey]) !== JSON.stringify(next)) {
+              state.habitCheckins[dateStr][habitKey] = next;
+              changed = true;
+            }
+          } catch (_cmpErr) {
+            state.habitCheckins[dateStr][habitKey] = next;
+            changed = true;
+          }
+        });
+      });
+      return changed;
+    }
+
     /** 修正云合并后 habitCheckins 中词数/分钟/实验次数被重复累加的脏数据 */
     function repairInflatedHabitNumericCheckins() {
       const hc = state.habitCheckins;
@@ -55048,6 +55127,7 @@
         const sep = pair.indexOf("\x00");
         rebuildHabitCheckinFromDoneList(pair.slice(0, sep), pair.slice(sep + 1));
       });
+      repairAllHabitNumericDoneAndCheckins();
       repairInflatedHabitNumericCheckins();
       dailyWinDates.forEach(function (dateStr) {
         if (!state.habitCheckins[dateStr]) state.habitCheckins[dateStr] = {};
@@ -60850,7 +60930,7 @@
         pctEl.appendChild(pctSpan);
       }
       if (rm) {
-        fillDoneSprintMetaLine(rm, "剩余 ", formatDoneSprintDurSeconds(getDoneSprintRemainSeconds(em)));
+        fillDoneSprintMetaLine(rm, "仅剩 ", formatDoneSprintDurSeconds(getDoneSprintRemainSeconds(em)));
       }
     }
 
@@ -71575,8 +71655,19 @@
       updateMeasureSegmentDesktopTabsLayout();
     }
 
+    let habitNumericLifetimeRepairOnce = false;
+
     function renderHabitCheckins() {
       const todayKey = formatDateInputValue(new Date());
+
+      if (!habitNumericLifetimeRepairOnce) {
+        habitNumericLifetimeRepairOnce = true;
+        if (repairAllHabitNumericDoneAndCheckins()) {
+          try {
+            saveState();
+          } catch (_habitRepairSaveErr) {}
+        }
+      }
 
       habitCards.forEach((card) => {
         const key = card.dataset.habitKey;
