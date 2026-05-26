@@ -11834,21 +11834,28 @@
         white-space: nowrap;
       }
 
-      ul.app-done-time-timeline.done-time-block-list
+      :is(#dynamicModule, #forgeModule)
+        ul.app-done-time-timeline.done-time-block-list
+        > li.done-time-block--sprint-current
+        .done-time-block-sprint-remain {
+        animation: done-time-block-sprint-remain-flash-kf 3s linear infinite !important;
+      }
+
+      :is(#dynamicModule, #forgeModule)
+        ul.app-done-time-timeline.done-time-block-list
         > li.done-time-block--sprint-current
         .done-time-block-sprint-remain
         .done-time-block-sprint-num {
         color: #dc2626;
         font-weight: 700;
-        animation: done-time-block-sprint-remain-flash-kf 3s linear infinite;
       }
 
       @media (prefers-reduced-motion: reduce) {
-        ul.app-done-time-timeline.done-time-block-list
+        :is(#dynamicModule, #forgeModule)
+          ul.app-done-time-timeline.done-time-block-list
           > li.done-time-block--sprint-current
-          .done-time-block-sprint-remain
-          .done-time-block-sprint-num {
-          animation: none;
+          .done-time-block-sprint-remain {
+          animation: none !important;
         }
       }
 
@@ -61060,12 +61067,22 @@
     }
 
     function fillDoneSprintMetaLine(lineEl, prefix, valueText) {
+      if (!lineEl) return;
+      const numSpan = lineEl.querySelector(":scope > .done-time-block-sprint-num");
+      if (numSpan) {
+        const prefixNode = lineEl.firstChild;
+        if (prefixNode && prefixNode.nodeType === Node.TEXT_NODE) {
+          prefixNode.textContent = prefix;
+        }
+        numSpan.textContent = valueText;
+        return;
+      }
       lineEl.textContent = "";
       lineEl.appendChild(document.createTextNode(prefix));
-      const numSpan = document.createElement("span");
-      numSpan.className = "done-time-block-sprint-num";
-      numSpan.textContent = valueText;
-      lineEl.appendChild(numSpan);
+      const created = document.createElement("span");
+      created.className = "done-time-block-sprint-num";
+      created.textContent = valueText;
+      lineEl.appendChild(created);
     }
 
     function updateDoneTimeBlockSprintProgressDom(blockLi) {
@@ -61097,11 +61114,14 @@
         fillDoneSprintMetaLine(el, "已过 ", formatDoneSprintDurMinutes(nowMin - sm));
       }
       if (pctEl) {
-        pctEl.textContent = "";
-        const pctSpan = document.createElement("span");
-        pctSpan.className = "done-time-block-sprint-num";
+        let pctSpan = pctEl.querySelector(":scope > .done-time-block-sprint-num");
+        if (!pctSpan) {
+          pctEl.textContent = "";
+          pctSpan = document.createElement("span");
+          pctSpan.className = "done-time-block-sprint-num";
+          pctEl.appendChild(pctSpan);
+        }
         pctSpan.textContent = String(Math.round(pct * 100)) + "%";
-        pctEl.appendChild(pctSpan);
       }
       if (rm) {
         fillDoneSprintMetaLine(rm, "仅剩 ", formatDoneSprintDurSeconds(getDoneSprintRemainSeconds(em)));
@@ -61292,7 +61312,7 @@
       const pctSpan = document.createElement("span");
       pctSpan.className = "done-time-block-sprint-pct";
       const remain = document.createElement("span");
-      remain.className = "done-time-block-sprint-remain";
+      remain.className = "done-time-block-sprint-remain done-time-block-sprint-remain--flash";
       splitRest.appendChild(pctSpan);
       splitRest.appendChild(remain);
       const urgencyEl = document.createElement("span");
