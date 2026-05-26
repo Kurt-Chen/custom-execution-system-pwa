@@ -51722,10 +51722,16 @@
       const lo = localForge && typeof localForge === "object" ? localForge : {};
       const ro = remoteForge && typeof remoteForge === "object" ? remoteForge : {};
       const out = preferRemote ? Object.assign({}, lo, ro) : Object.assign({}, ro, lo);
-      out.dailyMinimums = mergeIdRecordArraysPreferLocalOnTie(
+      const mergedDailyMinimums = mergeIdRecordArraysPreferLocalOnTie(
         Array.isArray(lo.dailyMinimums) ? lo.dailyMinimums : [],
         Array.isArray(ro.dailyMinimums) ? ro.dailyMinimums : []
       );
+      const dmDateKey = formatDateInputValue(new Date());
+      out.dailyMinimums = dedupeForgeMinimumsList(mergedDailyMinimums, {
+        mind: aggregateForgeCheckinsByNormalizedLabel(dmDateKey, "mind"),
+        body: aggregateForgeCheckinsByNormalizedLabel(dmDateKey, "body"),
+        spt: aggregateForgeCheckinsByNormalizedLabel(dmDateKey, "spt")
+      }).list;
       out.weeklyMinimums = mergeIdRecordArraysPreferLocalOnTie(
         Array.isArray(lo.weeklyMinimums) ? lo.weeklyMinimums : [],
         Array.isArray(ro.weeklyMinimums) ? ro.weeklyMinimums : []
@@ -74419,13 +74425,19 @@
         const nKey = forgeWpNormalizeTaskKey(spec.label);
         if (!nKey) return;
         const realm = spec.realm === "mind" ? "mind" : spec.realm === "spt" ? "spt" : "body";
+        const specSemanticKey = forgeWmSemanticDedupeKey(spec.label, realm);
         let row = null;
         for (let i = 0; i < state.forge.dailyMinimums.length; i++) {
           const r = state.forge.dailyMinimums[i];
           if (!r || typeof r !== "object") continue;
           const rowRealm = r.realm === "mind" ? "mind" : r.realm === "spt" ? "spt" : "body";
           if (rowRealm !== realm) continue;
-          if (forgeWpNormalizeTaskKey(String(r.label || "")) === nKey) {
+          const lb = String(r.label || "").trim();
+          if (
+            (specSemanticKey &&
+              forgeWmSemanticDedupeKey(lb, rowRealm) === specSemanticKey) ||
+            forgeWpNormalizeTaskKey(lb) === nKey
+          ) {
             row = r;
             break;
           }
@@ -74533,6 +74545,7 @@
     function migrateForgeDailyMinimumsHygiene() {
       let changed = normalizeForgeDailyMinLabelsInState();
       if (ensureForgeBuiltinDailyMinimumsSeeded()) changed = true;
+      if (dedupeForgeDailyMinimumsInState()) changed = true;
       return changed;
     }
 
@@ -74714,6 +74727,11 @@
         remarks.unshift(m[1].trim());
         primary = m[2].trim();
       }
+      m = primary.match(/^(.+?)\s+(第[一二三四五六七八九十百\d]+式)\s*$/);
+      if (m) {
+        remarks.unshift(m[2].trim());
+        primary = m[1].trim();
+      }
       m = primary.match(/^(.+?)\s*[（(]\s*(\d+)\s*kg\s*[）)]\s*$/i);
       if (m) {
         primary = m[1].trim();
@@ -74768,24 +74786,22 @@
       return realm + "\0" + primary + "\0s" + stepNum + "\0k" + kg;
     }
 
-    function forgeWmWeeklyMinRowProgressCur(row, weekAgg) {
+    function forgeWmMinRowProgressCur(row, dayOrWeekAgg) {
       const nKey = forgeWpNormalizeTaskKey(String(row.label || "").trim());
-      const agg = nKey ? weekAgg[nKey] : null;
+      const agg = nKey ? dayOrWeekAgg[nKey] : null;
       return agg && typeof agg.sum === "number" && !Number.isNaN(agg.sum) ? agg.sum : 0;
     }
 
-    function dedupeForgeWeeklyMinimumsInState() {
-      if (!state.forge || !Array.isArray(state.forge.weeklyMinimums)) return false;
-      const list = state.forge.weeklyMinimums;
-      if (list.length < 2) return false;
-      const weekKey = forgeGetThisWeekSundayKeyFromSelectedOrToday();
-      const aggByRealm = {
-        mind: aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "mind"),
-        body: aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "body"),
-        spt: aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "spt")
-      };
+    function forgeWmWeeklyMinRowProgressCur(row, weekAgg) {
+      return forgeWmMinRowProgressCur(row, weekAgg);
+    }
+
+    /** 日/周最低：按语义键合并重复行，保留进度较高或标签更完整的一条 */
+    function dedupeForgeMinimumsList(list, aggByRealm) {
+      const rows = Array.isArray(list) ? list : [];
+      if (rows.length < 2) return { list: rows, changed: false };
       const groups = Object.create(null);
-      list.forEach(function (r) {
+      rows.forEach(function (r) {
         if (!r || typeof r !== "object") return;
         const lb = String(r.label || "").trim();
         if (!lb) return;
@@ -74812,12 +74828,12 @@
         const g = groups[key];
         if (g.length <= 1) return;
         const realm = g[0].realm === "mind" ? "mind" : g[0].realm === "spt" ? "spt" : "body";
-        const weekAgg = aggByRealm[realm];
+        const realmAgg = aggByRealm && aggByRealm[realm] ? aggByRealm[realm] : {};
         let best = g[0];
-        let bestCur = forgeWmWeeklyMinRowProgressCur(best, weekAgg);
+        let bestCur = forgeWmMinRowProgressCur(best, realmAgg);
         for (let i = 1; i < g.length; i++) {
           const row = g[i];
-          const cur = forgeWmWeeklyMinRowProgressCur(row, weekAgg);
+          const cur = forgeWmMinRowProgressCur(row, realmAgg);
           if (cur > bestCur) {
             best = row;
             bestCur = cur;
@@ -74839,10 +74855,38 @@
         });
       });
       const removeIds = Object.keys(toRemove);
-      if (removeIds.length === 0) return false;
-      state.forge.weeklyMinimums = list.filter(function (r) {
-        return r && r.id && !toRemove[r.id];
+      if (removeIds.length === 0) return { list: rows, changed: false };
+      return {
+        list: rows.filter(function (r) {
+          return r && r.id && !toRemove[r.id];
+        }),
+        changed: true
+      };
+    }
+
+    function dedupeForgeDailyMinimumsInState() {
+      if (!state.forge || !Array.isArray(state.forge.dailyMinimums)) return false;
+      const dateKey = selectedDoneDate || formatDateInputValue(new Date());
+      const result = dedupeForgeMinimumsList(state.forge.dailyMinimums, {
+        mind: aggregateForgeCheckinsByNormalizedLabel(dateKey, "mind"),
+        body: aggregateForgeCheckinsByNormalizedLabel(dateKey, "body"),
+        spt: aggregateForgeCheckinsByNormalizedLabel(dateKey, "spt")
       });
+      if (!result.changed) return false;
+      state.forge.dailyMinimums = result.list;
+      return true;
+    }
+
+    function dedupeForgeWeeklyMinimumsInState() {
+      if (!state.forge || !Array.isArray(state.forge.weeklyMinimums)) return false;
+      const weekKey = forgeGetThisWeekSundayKeyFromSelectedOrToday();
+      const result = dedupeForgeMinimumsList(state.forge.weeklyMinimums, {
+        mind: aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "mind"),
+        body: aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "body"),
+        spt: aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "spt")
+      });
+      if (!result.changed) return false;
+      state.forge.weeklyMinimums = result.list;
       return true;
     }
 
