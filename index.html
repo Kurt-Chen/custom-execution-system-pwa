@@ -11840,7 +11840,7 @@
         .done-time-block-sprint-num {
         color: #dc2626;
         font-weight: 700;
-        animation: done-time-block-sprint-remain-flash-kf 1s linear infinite;
+        animation: done-time-block-sprint-remain-flash-kf 3s linear infinite;
       }
 
       @media (prefers-reduced-motion: reduce) {
@@ -30604,6 +30604,33 @@
       opacity: 0.9;
     }
 
+    @keyframes anniversary-tw-cd-flash-kf {
+      0%,
+      49% {
+        opacity: 1;
+      }
+      50%,
+      99% {
+        opacity: 0.25;
+      }
+      100% {
+        opacity: 1;
+      }
+    }
+
+    /* 停留在 12 Week Year 页时：各倒计时每 5 秒闪一次 */
+    #anniversaryModule.kinetic-tab-panel:not(.kinetic-tab-hidden) .tw020-cd-remain,
+    #anniversaryModule.kinetic-tab-panel:not(.kinetic-tab-hidden) .anniversary-deep-time-stats-countdown {
+      animation: anniversary-tw-cd-flash-kf 5s linear infinite;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #anniversaryModule.kinetic-tab-panel:not(.kinetic-tab-hidden) .tw020-cd-remain,
+      #anniversaryModule.kinetic-tab-panel:not(.kinetic-tab-hidden) .anniversary-deep-time-stats-countdown {
+        animation: none;
+      }
+    }
+
     .anniversary-tw020-current {
       font-size: 12px;
       color: #831843;
@@ -32344,6 +32371,27 @@
     .age-goal-countdown .age-goal-countdown-num {
       color: #dc2626;
       font-weight: 800;
+    }
+
+    /* 我的目标页：仅最近一个未过期倒计时每 5 秒闪一次 */
+    body.primary-module-fullscreen
+      #myGoalsModule.module-focus-active:not(.module-collapsed)
+      .age-goal-countdown.my-goals-countdown--flash,
+    body.primary-module-fullscreen
+      #myGoalsModule.module-focus-active:not(.module-collapsed)
+      .money-goal-countdown.my-goals-countdown--flash {
+      animation: anniversary-tw-cd-flash-kf 5s linear infinite;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      body.primary-module-fullscreen
+        #myGoalsModule.module-focus-active:not(.module-collapsed)
+        .age-goal-countdown.my-goals-countdown--flash,
+      body.primary-module-fullscreen
+        #myGoalsModule.module-focus-active:not(.module-collapsed)
+        .money-goal-countdown.my-goals-countdown--flash {
+        animation: none;
+      }
     }
 
     /* 公历日期整段不换行，避免窄屏胶囊被压窄后年份左侧被裁切（误看成 26/12/09） */
@@ -58024,6 +58072,130 @@
     bindAgeGoalViewMenuOutsideDismissOnce();
     ensureMoneyGoalViewMenus();
 
+    const MY_GOALS_COUNTDOWN_FLASH_CLASS = "my-goals-countdown--flash";
+    let myGoalsCountdownFlashTickerId = null;
+    let myGoalsCountdownFlashDateKey = "";
+
+    function getChineseLunarDateFmtForGoals() {
+      try {
+        return new Intl.DateTimeFormat("zh-CN-u-ca-chinese", {
+          year: "numeric",
+          month: "long",
+          day: "numeric"
+        });
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function diffCalendarDaysUntilTargetDate(target, today) {
+      return Math.ceil((target.getTime() - today.getTime()) / 86400000);
+    }
+
+    /** 年岁目标：第一个未过农历生日的年龄（40→60 顺序） */
+    function findNearestUpcomingAgeGoalFlashAge(today, lunarFmt) {
+      if (!lunarFmt) return null;
+      for (let age = 40; age <= 60; age++) {
+        const target = findGregorianDateForLunarBirthday(1986 + age, lunarFmt);
+        if (!target) continue;
+        if (diffCalendarDaysUntilTargetDate(target, today) >= 0) {
+          return age;
+        }
+      }
+      return null;
+    }
+
+    /** 净值目标：按列表顺序取第一个未过截止日的 target-age */
+    function findNearestUpcomingMoneyGoalFlashTargetAge(today, lunarFmt) {
+      if (!moneyGoalsList || !lunarFmt) return null;
+      const items = moneyGoalsList.querySelectorAll(".money-goal-item[data-target-age]");
+      for (let i = 0; i < items.length; i++) {
+        const targetAge = Number(items[i].dataset.targetAge);
+        if (!Number.isInteger(targetAge)) continue;
+        const target = findGregorianDateForLunarBirthday(1986 + targetAge, lunarFmt);
+        if (!target) continue;
+        if (diffCalendarDaysUntilTargetDate(target, today) >= 0) {
+          return String(targetAge);
+        }
+      }
+      return null;
+    }
+
+    function clearMyGoalsCountdownFlashMarks() {
+      document.querySelectorAll("." + MY_GOALS_COUNTDOWN_FLASH_CLASS).forEach(function (el) {
+        el.classList.remove(MY_GOALS_COUNTDOWN_FLASH_CLASS);
+      });
+    }
+
+    function isMyGoalsModulePageActive() {
+      return (
+        activePrimaryModuleKey === "goals" &&
+        myGoalsModule &&
+        myGoalsModule.classList.contains("module-focus-active") &&
+        !myGoalsModule.classList.contains("module-collapsed")
+      );
+    }
+
+    function applyMyGoalsNearestCountdownFlash() {
+      clearMyGoalsCountdownFlashMarks();
+      if (!isMyGoalsModulePageActive()) return;
+
+      const today = new Date();
+      const todayDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const lunarFmt = getChineseLunarDateFmtForGoals();
+
+      const flashAge = findNearestUpcomingAgeGoalFlashAge(todayDate, lunarFmt);
+      if (flashAge != null && ageGoalsCountdownList) {
+        const cd = ageGoalsCountdownList.querySelector(
+          '.age-goal-item[data-age="' + String(flashAge) + '"] .age-goal-countdown'
+        );
+        if (cd) cd.classList.add(MY_GOALS_COUNTDOWN_FLASH_CLASS);
+      }
+
+      const flashMoneyAge = findNearestUpcomingMoneyGoalFlashTargetAge(todayDate, lunarFmt);
+      if (flashMoneyAge != null && moneyGoalsList) {
+        const cd = moneyGoalsList.querySelector(
+          '.money-goal-item[data-target-age="' + flashMoneyAge + '"] .money-goal-countdown'
+        );
+        if (cd) cd.classList.add(MY_GOALS_COUNTDOWN_FLASH_CLASS);
+      }
+    }
+
+    function stopMyGoalsCountdownFlashTicker() {
+      if (myGoalsCountdownFlashTickerId) {
+        clearInterval(myGoalsCountdownFlashTickerId);
+        myGoalsCountdownFlashTickerId = null;
+      }
+      myGoalsCountdownFlashDateKey = "";
+      clearMyGoalsCountdownFlashMarks();
+    }
+
+    function tickMyGoalsCountdownFlash() {
+      if (!isMyGoalsModulePageActive()) {
+        stopMyGoalsCountdownFlashTicker();
+        return;
+      }
+      const todayKey = formatDateInputValue(new Date());
+      if (myGoalsCountdownFlashDateKey && myGoalsCountdownFlashDateKey !== todayKey) {
+        myGoalsCountdownFlashDateKey = todayKey;
+        if (typeof renderAgeGoalsCountdown === "function") renderAgeGoalsCountdown();
+        if (typeof renderMoneyGoalsCountdown === "function") renderMoneyGoalsCountdown();
+        return;
+      }
+      myGoalsCountdownFlashDateKey = todayKey;
+      applyMyGoalsNearestCountdownFlash();
+    }
+
+    function ensureMyGoalsCountdownFlashTicker() {
+      if (!isMyGoalsModulePageActive()) {
+        stopMyGoalsCountdownFlashTicker();
+        return;
+      }
+      tickMyGoalsCountdownFlash();
+      if (myGoalsCountdownFlashTickerId) return;
+      myGoalsCountdownFlashTickerId = window.setInterval(tickMyGoalsCountdownFlash, 60000);
+    }
+
     function renderAgeGoalsCountdown() {
       if (!ageGoalsCountdownList) return;
       ageGoalsCountdownList.innerHTML = "";
@@ -58433,6 +58605,7 @@
         bar.appendChild(saveBtn);
         ageGoalsCountdownList.insertAdjacentElement("afterend", bar);
       }
+      applyMyGoalsNearestCountdownFlash();
     }
 
     function wrapMoneyGoalHighlightNumbers(text) {
@@ -58584,6 +58757,7 @@
           fillMoneyGoalCountdownEl(countdownEl, target, today);
         });
       }
+      applyMyGoalsNearestCountdownFlash();
     }
 
     function getLocalHourBucket() {
@@ -70990,6 +71164,7 @@
       renderProjectTasks();
       renderAgeGoalsCountdown();
       renderMoneyGoalsCountdown();
+      if (typeof ensureMyGoalsCountdownFlashTicker === "function") ensureMyGoalsCountdownFlashTicker();
       renderDailyReminder();
       renderWeeklyPlanUI();
       renderKineticCountdowns();
@@ -75952,6 +76127,11 @@
 
       window.scrollTo(0, 0);
       if (activePrimaryModuleKey === "dynamic") ensureKineticDefaultTabVisible();
+      if (activePrimaryModuleKey === "goals") {
+        if (typeof ensureMyGoalsCountdownFlashTicker === "function") ensureMyGoalsCountdownFlashTicker();
+      } else if (typeof stopMyGoalsCountdownFlashTicker === "function") {
+        stopMyGoalsCountdownFlashTicker();
+      }
       /* 首屏 render() 早于底栏 init：全屏/焦点类名在后应用，须补一次 render，否则每天三赢等依赖 isDailyWinModernMode() 的 UI 会陈旧 */
       render();
     }
@@ -76005,6 +76185,11 @@
       }
       activePrimaryModuleKey = key;
       if (key === "dynamic") ensureKineticDefaultTabVisible();
+      if (key === "goals") {
+        if (typeof ensureMyGoalsCountdownFlashTicker === "function") ensureMyGoalsCountdownFlashTicker();
+      } else if (typeof stopMyGoalsCountdownFlashTicker === "function") {
+        stopMyGoalsCountdownFlashTicker();
+      }
       return true;
     }
 
