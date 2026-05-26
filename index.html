@@ -49133,13 +49133,20 @@
         }
       });
       document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState !== "visible") return;
+        if (document.visibilityState === "hidden") {
+          flushCloudSyncPulseImmediate();
+          return;
+        }
         refresh();
+        refreshCloudSyncPulseFromServer();
         if (!cloudSyncReady || !cloudSyncRef || cloudSyncSuppressPush) return;
         const pendingHash = serializeStateForCloud();
         if (pendingHash && pendingHash !== cloudSyncLastHash) {
           scheduleCloudSyncPush();
         }
+      });
+      window.addEventListener("pagehide", function () {
+        flushCloudSyncPulseImmediate();
       });
       window.addEventListener("offline", refresh);
       refresh();
@@ -49750,8 +49757,68 @@
         ":" +
         Boolean(item.completed) +
         ":" +
-        forgeSig
+        forgeSig +
+        ":" +
+        String(item.outcomeKind || "")
       );
+    }
+
+    function hasExplicitDoneOutcomeKind(item) {
+      if (!item || typeof item !== "object") return false;
+      const k = item.outcomeKind;
+      return k === "power" || k === "neutral" || k === "treason";
+    }
+
+    /** 合并 My Done 完成性质：任一侧已选则保留；冲突时由 preferRemoteOnConflict 决定（pulse / 云端较新） */
+    function mergeDoneItemOutcomeFields(mergedItem, localItem, remoteItem, preferRemoteOnConflict) {
+      if (!mergedItem || mergedItem.kind === "timeReflection" || doneTaskUsesPowerBadgeOnly(mergedItem)) {
+        return mergedItem;
+      }
+      const locEx = hasExplicitDoneOutcomeKind(localItem);
+      const remEx = hasExplicitDoneOutcomeKind(remoteItem);
+      if (!locEx && !remEx) return mergedItem;
+      let kind;
+      if (!locEx && remEx) kind = remoteItem.outcomeKind;
+      else if (locEx && !remEx) kind = localItem.outcomeKind;
+      else if (localItem.outcomeKind === remoteItem.outcomeKind) kind = localItem.outcomeKind;
+      else kind = preferRemoteOnConflict ? remoteItem.outcomeKind : localItem.outcomeKind;
+      if (kind === mergedItem.outcomeKind) return mergedItem;
+      const out = Object.assign({}, mergedItem);
+      if (kind === "power" || kind === "neutral" || kind === "treason") {
+        out.outcomeKind = kind;
+      } else {
+        delete out.outcomeKind;
+      }
+      return out;
+    }
+
+    function mergeDoneArraysForSync(localArr, remoteArr, preferRemoteOnConflict) {
+      const loc = Array.isArray(localArr) ? localArr : [];
+      const rem = Array.isArray(remoteArr) ? remoteArr : [];
+      const merged = mergeIdRecordArraysPreferLocalOnTie(loc, rem);
+      const mapLoc = new Map(
+        loc
+          .filter(function (x) {
+            return x && x.id != null;
+          })
+          .map(function (x) {
+            return [String(x.id), x];
+          })
+      );
+      const mapRem = new Map(
+        rem
+          .filter(function (x) {
+            return x && x.id != null;
+          })
+          .map(function (x) {
+            return [String(x.id), x];
+          })
+      );
+      return merged.map(function (item) {
+        if (!item || item.id == null) return item;
+        const id = String(item.id);
+        return mergeDoneItemOutcomeFields(item, mapLoc.get(id), mapRem.get(id), preferRemoteOnConflict);
+      });
     }
 
     /** 今日打卡快通道：今日 Done（含 Forge 打卡）+ 今日习惯 + Forge 壶铃/进度步进 */
@@ -49775,9 +49842,10 @@
       cloudSyncSuppressPush = true;
       try {
         if (Array.isArray(pulseState.done) && pulseState.done.length) {
-          const mergedDone = mergeIdRecordArraysPreferLocalOnTie(
+          const mergedDone = mergeDoneArraysForSync(
             Array.isArray(state.done) ? state.done : [],
-            pulseState.done
+            pulseState.done,
+            true
           );
           const ts =
             state.syncTombstones && typeof state.syncTombstones === "object"
@@ -49833,15 +49901,10 @@
       const changed = mergeCloudSyncPulseIntoState(pulseNode.state);
       if (pu > 0) setCloudLastPulseSeen(pu);
       if (!changed) return false;
-      repairDoneListCompletedAtFromHabitMeta();
+      reconcileCloudSyncPulseDerivedState(pulseNode.state);
       setCloudSyncHashFromCurrentState();
       scheduleCloudSyncPersistDebounced();
       scheduleCloudSyncRenderDebounced();
-      window.setTimeout(function () {
-        try {
-          reconcileDerivedCheckinsFromDoneAfterLoad();
-        } catch (_recErr) {}
-      }, 0);
       return true;
     }
 
@@ -51695,6 +51758,56 @@
       });
     }
 
+    /** 取消防抖并立即上传今日 pulse（切后台 / 习惯打卡后，避免平板未发出） */
+    function flushCloudSyncPulseImmediate() {
+      if (!cloudSyncReady || cloudSyncApplyingRemote || cloudSyncSuppressPush || !cloudSyncRef) return;
+      if (cloudSyncPushTimer) {
+        clearTimeout(cloudSyncPushTimer);
+        cloudSyncPushTimer = null;
+      }
+      pushCloudSyncPulseOnly();
+    }
+
+    /** 习惯打卡保存后：本地持久化 + 立即 pulse（不等 450ms 防抖） */
+    function saveStateAfterHabitCheckin() {
+      saveState();
+      flushCloudSyncPulseImmediate();
+    }
+
+    /** pulse 合并后：先补 Done 再 reconcile，避免 habitCheckins 被空 Done 冲掉 */
+    function reconcileCloudSyncPulseDerivedState(pulseState) {
+      repairDoneListCompletedAtFromHabitMeta();
+      const dates = new Set([formatDateInputValue(new Date())]);
+      if (pulseState && pulseState.habitCheckins && typeof pulseState.habitCheckins === "object") {
+        Object.keys(pulseState.habitCheckins).forEach(function (d) {
+          dates.add(d);
+        });
+      }
+      dates.forEach(function (d) {
+        try {
+          rebuildMissingHabitDoneRowsForDate(d);
+        } catch (_preDoneErr) {}
+      });
+      try {
+        reconcileDerivedCheckinsFromDoneAfterLoad();
+      } catch (_recErr) {}
+      dates.forEach(function (d) {
+        try {
+          rebuildMissingHabitDoneRowsForDate(d);
+        } catch (_postDoneErr) {}
+      });
+    }
+
+    /** 回到前台时主动拉一次 pulse（WebView 休眠可能漏掉 listener） */
+    function refreshCloudSyncPulseFromServer() {
+      if (!cloudSyncReady || !cloudSyncRoomRef || cloudSyncApplyingRemote) return;
+      readCloudSyncRoomChildValue("pulse")
+        .then(function (node) {
+          if (node) applyCloudSyncPulseFromRoom(node);
+        })
+        .catch(function () {});
+    }
+
     function scheduleCloudSyncFullPushDeferred() {
       if (cloudSyncFullPushTimer) clearTimeout(cloudSyncFullPushTimer);
       cloudSyncFullPushTimer = setTimeout(function () {
@@ -52947,7 +53060,7 @@
       const ts = base.syncTombstones;
 
       base.done = omitTombstonedIdRecords(
-        mergeIdRecordArraysPreferLocalOnTie(state.done, remoteState.done),
+        mergeDoneArraysForSync(state.done, remoteState.done, serverNewer),
         ts
       );
       base.memo = omitTombstonedIdRecords(
@@ -53300,8 +53413,9 @@
         state = merged;
         normalizeDoneListJournalFieldsInState();
         normalizeDoneOutcomeKindsInState();
-        reconcileDerivedCheckinsFromDoneAfterLoad();
         repairDoneListCompletedAtFromHabitMeta();
+        restoreDoneListFromHabitCheckinsIfMissing();
+        reconcileDerivedCheckinsFromDoneAfterLoad();
         restoreDoneListFromHabitCheckinsIfMissing();
         if (reconcileWeeklyPlanTasksToDeadlineWeeks()) {
           /* 不写 saveState，避免合并过程中再次 push */
@@ -55252,7 +55366,7 @@
       if (input) {
         input.value = "";
       }
-      saveState();
+      saveStateAfterHabitCheckin();
       render();
     }
 
@@ -55294,7 +55408,7 @@
       if (input) {
         input.value = "";
       }
-      saveState();
+      saveStateAfterHabitCheckin();
       render();
     }
 
@@ -55323,7 +55437,7 @@
       }
       state.habitCheckins[dateKey][habitKey] = nextObj;
       syncHabitReadingToDone(habitKey, dateKey, preservedRemark, nextTimes);
-      saveState();
+      saveStateAfterHabitCheckin();
       render();
     }
 
@@ -55429,7 +55543,7 @@
       state.habitCheckins[dateKey][habitKey] = nextObj;
       const lifetime = getHabitExperimentLifetimeTotal(habitKey);
       syncHabitExperimentToDone(habitKey, dateKey, newTotal, stampTimes, lifetime, remarkRaw || undefined, add);
-      saveState();
+      saveStateAfterHabitCheckin();
       render();
     }
 
@@ -55601,7 +55715,7 @@
       state.habitCheckins[dateKey][habitKey] = { times: nextTimes };
       syncHabitToDone(habitKey, dateKey, nextTimes);
       bumpRule100LinkedForEntrepreneurHabitIfNeeded(habitKey);
-      saveState();
+      saveStateAfterHabitCheckin();
       render();
     }
 
@@ -55628,7 +55742,7 @@
         completedAt: Date.now(),
         habitMeta: { key: "weightAndBodyFat", date: dateKey }
       });
-      saveState();
+      saveStateAfterHabitCheckin();
       render();
     }
 
@@ -61055,6 +61169,16 @@
       return Math.max(0, endSec - nowSec);
     }
 
+    /** 冲刺「仅剩」：桌面精确到秒；手机（≤767px）与「已过」一致仅 h/m */
+    function formatDoneSprintRemain(endMin, nowMin) {
+      const mobile =
+        typeof window.matchMedia === "function" && window.matchMedia("(max-width: 767px)").matches;
+      if (mobile) {
+        return formatDoneSprintDurMinutes(Math.max(0, Math.floor(Number(endMin) || 0) - Math.floor(Number(nowMin) || 0)));
+      }
+      return formatDoneSprintDurSeconds(getDoneSprintRemainSeconds(endMin));
+    }
+
     let doneTimeBlockSprintTickerId = null;
     let doneTodayVisibilityDigest = null;
 
@@ -61124,7 +61248,7 @@
         pctSpan.textContent = String(Math.round(pct * 100)) + "%";
       }
       if (rm) {
-        fillDoneSprintMetaLine(rm, "仅剩 ", formatDoneSprintDurSeconds(getDoneSprintRemainSeconds(em)));
+        fillDoneSprintMetaLine(rm, "仅剩 ", formatDoneSprintRemain(em, nowMin));
       }
     }
 
@@ -62381,6 +62505,7 @@
       if (!item || item.kind === "timeReflection" || doneTaskUsesPowerBadgeOnly(item)) return;
       item.outcomeKind = kind;
       saveState();
+      flushCloudSyncPulseImmediate();
       render();
     }
 
@@ -72396,6 +72521,7 @@
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState === "hidden") {
         void flushStatePersistQueue();
+        flushCloudSyncPulseImmediate();
       }
       if (document.visibilityState !== "visible") return;
       if (tickClosedListDayRollover()) {
