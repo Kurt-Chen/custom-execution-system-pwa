@@ -1902,6 +1902,10 @@
         line-height: 1.2;
         letter-spacing: -0.02em;
       }
+
+      .done-kinetic-shortcut__closed-note {
+        display: none !important;
+      }
     }
 
     /* 平板/笔记本/桌面：性质图例单行；左侧统计区优先占宽（三栏下亦不易折行）；极窄时灰框内可横滑 */
@@ -2148,6 +2152,24 @@
       text-overflow: clip;
       font-size: 12px;
       letter-spacing: -0.01em;
+    }
+
+    .done-kinetic-shortcut__closed-note {
+      flex-shrink: 0;
+      margin-left: 0.45em;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.2;
+      color: #0f766e;
+      white-space: nowrap;
+    }
+
+    .done-kinetic-shortcut--closed-pending .done-kinetic-shortcut__text {
+      color: inherit;
+    }
+
+    .done-kinetic-shortcut--closed-pending .done-kinetic-shortcut__closed-note {
+      color: #b45309;
     }
 
     @media (max-width: 420px) {
@@ -16178,6 +16200,32 @@
       display: none !important;
     }
 
+    #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-footer-reminder {
+      margin-top: 12px;
+      padding: 10px 0 2px;
+      border-top: 0.5px solid #e2e8f0;
+      font-size: 12px;
+      line-height: 1.55;
+      color: #57534e;
+      text-align: left;
+    }
+
+    #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-footer-reminder__principle {
+      margin: 0 0 6px;
+      font-weight: 700;
+      color: #6d28d9;
+    }
+
+    #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-footer-reminder__body {
+      margin: 0 0 6px;
+    }
+
+    #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-footer-reminder__rule {
+      margin: 0;
+      font-weight: 600;
+      color: #b45309;
+    }
+
     /* Closed-List v3 手机：日期居中独占一行，避免与「昨天/明天」挤占导致标签不更新/被裁切 */
     @media (max-width: 767px) {
       #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-date-nav-row {
@@ -16210,6 +16258,16 @@
       #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-date-nav-btn,
       #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-day-pill {
         touch-action: manipulation;
+      }
+
+      #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-footer-reminder {
+        margin-top: 10px;
+        padding: 10px 12px 11px;
+        font-size: 0.78rem;
+      }
+
+      #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-footer-reminder__principle {
+        font-size: 0.84rem;
       }
     }
 
@@ -37402,9 +37460,11 @@
                   type="button"
                   id="doneShortcutClosedListBtn"
                   class="done-kinetic-shortcut done-kinetic-shortcut--closed"
+                  aria-label="Highest-Leverage Action，备注：回避·阻力·恐惧➠指南针"
                 >
                   <span class="done-kinetic-shortcut__icon" aria-hidden="true">⚡</span>
                   <span class="done-kinetic-shortcut__text">Highest-Leverage Action</span>
+                  <span class="done-kinetic-shortcut__closed-note">【回避·阻力·恐惧➠指南针】</span>
                 </button>
               </div>
             </div>
@@ -37573,6 +37633,20 @@
             </div>
             <button id="closedListTodayBtn" type="button" hidden tabindex="-1" aria-hidden="true">今天</button>
             <div id="closedListEmpty" class="empty">暂无 Closed-List 条目</div>
+            <footer
+              id="closedListFooterReminder"
+              class="closed-list-footer-reminder"
+              aria-label="Closed-List 执行提醒"
+            >
+              <p class="closed-list-footer-reminder__principle">
+                「你最回避的/最恐惧的 = 你最应该做的」
+              </p>
+              <p class="closed-list-footer-reminder__body">
+                每天的任务按「回避程度」排序，从最回避（最恐惧）的依次开始做。我正在回避的任务的「Ten Turns of Momentum
+                版本」是什么？
+              </p>
+              <p class="closed-list-footer-reminder__rule">完成 Closed-List 之前，不做其他事。</p>
+            </footer>
           </div>
 
           <div id="weeklyPlanTasksPanel" class="weekly-plan-tasks-panel">
@@ -51078,13 +51152,88 @@
       cloudSyncLastHash = serializeStateForCloud();
     }
 
+    function stampDeadlineChange(item, msOrNull) {
+      if (!item || typeof item !== "object") return;
+      const n = normalizeDeadlineAtMs(msOrNull);
+      const now = Date.now();
+      if (n == null) delete item.deadlineAt;
+      else item.deadlineAt = n;
+      item.deadlineUpdatedAt = now;
+      item.updatedAt = now;
+    }
+
+    function mergeDeadlineFieldsForSync(lItem, rItem, preferLocalOnTie) {
+      const lDl = normalizeDeadlineAtMs(lItem && lItem.deadlineAt);
+      const rDl = normalizeDeadlineAtMs(rItem && rItem.deadlineAt);
+      const lDu = Number(lItem && lItem.deadlineUpdatedAt) || 0;
+      const rDu = Number(rItem && rItem.deadlineUpdatedAt) || 0;
+      const mergedDu = Math.max(lDu, rDu);
+      if (lDl == null && rDl == null) {
+        return mergedDu > 0 ? { deadlineUpdatedAt: mergedDu } : {};
+      }
+      if (lDl != null && rDl == null) {
+        if (lDu >= rDu) return { deadlineAt: lDl, deadlineUpdatedAt: lDu || mergedDu || undefined };
+        return mergedDu > 0 ? { deadlineUpdatedAt: mergedDu } : {};
+      }
+      if (lDl == null && rDl != null) {
+        if (rDu > lDu) return { deadlineAt: rDl, deadlineUpdatedAt: rDu };
+        return mergedDu > 0 ? { deadlineUpdatedAt: mergedDu } : {};
+      }
+      if (lDu > rDu) return { deadlineAt: lDl, deadlineUpdatedAt: lDu };
+      if (rDu > lDu) return { deadlineAt: rDl, deadlineUpdatedAt: rDu };
+      if (lDl === rDl) {
+        return mergedDu > 0 ? { deadlineAt: lDl, deadlineUpdatedAt: mergedDu } : { deadlineAt: lDl };
+      }
+      return preferLocalOnTie
+        ? { deadlineAt: lDl, deadlineUpdatedAt: lDu || mergedDu || Date.now() }
+        : { deadlineAt: rDl, deadlineUpdatedAt: rDu || mergedDu || Date.now() };
+    }
+
+    function applyDeadlineMergeToItem(target, merged) {
+      if (!target || !merged || typeof merged !== "object") return;
+      if (Object.prototype.hasOwnProperty.call(merged, "deadlineAt")) {
+        if (merged.deadlineAt != null) target.deadlineAt = merged.deadlineAt;
+        else delete target.deadlineAt;
+      }
+      if (merged.deadlineUpdatedAt != null) target.deadlineUpdatedAt = merged.deadlineUpdatedAt;
+    }
+
+    function reconcileMirrorDeadlinesAfterCloudMerge() {
+      (state.closedList || []).forEach(function (item) {
+        const mo = item.mirrorOf;
+        if (!mo) return;
+        if (mo.kind === "weeklyPlan") {
+          const resolved = resolveWeeklyPlanMirrorLocation(mo);
+          if (!resolved) return;
+          const tasks = readWeeklyPlanBucketNormalized(resolved.weekKey);
+          const task = tasks.find(function (t) {
+            return t.id === mo.id;
+          });
+          if (!task) return;
+          const pick = mergeDeadlineFieldsForSync(task, item, false);
+          applyDeadlineMergeToItem(task, pick);
+          applyDeadlineMergeToItem(item, pick);
+        } else if (mo.kind === "anniversaryTw") {
+          const located = findAnniversaryTaskInStorage(mo.module, mo.taskId, mo.weekNum);
+          if (!located) return;
+          const pick = mergeDeadlineFieldsForSync(located.task, item, false);
+          applyDeadlineMergeToItem(located.task, pick);
+          applyDeadlineMergeToItem(item, pick);
+        }
+      });
+    }
+
     function recordTieTimestampForSync(item) {
       if (!item || typeof item !== "object") return 0;
       const c = Number(item.completedAt);
+      const u = Number(item.updatedAt);
+      const du = Number(item.deadlineUpdatedAt);
       const cr = Number(item.createdAt);
-      if (Number.isFinite(c) && c > 0) return c;
-      if (Number.isFinite(cr) && cr > 0) return cr;
-      return 0;
+      let best = 0;
+      [c, u, du, cr].forEach(function (v) {
+        if (Number.isFinite(v) && v > 0) best = Math.max(best, v);
+      });
+      return best;
     }
 
     /** 按 id 合并两端记录：并集；同 id 取时间戳较大者，平局取本地 */
@@ -51146,24 +51295,36 @@
           return (L && L.mirrorOf) || (R && R.mirrorOf);
         }
         const wantDone = Boolean((L && L.completed) || (R && R.completed) || item.completed);
+        const dlPick = mergeDeadlineFieldsForSync(L, R, true);
+        const revBump = Math.max(Number(L && L.updatedAt) || 0, Number(R && R.updatedAt) || 0);
         if (!wantDone) {
+          let out = item;
           const mo = mirrorFromSides();
           if (mo && !item.mirrorOf) {
-            return Object.assign({}, item, { mirrorOf: mo });
+            out = Object.assign({}, item, { mirrorOf: mo });
           }
-          return item;
+          if (L || R) {
+            out = Object.assign({}, out);
+            applyDeadlineMergeToItem(out, dlPick);
+            const u = Math.max(revBump, Number(out.updatedAt) || 0, Number(dlPick.deadlineUpdatedAt) || 0);
+            if (u > 0) out.updatedAt = u;
+          }
+          return out;
         }
         const out = Object.assign({}, item, { completed: true });
         const moMirror = mirrorFromSides();
         if (moMirror && !out.mirrorOf) {
           out.mirrorOf = moMirror;
         }
+        applyDeadlineMergeToItem(out, dlPick);
         const ca = [L && L.completedAt, R && R.completedAt, item.completedAt]
           .map((t) => Number(t))
           .filter((t) => Number.isFinite(t) && t > 0);
         if (ca.length) {
           out.completedAt = Math.max.apply(null, ca);
         }
+        const u = Math.max(revBump, Number(out.updatedAt) || 0, Number(dlPick.deadlineUpdatedAt) || 0);
+        if (u > 0) out.updatedAt = u;
         return out;
       });
     }
@@ -52368,6 +52529,10 @@
         merged.mainDone = Boolean(merged.mainDone);
         if (!merged.mainDone) delete merged.completedAt;
       }
+      const dlPick = mergeDeadlineFieldsForSync(l, r, !preferRemote);
+      applyDeadlineMergeToItem(merged, dlPick);
+      const u = Math.max(Number(l.updatedAt) || 0, Number(r.updatedAt) || 0, Number(dlPick.deadlineUpdatedAt) || 0);
+      if (u > 0) merged.updatedAt = u;
       return normalizeWeeklyPlanTask(merged);
     }
 
@@ -53026,6 +53191,10 @@
       };
       const d = normalizeDeadlineAtMs(t.deadlineAt);
       if (d != null) out.deadlineAt = d;
+      const du = Number(t.deadlineUpdatedAt);
+      if (Number.isFinite(du) && du > 0) out.deadlineUpdatedAt = du;
+      const u = Number(t.updatedAt);
+      if (Number.isFinite(u) && u > 0) out.updatedAt = u;
       return out;
     }
 
@@ -53040,16 +53209,11 @@
       const lDone = Boolean(l.done);
       const done = rDone !== lDone ? (preferRemote ? rDone : lDone) : lDone;
       const subs = mergeTwSubsForSync(r.subs || [], l.subs || [], preferRemote);
-      const rD = normalizeDeadlineAtMs(r.deadlineAt);
-      const lD = normalizeDeadlineAtMs(l.deadlineAt);
-      let deadlineAt = null;
-      if (rD != null && lD != null) {
-        deadlineAt = preferRemote ? rD : lD;
-      } else if (rD != null || lD != null) {
-        deadlineAt = rD != null ? rD : lD;
-      }
+      const dlPick = mergeDeadlineFieldsForSync(l, r, !preferRemote);
       const out = { id: id, text: text, subs: subs, done: done };
-      if (deadlineAt != null) out.deadlineAt = deadlineAt;
+      applyDeadlineMergeToItem(out, dlPick);
+      const u = Math.max(Number(l.updatedAt) || 0, Number(r.updatedAt) || 0, Number(dlPick.deadlineUpdatedAt) || 0);
+      if (u > 0) out.updatedAt = u;
       return out;
     }
 
@@ -53873,6 +54037,7 @@
         if (reconcileWeeklyPlanTasksToDeadlineWeeks()) {
           /* 不写 saveState，避免合并过程中再次 push */
         }
+        reconcileMirrorDeadlinesAfterCloudMerge();
         setCloudSyncHashFromCurrentState();
         const r = persistStateToLocalStorage();
         if (!skipRender) render();
@@ -56979,9 +57144,7 @@
     function updateClosedListDeadline(id, msOrNull) {
       const item = state.closedList.find((x) => x.id === id);
       if (!item) return;
-      const n = normalizeDeadlineAtMs(msOrNull);
-      if (n == null) delete item.deadlineAt;
-      else item.deadlineAt = n;
+      stampDeadlineChange(item, msOrNull);
       const mo = item.mirrorOf;
       if (mo && mo.kind === "weeklyPlan") {
         const resolved = resolveWeeklyPlanMirrorLocation(mo);
@@ -56990,8 +57153,7 @@
           const tasks = readWeeklyPlanBucketNormalized(wk);
           const wt = tasks.find((x) => x.id === mo.id);
           if (wt) {
-            if (n == null) delete wt.deadlineAt;
-            else wt.deadlineAt = n;
+            stampDeadlineChange(wt, msOrNull);
             saveWeeklyPlanTasksForWeek(tasks, wk);
           }
           if (relocateWeeklyPlanTaskToDeadlineWeek(mo.id)) {
@@ -57001,6 +57163,11 @@
           if (mo.weekKey !== wk) {
             repointWeeklyPlanMirrorWeekKeys(mo.id, wk);
           }
+        }
+      } else if (mo && mo.kind === "anniversaryTw") {
+        const located = findAnniversaryTaskInStorage(mo.module, mo.taskId, mo.weekNum);
+        if (located) {
+          stampDeadlineChange(located.task, msOrNull);
         }
       }
       dedupeWeeklyPlanTasksInStorage();
@@ -63521,6 +63688,8 @@
         body.textContent = raw.slice(prefixMark.length);
         textEl.appendChild(pref);
         textEl.appendChild(body);
+      } else if (raw.indexOf(CLOSED_LIST_ANNIVERSARY_PREFIX) === 0) {
+        textEl.textContent = formatAnniversaryClosedListDisplayText(raw, closedListItem);
       } else {
         textEl.textContent = raw;
       }
@@ -65688,6 +65857,11 @@
         const dMirror = normalizeDeadlineAtMs(task.deadlineAt);
         if (dMirror != null) item.deadlineAt = dMirror;
         else delete item.deadlineAt;
+        const duMirror = Number(task.deadlineUpdatedAt) || 0;
+        if (duMirror > 0) {
+          item.deadlineUpdatedAt = duMirror;
+          item.updatedAt = Math.max(Number(item.updatedAt) || 0, duMirror);
+        }
         const want = isWeeklyPlanMainComplete(task);
         if (Boolean(item.completed) === want) return;
         item.completed = want;
@@ -66552,6 +66726,10 @@
         base.completedAt = evidenceTs != null ? evidenceTs : Date.now();
       }
       if (dAt != null) base.deadlineAt = dAt;
+      const du = Number(task && task.deadlineUpdatedAt);
+      if (Number.isFinite(du) && du > 0) base.deadlineUpdatedAt = du;
+      const u = Number(task && task.updatedAt);
+      if (Number.isFinite(u) && u > 0) base.updatedAt = u;
       return base;
     }
 
@@ -66951,7 +67129,6 @@
     }
 
     const CLOSED_LIST_ANNIVERSARY_PREFIX = "【12周年】";
-    const ANNIVERSARY_TW_CLOSED_MODULE_TAGS = { tw020: "#20", tw021: "#21", tw022: "#22" };
 
     function getAnniversaryWeekTasksByModule(module, weekNum) {
       if (module === "tw020") return getTw020WeekTasks(weekNum);
@@ -66967,16 +67144,42 @@
       return "第" + weekNum + "周";
     }
 
+    function stripAnniversaryClosedListLineDecorations(rest) {
+      let s = String(rest || "").trim();
+      s = s.replace(/^#(?:20|21|22)\s*·\s*/, "");
+      s = s.replace(/^(第\d+周)\s*[（(][^）)]*[）)]\s*·\s*/, "$1 · ");
+      return s;
+    }
+
+    function formatAnniversaryClosedListDisplayText(rawText, closedListItem) {
+      const mo = closedListItem && closedListItem.mirrorOf;
+      if (mo && mo.kind === "anniversaryTw") {
+        const located = findAnniversaryTaskInStorage(mo.module, mo.taskId, mo.weekNum);
+        if (located) {
+          const task = located.task;
+          let subText;
+          if (mo.subId) {
+            const sub = (task.subs || []).find((s) => s && s.id === mo.subId);
+            subText = sub ? sub.text : "（子任务）";
+          }
+          return buildAnniversaryClosedListLineText(
+            mo.module,
+            located.weekNum,
+            task.text,
+            mo.subId ? subText : undefined
+          );
+        }
+      }
+      const raw = String(rawText || "").trim();
+      if (raw.indexOf(CLOSED_LIST_ANNIVERSARY_PREFIX) !== 0) return raw;
+      const rest = stripAnniversaryClosedListLineDecorations(raw.slice(CLOSED_LIST_ANNIVERSARY_PREFIX.length));
+      return CLOSED_LIST_ANNIVERSARY_PREFIX + rest;
+    }
+
     function buildAnniversaryClosedListLineText(module, weekNum, taskText, subText) {
-      const modTag = ANNIVERSARY_TW_CLOSED_MODULE_TAGS[module] || "";
-      const weekLab = buildAnniversaryWeekLabelForModule(module, weekNum);
+      const weekLab = "第" + weekNum + "周";
       const mainT = String(taskText || "").trim() || "（任务）";
-      let line =
-        CLOSED_LIST_ANNIVERSARY_PREFIX +
-        (modTag ? modTag + " · " : "") +
-        weekLab +
-        " · " +
-        mainT;
+      let line = CLOSED_LIST_ANNIVERSARY_PREFIX + weekLab + " · " + mainT;
       if (subText !== undefined && subText !== null) {
         const subT = String(subText || "").trim() || "（子任务）";
         line += " › " + subT;
@@ -67094,6 +67297,11 @@
         if (String(item.text || "").trim() !== lineText) item.text = lineText;
         if (dMirror != null) item.deadlineAt = dMirror;
         else delete item.deadlineAt;
+        const duMirror = Number(task.deadlineUpdatedAt) || 0;
+        if (duMirror > 0) {
+          item.deadlineUpdatedAt = duMirror;
+          item.updatedAt = Math.max(Number(item.updatedAt) || 0, duMirror);
+        }
         if (Boolean(item.completed) === want) return;
         item.completed = want;
         if (want) {
@@ -67378,9 +67586,7 @@
       const tasks = readWeeklyPlanBucketNormalized(located.weekKey);
       const task = tasks.find((t) => t.id === taskId);
       if (!task) return;
-      const n = normalizeDeadlineAtMs(msOrNull);
-      if (n == null) delete task.deadlineAt;
-      else task.deadlineAt = n;
+      stampDeadlineChange(task, msOrNull);
       saveWeeklyPlanTasksForWeek(tasks, located.weekKey);
       relocateWeeklyPlanTaskToDeadlineWeek(taskId);
       dedupeWeeklyPlanTasksInStorage();
@@ -68674,9 +68880,7 @@
       if (!task) {
         return;
       }
-      const n = normalizeDeadlineAtMs(msOrNull);
-      if (n == null) delete task.deadlineAt;
-      else task.deadlineAt = n;
+      stampDeadlineChange(task, msOrNull);
       syncAllAnniversaryMirrorsForTask("tw020", taskId);
       saveState();
       render();
