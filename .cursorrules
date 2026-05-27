@@ -1,0 +1,179 @@
+# Brute Force · 定制自己的执行系统 — Cursor 项目规则
+
+> 扫描结论：本仓库是 **单文件 PWA**（`index.html` + `sw.js`），**不是 React/Vue 项目**。请勿按 React 组件库方式重构，除非用户明确要求。
+
+---
+
+## 技术栈
+
+| 层级 | 技术 | 说明 |
+|------|------|------|
+| 应用形态 | **Vanilla HTML/CSS/JS** | 无 `package.json`、无构建链、无框架运行时 |
+| 主入口 | `index.html` | 内联 `<style>` + 大量静态 HTML + 单 `<script>`（约 7 万+ 行） |
+| PWA | `manifest.webmanifest` + `sw.js` | 离线壳；改缓存版本时同步 `sw.js` 的 `CACHE_NAME` 与 `index.html` 内 `APP_CACHE_NAME_FOR_BADGE` |
+| 本机存储 | **IndexedDB**（主）+ **localStorage**（配置/小项） | 主数据键 `todo-app-data-v1`；IDB 名 `exec-system-app-db` |
+| 云端同步 | **Firebase JS SDK 10.12.5（compat）** | `firebase-app-compat` + `firebase-auth-compat` + `firebase-database-compat` |
+| Firebase 用法 | **Realtime Database** + **匿名登录** | 房间路径 `rooms/{roomId}`；配置存 `localStorage` 键 `todo-app-firebase-config-v1` |
+| 部署 | PowerShell | `deploy.ps1`、`publish-github-pages.ps1`（GitHub Pages） |
+| 维护脚本 | Node `.mjs` / Python | `_forge_*.mjs`、`_forge_refactor_html.py` 等，**非运行时依赖** |
+
+**不存在**：React、Vue、Angular、TypeScript 源码、Webpack/Vite、Firebase Firestore/Functions（当前仅用 RTDB）。
+
+---
+
+## 架构与「组件」写法
+
+### 模式（必须遵循）
+
+- **全局单例 `state` 对象** + **`saveState()`** + **`render()`** 全量重绘（命令式 UI）。
+- UI 用 **`document.createElement` / `appendChild` / `textContent`** 构建，不用 JSX、不用模板引擎。
+- 事件用 **`addEventListener`**；需要阻止冒泡时在交互处 `ev.stopPropagation()`。
+- 模块切换：`#dynamicModule`、`#forgeModule`、`#anniversaryModule` 等 section + `activateKineticTab` / `module-focus-active` 类。
+- 列表项操作菜单：`.manual-item-actions-wrap` + `.manual-item-more-btn`（⋯）+ `.compact-manual-item-icons`（展开后显示按钮）。
+
+### 函数风格（偏好）
+
+```javascript
+/** 中文 JSDoc：说明业务意图、联动副作用 */
+function updateTw020TaskText(weekNum, taskId, text) {
+  const task = getTw020WeekTasks(weekNum).find((x) => x.id === taskId);
+  if (!task) return;
+  task.text = String(text || "").trim();
+  syncAllAnniversaryMirrorsForTask("tw020", taskId);
+  saveState();
+  // 多数小改只 saveState；需要立即刷新 UI 时再 render()
+}
+```
+
+- 使用 **`function` 声明**（与现有代码一致）；箭头函数可用于短回调。
+- 早返回 `if (!x) return;`，避免深层嵌套。
+- 修改 `state` 后：**几乎总是 `saveState()`**；需要立刻反映 DOM 时 **`render()`**。
+- 云合并期间注意 **`cloudSyncSuppressPush`**，避免推送风暴。
+
+### 禁止事项
+
+- ❌ 引入 **React / Vue / Svelte / class component** 或把 `index.html` 拆成多包 SPA（除非用户明确要求大重构）。
+- ❌ 用 **innerHTML 插入用户可控文本**（XSS）；现有模式是 `textContent` 或受控 `innerHTML`（如图标 SVG 常量）。
+- ❌ 在 **`runDataRetentionPass` 例行清理** 中按年龄删除 My Done / 备忘录等业务数据（见 `.cursor/rules/data-retention.mdc`）。
+- ❌ 未经确认改动 **仅桌面 / 仅手机** 的媒体查询（见端别规则）。
+- ❌ 代替用户 **`git commit` / `git push`**（仅提醒流程）。
+- ❌ 跳过 **`saveState()`** 直接改内存却不落盘（除非是纯 UI 临时状态）。
+
+---
+
+## 文件与命名规范
+
+### 仓库文件
+
+| 文件 | 用途 |
+|------|------|
+| `index.html` | **唯一业务源码**（改功能默认只改此文件） |
+| `sw.js` | Service Worker；与 HTML 缓存版本联动 |
+| `manifest.webmanifest` | PWA 元数据 |
+| `icons/` | 应用图标 |
+| `index - YYYY.M.D.html` | 日期备份快照，**不要当主开发文件** |
+| `_zip_scan/`、`_git_head_*.html` | 扫描/备份产物，**勿纳入常规提交** |
+
+### JavaScript 命名
+
+- **函数 / 变量**：`camelCase` — `saveState`, `getTw020WeekTasks`, `appendAnniversaryManualActionsWrap`
+- **常量**：`UPPER_SNAKE_CASE` — `STORAGE_KEY`, `CLOSED_LIST_ANNIVERSARY_PREFIX`
+- **state 字段**：`camelCase` — `weeklyPlan`, `anniversaryTw020`, `closedList`, `syncTombstones`
+- **十二周年模块**：`tw020` / `tw021` / `tw022`；函数前缀 `Tw020` / `Tw021` / `Tw022` 或 `Anniversary`
+- **渲染入口**：`renderXxx()` — `renderAnniversaryTw020`, `render()` 为总入口
+- **ID 生成**：`newTw020Id()` 等 `Date.now().toString(36) + Math.random()...` 模式
+
+### HTML / CSS 命名
+
+- **元素 id**：`kebab-case` — `anniversaryTw020Title`, `dynamicModule`
+- **class**：`kebab-case`，模块前缀 — `tw020-task-row`, `weekly-plan-promote-closed-btn`, `done-kinetic-shortcut`
+- **CSS 变量**：`:root` 内 `--bg`, `--primary`, `--done-list-row-pad-y` 等
+- **模块容器 id**：`#weeklyPlanSection`, `#anniversaryModule`, `#closedList`, `#forgeModule`
+
+---
+
+## CSS / 样式方案
+
+- **全部写在 `index.html` 的 `<style>` 中**（无独立 `.css` 文件、无 Tailwind、无 CSS Modules）。
+- 设计语言：浅色卡片、`--primary: #2563eb`、圆角卡片 + 细边框。
+- **响应式 / 端别**（必须遵守 `.cursor/rules/platform-desktop-mobile-separation.mdc`）：
+  - 手机：`max-width: 767px` 或 `pointer: coarse`
+  - 触控大屏：`max-width: 1366px` and `pointer: coarse`
+  - 桌面：默认规则或 `min-width` 覆盖
+- 双端样式 **分开写媒体查询块**，不要混成一条无法拆分的规则。
+- 修改后向用户说明 **「本次影响端别：Desktop / Mobile / Both」**。
+
+---
+
+## 数据与 Firebase 规范
+
+### 本机 `state` 要点
+
+- 列表类：`done`, `memo`, `closedList`, `stopDoing`, `trash` 等 **数组**。
+- 周计划：`weeklyPlan[weekKey]` 任务数组；UI 状态 `weeklyPlanUi`。
+- 十二周年：`anniversaryTw020/021/022` 含 `weeks`, `anchor`, `futureStory`, `progressBands`。
+- 删除：**`pushTrashEntry` + `syncTombstones`**，合并时剔除已删 id，避免云端「复活」。
+- 封闭清单镜像：**`item.mirrorOf`** — `{ kind: "weeklyPlan" | "anniversaryTw", ... }`，完成态双向联动。
+
+### Firebase Realtime Database
+
+- SDK：**10.12.5 compat**（全局 `firebase`），配置字段需含 `apiKey`, `projectId`, `databaseURL`。
+- 认证：**匿名登录**；`databaseURL` 须为 RTDB 域名（`firebaseio.com` / `firebasedatabase.app`）。
+- 上传：经 **`cloneStateForFirebaseUpload` / `buildStateForCloudUpload`**；注意 **单次写入约 256KB** 上限，过大走 **v2 分片** `pushStateToCloudV2Sharded`。
+- 合并：比较 **`updatedAt`（服务端时间）**，用 `getCloudLastSeenUpdatedAt`；勿仅用本机保存时间判断新旧。
+- 数字字段：用 **`coerceCloudUpdatedAt`** 解析，防止 Firebase 存成字符串导致永不合并。
+- 错误文案：走 **`formatCloudSyncError` / `setCloudSyncError`**，对用户提示网络/规则/体积问题。
+
+### 保存流程
+
+```text
+改 state → saveState() → persistStateToLocalStorage (IDB) → scheduleCloudSyncPush()
+需要刷新界面 → render()（会触发各 renderXxx 与 syncXxxDoneList）
+```
+
+---
+
+## 注释风格（中英文混用）
+
+- **块注释 / JSDoc 首行用中文** 说明业务含义、联动、边界。
+- **标识符、API、Firebase、localStorage 键名保持英文**，与代码一致。
+- 示例：
+
+```javascript
+/** 十二周年主/子任务 → 封闭清单（前缀【12周年】，mirrorOf 联动完成） */
+function promoteAnniversaryTaskToClosedList(module, weekNum, taskId, subIdOpt) { ... }
+
+// Purpose · My Values：英文部分去掉包裹括号
+```
+
+- 不要写废话注释（「调用 saveState」）；要写的是 **为什么**、**与谁联动**、**坑**（如 RTDB 256KB）。
+
+---
+
+## Git 与协作（摘要）
+
+- 改仓库前提醒用户在本机根目录 **`git pull`**（用户已同步可一句带过）。
+- **不要主动 `git commit` / `git push`**，除非用户明确要求。
+- 已有规则文件（优先阅读）：
+  - `.cursor/rules/git-workflow-session.mdc`
+  - `.cursor/rules/platform-desktop-mobile-separation.mdc`
+  - `.cursor/rules/data-retention.mdc`
+
+---
+
+## Agent 修改清单（每次动 `index.html` 时自检）
+
+1. 改动范围是否最小？只动相关 `renderXxx` / 样式块 / 一两个函数。
+2. 是否 `saveState()`？镜像/周计划/封闭清单是否需 `syncAll*Mirrors*`？
+3. 端别是否明确？手机/桌面 CSS 是否误伤？
+4. 云同步：合并路径是否设置 `cloudSyncSuppressPush`？
+5. 用户可见文案：产品内中文为主（如「封闭清单」「十二周年」），技术日志可 `console.warn` 中文。
+6. 回复用户：**使用中文**。
+
+---
+
+## 用户若提到 React / Firebase 时的对齐说明
+
+- **「组件」**在本项目中 = **一块 DOM 区域 + `renderXxx()` 函数**，不是 `.tsx` 文件。
+- **Firebase** = 仅 **Realtime Database 云同步**；本地主存储是 **IndexedDB**，不是 Firestore。
+- 若用户要求「用 React 重写」，先确认范围与是否接受放弃单文件 PWA 架构，再行动。
