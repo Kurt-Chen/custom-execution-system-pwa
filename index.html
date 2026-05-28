@@ -49536,6 +49536,10 @@
     const CLOUD_SYNC_PERSIST_DEBOUNCE_MS = 1500;
     const CLOUD_SYNC_FULL_PUSH_MIN_INTERVAL_MS = 300000;
     const CLOUD_SYNC_FULL_PUSH_IDLE_MS = 20000;
+    /** pulse 截止期限：待上传的周键 / 封闭清单 id / TW020 周次（构建 payload 后清空） */
+    let cloudSyncPulseWeeklyPlanWeekKeys = null;
+    let cloudSyncPulseClosedListIds = null;
+    let cloudSyncPulseTw020WeekNums = null;
 
     if (!cloudSyncClientId) {
       cloudSyncClientId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -50284,6 +50288,204 @@
       return changed;
     }
 
+    function noteCloudSyncWeeklyPlanPulseWeekKey(weekKey) {
+      if (weekKey == null || String(weekKey).trim() === "") return;
+      if (!cloudSyncPulseWeeklyPlanWeekKeys) cloudSyncPulseWeeklyPlanWeekKeys = new Set();
+      cloudSyncPulseWeeklyPlanWeekKeys.add(String(weekKey));
+    }
+
+    function noteCloudSyncClosedListPulseId(itemId) {
+      if (itemId == null || String(itemId).trim() === "") return;
+      if (!cloudSyncPulseClosedListIds) cloudSyncPulseClosedListIds = new Set();
+      cloudSyncPulseClosedListIds.add(String(itemId));
+    }
+
+    function noteCloudSyncTw020PulseWeek(weekNum) {
+      if (weekNum == null || String(weekNum).trim() === "") return;
+      if (!cloudSyncPulseTw020WeekNums) cloudSyncPulseTw020WeekNums = new Set();
+      cloudSyncPulseTw020WeekNums.add(String(weekNum));
+    }
+
+    function compactClosedListItemForDeadlinePulse(item) {
+      if (!item || item.id == null) return null;
+      const out = { id: item.id };
+      const d = normalizeDeadlineAtMs(item.deadlineAt);
+      if (d != null) out.deadlineAt = d;
+      const du = Number(item.deadlineUpdatedAt);
+      if (Number.isFinite(du) && du > 0) out.deadlineUpdatedAt = du;
+      const u = Number(item.updatedAt);
+      if (Number.isFinite(u) && u > 0) out.updatedAt = u;
+      if (item.completed) out.completed = true;
+      if (item.mirrorOf && typeof item.mirrorOf === "object") {
+        try {
+          out.mirrorOf = JSON.parse(JSON.stringify(item.mirrorOf));
+        } catch (_moErr) {
+          out.mirrorOf = item.mirrorOf;
+        }
+      }
+      return out;
+    }
+
+    function buildCloudSyncWeeklyPlanPulseSlice() {
+      const keys = new Set();
+      try {
+        keys.add(getWeeklyPlanViewWeekKey());
+        keys.add(getCurrentWeeklyPlanCalendarWeekKey());
+      } catch (_wkErr) {}
+      if (cloudSyncPulseWeeklyPlanWeekKeys) {
+        cloudSyncPulseWeeklyPlanWeekKeys.forEach(function (k) {
+          keys.add(k);
+        });
+        cloudSyncPulseWeeklyPlanWeekKeys = null;
+      }
+      const out = {};
+      keys.forEach(function (wk) {
+        const tasks = getWeeklyPlanTasksForWeekKey(wk);
+        if (tasks.length) {
+          out[wk] = tasks.map(normalizeWeeklyPlanTask);
+        }
+      });
+      return Object.keys(out).length ? out : null;
+    }
+
+    function buildCloudSyncClosedListDeadlinePulseSlice() {
+      if (!cloudSyncPulseClosedListIds || !cloudSyncPulseClosedListIds.size) return null;
+      const ids = cloudSyncPulseClosedListIds;
+      cloudSyncPulseClosedListIds = null;
+      const items = [];
+      (Array.isArray(state.closedList) ? state.closedList : []).forEach(function (item) {
+        if (!item || item.id == null || !ids.has(String(item.id))) return;
+        const compact = compactClosedListItemForDeadlinePulse(item);
+        if (compact) items.push(compact);
+      });
+      return items.length ? items : null;
+    }
+
+    function buildCloudSyncAnniversaryTw020PulseSlice() {
+      if (!cloudSyncPulseTw020WeekNums || !cloudSyncPulseTw020WeekNums.size) return null;
+      const weeks = cloudSyncPulseTw020WeekNums;
+      cloudSyncPulseTw020WeekNums = null;
+      if (typeof normalizeAnniversaryTw020State === "function") {
+        normalizeAnniversaryTw020State();
+      }
+      const src =
+        state.anniversaryTw020 && state.anniversaryTw020.weeks && typeof state.anniversaryTw020.weeks === "object"
+          ? state.anniversaryTw020.weeks
+          : {};
+      const outWeeks = {};
+      weeks.forEach(function (wk) {
+        const key = String(wk);
+        const arr = src[key];
+        if (!Array.isArray(arr) || !arr.length) return;
+        outWeeks[key] = arr.map(cloneTwTaskForMerge);
+      });
+      return Object.keys(outWeeks).length ? { weeks: outWeeks } : null;
+    }
+
+    function mergeCloudSyncWeeklyPlanPulseIntoState(planSlice) {
+      if (!planSlice || typeof planSlice !== "object") return false;
+      const ts =
+        state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
+      const next = mergeWeeklyPlanBucketsForSync(state.weeklyPlan, planSlice, true, ts);
+      try {
+        if (JSON.stringify(state.weeklyPlan) !== JSON.stringify(next)) {
+          state.weeklyPlan = next;
+          return true;
+        }
+      } catch (_wpCmp) {
+        state.weeklyPlan = next;
+        return true;
+      }
+      return false;
+    }
+
+    function mergeCloudSyncClosedListPulseIntoState(items) {
+      if (!Array.isArray(items) || !items.length) return false;
+      const merged = mergeClosedListArraysForSync(
+        Array.isArray(state.closedList) ? state.closedList : [],
+        items
+      );
+      const loc = Array.isArray(state.closedList) ? state.closedList : [];
+      let changed = merged.length !== loc.length;
+      if (!changed) {
+        const sigMap = new Map();
+        loc.forEach(function (x) {
+          if (!x || x.id == null) return;
+          sigMap.set(
+            String(x.id),
+            String(x.deadlineAt || "") +
+              ":" +
+              String(x.deadlineUpdatedAt || "") +
+              ":" +
+              Boolean(x.completed)
+          );
+        });
+        for (let i = 0; i < merged.length; i++) {
+          const m = merged[i];
+          if (!m || m.id == null) continue;
+          const sig =
+            String(m.deadlineAt || "") +
+            ":" +
+            String(m.deadlineUpdatedAt || "") +
+            ":" +
+            Boolean(m.completed);
+          if (sigMap.get(String(m.id)) !== sig) {
+            changed = true;
+            break;
+          }
+        }
+      }
+      if (changed) state.closedList = merged;
+      return changed;
+    }
+
+    function mergeCloudSyncAnniversaryTw020PulseIntoState(twSlice) {
+      if (!twSlice || !twSlice.weeks || typeof twSlice.weeks !== "object") return false;
+      if (typeof normalizeAnniversaryTw020State === "function") {
+        normalizeAnniversaryTw020State();
+      }
+      if (!state.anniversaryTw020 || typeof state.anniversaryTw020 !== "object") {
+        state.anniversaryTw020 = { weeks: {}, futureStory: "" };
+      }
+      if (!state.anniversaryTw020.weeks || typeof state.anniversaryTw020.weeks !== "object") {
+        state.anniversaryTw020.weeks = {};
+      }
+      let changed = false;
+      Object.keys(twSlice.weeks).forEach(function (wk) {
+        const remArr = Array.isArray(twSlice.weeks[wk]) ? twSlice.weeks[wk] : [];
+        if (!remArr.length) return;
+        const locArr = Array.isArray(state.anniversaryTw020.weeks[wk])
+          ? state.anniversaryTw020.weeks[wk]
+          : [];
+        const next = mergeTwWeekTasksForSync(remArr, locArr, true);
+        try {
+          if (JSON.stringify(locArr) !== JSON.stringify(next)) {
+            state.anniversaryTw020.weeks[wk] = next;
+            changed = true;
+          }
+        } catch (_twCmp) {
+          state.anniversaryTw020.weeks[wk] = next;
+          changed = true;
+        }
+      });
+      return changed;
+    }
+
+    /** 截止期限修改后：记入 pulse 范围并立即上传 */
+    function saveStateAfterDeadlineChange(opts) {
+      const o = opts && typeof opts === "object" ? opts : {};
+      if (Array.isArray(o.weekKeys)) {
+        o.weekKeys.forEach(function (wk) {
+          noteCloudSyncWeeklyPlanPulseWeekKey(wk);
+        });
+      } else if (o.weekKey != null) {
+        noteCloudSyncWeeklyPlanPulseWeekKey(o.weekKey);
+      }
+      if (o.closedListId != null) noteCloudSyncClosedListPulseId(o.closedListId);
+      if (o.tw020Week != null) noteCloudSyncTw020PulseWeek(o.tw020Week);
+      saveStateWithCloudPulseImmediate();
+    }
+
     function cloudSyncDonePulseSignature(item) {
       if (!item || item.id == null) return "";
       let forgeSig = "";
@@ -50378,11 +50580,25 @@
         return doneTaskMatchesFilterDate(t, todayKey);
       });
       const pulseState = { done: doneToday, habitCheckins: {} };
-      if (state.habitCheckins && state.habitCheckins[todayKey]) {
-        pulseState.habitCheckins[todayKey] = state.habitCheckins[todayKey];
+      if (state.habitCheckins && typeof state.habitCheckins === "object") {
+        if (state.habitCheckins[todayKey] && typeof state.habitCheckins[todayKey] === "object") {
+          pulseState.habitCheckins[todayKey] = state.habitCheckins[todayKey];
+        } else if (
+          doneToday.some(function (t) {
+            return t && t.habitMeta && t.habitMeta.date === todayKey;
+          })
+        ) {
+          pulseState.habitCheckins[todayKey] = {};
+        }
       }
       const forgePulse = buildCloudSyncForgePulseSlice();
       if (forgePulse) pulseState.forge = forgePulse;
+      const weeklyPlanPulse = buildCloudSyncWeeklyPlanPulseSlice();
+      if (weeklyPlanPulse) pulseState.weeklyPlan = weeklyPlanPulse;
+      const closedListPulse = buildCloudSyncClosedListDeadlinePulseSlice();
+      if (closedListPulse) pulseState.closedList = closedListPulse;
+      const tw020Pulse = buildCloudSyncAnniversaryTw020PulseSlice();
+      if (tw020Pulse) pulseState.anniversaryTw020 = tw020Pulse;
       return pulseState;
     }
 
@@ -50437,6 +50653,15 @@
             changed = true;
           }
         }
+        if (pulseState.weeklyPlan && typeof pulseState.weeklyPlan === "object") {
+          if (mergeCloudSyncWeeklyPlanPulseIntoState(pulseState.weeklyPlan)) changed = true;
+        }
+        if (Array.isArray(pulseState.closedList) && pulseState.closedList.length) {
+          if (mergeCloudSyncClosedListPulseIntoState(pulseState.closedList)) changed = true;
+        }
+        if (pulseState.anniversaryTw020 && typeof pulseState.anniversaryTw020 === "object") {
+          if (mergeCloudSyncAnniversaryTw020PulseIntoState(pulseState.anniversaryTw020)) changed = true;
+        }
       } finally {
         cloudSyncSuppressPush = false;
       }
@@ -50454,7 +50679,28 @@
       reconcileCloudSyncPulseDerivedState(pulseNode.state);
       setCloudSyncHashFromCurrentState();
       scheduleCloudSyncPersistDebounced();
-      scheduleCloudSyncRenderDebounced();
+      const pulseHasHabit =
+        pulseNode.state &&
+        pulseNode.state.habitCheckins &&
+        typeof pulseNode.state.habitCheckins === "object";
+      const pulseHasForge =
+        pulseNode.state && pulseNode.state.forge && typeof pulseNode.state.forge === "object";
+      const pulseHasDeadline =
+        (pulseNode.state &&
+          pulseNode.state.weeklyPlan &&
+          typeof pulseNode.state.weeklyPlan === "object" &&
+          Object.keys(pulseNode.state.weeklyPlan).length > 0) ||
+        (Array.isArray(pulseNode.state.closedList) && pulseNode.state.closedList.length > 0) ||
+        (pulseNode.state &&
+          pulseNode.state.anniversaryTw020 &&
+          pulseNode.state.anniversaryTw020.weeks &&
+          typeof pulseNode.state.anniversaryTw020.weeks === "object" &&
+          Object.keys(pulseNode.state.anniversaryTw020.weeks).length > 0);
+      if (pulseHasHabit || pulseHasForge || pulseHasDeadline) {
+        render();
+      } else {
+        scheduleCloudSyncRenderDebounced();
+      }
       return true;
     }
 
@@ -50653,7 +50899,18 @@
       const hasDone = Array.isArray(pulseState.done) && pulseState.done.length > 0;
       const hasHc =
         pulseState.habitCheckins && Object.keys(pulseState.habitCheckins).length > 0;
-      if (!hasDone && !hasHc) return Promise.resolve();
+      const hasForge = pulseState.forge && typeof pulseState.forge === "object";
+      const hasWeeklyPlan =
+        pulseState.weeklyPlan && typeof pulseState.weeklyPlan === "object" && Object.keys(pulseState.weeklyPlan).length > 0;
+      const hasClosedList = Array.isArray(pulseState.closedList) && pulseState.closedList.length > 0;
+      const hasTw020 =
+        pulseState.anniversaryTw020 &&
+        pulseState.anniversaryTw020.weeks &&
+        typeof pulseState.anniversaryTw020.weeks === "object" &&
+        Object.keys(pulseState.anniversaryTw020.weeks).length > 0;
+      if (!hasDone && !hasHc && !hasForge && !hasWeeklyPlan && !hasClosedList && !hasTw020) {
+        return Promise.resolve();
+      }
       const ts =
         serverTs != null &&
         window.firebase &&
@@ -52411,18 +52668,31 @@
       pushCloudSyncPulseOnly();
     }
 
-    /** 习惯打卡保存后：本地持久化 + 立即 pulse（不等 450ms 防抖） */
-    function saveStateAfterHabitCheckin() {
+    /** 今日交互类保存：本地持久化 + 立即 pulse（不等 450ms 防抖） */
+    function saveStateWithCloudPulseImmediate() {
       saveState();
       flushCloudSyncPulseImmediate();
     }
 
+    /** 习惯打卡保存后：等同 saveStateWithCloudPulseImmediate */
+    function saveStateAfterHabitCheckin() {
+      saveStateWithCloudPulseImmediate();
+    }
+
     /** pulse 合并后：先补 Done 再 reconcile，避免 habitCheckins 被空 Done 冲掉 */
     function reconcileCloudSyncPulseDerivedState(pulseState) {
+      let pulseHcSnapshot = null;
+      if (pulseState && pulseState.habitCheckins && typeof pulseState.habitCheckins === "object") {
+        try {
+          pulseHcSnapshot = JSON.parse(JSON.stringify(pulseState.habitCheckins));
+        } catch (_hcSnapErr) {
+          pulseHcSnapshot = pulseState.habitCheckins;
+        }
+      }
       repairDoneListCompletedAtFromHabitMeta();
       const dates = new Set([formatDateInputValue(new Date())]);
-      if (pulseState && pulseState.habitCheckins && typeof pulseState.habitCheckins === "object") {
-        Object.keys(pulseState.habitCheckins).forEach(function (d) {
+      if (pulseHcSnapshot) {
+        Object.keys(pulseHcSnapshot).forEach(function (d) {
           dates.add(d);
         });
       }
@@ -52434,11 +52704,23 @@
       try {
         reconcileDerivedCheckinsFromDoneAfterLoad();
       } catch (_recErr) {}
+      if (pulseHcSnapshot) {
+        state.habitCheckins = mergeHabitCheckinsForSync(state.habitCheckins, pulseHcSnapshot);
+      }
       dates.forEach(function (d) {
         try {
           rebuildMissingHabitDoneRowsForDate(d);
         } catch (_postDoneErr) {}
       });
+      if (
+        (pulseState && pulseState.weeklyPlan) ||
+        (pulseState && Array.isArray(pulseState.closedList) && pulseState.closedList.length) ||
+        (pulseState && pulseState.anniversaryTw020)
+      ) {
+        try {
+          reconcileMirrorDeadlinesAfterCloudMerge();
+        } catch (_dlMirErr) {}
+      }
     }
 
     /** 回到前台时主动拉一次 pulse（WebView 休眠可能漏掉 listener） */
@@ -55769,7 +56051,7 @@
       delete state.habitCheckins[dk].dailyThreeWinsDoneSuppressed;
       state.habitCheckins[dk].dailyThreeWins = true;
       syncHabitToDone("dailyThreeWins", dk);
-      saveState();
+      saveStateAfterHabitCheckin();
       render();
       return true;
     }
@@ -56124,7 +56406,7 @@
         const text =
           "【习惯】" + label + " · 第 " + String(nextObj.times) + " 次打卡" + (r ? " · " + r : "");
         updateLatestHabitDoneRowForDay(habitKey, dateKey, text, { remarkSnapshot: r });
-        saveState();
+        saveStateAfterHabitCheckin();
         render();
         return;
       }
@@ -56161,7 +56443,7 @@
         updateLatestHabitDoneRowForDay(habitKey, dateKey, text, {
           remarkSnapshot: remarkForDone ? String(remarkForDone).trim() : ""
         });
-        saveState();
+        saveStateAfterHabitCheckin();
         render();
       }
     }
@@ -56236,7 +56518,7 @@
         }
         day[habitKey] = false;
         removeHabitFromDone(habitKey, dateKey);
-        saveState();
+        saveStateAfterHabitCheckin();
         render();
         return;
       }
@@ -56252,13 +56534,13 @@
         alert("数据不一致，已清空今日记录。");
         day[habitKey] = false;
         removeHabitFromDone(habitKey, dateKey);
-        saveState();
+        saveStateAfterHabitCheckin();
         render();
         return;
       }
       if (batches.length === 0) {
         day[habitKey] = false;
-        saveState();
+        saveStateAfterHabitCheckin();
         render();
         return;
       }
@@ -56272,7 +56554,7 @@
         nextObj.remark = cur.remark.trim();
       }
       day[habitKey] = nextObj;
-      saveState();
+      saveStateAfterHabitCheckin();
       render();
     }
 
@@ -56288,7 +56570,7 @@
         }
         removeLastHabitStampFromDone(habitKey, todayKey);
         rebuildHabitCheckinFromDoneList("weightAndBodyFat", todayKey);
-        saveState();
+        saveStateAfterHabitCheckin();
         render();
         return;
       }
@@ -56315,7 +56597,7 @@
           day[habitKey] = nextObj;
           removeLastHabitStampFromDone(habitKey, todayKey);
         }
-        saveState();
+        saveStateAfterHabitCheckin();
         render();
         return;
       }
@@ -56331,7 +56613,7 @@
         day[habitKey] = { times: nextTimes };
         removeLastHabitStampFromDone(habitKey, todayKey);
       }
-      saveState();
+      saveStateAfterHabitCheckin();
       render();
     }
 
@@ -56385,7 +56667,7 @@
       if (wasChecked) {
         removeLastHabitStampFromDone("weightAndBodyFat", dateKey);
         rebuildHabitCheckinFromDoneList("weightAndBodyFat", dateKey);
-        saveState();
+        saveStateAfterHabitCheckin();
         render();
         return;
       }
@@ -57178,12 +57460,14 @@
     function updateClosedListDeadline(id, msOrNull) {
       const item = state.closedList.find((x) => x.id === id);
       if (!item) return;
+      const pulseWeekKeys = [];
       stampDeadlineChange(item, msOrNull);
       const mo = item.mirrorOf;
       if (mo && mo.kind === "weeklyPlan") {
         const resolved = resolveWeeklyPlanMirrorLocation(mo);
         if (resolved) {
           let wk = resolved.weekKey;
+          pulseWeekKeys.push(wk);
           const tasks = readWeeklyPlanBucketNormalized(wk);
           const wt = tasks.find((x) => x.id === mo.id);
           if (wt) {
@@ -57194,6 +57478,7 @@
             const again = resolveWeeklyPlanMirrorLocation(mo);
             if (again) wk = again.weekKey;
           }
+          pulseWeekKeys.push(wk);
           if (mo.weekKey !== wk) {
             repointWeeklyPlanMirrorWeekKeys(mo.id, wk);
           }
@@ -57205,7 +57490,7 @@
         }
       }
       dedupeWeeklyPlanTasksInStorage();
-      saveState();
+      saveStateAfterDeadlineChange({ closedListId: id, weekKeys: pulseWeekKeys });
       render();
     }
 
@@ -57670,7 +57955,7 @@
       }
       syncRule100HoursToDone(actually, name || "自定义100" + uLabel, entry.hoursTotal, key, entry.unit);
       bumpDoneFilterToTaskDay(Date.now());
-      saveState();
+      saveStateWithCloudPulseImmediate();
       render();
     }
 
@@ -57709,7 +57994,7 @@
         syncRule100ToDone(key, today, title);
         bumpDoneFilterToTaskDay(habitDateToCompletedAt(today));
       }
-      saveState();
+      saveStateWithCloudPulseImmediate();
       render();
     }
 
@@ -58109,23 +58394,46 @@
 
     function formatLife4000WeeklyDoneText(metrics) {
       const parts = [];
-      if (metrics.endDate) {
-        parts.push("预计结束 " + formatLife4000CnDate(metrics.endDate));
-      }
       parts.push("累计存活 " + metrics.passed + " 周");
       parts.push("剩余 " + metrics.remaining + " 周");
       parts.push("已度过 " + metrics.pct.toFixed(1) + "%（4000 周）");
       return "【人生进度表】周二周报 · " + parts.join(" · ");
     }
 
-    /** 人生进度表：每周二 5:55 刷新后写入 My Done（每周期一条，可补发遗漏周期） */
+    /** 本地日历周二（0=周日 … 2=周二）才写入 My Done */
+    function isLife4000TuesdaySyncDay(now) {
+      return (now || new Date()).getDay() === 2;
+    }
+
+    /** 已有条目去掉「预计结束」等旧文案，与 formatLife4000WeeklyDoneText 对齐 */
+    function refreshLife4000DoneEntryTexts() {
+      let changed = false;
+      state.done.forEach(function (item) {
+        if (!item || !item.life4000Meta) return;
+        const meta = item.life4000Meta;
+        const next = formatLife4000WeeklyDoneText({
+          passed: meta.passed,
+          remaining: meta.remaining,
+          pct: meta.pct
+        });
+        if (item.text !== next) {
+          item.text = next;
+          changed = true;
+        }
+      });
+      return changed;
+    }
+
+    /** 人生进度表：仅每周二写入 My Done（每周期一条；定时器周二 5:55 触发） */
     function syncLife4000WeeklyToDone() {
       ensureLife4000WeeksState();
+      const now = new Date();
+      if (!isLife4000TuesdaySyncDay(now)) return false;
       const birth = getLife4000ResolvedBirthDate();
       if (!birth) return false;
       const metrics = computeLife4000WeeksMetricsFromBirthDate(birth);
       if (!metrics.ok) return false;
-      const tuesdayKey = getLife4000TuesdayCycleKey(new Date());
+      const tuesdayKey = getLife4000TuesdayCycleKey(now);
       if (state.life4000Weeks.lastDoneTuesdayKey === tuesdayKey) return false;
       if (hasLife4000DoneEntry(tuesdayKey)) {
         if (state.life4000Weeks.lastDoneTuesdayKey !== tuesdayKey) {
@@ -60250,7 +60558,7 @@
         completedAt: ts,
         forgeBodyMeta: { dateKey: dateKey, amount: amt, rowKey: rowKeyForMeta }
       });
-      saveState();
+      saveStateWithCloudPulseImmediate();
       render();
     }
 
@@ -60272,7 +60580,7 @@
         completedAt: ts,
         forgeMindMeta: forgeMindMeta
       });
-      saveState();
+      saveStateWithCloudPulseImmediate();
       render();
     }
 
@@ -61249,7 +61557,7 @@
         } else {
           rebuildHabitCheckinFromDoneList(removed.habitMeta.key, removed.habitMeta.date);
         }
-        saveState();
+        saveStateAfterHabitCheckin();
         render();
         return;
       }
@@ -67617,6 +67925,7 @@
     function updateWeeklyPlanDeadline(taskId, msOrNull) {
       const located = findWeeklyPlanTaskInStorage(taskId);
       if (!located) return;
+      const pulseWeekKeys = [located.weekKey];
       const tasks = readWeeklyPlanBucketNormalized(located.weekKey);
       const task = tasks.find((t) => t.id === taskId);
       if (!task) return;
@@ -67625,9 +67934,10 @@
       relocateWeeklyPlanTaskToDeadlineWeek(taskId);
       dedupeWeeklyPlanTasksInStorage();
       const after = findWeeklyPlanTaskInStorage(taskId);
+      if (after) pulseWeekKeys.push(after.weekKey);
       const syncWeek = after ? after.weekKey : getWeeklyPlanViewWeekKey();
       syncAllWeeklyPlanMirrorsForWeek(syncWeek);
-      saveState();
+      saveStateAfterDeadlineChange({ weekKeys: pulseWeekKeys });
       render();
     }
 
@@ -68916,7 +69226,7 @@
       }
       stampDeadlineChange(task, msOrNull);
       syncAllAnniversaryMirrorsForTask("tw020", taskId);
-      saveState();
+      saveStateAfterDeadlineChange({ tw020Week: weekNum });
       render();
     }
 
@@ -72653,6 +72963,7 @@
         });
       }
       let doneHygieneChanged = refreshAllDailyWinCheckins();
+      if (refreshLife4000DoneEntryTexts()) doneHygieneChanged = true;
       if (dedupeClosedListWeeklyPlanMirrorsInState()) doneHygieneChanged = true;
       if (pruneRedundantDoneEntriesInState()) doneHygieneChanged = true;
       if (doneHygieneChanged) saveState();
