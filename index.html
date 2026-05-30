@@ -3443,6 +3443,11 @@
       font-weight: 800;
     }
 
+    #habitRoutineModule .habit-en-savings-title-wrap.habit-title--savings-daily-pending .submodule-title {
+      color: #dc2626 !important;
+      font-weight: 800;
+    }
+
     #habitRoutineModule .habit-en-row--scheduled-letter .habit-check-btn:disabled {
       opacity: 0.45;
       cursor: not-allowed;
@@ -55271,7 +55276,8 @@
       if (!v || typeof v !== "object") {
         return false;
       }
-      return Number.isFinite(v.yuan) && v.yuan > 0;
+      const yuan = Number(v.yuan);
+      return Number.isFinite(yuan) && yuan > 0;
     }
 
     function formatSavingsLifetimeRatio(habitKey) {
@@ -56111,6 +56117,28 @@
         }, 0);
         state.habitCheckins[dateStr][habitKey] = {
           wordCount: wordCount,
+          times: batches.length,
+          batches: batches.slice()
+        };
+        return;
+      }
+      if (isHabitSavingsKey(habitKey)) {
+        const batches = [];
+        for (let i = rows.length - 1; i >= 0; i--) {
+          const ba = rows[i].habitMeta && Number(rows[i].habitMeta.batchAmount);
+          if (Number.isFinite(ba) && ba > 0) batches.push(ba);
+        }
+        if (batches.length === 0) {
+          if (rows.length === 0) {
+            state.habitCheckins[dateStr][habitKey] = false;
+          }
+          return;
+        }
+        const yuan = batches.reduce(function (a, b) {
+          return a + b;
+        }, 0);
+        state.habitCheckins[dateStr][habitKey] = {
+          yuan: yuan,
           times: batches.length,
           batches: batches.slice()
         };
@@ -74376,13 +74404,18 @@
           } else if (isHabitSavingsKey(key)) {
             const yuanInput = card.querySelector(".habit-en-yuan-input");
             const v = dayData[key];
+            const savingsChecked = isHabitSavingsChecked(v);
             const ratioEl = card.querySelector(".habit-en-savings-lifetime-ratio");
             const titleEl = getHabitCardTitleElementForLifetimeCount(card);
+            const titleWrap = card.querySelector(".habit-en-savings-title-wrap");
             if (ratioEl) {
               ratioEl.textContent = formatSavingsLifetimeRatio(key);
             }
             if (titleEl) {
-              titleEl.classList.toggle("habit-title--scheduled-due-today", !checked);
+              titleEl.classList.toggle("habit-title--scheduled-due-today", !savingsChecked);
+            }
+            if (titleWrap) {
+              titleWrap.classList.toggle("habit-title--savings-daily-pending", !savingsChecked);
             }
             if (yuanInput) {
               yuanInput.value = "";
@@ -74390,17 +74423,17 @@
             }
             const clearBtn = card.querySelector(".habit-en-clear-today-btn");
             if (clearBtn) {
-              clearBtn.hidden = !checked;
+              clearBtn.hidden = !savingsChecked;
             }
             if (todayNote) {
-              if (checked && v && typeof v === "object" && Number.isFinite(v.yuan) && v.yuan > 0) {
+              if (savingsChecked && v && typeof v === "object" && Number(v.yuan) > 0) {
                 const tc = getHabitNumericStampTimes(v, "yuan");
                 todayNote.textContent = isHabitRoutineCompactMobile()
                   ? tc > 0
                     ? String(tc)
                     : ""
-                  : "今日累计 " + String(v.yuan) + " 元 · 打卡 " + String(tc) + " 次";
-              } else if (checked && v === true) {
+                  : "今日累计 " + String(Number(v.yuan)) + " 元 · 打卡 " + String(tc) + " 次";
+              } else if (savingsChecked && v === true) {
                 todayNote.textContent = isHabitRoutineCompactMobile() ? "" : "今日已打卡";
               } else {
                 todayNote.textContent = "";
@@ -74409,7 +74442,7 @@
             btnEl.textContent = "";
             btnEl.setAttribute("aria-label", "累加打卡");
             btnEl.removeAttribute("title");
-            btnEl.classList.toggle("checked", checked);
+            btnEl.classList.toggle("checked", savingsChecked);
             return;
           } else if (isHabitOptionalRemarkKey(key)) {
             const remarkTa = card.querySelector(".habit-en-remark-input");
