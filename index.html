@@ -3431,7 +3431,7 @@
       min-width: 0;
     }
 
-    /* 今日到期：仅未选中 Tab 用红字提醒；选中后沿用各胶囊自己的色相，避免与青绿底冲突 */
+    /* 当前周期未填写：未选中 Tab 用红字提醒；选中后沿用各胶囊色相 */
     #habitBasicGroup #habitMeasureTabStrip .habit-measure-tab.habit-measure-tab--due-today:not(.is-active) .habit-measure-tab__name {
       color: #dc2626 !important;
       font-weight: 800;
@@ -72808,31 +72808,23 @@
       return { y: Number(m[1]), q: Number(m[2]) };
     }
 
-    /** 下一个月末截止所对应的「回顾月份」键（截止月为 M，则回顾上一自然月） */
-    function getBackwardMonthlyReviewKeyFromNextDue(nowRef) {
-      const dueM = getNextMonthEndDueDate(nowRef);
-      const y = dueM.getFullYear();
-      const m0 = dueM.getMonth();
-      let prevM0 = m0 - 1;
-      let y2 = y;
-      if (prevM0 < 0) {
-        prevM0 = 11;
-        y2--;
-      }
-      return String(y2) + "-" + String(prevM0 + 1).padStart(2, "0");
+    /** 下一个周六截止所对应的回顾周键（与截止周六同周；未写的旧周期自动跳过） */
+    function getBackwardWeeklyReviewKeyFromNextDue(nowRef) {
+      return formatDateInputValue(getNextWeeklySaturdayDueDate(nowRef));
     }
 
-    /** 下一个季末截止所在季度（与该季度回顾条目对齐） */
+    /** 下一个「月末填写」截止日所对应的回顾月份键（与截止月同月；未写的旧周期自动跳过） */
+    function getBackwardMonthlyReviewKeyFromNextDue(nowRef) {
+      return getBackwardMonthKey(getNextMonthEndDueDate(nowRef));
+    }
+
+    /** 下一个季末截止所对应的回顾季度键（与截止季同季；未写的旧周期自动跳过） */
     function getBackwardQuarterKeyFromNextDue(nowRef) {
-      const dueQ = getNextQuarterEndDueDate(nowRef);
-      const y = dueQ.getFullYear();
-      const q = Math.floor(dueQ.getMonth() / 3) + 1;
-      return String(y) + "-Q" + q;
+      return getBackwardQuarterKey(getNextQuarterEndDueDate(nowRef));
     }
 
     function syncBackwardMeasurePeriodKeysFromSchedule(nowRef) {
-      const dueW = getNextWeeklySaturdayDueDate(nowRef);
-      state.backwardMeasurePeriod.weekly = formatDateInputValue(getBackwardWeekSaturdayKey(dueW));
+      state.backwardMeasurePeriod.weekly = getBackwardWeeklyReviewKeyFromNextDue(nowRef);
       state.backwardMeasurePeriod.monthly = getBackwardMonthlyReviewKeyFromNextDue(nowRef);
       state.backwardMeasurePeriod.quarterly = getBackwardQuarterKeyFromNextDue(nowRef);
     }
@@ -72908,6 +72900,101 @@
         d.getMonth() === n.getMonth() &&
         d.getDate() === n.getDate()
       );
+    }
+
+    /** 向后衡量：各频率的「本期」起始日（截止日所在周/月/季的首日） */
+    function getBackwardDueCycleStart(kind, dueDate) {
+      if (!(dueDate instanceof Date) || Number.isNaN(dueDate.getTime())) return null;
+      const y = dueDate.getFullYear();
+      const m0 = dueDate.getMonth();
+      const d = dueDate.getDate();
+      if (kind === "weekly") {
+        const start = backwardMeasureLocalNoon(y, m0, d);
+        start.setDate(start.getDate() - 6);
+        return start;
+      }
+      if (kind === "monthly") {
+        return backwardMeasureLocalNoon(y, m0, 1);
+      }
+      if (kind === "quarterly") {
+        const qStartMonth = Math.floor(m0 / 3) * 3;
+        return backwardMeasureLocalNoon(y, qStartMonth, 1);
+      }
+      return backwardMeasureLocalNoon(y, m0, d);
+    }
+
+    /** 仍在当前填写周期内（含截止日当天；过期后由 syncBackwardMeasurePeriodKeysFromSchedule 跳到下一期） */
+    function isBackwardDueCycleActiveForKind(kind, dueDate, nowRef) {
+      if (!(dueDate instanceof Date) || Number.isNaN(dueDate.getTime())) return false;
+      const now = nowRef instanceof Date ? nowRef : new Date();
+      const today = backwardMeasureLocalNoon(now.getFullYear(), now.getMonth(), now.getDate());
+      const dueDay = backwardMeasureLocalNoon(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+      if (today.getTime() > dueDay.getTime()) return false;
+      const start = getBackwardDueCycleStart(kind, dueDate);
+      if (!start) return true;
+      return today.getTime() >= start.getTime();
+    }
+
+    function isBackwardDueCycleActive(d, nowRef) {
+      return isBackwardDueCycleActiveForKind("monthly", d, nowRef);
+    }
+
+    function thinkDayEntryHasContent(td) {
+      if (!td || typeof td !== "object") return false;
+      for (let i = 1; i <= 5; i++) {
+        if (String(td["q" + i] || "").trim()) return true;
+      }
+      return Number.isFinite(Number(td.updatedAt)) && Number(td.updatedAt) > 0;
+    }
+
+    function isBackwardMeasurePeriodComplete(kind, periodKey, dueDate) {
+      ensureBackwardMeasureState();
+      if (!periodKey) return false;
+      if (backwardMeasurePeriodHasContent(state.backwardMeasure[kind][periodKey])) return true;
+      return state.done.some((item) => {
+        if (!item.backwardMeasureMeta || item.backwardMeasureMeta.kind !== kind) return false;
+        if (item.backwardMeasureMeta.periodKey === periodKey) return true;
+        if (!(dueDate instanceof Date) || !Number.isFinite(item.completedAt)) return false;
+        const ca = new Date(Number(item.completedAt));
+        if (Number.isNaN(ca.getTime())) return false;
+        return isBackwardDueCycleActiveForKind(kind, dueDate, ca);
+      });
+    }
+
+    function isThinkDayPeriodComplete(periodKey, dueDate) {
+      ensureBackwardMeasureState();
+      if (!periodKey) return false;
+      const store =
+        state.backwardMeasure.thinkDay && typeof state.backwardMeasure.thinkDay === "object"
+          ? state.backwardMeasure.thinkDay
+          : null;
+      if (!store) return false;
+      if (thinkDayEntryHasContent(store[periodKey])) return true;
+      if (!(dueDate instanceof Date)) return false;
+      return Object.keys(store).some((key) => {
+        if (key === periodKey) return false;
+        const td = store[key];
+        if (!thinkDayEntryHasContent(td)) return false;
+        const u = Number(td.updatedAt);
+        if (!Number.isFinite(u) || u <= 0) return false;
+        const ca = new Date(u);
+        if (Number.isNaN(ca.getTime())) return false;
+        return isBackwardDueCycleActiveForKind("monthly", dueDate, ca);
+      });
+    }
+
+    function shouldBackwardMeasureShowDueAlert(kind, dueDate, nowRef) {
+      ensureBackwardMeasurePeriod();
+      const periodKey = state.backwardMeasurePeriod[kind];
+      if (!periodKey || !isBackwardDueCycleActiveForKind(kind, dueDate, nowRef)) return false;
+      return !isBackwardMeasurePeriodComplete(kind, periodKey, dueDate);
+    }
+
+    function shouldThinkDayShowDueAlert(dueDate, nowRef) {
+      ensureBackwardMeasurePeriod();
+      const periodKey = state.backwardMeasurePeriod.monthly;
+      if (!periodKey || !isBackwardDueCycleActiveForKind("monthly", dueDate, nowRef)) return false;
+      return !isThinkDayPeriodComplete(periodKey, dueDate);
     }
 
     function setBackwardNextDueEl(id, d) {
@@ -73174,28 +73261,31 @@
       if (!root) {
         return;
       }
-      const dueW = getNextWeeklySaturdayDueDate(nowRef);
-      const dueM = getNextMonthEndDueDate(nowRef);
-      const dueQ = getNextQuarterEndDueDate(nowRef);
-      const wToday = isBackwardDueDateToday(dueW);
-      const mToday = isBackwardDueDateToday(dueM);
-      const qToday = isBackwardDueDateToday(dueQ);
+      ensureBackwardMeasurePeriod();
+      const ref = nowRef instanceof Date ? nowRef : new Date();
+      const dueW = getNextWeeklySaturdayDueDate(ref);
+      const dueM = getNextMonthEndDueDate(ref);
+      const dueQ = getNextQuarterEndDueDate(ref);
+      const wDue = shouldBackwardMeasureShowDueAlert("weekly", dueW, ref);
+      const mDue = shouldBackwardMeasureShowDueAlert("monthly", dueM, ref);
+      const qDue = shouldBackwardMeasureShowDueAlert("quarterly", dueQ, ref);
+      const thinkDue = shouldThinkDayShowDueAlert(dueM, ref);
 
       const tabWeekly = document.getElementById("habitMeasureTabBtnWeekly");
       const tabMonthly = document.getElementById("habitMeasureTabBtnMonthly");
       const tabQuarterly = document.getElementById("habitMeasureTabBtnQuarterly");
       const tabThink = document.getElementById("habitMeasureTabBtnThinkDay");
       if (tabWeekly) {
-        tabWeekly.classList.toggle("habit-measure-tab--due-today", wToday);
+        tabWeekly.classList.toggle("habit-measure-tab--due-today", wDue);
       }
       if (tabMonthly) {
-        tabMonthly.classList.toggle("habit-measure-tab--due-today", mToday);
+        tabMonthly.classList.toggle("habit-measure-tab--due-today", mDue);
       }
       if (tabQuarterly) {
-        tabQuarterly.classList.toggle("habit-measure-tab--due-today", qToday);
+        tabQuarterly.classList.toggle("habit-measure-tab--due-today", qDue);
       }
       if (tabThink) {
-        tabThink.classList.toggle("habit-measure-tab--due-today", mToday);
+        tabThink.classList.toggle("habit-measure-tab--due-today", thinkDue);
       }
 
       const tw = root.querySelector(".habit-sub-backward--weekly .habit-backward-subfold-title");
@@ -73203,16 +73293,16 @@
       const tq = root.querySelector(".habit-sub-backward--quarterly .habit-backward-subfold-title");
       const tt = root.querySelector(".habit-sub-backward--thinkday .habit-backward-subfold-title");
       if (tw) {
-        tw.classList.toggle("habit-backward-title-due-today", wToday);
+        tw.classList.toggle("habit-backward-title-due-today", wDue);
       }
       if (tm) {
-        tm.classList.toggle("habit-backward-title-due-today", mToday);
+        tm.classList.toggle("habit-backward-title-due-today", mDue);
       }
       if (tq) {
-        tq.classList.toggle("habit-backward-title-due-today", qToday);
+        tq.classList.toggle("habit-backward-title-due-today", qDue);
       }
       if (tt) {
-        tt.classList.toggle("habit-backward-title-due-today", mToday);
+        tt.classList.toggle("habit-backward-title-due-today", thinkDue);
       }
     }
 
@@ -73250,9 +73340,9 @@
       const hintW = document.getElementById("backwardWeeklyHint");
       if (hintW) {
         hintW.textContent =
-          "当前周期（周六锚点）：" +
+          "当前回顾周（周六锚点）：" +
           wk.replace(/-/g, "/") +
-          " · 已按上方「下次填写截止」自动对齐，无需手动选择";
+          " · 与上方「下次填写截止」同周 · 未写的旧周自动跳过";
       }
       const hintM = document.getElementById("backwardMonthlyHint");
       if (hintM) {
@@ -73265,16 +73355,16 @@
           y +
           "年" +
           (Number.isFinite(moNum) ? moNum : "") +
-          "月 · 与截止月末对齐 · 思考日 与此月份共用";
+          "月 · 与截止月末对齐 · 未写的旧月自动跳过 · 思考日与此月份共用";
       }
       const hintQ = document.getElementById("backwardQuarterlyHint");
       if (hintQ) {
         hintQ.textContent =
-          "当前季度：第" +
+          "当前回顾季度：第" +
           qCn[qIndex] +
           "季度（" +
           qk +
-          "）· 与截止季末对齐 · 建议在每季最后一天回顾";
+          "）· 与截止季末对齐 · 未写的旧季自动跳过";
       }
 
       const bindMeta = (metaId, kind, key) => {
@@ -73308,7 +73398,7 @@
           y +
           "年" +
           (Number.isFinite(moNum) ? moNum : "") +
-          "月 · 截止日与每月向后衡量相同（见上方「下次填写截止」）";
+          "月 · 截止日相同 · 未写的旧月自动跳过";
       }
 
       const tdRaw = state.backwardMeasure.thinkDay && typeof state.backwardMeasure.thinkDay === "object"
