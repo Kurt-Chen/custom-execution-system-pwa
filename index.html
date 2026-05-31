@@ -3431,7 +3431,7 @@
       min-width: 0;
     }
 
-    /* 当前周期未填写：未选中 Tab 用红字提醒；选中后沿用各胶囊色相 */
+    /* 临近截止且未填写：未选中 Tab 用红字提醒；选中后沿用各胶囊色相 */
     #habitBasicGroup #habitMeasureTabStrip .habit-measure-tab.habit-measure-tab--due-today:not(.is-active) .habit-measure-tab__name {
       color: #dc2626 !important;
       font-weight: 800;
@@ -72808,19 +72808,19 @@
       return { y: Number(m[1]), q: Number(m[2]) };
     }
 
-    /** 下一个周六截止所对应的回顾周键（与截止周六同周；未写的旧周期自动跳过） */
+    /** 下一个周六截止所对应的回顾周键（与截止周六同周；已完成的周期自动跳到下一期） */
     function getBackwardWeeklyReviewKeyFromNextDue(nowRef) {
-      return formatDateInputValue(getNextWeeklySaturdayDueDate(nowRef));
+      return formatDateInputValue(getEffectiveWeeklyDueDate(nowRef));
     }
 
-    /** 下一个「月末填写」截止日所对应的回顾月份键（与截止月同月；未写的旧周期自动跳过） */
+    /** 下一个「月末填写」截止日所对应的回顾月份键（与截止月同月；已完成的周期自动跳到下一期） */
     function getBackwardMonthlyReviewKeyFromNextDue(nowRef) {
-      return getBackwardMonthKey(getNextMonthEndDueDate(nowRef));
+      return getBackwardMonthKey(getEffectiveMonthlyDueDate(nowRef));
     }
 
-    /** 下一个季末截止所对应的回顾季度键（与截止季同季；未写的旧周期自动跳过） */
+    /** 下一个季末截止所对应的回顾季度键（与截止季同季；已完成的周期自动跳到下一期） */
     function getBackwardQuarterKeyFromNextDue(nowRef) {
-      return getBackwardQuarterKey(getNextQuarterEndDueDate(nowRef));
+      return getBackwardQuarterKey(getEffectiveQuarterEndDueDate(nowRef));
     }
 
     function syncBackwardMeasurePeriodKeysFromSchedule(nowRef) {
@@ -72935,6 +72935,28 @@
       return today.getTime() >= start.getTime();
     }
 
+    /**
+     * Tab 红字提醒窗口（窄于完整填写周期，避免周/季过早变红）：
+     * - 周：截止周六当天 + 前一日（周五）
+     * - 月 / 思考日：月末最后 7 天
+     * - 季：季末最后 7 天
+     */
+    function isBackwardDueAlertWindowActive(kind, dueDate, nowRef) {
+      if (!(dueDate instanceof Date) || Number.isNaN(dueDate.getTime())) return false;
+      const now = nowRef instanceof Date ? nowRef : new Date();
+      const today = backwardMeasureLocalNoon(now.getFullYear(), now.getMonth(), now.getDate());
+      const dueDay = backwardMeasureLocalNoon(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+      if (today.getTime() > dueDay.getTime()) return false;
+      if (kind === "weekly") {
+        const alertStart = backwardMeasureLocalNoon(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+        alertStart.setDate(alertStart.getDate() - 1);
+        return today.getTime() >= alertStart.getTime();
+      }
+      const alertStart = backwardMeasureLocalNoon(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+      alertStart.setDate(alertStart.getDate() - 6);
+      return today.getTime() >= alertStart.getTime();
+    }
+
     function isBackwardDueCycleActive(d, nowRef) {
       return isBackwardDueCycleActiveForKind("monthly", d, nowRef);
     }
@@ -72986,15 +73008,72 @@
     function shouldBackwardMeasureShowDueAlert(kind, dueDate, nowRef) {
       ensureBackwardMeasurePeriod();
       const periodKey = state.backwardMeasurePeriod[kind];
-      if (!periodKey || !isBackwardDueCycleActiveForKind(kind, dueDate, nowRef)) return false;
+      if (!periodKey || !isBackwardDueAlertWindowActive(kind, dueDate, nowRef)) return false;
       return !isBackwardMeasurePeriodComplete(kind, periodKey, dueDate);
     }
 
     function shouldThinkDayShowDueAlert(dueDate, nowRef) {
       ensureBackwardMeasurePeriod();
       const periodKey = state.backwardMeasurePeriod.monthly;
-      if (!periodKey || !isBackwardDueCycleActiveForKind("monthly", dueDate, nowRef)) return false;
+      if (!periodKey || !isBackwardDueAlertWindowActive("monthly", dueDate, nowRef)) return false;
       return !isThinkDayPeriodComplete(periodKey, dueDate);
+    }
+
+    function getNextMonthEndAfter(dueDate) {
+      const y = dueDate.getFullYear();
+      const m0 = dueDate.getMonth();
+      const ny = m0 === 11 ? y + 1 : y;
+      const nm0 = m0 === 11 ? 0 : m0 + 1;
+      return getLastDayOfMonthLocal(ny, nm0);
+    }
+
+    function getNextWeeklySaturdayAfter(dueDate) {
+      const d = backwardMeasureLocalNoon(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+      d.setDate(d.getDate() + 7);
+      return d;
+    }
+
+    function getNextQuarterEndAfter(dueDate) {
+      const y = dueDate.getFullYear();
+      const q = Math.floor(dueDate.getMonth() / 3) + 1;
+      let nq = q + 1;
+      let ny = y;
+      if (nq > 4) {
+        nq = 1;
+        ny++;
+      }
+      return getQuarterEndDate(ny, nq);
+    }
+
+    /** 日历上下一个截止日；若该期已填写完成则继续推进（如今日 5/31 已保存 → 显示 6/30） */
+    function getEffectiveMonthlyDueDate(ref) {
+      let due = getNextMonthEndDueDate(ref);
+      for (let guard = 0; guard < 24; guard++) {
+        const key = getBackwardMonthKey(due);
+        if (!isBackwardMeasurePeriodComplete("monthly", key, due)) return due;
+        due = getNextMonthEndAfter(due);
+      }
+      return due;
+    }
+
+    function getEffectiveWeeklyDueDate(ref) {
+      let due = getNextWeeklySaturdayDueDate(ref);
+      for (let guard = 0; guard < 52; guard++) {
+        const key = formatDateInputValue(due);
+        if (!isBackwardMeasurePeriodComplete("weekly", key, due)) return due;
+        due = getNextWeeklySaturdayAfter(due);
+      }
+      return due;
+    }
+
+    function getEffectiveQuarterEndDueDate(ref) {
+      let due = getNextQuarterEndDueDate(ref);
+      for (let guard = 0; guard < 8; guard++) {
+        const key = getBackwardQuarterKey(due);
+        if (!isBackwardMeasurePeriodComplete("quarterly", key, due)) return due;
+        due = getNextQuarterEndAfter(due);
+      }
+      return due;
     }
 
     function setBackwardNextDueEl(id, d) {
@@ -73263,9 +73342,9 @@
       }
       ensureBackwardMeasurePeriod();
       const ref = nowRef instanceof Date ? nowRef : new Date();
-      const dueW = getNextWeeklySaturdayDueDate(ref);
-      const dueM = getNextMonthEndDueDate(ref);
-      const dueQ = getNextQuarterEndDueDate(ref);
+      const dueW = getEffectiveWeeklyDueDate(ref);
+      const dueM = getEffectiveMonthlyDueDate(ref);
+      const dueQ = getEffectiveQuarterEndDueDate(ref);
       const wDue = shouldBackwardMeasureShowDueAlert("weekly", dueW, ref);
       const mDue = shouldBackwardMeasureShowDueAlert("monthly", dueM, ref);
       const qDue = shouldBackwardMeasureShowDueAlert("quarterly", dueQ, ref);
@@ -73309,9 +73388,9 @@
     function renderBackwardMeasure() {
       ensureBackwardMeasurePeriod();
       const nowRef = new Date();
-      const dueWeekly = getNextWeeklySaturdayDueDate(nowRef);
-      const dueMonthlyEnd = getNextMonthEndDueDate(nowRef);
-      const dueQuarterEnd = getNextQuarterEndDueDate(nowRef);
+      const dueWeekly = getEffectiveWeeklyDueDate(nowRef);
+      const dueMonthlyEnd = getEffectiveMonthlyDueDate(nowRef);
+      const dueQuarterEnd = getEffectiveQuarterEndDueDate(nowRef);
       setBackwardNextDueEl("backwardWeeklyNextDue", dueWeekly);
       setBackwardNextDueEl("backwardMonthlyNextDue", dueMonthlyEnd);
       setBackwardNextDueEl("backwardQuarterlyNextDue", dueQuarterEnd);
