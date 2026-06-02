@@ -49698,7 +49698,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260528j";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260602a";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** 本机已合并的 pulse.updatedAt（今日打卡快通道，远小于整包 v2） */
@@ -56313,26 +56313,16 @@
       return dates;
     }
 
-    /** 单日累计：仅汇总合法 batchAmount，避免 Done 重复行把终身累计撑爆 */
-    function computeHabitNumericDayTotalFromDoneRows(habitKey, dateStr) {
-      const opts = getHabitNumericSanitizeOpts(habitKey);
-      if (!opts) return 0;
-      const rows = getHabitDoneRowsForDay(habitKey, dateStr);
-      const batches = [];
-      for (let i = rows.length - 1; i >= 0; i--) {
-        const ba = rows[i].habitMeta && Number(rows[i].habitMeta.batchAmount);
-        if (Number.isFinite(ba) && ba > 0 && ba <= opts.maxBatch) {
-          batches.push(ba);
-        }
-      }
-      let trimmed = batches;
-      if (trimmed.length > HABIT_NUMERIC_MAX_STAMPS_PER_DAY) {
-        trimmed = trimmed.slice(-HABIT_NUMERIC_MAX_STAMPS_PER_DAY);
-      }
-      return Math.min(sumSanitizedHabitNumericBatches(trimmed, opts.maxBatch), opts.maxDaily);
+    /** 从习惯 Done 文案解析「本次 +N」（优先于 meta.batchAmount，避免累计值被当增量加总） */
+    function parseHabitDoneStampDeltaFromText(text, opts) {
+      if (!text || !opts) return 0;
+      const m = String(text).match(/本次\s*\+\s*([\d,]+)/);
+      if (!m) return 0;
+      const n = parseInt(String(m[1]).replace(/,/g, ""), 10);
+      return Number.isFinite(n) && n > 0 && n <= opts.maxBatch ? n : 0;
     }
 
-    /** 取同日最新一条习惯 Done 文案中的「今日累计」，用于压住 batchAmount 重复镜像 */
+    /** 取同日最新一条习惯 Done 文案中的「今日累计」 */
     function getHabitDoneDayCumulativeFromLatestText(habitKey, dateStr) {
       const opts = getHabitNumericSanitizeOpts(habitKey);
       if (!opts) return 0;
@@ -56346,31 +56336,91 @@
       return Number.isFinite(n) && n > 0 && n <= opts.maxDaily ? n : 0;
     }
 
+    /** 由同日 Done 行重建数值型 checkin（增量用「本次 +」，当日总量以最新「今日累计」为准） */
+    function buildHabitNumericCheckinFromDoneRows(habitKey, dateStr) {
+      const opts = getHabitNumericSanitizeOpts(habitKey);
+      if (!opts) return null;
+      const rows = getHabitDoneRowsForDay(habitKey, dateStr);
+      if (!rows.length) return null;
+      const batches = [];
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const row = rows[i];
+        let inc = parseHabitDoneStampDeltaFromText(row.text, opts);
+        const ba = row.habitMeta && Number(row.habitMeta.batchAmount);
+        if (!inc && Number.isFinite(ba) && ba > 0 && ba <= opts.maxBatch) {
+          inc = ba;
+        }
+        if (inc > 0) {
+          batches.push(inc);
+        }
+      }
+      const textTotal = getHabitDoneDayCumulativeFromLatestText(habitKey, dateStr);
+      let total = sumSanitizedHabitNumericBatches(batches, opts.maxBatch);
+      if (textTotal > 0) {
+        total = textTotal;
+      }
+      if (!total || total > opts.maxDaily) {
+        return null;
+      }
+      const times = Math.max(batches.length, rows.length);
+      const out = { times: times, batches: batches.slice() };
+      out[opts.valueKey] = total;
+      return out;
+    }
+
+    function computeHabitNumericDayTotalFromDoneRows(habitKey, dateStr) {
+      const opts = getHabitNumericSanitizeOpts(habitKey);
+      if (!opts) return 0;
+      const textTotal = getHabitDoneDayCumulativeFromLatestText(habitKey, dateStr);
+      if (textTotal > 0) {
+        return textTotal;
+      }
+      const built = buildHabitNumericCheckinFromDoneRows(habitKey, dateStr);
+      if (built && Number.isFinite(Number(built[opts.valueKey])) && built[opts.valueKey] > 0) {
+        return Math.min(Number(built[opts.valueKey]), opts.maxDaily);
+      }
+      return 0;
+    }
+
+    /** 当 batches 汇总大于 wordCount/minutes 字段时，以字段为准（与界面「今日累计」一致） */
+    function clampHabitNumericCheckinToFieldTotal(habitKey, val) {
+      const opts = getHabitNumericSanitizeOpts(habitKey);
+      if (!opts || !val || typeof val !== "object") {
+        return val;
+      }
+      const field = Number(val[opts.valueKey]);
+      if (!Number.isFinite(field) || field <= 0) {
+        return val;
+      }
+      const cappedField = Math.min(field, opts.maxDaily);
+      const batches = Array.isArray(val.batches) ? val.batches : [];
+      const batchSum = sumSanitizedHabitNumericBatches(batches, opts.maxBatch);
+      if (batchSum <= cappedField) {
+        return val;
+      }
+      const times = Math.max(Number(val.times) || 0, batches.length) || 1;
+      const out = Object.assign({}, val);
+      out[opts.valueKey] = cappedField;
+      out.times = times;
+      out.batches =
+        cappedField <= opts.maxBatch
+          ? [cappedField]
+          : batches.slice(-Math.min(times, HABIT_NUMERIC_MAX_STAMPS_PER_DAY));
+      return out;
+    }
+
     function getHabitNumericDayTotal(habitKey, dateStr) {
       const opts = getHabitNumericSanitizeOpts(habitKey);
       if (!opts) return 0;
       const hc = state.habitCheckins && typeof state.habitCheckins === "object" ? state.habitCheckins : {};
       const raw = hc[dateStr] ? hc[dateStr][habitKey] : null;
-      const sanitized = sanitizeHabitNumericCheckinValue(raw, opts);
-      let fromCheckin =
-        sanitized && typeof sanitized === "object" ? Number(sanitized[opts.valueKey]) || 0 : 0;
-      const rawField =
-        raw && typeof raw === "object" && Number.isFinite(Number(raw[opts.valueKey]))
-          ? Number(raw[opts.valueKey])
-          : 0;
-      if (fromCheckin > 0 && rawField > 0 && rawField < fromCheckin) {
-        fromCheckin = rawField;
+      if (raw && typeof raw === "object") {
+        const rawField = Number(raw[opts.valueKey]);
+        if (Number.isFinite(rawField) && rawField > 0) {
+          return Math.min(rawField, opts.maxDaily);
+        }
       }
-      if (fromCheckin > 0) {
-        return Math.min(fromCheckin, opts.maxDaily);
-      }
-      const fromDoneBatches = computeHabitNumericDayTotalFromDoneRows(habitKey, dateStr);
-      const fromDoneText = getHabitDoneDayCumulativeFromLatestText(habitKey, dateStr);
-      let fromDone = fromDoneBatches;
-      if (fromDoneText > 0) {
-        fromDone = Math.min(fromDone, fromDoneText);
-      }
-      return Math.min(fromDone, opts.maxDaily);
+      return computeHabitNumericDayTotalFromDoneRows(habitKey, dateStr);
     }
 
     function sumHabitNumericLifetimeByDay(habitKey) {
@@ -56918,70 +56968,15 @@
         state.habitCheckins[dateStr].dailyThreeWins = countDailyWinEntriesForDate(dateStr) >= 3;
         return;
       }
-      if (isHabitMinutesKey(habitKey)) {
-        const batches = [];
-        for (let i = rows.length - 1; i >= 0; i--) {
-          const ba = rows[i].habitMeta && Number(rows[i].habitMeta.batchAmount);
-          if (Number.isFinite(ba) && ba > 0) batches.push(ba);
-        }
-        if (batches.length === 0) {
+      if (isHabitMinutesKey(habitKey) || isHabitWordCountKey(habitKey) || isHabitSavingsKey(habitKey)) {
+        const built = buildHabitNumericCheckinFromDoneRows(habitKey, dateStr);
+        if (!built) {
           if (rows.length === 0) {
             state.habitCheckins[dateStr][habitKey] = false;
           }
           return;
         }
-        const minutes = batches.reduce(function (a, b) {
-          return a + b;
-        }, 0);
-        state.habitCheckins[dateStr][habitKey] = {
-          minutes: minutes,
-          times: batches.length,
-          batches: batches.slice()
-        };
-        return;
-      }
-      if (isHabitWordCountKey(habitKey)) {
-        const batches = [];
-        for (let i = rows.length - 1; i >= 0; i--) {
-          const ba = rows[i].habitMeta && Number(rows[i].habitMeta.batchAmount);
-          if (Number.isFinite(ba) && ba > 0) batches.push(ba);
-        }
-        if (batches.length === 0) {
-          if (rows.length === 0) {
-            state.habitCheckins[dateStr][habitKey] = false;
-          }
-          return;
-        }
-        const wordCount = batches.reduce(function (a, b) {
-          return a + b;
-        }, 0);
-        state.habitCheckins[dateStr][habitKey] = {
-          wordCount: wordCount,
-          times: batches.length,
-          batches: batches.slice()
-        };
-        return;
-      }
-      if (isHabitSavingsKey(habitKey)) {
-        const batches = [];
-        for (let i = rows.length - 1; i >= 0; i--) {
-          const ba = rows[i].habitMeta && Number(rows[i].habitMeta.batchAmount);
-          if (Number.isFinite(ba) && ba > 0) batches.push(ba);
-        }
-        if (batches.length === 0) {
-          if (rows.length === 0) {
-            state.habitCheckins[dateStr][habitKey] = false;
-          }
-          return;
-        }
-        const yuan = batches.reduce(function (a, b) {
-          return a + b;
-        }, 0);
-        state.habitCheckins[dateStr][habitKey] = {
-          yuan: yuan,
-          times: batches.length,
-          batches: batches.slice()
-        };
+        state.habitCheckins[dateStr][habitKey] = built;
         return;
       }
       if (isHabitExperimentKey(habitKey)) {
@@ -57372,7 +57367,11 @@
           }
           if (!state.habitCheckins[dateStr]) return;
           const opts = getHabitNumericSanitizeOpts(habitKey);
-          const sanitized = sanitizeHabitNumericCheckinValue(state.habitCheckins[dateStr][habitKey], opts);
+          const clamped = clampHabitNumericCheckinToFieldTotal(
+            habitKey,
+            state.habitCheckins[dateStr][habitKey]
+          );
+          const sanitized = sanitizeHabitNumericCheckinValue(clamped, opts);
           const next = sanitized === false ? false : sanitized;
           try {
             if (JSON.stringify(state.habitCheckins[dateStr][habitKey]) !== JSON.stringify(next)) {
@@ -57403,7 +57402,8 @@
             : isHabitSavingsKey(habitKey)
               ? { valueKey: "yuan", maxBatch: 99999, maxDaily: 999999 }
               : { valueKey: "minutes", maxBatch: 999, maxDaily: 99999 };
-          const sanitized = sanitizeHabitNumericCheckinValue(day[habitKey], opts);
+          const clamped = clampHabitNumericCheckinToFieldTotal(habitKey, day[habitKey]);
+          const sanitized = sanitizeHabitNumericCheckinValue(clamped, opts);
           const next = sanitized === false ? false : sanitized;
           try {
             if (JSON.stringify(day[habitKey]) !== JSON.stringify(next)) {
@@ -75370,14 +75370,19 @@
       updateMeasureSegmentDesktopTabsLayout();
     }
 
-    let habitNumericLifetimeRepairOnce = false;
+    const HABIT_NUMERIC_LIFETIME_REPAIR_VER = 3;
+    let habitNumericLifetimeRepairAppliedVer = 0;
 
     function renderHabitCheckins() {
       const todayKey = formatDateInputValue(new Date());
 
-      if (!habitNumericLifetimeRepairOnce) {
-        habitNumericLifetimeRepairOnce = true;
-        if (repairAllHabitNumericDoneAndCheckins()) {
+      if (habitNumericLifetimeRepairAppliedVer < HABIT_NUMERIC_LIFETIME_REPAIR_VER) {
+        habitNumericLifetimeRepairAppliedVer = HABIT_NUMERIC_LIFETIME_REPAIR_VER;
+        let repaired = repairAllHabitNumericDoneAndCheckins();
+        if (repairInflatedHabitNumericCheckins()) {
+          repaired = true;
+        }
+        if (repaired) {
           try {
             saveState();
           } catch (_habitRepairSaveErr) {}
