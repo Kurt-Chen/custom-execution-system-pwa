@@ -53612,6 +53612,54 @@
       });
     }
 
+    function getWeeklyPlanMicroStatusAt(micro) {
+      if (!micro) return 0;
+      const st = Number(micro.statusAt);
+      if (Number.isFinite(st) && st > 0) return st;
+      return normalizeWeeklyPlanCompletedAtMs(micro.completedAt) || 0;
+    }
+
+    function getWeeklyPlanMainStatusAt(task) {
+      if (!task) return 0;
+      const st = Number(task.statusAt);
+      if (Number.isFinite(st) && st > 0) return st;
+      return normalizeWeeklyPlanCompletedAtMs(task.completedAt) || 0;
+    }
+
+    /** 云同步：子步骤完成态按 statusAt / completedAt 取较新一侧，避免 OR 合并导致无法取消勾选 */
+    function mergeWeeklyPlanMicroDoneForSync(locMicro, remMicro, preferRemote) {
+      const l = locMicro && locMicro.id ? locMicro : null;
+      const r = remMicro && remMicro.id ? remMicro : null;
+      if (!l) return r ? Object.assign({}, r) : null;
+      if (!r) return Object.assign({}, l);
+      const lt = getWeeklyPlanMicroStatusAt(l);
+      const rt = getWeeklyPlanMicroStatusAt(r);
+      const pickRemote = rt > lt || (rt === lt && preferRemote);
+      const pick = pickRemote ? r : l;
+      const out = Object.assign({}, l, r, {
+        id: l.id,
+        text: String((pick.text != null ? pick.text : l.text) || ""),
+        done: Boolean(pick.done)
+      });
+      const at = normalizeWeeklyPlanCompletedAtMs(pick.completedAt);
+      if (out.done && at) out.completedAt = at;
+      else delete out.completedAt;
+      const statusAt = Math.max(lt, rt);
+      if (statusAt > 0) out.statusAt = statusAt;
+      return out;
+    }
+
+    function mergeWeeklyPlanMainDoneForSync(locTask, remTask, preferRemote) {
+      const lDone = Boolean(locTask && locTask.mainDone);
+      const rDone = Boolean(remTask && remTask.mainDone);
+      if (lDone === rDone) return lDone;
+      const lt = getWeeklyPlanMainStatusAt(locTask);
+      const rt = getWeeklyPlanMainStatusAt(remTask);
+      if (rt > lt) return rDone;
+      if (lt > rt) return lDone;
+      return preferRemote ? rDone : lDone;
+    }
+
     function mergeWeeklyPlanMicroTasksForSync(locMicros, remMicros, preferRemote) {
       const L = Array.isArray(locMicros) ? locMicros : [];
       const R = Array.isArray(remMicros) ? remMicros : [];
@@ -53625,50 +53673,47 @@
           map.set(m.id, m);
           return;
         }
-        const l = map.get(m.id);
-        const done = Boolean(l.done) || Boolean(m.done);
-        const merged = preferRemote ? Object.assign({}, l, m) : Object.assign({}, m, l);
-        merged.done = done;
-        const la = normalizeWeeklyPlanCompletedAtMs(l.completedAt);
-        const ra = normalizeWeeklyPlanCompletedAtMs(m.completedAt);
-        const at = la != null && ra != null ? Math.max(la, ra) : la != null ? la : ra;
-        if (done && at) merged.completedAt = at;
-        else if (!done) delete merged.completedAt;
-        map.set(m.id, merged);
+        map.set(m.id, mergeWeeklyPlanMicroDoneForSync(map.get(m.id), m, preferRemote));
       });
       return Array.from(map.values());
     }
 
     function mergeWeeklyPlanOneTaskForSync(locTask, remTask, preferRemote) {
-      const l = locTask && locTask.id ? normalizeWeeklyPlanTask(locTask) : null;
-      const r = remTask && remTask.id ? normalizeWeeklyPlanTask(remTask) : null;
-      if (!l) return r;
-      if (!r) return l;
-      const lDone = isWeeklyPlanMainComplete(l);
-      const rDone = isWeeklyPlanMainComplete(r);
-      if (lDone && !rDone) return l;
-      if (rDone && !lDone) return r;
-      const merged = preferRemote ? Object.assign({}, l, r) : Object.assign({}, r, l);
+      const l = locTask && locTask.id ? locTask : null;
+      const r = remTask && remTask.id ? remTask : null;
+      if (!l) return r ? normalizeWeeklyPlanTask(r) : null;
+      if (!r) return normalizeWeeklyPlanTask(l);
+      const lU = Number(l.updatedAt) || 0;
+      const rU = Number(r.updatedAt) || 0;
+      const merged = preferRemote || rU > lU ? Object.assign({}, l, r) : Object.assign({}, r, l);
       merged.id = l.id;
+      if (rU > lU || (rU === lU && preferRemote)) {
+        merged.text = String(r.text != null ? r.text : l.text || "");
+      } else if (lU > rU) {
+        merged.text = String(l.text != null ? l.text : r.text || "");
+      } else {
+        merged.text = String((preferRemote ? r.text : l.text) != null ? (preferRemote ? r.text : l.text) : "");
+      }
       merged.microTasks = mergeWeeklyPlanMicroTasksForSync(l.microTasks, r.microTasks, preferRemote);
-      if (lDone && rDone) {
-        merged.mainDone = true;
-        const la = normalizeWeeklyPlanCompletedAtMs(l.completedAt);
-        const ra = normalizeWeeklyPlanCompletedAtMs(r.completedAt);
-        const at = la != null && ra != null ? Math.max(la, ra) : la != null ? la : ra;
-        if (at) merged.completedAt = at;
-      } else if (!isWeeklyPlanMainComplete(merged)) {
-        merged.mainDone = Boolean(merged.mainDone);
-        if (!merged.mainDone) delete merged.completedAt;
+      merged.microSectionExpanded = Boolean(l.microSectionExpanded) || Boolean(r.microSectionExpanded);
+      if (merged.microTasks.length > 0) {
+        applyWeeklyPlanMainDoneFromMicros(merged);
+      } else {
+        merged.mainDone = mergeWeeklyPlanMainDoneForSync(l, r, preferRemote);
+        if (merged.mainDone) stampWeeklyPlanMainDone(merged, true);
+        else {
+          merged.mainDone = false;
+          delete merged.completedAt;
+        }
       }
       const dlPick = mergeDeadlineFieldsForSync(l, r, !preferRemote);
       applyDeadlineMergeToItem(merged, dlPick);
-      const u = Math.max(Number(l.updatedAt) || 0, Number(r.updatedAt) || 0, Number(dlPick.deadlineUpdatedAt) || 0);
+      const u = Math.max(lU, rU, Number(dlPick.deadlineUpdatedAt) || 0);
       if (u > 0) merged.updatedAt = u;
       return normalizeWeeklyPlanTask(merged);
     }
 
-    /** 云同步：按周、按任务 id 合并；任一侧已完成则保留完成态，避免远端旧数据整包覆盖本机勾选 */
+    /** 云同步：按周、按任务 id 逐字段合并；子步骤完成态按 statusAt 取较新一侧 */
     function mergeWeeklyPlanBucketsForSync(locPlan, remPlan, preferRemote, tombstones) {
       const lo = locPlan && typeof locPlan === "object" ? locPlan : {};
       const ro = remPlan && typeof remPlan === "object" ? remPlan : {};
@@ -55170,6 +55215,7 @@
           /* 不写 saveState，避免合并过程中再次 push */
         }
         reconcileMirrorDeadlinesAfterCloudMerge();
+        syncAllWeeklyPlanDoneLists();
         setCloudSyncHashFromCurrentState();
         const r = persistStateToLocalStorage();
         if (!skipRender) render();
@@ -67120,9 +67166,11 @@
 
     function stampWeeklyPlanMicroDone(micro, done) {
       if (!micro) return;
+      const now = Date.now();
+      micro.statusAt = now;
       if (done) {
         if (!normalizeWeeklyPlanCompletedAtMs(micro.completedAt)) {
-          micro.completedAt = Date.now();
+          micro.completedAt = now;
         }
       } else {
         delete micro.completedAt;
@@ -67131,13 +67179,20 @@
 
     function stampWeeklyPlanMainDone(task, done) {
       if (!task) return;
+      const now = Date.now();
+      task.statusAt = now;
       if (done) {
         if (!normalizeWeeklyPlanCompletedAtMs(task.completedAt)) {
-          task.completedAt = Date.now();
+          task.completedAt = now;
         }
       } else {
         delete task.completedAt;
       }
+    }
+
+    function touchWeeklyPlanTaskRevision(task) {
+      if (!task || typeof task !== "object") return;
+      task.updatedAt = Date.now();
     }
 
     function clearWeeklyPlanCompletionStamps(task) {
@@ -67479,11 +67534,28 @@
       return Boolean(items["main:" + tid]);
     }
 
-    function weeklyPlanDoneListShowsTaskComplete(taskId) {
+    function weeklyPlanDoneListShowsTaskComplete(taskId, task) {
       const tid = String(taskId || "");
-      return (state.done || []).some(function (d) {
-        const m = d && d.weeklyPlanMeta;
-        return m && m.taskId === tid;
+      if (!tid) return false;
+      const doneList = state.done || [];
+      const micros = task && Array.isArray(task.microTasks) ? task.microTasks : [];
+      if (micros.length > 0) {
+        return micros.every(function (m) {
+          if (!m || !m.id) return false;
+          return doneList.some(function (d) {
+            const meta = d && d.weeklyPlanMeta;
+            return (
+              meta &&
+              meta.taskId === tid &&
+              meta.kind === "micro" &&
+              meta.microId === m.id
+            );
+          });
+        });
+      }
+      return doneList.some(function (d) {
+        const meta = d && d.weeklyPlanMeta;
+        return meta && meta.taskId === tid && meta.kind === "main";
       });
     }
 
@@ -67516,7 +67588,7 @@
           if (weeklyPlanDoneRefShowsTaskComplete(wks[i], task.id, task)) return true;
         }
       }
-      if (weeklyPlanDoneListShowsTaskComplete(task.id)) return true;
+      if (weeklyPlanDoneListShowsTaskComplete(task.id, task)) return true;
       if (closedListShowsWeeklyPlanTaskComplete(task.id)) return true;
       return false;
     }
@@ -67538,6 +67610,16 @@
       }
     }
 
+    /** 载入/同步后：仅在「全部子步骤/主任务」均有完成证据时补全周计划勾选，避免部分 Done 条目拖垮整项 */
+    function shouldRepairWeeklyPlanTaskFromEvidence(weekKey, task) {
+      if (!task) return false;
+      if (isWeeklyPlanMainComplete(normalizeWeeklyPlanTask(task))) return false;
+      if (weeklyPlanDoneRefShowsTaskComplete(weekKey, task.id, task)) return true;
+      if (weeklyPlanDoneListShowsTaskComplete(task.id, task)) return true;
+      if (closedListShowsWeeklyPlanTaskComplete(task.id)) return true;
+      return false;
+    }
+
     /** 载入/同步/结转后：按 Done·封闭清单·镜像映射补全周计划完成戳，避免「已完成」又以未勾选出现在本周 */
     function repairWeeklyPlanCompletionFromEvidence() {
       if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
@@ -67546,9 +67628,7 @@
         const raw = state.weeklyPlan[weekKey];
         if (!Array.isArray(raw)) return;
         raw.forEach(function (task) {
-          if (!task || !isWeeklyPlanTaskCompleteForRollover(weekKey, task)) return;
-          const normBefore = normalizeWeeklyPlanTask(task);
-          if (isWeeklyPlanMainComplete(normBefore)) return;
+          if (!shouldRepairWeeklyPlanTaskFromEvidence(weekKey, task)) return;
           applyWeeklyPlanCompletionFromEvidence(task);
           changed = true;
         });
@@ -67656,12 +67736,11 @@
       return changed;
     }
 
-    function syncWeeklyPlanDoneList() {
-      const weekKey = getCurrentWeeklyPlanCalendarWeekKey();
+    function syncWeeklyPlanDoneListForWeek(weekKey) {
       const tasks = getWeeklyPlanTasksForWeekKey(weekKey);
       const ref = ensureWeeklyPlanWeekRef(weekKey);
       if (ref.suppressed) {
-        return;
+        return false;
       }
 
       const desiredKeys = new Set();
@@ -67688,6 +67767,17 @@
       let changed = false;
 
       Object.keys(items).forEach((key) => {
+        if (!desiredKeys.has(key)) {
+          const doneId = items[key];
+          if (doneId) {
+            state.done = state.done.filter((d) => d.id !== doneId);
+          }
+          delete items[key];
+          changed = true;
+        }
+      });
+
+      desiredKeys.forEach((syncKey) => {
         if (!desiredKeys.has(key)) {
           const doneId = items[key];
           if (doneId) {
@@ -67756,7 +67846,24 @@
         changed = true;
       });
 
+      return changed;
+    }
+
+    /** 按周计划实际勾选状态，对齐所有周的 weeklyPlanDoneRef 与 My Done 镜像 */
+    function syncAllWeeklyPlanDoneLists() {
+      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
+      let changed = false;
+      Object.keys(state.weeklyPlan).forEach(function (weekKey) {
+        if (syncWeeklyPlanDoneListForWeek(weekKey)) changed = true;
+      });
       if (changed) saveState();
+      return changed;
+    }
+
+    function syncWeeklyPlanDoneList() {
+      if (syncWeeklyPlanDoneListForWeek(getCurrentWeeklyPlanCalendarWeekKey())) {
+        saveState();
+      }
     }
 
     function ensureAnniversaryDoneModuleRef(moduleId) {
@@ -68254,12 +68361,16 @@
               };
               const microAt = normalizeWeeklyPlanCompletedAtMs(m.completedAt);
               if (microAt) microBase.completedAt = microAt;
+              const microSt = Number(m.statusAt);
+              if (Number.isFinite(microSt) && microSt > 0) microBase.statusAt = microSt;
               return microBase;
             })
           : []
       };
       const mainAt = normalizeWeeklyPlanCompletedAtMs(task.completedAt);
       if (mainAt) base.completedAt = mainAt;
+      const mainSt = Number(task.statusAt);
+      if (Number.isFinite(mainSt) && mainSt > 0) base.statusAt = mainSt;
       if (base.mainDone && !mainAt && base.microTasks.length === 0) {
         const evidenceTs = findWeeklyPlanCompletionTimestampFromEvidence(base.id);
         base.completedAt = evidenceTs != null ? evidenceTs : Date.now();
@@ -68582,6 +68693,7 @@
         mainDone: false,
         microTasks: []
       };
+      touchWeeklyPlanTaskRevision(newTask);
       saveWeeklyPlanTasksForWeek(insertWeeklyPlanTaskForLane(tasks, newTask, lane));
       weeklyPlanTaskInput.value = "";
       focusWeeklyPlanComposerInput();
@@ -69120,6 +69232,7 @@
       const task = tasks.find((t) => t.id === taskId);
       if (!task) return;
       task.text = text;
+      touchWeeklyPlanTaskRevision(task);
       saveWeeklyPlanTasksForWeek(tasks);
       render();
     }
@@ -69132,6 +69245,7 @@
       const task = tasks.find((t) => t.id === taskId);
       if (!task) return;
       stampDeadlineChange(task, msOrNull);
+      touchWeeklyPlanTaskRevision(task);
       saveWeeklyPlanTasksForWeek(tasks, located.weekKey);
       relocateWeeklyPlanTaskToDeadlineWeek(taskId);
       dedupeWeeklyPlanTasksInStorage();
@@ -69155,6 +69269,7 @@
         done: false
       });
       applyWeeklyPlanMainDoneFromMicros(task);
+      touchWeeklyPlanTaskRevision(task);
       saveWeeklyPlanTasksForWeek(tasks);
       syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewWeekKey());
       saveState();
@@ -69176,6 +69291,7 @@
         task.mainDone = Boolean(checked);
         stampWeeklyPlanMainDone(task, Boolean(checked));
       }
+      touchWeeklyPlanTaskRevision(task);
       saveWeeklyPlanTasksForWeek(tasks);
       syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewWeekKey());
       saveState();
@@ -69191,6 +69307,7 @@
       m.done = checked;
       stampWeeklyPlanMicroDone(m, Boolean(checked));
       applyWeeklyPlanMainDoneFromMicros(task);
+      touchWeeklyPlanTaskRevision(task);
       saveWeeklyPlanTasksForWeek(tasks);
       syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewWeekKey());
       saveState();
@@ -69204,6 +69321,7 @@
       const m = task.microTasks.find((x) => x.id === microId);
       if (!m) return;
       m.text = String(newText || "").trim();
+      touchWeeklyPlanTaskRevision(task);
       saveWeeklyPlanTasksForWeek(tasks);
       render();
     }
@@ -74340,7 +74458,7 @@
       if (doneHygieneChanged) saveState();
       repairWeeklyPlanCompletionFromEvidence();
       rolloverWeeklyPlanIncompleteToCurrentWeek();
-      syncWeeklyPlanDoneList();
+      syncAllWeeklyPlanDoneLists();
       if (syncLife4000WeeklyToDone()) {
         saveState();
       }
