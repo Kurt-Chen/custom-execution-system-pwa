@@ -50506,6 +50506,9 @@
         }
         refresh();
         refreshCloudSyncPulseFromServer();
+        if (cloudSyncReady && cloudSyncNeedsBackgroundHistoryMerge(0)) {
+          scheduleCloudSyncBackgroundHistoryMerge();
+        }
         if (!cloudSyncReady || !cloudSyncRef || cloudSyncSuppressPush) return;
         const pendingHash = serializeStateForCloud();
         if (pendingHash && pendingHash !== cloudSyncLastHash) {
@@ -50701,16 +50704,18 @@
       } catch (_e) {}
     }
 
-    /** 仅在本机 Done 为空或云端 meta 比 lastSeen 新时后台拉 v2/done；本机已有数据不因「缓存 Done=0」反复拉 */
+    /** 后台拉 v2/done：本机 Done 为空、云端较新、缓存条数多于本机、从未拉过、或距上次超过间隔时触发 */
     function cloudSyncNeedsBackgroundHistoryMerge(metaAt) {
       const localDone = countDoneRecordsInState(state);
       const lastSeen = getCloudLastSeenUpdatedAt();
       const meta = Number(metaAt) || 0;
       if (localDone === 0) return true;
       if (meta > lastSeen) return true;
-      if (Date.now() - getCloudSyncLastHistoryMergeAt() < CLOUD_SYNC_HISTORY_MERGE_MIN_INTERVAL_MS) {
-        return false;
-      }
+      const cachedRemote = getCachedRemoteDoneCount();
+      if (cachedRemote > localDone) return true;
+      const lastMerge = getCloudSyncLastHistoryMergeAt();
+      if (lastMerge === 0) return true;
+      if (Date.now() - lastMerge >= CLOUD_SYNC_HISTORY_MERGE_MIN_INTERVAL_MS) return true;
       return false;
     }
 
@@ -51611,12 +51616,7 @@
             if (metaAt > 0) setCloudLastSeenUpdatedAt(metaAt);
             return;
           }
-          if (
-            metaAt > 0 &&
-            metaAt <= getCloudLastSeenUpdatedAt() &&
-            cloudSyncCachedRemotePayload &&
-            cloudSyncCachedRemotePayload.state
-          ) {
+          if (metaAt > 0 && metaAt <= getCloudLastSeenUpdatedAt() && !cloudSyncNeedsBackgroundHistoryMerge(metaAt)) {
             return;
           }
         }
@@ -53536,12 +53536,15 @@
       }
     }
 
-    /** 回到前台时主动拉一次 pulse（WebView 休眠可能漏掉 listener） */
+    /** 回到前台时主动拉一次 pulse（WebView 休眠可能漏掉 listener）；必要时补拉 Done 历史 */
     function refreshCloudSyncPulseFromServer() {
       if (!cloudSyncReady || !cloudSyncRoomRef || cloudSyncApplyingRemote) return;
       readCloudSyncRoomChildValue("pulse")
         .then(function (node) {
           if (node) applyCloudSyncPulseFromRoom(node);
+          if (cloudSyncNeedsBackgroundHistoryMerge(0)) {
+            scheduleCloudSyncBackgroundHistoryMerge();
+          }
         })
         .catch(function () {});
     }
