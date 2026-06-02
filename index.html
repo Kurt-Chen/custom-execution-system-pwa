@@ -50506,9 +50506,6 @@
         }
         refresh();
         refreshCloudSyncPulseFromServer();
-        if (cloudSyncReady && cloudSyncNeedsBackgroundHistoryMerge(0)) {
-          scheduleCloudSyncBackgroundHistoryMerge();
-        }
         if (!cloudSyncReady || !cloudSyncRef || cloudSyncSuppressPush) return;
         const pendingHash = serializeStateForCloud();
         if (pendingHash && pendingHash !== cloudSyncLastHash) {
@@ -50704,7 +50701,7 @@
       } catch (_e) {}
     }
 
-    /** 后台拉 v2/done：本机 Done 为空、云端较新、缓存条数多于本机、从未拉过、或距上次超过间隔时触发 */
+    /** 后台拉 v2/done：本机 Done 为空、云端 meta 较新、或缓存快照条数多于本机时触发（避免反复全量拉取卡死 UI） */
     function cloudSyncNeedsBackgroundHistoryMerge(metaAt) {
       const localDone = countDoneRecordsInState(state);
       const lastSeen = getCloudLastSeenUpdatedAt();
@@ -50713,10 +50710,18 @@
       if (meta > lastSeen) return true;
       const cachedRemote = getCachedRemoteDoneCount();
       if (cachedRemote > localDone) return true;
-      const lastMerge = getCloudSyncLastHistoryMergeAt();
-      if (lastMerge === 0) return true;
-      if (Date.now() - lastMerge >= CLOUD_SYNC_HISTORY_MERGE_MIN_INTERVAL_MS) return true;
       return false;
+    }
+
+    /** 首次连上云后补拉一次 Done 历史（轻量初始化不含 v2/done，避免平板累计偏少） */
+    function scheduleCloudSyncInitialHistoryMergeIfNeeded() {
+      if (!cloudSyncReady || !cloudSyncRoomRef) return;
+      if (getCloudSyncLastHistoryMergeAt() > 0) return;
+      if (countDoneRecordsInState(state) === 0) return;
+      window.setTimeout(function () {
+        if (!cloudSyncReady || getCloudSyncLastHistoryMergeAt() > 0) return;
+        scheduleCloudSyncBackgroundHistoryMerge();
+      }, 2800);
     }
 
     async function runCloudSyncBackgroundHistoryMerge() {
@@ -51616,7 +51621,14 @@
             if (metaAt > 0) setCloudLastSeenUpdatedAt(metaAt);
             return;
           }
-          if (metaAt > 0 && metaAt <= getCloudLastSeenUpdatedAt() && !cloudSyncNeedsBackgroundHistoryMerge(metaAt)) {
+          if (
+            metaAt > 0 &&
+            metaAt <= getCloudLastSeenUpdatedAt() &&
+            cloudSyncCachedRemotePayload &&
+            cloudSyncCachedRemotePayload.state &&
+            getCachedRemoteDoneCount() <= countDoneRecordsInState(state) &&
+            !cloudSyncNeedsBackgroundHistoryMerge(metaAt)
+          ) {
             return;
           }
         }
@@ -53536,15 +53548,12 @@
       }
     }
 
-    /** 回到前台时主动拉一次 pulse（WebView 休眠可能漏掉 listener）；必要时补拉 Done 历史 */
+    /** 回到前台时主动拉一次 pulse（WebView 休眠可能漏掉 listener） */
     function refreshCloudSyncPulseFromServer() {
       if (!cloudSyncReady || !cloudSyncRoomRef || cloudSyncApplyingRemote) return;
       readCloudSyncRoomChildValue("pulse")
         .then(function (node) {
           if (node) applyCloudSyncPulseFromRoom(node);
-          if (cloudSyncNeedsBackgroundHistoryMerge(0)) {
-            scheduleCloudSyncBackgroundHistoryMerge();
-          }
         })
         .catch(function () {});
     }
@@ -55455,6 +55464,8 @@
         }, 500);
         if (cloudSyncNeedsBackgroundHistoryMerge(initMetaAt)) {
           scheduleCloudSyncBackgroundHistoryMerge();
+        } else {
+          scheduleCloudSyncInitialHistoryMergeIfNeeded();
         }
       } catch (err) {
         console.warn("云同步初始化失败:", err);
@@ -67633,7 +67644,6 @@
           changed = true;
         });
       });
-      if (changed) saveState();
       return changed;
     }
 
@@ -74456,7 +74466,7 @@
       if (dedupeClosedListWeeklyPlanMirrorsInState()) doneHygieneChanged = true;
       if (pruneRedundantDoneEntriesInState()) doneHygieneChanged = true;
       if (doneHygieneChanged) saveState();
-      repairWeeklyPlanCompletionFromEvidence();
+      if (repairWeeklyPlanCompletionFromEvidence()) doneHygieneChanged = true;
       rolloverWeeklyPlanIncompleteToCurrentWeek();
       syncAllWeeklyPlanDoneLists();
       if (syncLife4000WeeklyToDone()) {
@@ -75849,13 +75859,16 @@
     if (weeklyPlanThisWeekBtn) {
       weeklyPlanThisWeekBtn.addEventListener("click", goWeeklyPlanThisWeek);
     }
-    document.getElementById("weeklyPlanJumpDate").addEventListener("change", (event) => {
-      const v = event.target.value;
-      if (!v) return;
-      const { sunday } = getSundayToSaturdayWeek(new Date(v + "T12:00:00"));
-      setWeeklyPlanViewToSunday(formatDateInputValue(sunday));
-      render();
-    });
+    const weeklyPlanJumpDateEl = document.getElementById("weeklyPlanJumpDate");
+    if (weeklyPlanJumpDateEl) {
+      weeklyPlanJumpDateEl.addEventListener("change", (event) => {
+        const v = event.target.value;
+        if (!v) return;
+        const { sunday } = getSundayToSaturdayWeek(new Date(v + "T12:00:00"));
+        setWeeklyPlanViewToSunday(formatDateInputValue(sunday));
+        render();
+      });
+    }
     /* 脚本级常量：云同步合并会触发 render → Forge 周最低逻辑，须在 init 前存在 */
     const FORGE_WP_DOW_ORDER = [0, 1, 2, 3, 4, 5, 6];
     const FORGE_WP_WEEKDAY_ZH = { 1: "周一", 2: "周二", 3: "周三", 4: "周四", 5: "周五", 6: "周六", 0: "周日" };
@@ -75879,7 +75892,9 @@
         stateStorageUseIdb = false;
         stateStorageReady = true;
       }
+      try {
       loadState();
+      if (!Array.isArray(state.done)) state.done = [];
       if (tryRestoreStateFromEmergencyBackup()) {
         repairDoneListCompletedAtFromHabitMeta();
         restoreDoneListFromHabitCheckinsIfMissing();
@@ -75997,6 +76012,10 @@
     initHabitEnRemarkDisclosures();
     initMoneyGoalDualViewTabs();
     initPurposeMissionDualViewTabs();
+      } catch (bootErr) {
+        console.error("应用初始化失败:", bootErr);
+        if (!Array.isArray(state.done)) state.done = [];
+      }
       try {
         render();
       } catch (firstRenderErr) {
