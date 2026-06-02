@@ -50343,6 +50343,8 @@
     let cloudSyncFullPushTimer = null;
     let cloudSyncPersistDebounceTimer = null;
     let cloudSyncBackgroundHistoryInFlight = false;
+    let cloudSyncHistoryMergeRetryCount = 0;
+    const CLOUD_SYNC_HISTORY_MERGE_MAX_RETRIES = 4;
     let cloudSyncRemoteFullMergeInFlight = false;
     const CLOUD_SYNC_REMOTE_MERGE_DEBOUNCE_MS = 2000;
     const CLOUD_SYNC_RENDER_DEBOUNCE_MS = 500;
@@ -50748,14 +50750,17 @@
             setCloudLastSeenUpdatedAt(remoteAt);
           }
           markCloudSyncHistoryMergeRan();
+          cloudSyncHistoryMergeRetryCount = 0;
           scheduleCloudSyncRenderDebounced();
         }
         cloudSyncLastErrorMsg = "";
         restoreCloudSyncConnectedBadgeUnlessError();
       } catch (err) {
-        console.warn("云同步后台拉取历史失败:", err);
-        if (!hadError) {
+        noteCloudSyncHistoryMergeFailure(err, "后台拉取历史");
+        if (!shouldTreatCloudMergeReadAsNonFatal(err) && !hadError) {
           setCloudSyncError(err, "读取或合并云端历史失败");
+        } else {
+          scheduleCloudSyncHistoryMergeRetry(err);
         }
       } finally {
         cloudSyncBackgroundHistoryInFlight = false;
@@ -51651,11 +51656,16 @@
         absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
         if (ua > 0) setCloudLastSeenUpdatedAt(ua);
         markCloudSyncHistoryMergeRan();
+        cloudSyncHistoryMergeRetryCount = 0;
         scheduleCloudSyncRenderDebounced();
         cloudSyncLastErrorMsg = "";
       } catch (err) {
-        console.warn("云同步合并远端失败:", err);
-        setCloudSyncError(err, "读取或合并云端数据失败");
+        noteCloudSyncHistoryMergeFailure(err, "合并远端");
+        if (!shouldTreatCloudMergeReadAsNonFatal(err)) {
+          setCloudSyncError(err, "读取或合并云端数据失败");
+        } else {
+          scheduleCloudSyncHistoryMergeRetry(err);
+        }
       } finally {
         cloudSyncApplyingRemote = false;
         cloudSyncRemoteFullMergeInFlight = false;
@@ -51670,8 +51680,13 @@
       cloudSyncListenPulseRef.on("value", function (snap) {
         const pulseNode = snap.val();
         if (!pulseNode) return;
-        if (applyCloudSyncPulseFromRoom(pulseNode) && !cloudSyncLastErrorMsg) {
-          setCloudSyncStatus("已连接 ✓", "status-connected");
+        if (applyCloudSyncPulseFromRoom(pulseNode)) {
+          if (!isCloudSyncHardErrorMsg(cloudSyncLastErrorMsg)) {
+            cloudSyncLastErrorMsg = "";
+          }
+          if (!cloudSyncLastErrorMsg) {
+            setCloudSyncStatus("已连接 ✓", "status-connected");
+          }
         }
       });
       cloudSyncListenV2MetaRef = cloudSyncRoomRef.child("v2/meta");
@@ -51769,6 +51784,49 @@
       if (!cloudSyncLastErrorMsg) {
         setCloudSyncStatus("已连接 ✓", "status-connected");
       }
+    }
+
+    /** 后台 Done 历史拉取失败：不标红「同步错误」，pulse/今日快同步仍可用 */
+    function shouldTreatCloudMergeReadAsNonFatal(err) {
+      if (isTransientCloudSyncError(err)) return true;
+      const msg = formatCloudSyncError(err, "");
+      const low = msg.toLowerCase();
+      return low.includes("超时") || low.includes("timeout") || low.includes("aborterror");
+    }
+
+    function isCloudSyncHardErrorMsg(msg) {
+      const m = String(msg || "");
+      if (!m) return false;
+      return (
+        m.includes("PERMISSION_DENIED") ||
+        m.includes("OPERATION_NOT_ALLOWED") ||
+        m.includes("存储已满") ||
+        m.includes("quota") ||
+        m.includes("本机暂无完成记录") ||
+        m.includes("Firebase SDK 未加载") ||
+        m.includes("匿名登录") ||
+        m.includes("配置无效")
+      );
+    }
+
+    function noteCloudSyncHistoryMergeFailure(err, label) {
+      const detail = formatCloudSyncError(err, label || "读取或合并云端历史失败");
+      console.warn("[云同步] " + (label || "历史同步") + ":", detail);
+      if (cloudSyncReady) {
+        restoreCloudSyncConnectedBadgeUnlessError();
+      }
+    }
+
+    function scheduleCloudSyncHistoryMergeRetry(err) {
+      if (!cloudSyncReady || !cloudSyncRoomRef) return;
+      if (!shouldTreatCloudMergeReadAsNonFatal(err)) return;
+      if (cloudSyncHistoryMergeRetryCount >= CLOUD_SYNC_HISTORY_MERGE_MAX_RETRIES) return;
+      cloudSyncHistoryMergeRetryCount += 1;
+      const delayMs = 15000 * cloudSyncHistoryMergeRetryCount;
+      window.setTimeout(function () {
+        if (!cloudSyncReady || cloudSyncBackgroundHistoryInFlight) return;
+        scheduleCloudSyncBackgroundHistoryMerge();
+      }, delayMs);
     }
 
     function setAppVersionText(label) {
