@@ -25410,6 +25410,11 @@
       background: #ecfccb;
     }
 
+    #purposePrincipleSection .principle-card--life-12 .principle-card__num {
+      color: #3730a3;
+      background: #e0e7ff;
+    }
+
     #purposePrincipleSection .principle-card--work-1 .principle-card__num {
       color: #b45309;
       background: #ffedd5;
@@ -47584,6 +47589,39 @@
                             </p>
                           </details>
                         </li>
+                        <li class="principle-card principle-card--life-12">
+                          <details class="principle-card-disclosure">
+                            <summary class="principle-card__head">
+                              <span class="principle-card__num" aria-hidden="true">12</span>
+                              <h5 class="principle-card__title">Do Not Give Unsolicited Advice.</h5>
+                            </summary>
+                            <p class="principle-card__subhead">六条解释</p>
+                            <ul class="principle-card__list">
+                              <li>
+                                <strong>你的智慧是负担，不是礼物。</strong>没人问你时，你的「好意」本质上是在说：「你处理不好，让我来替你想。」这是一种隐蔽的控制欲。
+                              </li>
+                              <li>
+                                <strong>建议改变对方，沉默尊重对方。</strong>给建议意味着你认为对方现在的状态需要被纠正。沉默传递的是：「我相信你能自己处理。」
+                              </li>
+                              <li>
+                                <strong>问题没被提出，就还不是问题。</strong>你看到的「问题」，可能是对方已经知道并接受的一种权衡。插嘴等于把你的价值观强加为评判标准。
+                              </li>
+                              <li>
+                                <strong>说话的欲望，往往是自己的需求。</strong>想「帮」别人开口，多半是在证明自己有价值、有洞见。这是表演，不是服务。
+                              </li>
+                              <li>
+                                <strong>被问到才说，说完就停。</strong>即使被问了，也只回答被问的部分，不要延伸建议。边界在「你问的」，不在「我觉得你还应该知道什么」。
+                              </li>
+                              <li>
+                                <strong>优越感不需要观众，它只需要一个出口。</strong>急于给建议，是优越感在寻求确认；把它包装成关心，是最高级的形式。真正内化的智慧，不需要被他人听见才算数。
+                              </li>
+                            </ul>
+                            <p class="principle-card__subhead">一句话检验</p>
+                            <p class="principle-card__callout">
+                              开口之前先问：他问了吗？没有，就闭嘴。
+                            </p>
+                          </details>
+                        </li>
                       </ol>
                     </div>
                   </div>
@@ -50124,7 +50162,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260604l";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260604n";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** 本机已合并的 pulse.updatedAt（今日打卡快通道，远小于整包 v2） */
@@ -51595,9 +51633,7 @@
       const out = {};
       keys.forEach(function (wk) {
         const tasks = getWeeklyPlanTasksForWeekKey(wk);
-        if (tasks.length) {
-          out[wk] = tasks.map(normalizeWeeklyPlanTask);
-        }
+        out[wk] = tasks.map(normalizeWeeklyPlanTask);
       });
       return Object.keys(out).length ? out : null;
     }
@@ -51636,18 +51672,79 @@
       return Object.keys(outWeeks).length ? { weeks: outWeeks } : null;
     }
 
+    /**
+     * 周计划 pulse 合并：远程 slice 为 pulse 涉及各周的完整 bucket 快照。
+     * 改截止期限会跨 weekKey 迁移任务，须按 id 摘出旧 bucket，不能与普通全量 merge 一样做并集。
+     */
+    function mergeWeeklyPlanPulseSliceForSync(locPlan, pulseSlice, tombstones) {
+      const lo = locPlan && typeof locPlan === "object" ? locPlan : {};
+      const po = pulseSlice && typeof pulseSlice === "object" ? pulseSlice : {};
+      const ts = tombstones && typeof tombstones === "object" ? tombstones : {};
+      const remoteById = new Map();
+      Object.keys(po).forEach(function (wk) {
+        const arr = Array.isArray(po[wk]) ? po[wk] : [];
+        arr.forEach(function (t) {
+          if (t && t.id != null) remoteById.set(String(t.id), { weekKey: wk, task: t });
+        });
+      });
+      const pulseWeekKeys = new Set(Object.keys(po));
+      const out = {};
+      Object.keys(lo).forEach(function (wk) {
+        if (!pulseWeekKeys.has(wk)) out[wk] = lo[wk];
+      });
+      pulseWeekKeys.forEach(function (wk) {
+        const la = Array.isArray(lo[wk]) ? lo[wk] : [];
+        const ra = Array.isArray(po[wk]) ? po[wk] : [];
+        const map = new Map();
+        ra.forEach(function (t) {
+          if (!t || t.id == null) return;
+          const id = String(t.id);
+          const loc = la.find(function (x) {
+            return x && String(x.id) === id;
+          });
+          map.set(id, loc ? mergeWeeklyPlanOneTaskForSync(loc, t, true) : normalizeWeeklyPlanTask(t));
+        });
+        la.forEach(function (t) {
+          if (!t || t.id == null) return;
+          const id = String(t.id);
+          if (map.has(id)) return;
+          const remoteLoc = remoteById.get(id);
+          if (remoteLoc && remoteLoc.weekKey !== wk) return;
+          map.set(id, normalizeWeeklyPlanTask(t));
+        });
+        const bucket = omitTombstonedIdRecords(Array.from(map.values()), ts).map(function (task) {
+          const normalized = normalizeWeeklyPlanTask(task);
+          normalized.microTasks = omitTombstonedWeeklyPlanMicros(normalized.microTasks, ts);
+          return normalized;
+        });
+        if (bucket.length) out[wk] = bucket;
+      });
+      Object.keys(out).forEach(function (wk) {
+        const arr = Array.isArray(out[wk]) ? out[wk] : [];
+        const filtered = arr.filter(function (t) {
+          if (!t || t.id == null) return true;
+          const remoteLoc = remoteById.get(String(t.id));
+          if (!remoteLoc) return true;
+          return remoteLoc.weekKey === wk;
+        });
+        if (filtered.length === arr.length) return;
+        if (filtered.length === 0) delete out[wk];
+        else out[wk] = filtered;
+      });
+      return out;
+    }
+
     function mergeCloudSyncWeeklyPlanPulseIntoState(planSlice) {
       if (!planSlice || typeof planSlice !== "object") return false;
       const ts =
         state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
-      const next = mergeWeeklyPlanBucketsForSync(state.weeklyPlan, planSlice, true, ts);
+      const before = state.weeklyPlan;
+      const next = mergeWeeklyPlanPulseSliceForSync(state.weeklyPlan, planSlice, ts);
+      state.weeklyPlan = next;
+      dedupeWeeklyPlanDuplicateIdsAcrossBuckets();
       try {
-        if (JSON.stringify(state.weeklyPlan) !== JSON.stringify(next)) {
-          state.weeklyPlan = next;
-          return true;
-        }
+        if (JSON.stringify(before) !== JSON.stringify(state.weeklyPlan)) return true;
       } catch (_wpCmp) {
-        state.weeklyPlan = next;
         return true;
       }
       return false;
@@ -52773,11 +52870,12 @@
       }
       if (lDl != null && rDl == null) {
         if (lDu >= rDu) return { deadlineAt: lDl, deadlineUpdatedAt: lDu || mergedDu || undefined };
-        return mergedDu > 0 ? { deadlineUpdatedAt: mergedDu } : {};
+        return { deadlineUpdatedAt: rDu, deadlineAt: null };
       }
       if (lDl == null && rDl != null) {
         if (rDu > lDu) return { deadlineAt: rDl, deadlineUpdatedAt: rDu };
-        return mergedDu > 0 ? { deadlineUpdatedAt: mergedDu } : {};
+        if (lDu > rDu) return { deadlineUpdatedAt: lDu, deadlineAt: null };
+        return { deadlineAt: rDl, deadlineUpdatedAt: mergedDu || rDu || undefined };
       }
       if (lDu > rDu) return { deadlineAt: lDl, deadlineUpdatedAt: lDu };
       if (rDu > lDu) return { deadlineAt: rDl, deadlineUpdatedAt: rDu };
