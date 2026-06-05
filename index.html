@@ -34024,6 +34024,27 @@
       border: 1px solid rgba(5, 150, 105, 0.22);
     }
 
+    #myGoalsModule .money-goals-family-milestones {
+      margin: 10px 0 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      text-align: center;
+      background: linear-gradient(165deg, #fffbeb 0%, #ffffff 100%);
+      border: 1px solid rgba(217, 119, 6, 0.28);
+    }
+
+    #myGoalsModule .money-goals-family-milestone {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.55;
+      color: #92400e;
+    }
+
+    #myGoalsModule .money-goals-family-milestone + .money-goals-family-milestone {
+      margin-top: 4px;
+    }
+
     .money-goal-item {
       border: 1px solid #e2e8f0;
       border-radius: 10px;
@@ -45041,6 +45062,10 @@
                 </details>
               </div>
               <p class="money-goals-hourly-rate-note">我的时薪标准：$1000/Hour</p>
+              <div class="money-goals-family-milestones" aria-label="家族财富里程碑">
+                <p class="money-goals-family-milestone">成为家族第一个千万富翁</p>
+                <p class="money-goals-family-milestone">成为家族第一个亿万富翁</p>
+              </div>
             </section>
                 </div>
                 <div
@@ -50162,7 +50187,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260604n";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260605b";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** 本机已合并的 pulse.updatedAt（今日打卡快通道，远小于整包 v2） */
@@ -58582,6 +58607,9 @@
       );
       const newItem = createClosedListItem(parsed.text, assignDateStr, miniStep);
       if (dl != null) newItem.deadlineAt = dl;
+      if (tryAttachMirrorFromClosedListText(newItem)) {
+        applySourceCompleteStateToClosedListMirror(newItem);
+      }
       state.closedList.unshift(newItem);
       if (hadManualOrder) {
         state.closedList.forEach((item) => {
@@ -59215,6 +59243,9 @@
       if (mo && mo.kind === "weeklyPlan") {
         applyWeeklyPlanCompletionFromMirror(mo, want);
         syncAllWeeklyPlanMirrorsForWeek(mo.weekKey);
+      } else if (mo && mo.kind === "anniversaryTw") {
+        applyAnniversaryCompletionFromMirror(mo, want);
+        syncAllAnniversaryMirrorsForTask(mo.module, mo.taskId);
       }
       return true;
     }
@@ -63558,6 +63589,7 @@
         /** closedListMeta：从 My Done 删除仅移除 Done 行，不回写封闭清单勾选（保留已完成划线） */
       }
       if (listName === "closedList") {
+        /** 含 mirrorOf 的镜像：仅删封闭清单行，不删周计划/十二周年源任务 */
         removeClosedListDoneCopy(task.id);
       }
       if (listName === "memo") {
@@ -67887,7 +67919,7 @@
     }
 
     /**
-     * 旧数据仅有「【自周计划】」前缀、无 mirrorOf 时，按主任务标题在周计划各周中匹配并补写 mirrorOf。
+     * 旧数据仅有「【自周计划】/【12周年】」前缀、无 mirrorOf 时，按标题匹配并补写 mirrorOf。
      */
     function tryAttachMirrorFromClosedListText(item) {
       if (!item || item.mirrorOf) return false;
@@ -67900,24 +67932,42 @@
           module = "tw0" + modMatch[1];
           rest = rest.slice(modMatch[0].length).trim();
         }
-        const sep = rest.lastIndexOf(" · ");
-        if (sep < 0) return false;
-        const mainT = rest.slice(sep + 3).trim();
-        const weekPart = rest.slice(0, sep).trim();
-        const wm = weekPart.match(/^第(\d+)周/);
-        const weekHint = wm ? Number(wm[1]) : 0;
+        const weekMatch = rest.match(/^第(\d+)周\s*·\s*(.+)$/);
+        if (!weekMatch) return false;
+        const weekHint = Number(weekMatch[1]);
+        let bodyPart = weekMatch[2].trim();
+        let mainT = bodyPart;
+        let subT = "";
+        const subSep = bodyPart.indexOf(" › ");
+        if (subSep >= 0) {
+          mainT = bodyPart.slice(0, subSep).trim();
+          subT = bodyPart.slice(subSep + 3).trim();
+        }
         const modules = module ? [module] : ["tw020", "tw021", "tw022"];
         for (let i = 0; i < modules.length; i++) {
           const hit = findAnniversaryTaskByTitle(modules[i], mainT, weekHint);
-          if (hit) {
+          if (!hit) continue;
+          if (subT) {
+            const sub = (hit.task.subs || []).find(function (s) {
+              return s && String(s.text || "").trim() === subT;
+            });
+            if (!sub) continue;
             item.mirrorOf = {
               kind: "anniversaryTw",
               module: hit.module,
               weekNum: hit.weekNum,
-              taskId: hit.task.id
+              taskId: hit.task.id,
+              subId: sub.id
             };
             return true;
           }
+          item.mirrorOf = {
+            kind: "anniversaryTw",
+            module: hit.module,
+            weekNum: hit.weekNum,
+            taskId: hit.task.id
+          };
+          return true;
         }
         return false;
       }
@@ -67947,6 +67997,33 @@
         }
       }
       return false;
+    }
+
+    /** 镜像条目建立链接后，按源任务当前完成态初始化封闭清单勾选 */
+    function applySourceCompleteStateToClosedListMirror(item) {
+      if (!item || !item.mirrorOf) return;
+      const mo = item.mirrorOf;
+      let want = false;
+      if (mo.kind === "weeklyPlan") {
+        const resolved = resolveWeeklyPlanMirrorLocation(mo);
+        if (resolved) want = isWeeklyPlanMainComplete(resolved.task);
+      } else if (mo.kind === "anniversaryTw") {
+        const located = findAnniversaryTaskInStorage(mo.module, mo.taskId, mo.weekNum);
+        if (located) {
+          if (mo.subId) {
+            const sub = (located.task.subs || []).find(function (s) {
+              return s && s.id === mo.subId;
+            });
+            want = sub ? Boolean(sub.done) : false;
+          } else {
+            want = Boolean(located.task.done);
+          }
+        }
+      }
+      if (!want || item.completed) return;
+      item.completed = true;
+      item.completedAt = Date.now();
+      syncClosedListToDone(item);
     }
 
     /** 跨周迁移或载入后：把 Closed-List 里仍指向旧周的 mirrorOf.weekKey 纠正到任务实际所在周 */
