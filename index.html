@@ -40220,7 +40220,7 @@
               >
                 <span class="habit-category-tab__stack">
                   <span class="habit-category-tab__name">成长</span>
-                  <span class="habit-category-tab__prog">0/7</span>
+                  <span class="habit-category-tab__prog">0/6</span>
                 </span>
               </button>
               <button
@@ -40876,7 +40876,7 @@
           <div id="habitCategoryPanelGrowth" class="submodule-group submodule-group-growth collapsed habit-category-panel" data-habit-category="growth">
             <div class="submodule-group-header">
               <h3 class="submodule-group-title">成长</h3>
-              <span id="habitGrowthProgress" class="habit-en-learning-progress habit-group-header-progress" aria-live="polite">0/7</span>
+              <span id="habitGrowthProgress" class="habit-en-learning-progress habit-group-header-progress" aria-live="polite">0/6</span>
               <button type="button" class="toggle-btn toggle-chevron submodule-group-toggle" aria-label="切换此区块" aria-expanded="false"></button>
             </div>
             <div class="submodule-nested-grid habit-en-learning-grid">
@@ -40964,26 +40964,11 @@
                   </div>
                   <div class="habit-en-week-bar" aria-label="本周打卡"></div>
                 </section>
-                <section class="submodule-card submodule-card-nested habit-en-row" data-habit-key="beliefAudit">
+                <section class="submodule-card submodule-card-nested habit-en-row" data-habit-key="beliefAssumptionAudit">
                   <div class="habit-en-icon" aria-hidden="true">⚖️</div>
                   <div class="habit-en-body">
-                    <h3 class="submodule-title">信念审计</h3>
-                    <p class="submodule-note"><span class="habit-title-lang--desktop">列出当下最坚定的 1–3 条信念，追问：它基于什么证据？若出现相反证据，我会更新吗？持有信念，但不嫁给它——永远保留被说服的权利。</span></p>
-                  </div>
-                  <div class="habit-en-actions">
-                    <div class="habit-en-punch-meta">
-                    <span class="habit-en-today-note" aria-live="polite"></span>
-                    <button type="button" class="habit-en-clear-today-btn" hidden>减一次</button>
-                    </div>
-                    <button class="habit-check-btn habit-en-check-btn" type="button" aria-label="今日打卡"></button>
-                  </div>
-                  <div class="habit-en-week-bar" aria-label="本周打卡"></div>
-                </section>
-                <section class="submodule-card submodule-card-nested habit-en-row" data-habit-key="assumptionAudit">
-                  <div class="habit-en-icon" aria-hidden="true">📝</div>
-                  <div class="habit-en-body">
-                    <h3 class="submodule-title">假设审计</h3>
-                    <p class="submodule-note"><span class="habit-title-lang--desktop">行动前写下「我预期会发生什么」；行动后对比结果与预期的差距——差距是学习的入口，有假设才有可以被纠正的地方。</span></p>
+                    <h3 class="submodule-title">信念审计·假设审计</h3>
+                    <p class="submodule-note"><span class="habit-title-lang--desktop">信念：列出当下最坚定的 1–3 条信念，追问它基于什么证据、出现相反证据时是否会更新——持有信念，但不嫁给它。假设：行动前写下「我预期会发生什么」，行动后对比结果与预期的差距——差距是学习的入口。</span></p>
                   </div>
                   <div class="habit-en-actions">
                     <div class="habit-en-punch-meta">
@@ -50314,7 +50299,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260607b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260607c";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** 本机已合并的 pulse.updatedAt（今日打卡快通道，远小于整包 v2） */
@@ -56736,6 +56721,39 @@
       });
     }
 
+    function migrateBeliefAssumptionAuditHabit() {
+      const mergedKey = "beliefAssumptionAudit";
+      const legacyKeys = ["beliefAudit", "assumptionAudit"];
+      Object.keys(state.habitCheckins).forEach((dateStr) => {
+        const day = state.habitCheckins[dateStr];
+        if (!day || typeof day !== "object") return;
+        let merged = day[mergedKey];
+        legacyKeys.forEach((oldKey) => {
+          const v = day[oldKey];
+          if (v === undefined || v === null || v === false) return;
+          if (!merged) {
+            merged = v;
+          } else if (typeof merged === "object" && typeof v === "object") {
+            merged = { ...v, ...merged };
+          } else if (getSimpleHabitStampTimes(merged) < getSimpleHabitStampTimes(v)) {
+            merged = v;
+          }
+          delete day[oldKey];
+        });
+        if (merged) {
+          day[mergedKey] = merged;
+        }
+      });
+
+      state.done.forEach((item) => {
+        if (!item.habitMeta) return;
+        const key = item.habitMeta.key;
+        if (legacyKeys.indexOf(key) === -1) return;
+        item.habitMeta.key = mergedKey;
+        item.text = "【习惯】信念审计·假设审计";
+      });
+    }
+
     function isWeightBodyFatChecked(v) {
       if (v === true) return true;
       return Boolean(
@@ -57494,8 +57512,7 @@
       tenTurnsOfMomentum: "Ten Turns of Momentum",
       ideaSex: "IDEA SEX",
       goForNo: "Go for No!",
-      beliefAudit: "信念审计",
-      assumptionAudit: "假设审计",
+      beliefAssumptionAudit: "信念审计·假设审计",
       coldShower: "洗冷水澡",
       idealFuelCoffee: "喝理想燃料咖啡（代餐）",
       lowCarbDiet: "低碳水饮食",
@@ -75795,7 +75812,7 @@
           categoryKey: "ai",
           keys: ["aiChat", "vibeCoding", "workflowAutomationAiAgent", "aiDeepResearch", "dailyTenIdeas"]
         },
-        { progressId: "habitGrowthProgress", categoryKey: "growth", keys: ["fiveSecondRule", "highFiveHabit", "tenTurnsOfMomentum", "ideaSex", "goForNo", "beliefAudit", "assumptionAudit"] },
+        { progressId: "habitGrowthProgress", categoryKey: "growth", keys: ["fiveSecondRule", "highFiveHabit", "tenTurnsOfMomentum", "ideaSex", "goForNo", "beliefAssumptionAudit"] },
         { progressId: "habitFinanceInvestProgress", categoryKey: "financeInvest", keys: FINANCE_INVEST_HABIT_KEYS.slice() },
         { progressId: "habitAlphaMaleProgress", categoryKey: "alphaMale", keys: ["alphaMaleApproach", "alphaMaleEyeContactPractice"] },
         {
@@ -76683,6 +76700,7 @@
       maybeRunScheduledDataRetentionOnStartup();
       bootstrapAppInfrastructure();
       migrateWeightBodyFatHabits();
+      migrateBeliefAssumptionAuditHabit();
       if (ensureDefaultAge40Goals()) {
         saveState();
       }
