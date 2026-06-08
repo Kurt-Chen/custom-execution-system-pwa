@@ -30773,6 +30773,56 @@
       outline-offset: 2px;
     }
 
+    #anniversaryModule .anniversary-deep-time-stats-total-group {
+      display: inline-flex;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 6px;
+    }
+
+    #anniversaryModule .anniversary-deep-time-stats-tagline {
+      display: none;
+    }
+
+    /* 深度时间统计条：仅桌面端三栏（总时长左 / 倒计时中 / 时间块标语右） */
+    @media (min-width: 768px) {
+      #anniversaryModule .anniversary-deep-time-stats-fold > summary.anniversary-deep-time-stats-summary {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        justify-content: stretch;
+        align-items: center;
+        gap: 8px;
+        text-align: left;
+      }
+
+      #anniversaryModule .anniversary-deep-time-stats-total-group {
+        grid-column: 1;
+        justify-self: start;
+      }
+
+      #anniversaryModule
+        .anniversary-deep-time-stats-fold
+        > summary.anniversary-deep-time-stats-summary
+        .anniversary-deep-time-stats-countdown {
+        grid-column: 2;
+        justify-self: center;
+        margin-left: 0;
+      }
+
+      #anniversaryModule .anniversary-deep-time-stats-tagline {
+        display: block;
+        grid-column: 3;
+        justify-self: end;
+        text-align: right;
+        padding-right: 18px;
+        font-size: 13px;
+        font-weight: 600;
+        line-height: 1.25;
+        color: #64748b;
+        white-space: nowrap;
+      }
+    }
+
     #anniversaryModule .anniversary-deep-time-stats-body {
       padding: 0 6px 6px;
     }
@@ -47712,6 +47762,9 @@
                               <h5 class="principle-card__title">做一个贝叶斯主义者（Be a Bayesian）</h5>
                             </summary>
                             <p class="principle-card__body">
+                              "Start before you're ready."<br>
+                              你永远不会真正"准备好"。<br>
+                              等待准备好，本质上是在等一个不会到来的信号。而开始本身，才是准备的一部分。<br>
                               固体信念遇新证据会过滤；液体信念把每条新证据当更新机会。<br>
                               「基于现有证据，A 成立概率更高」——没有「自己」参与，更新无损尊严。<br>
                               持有信念，但不嫁给它；永远保留被说服的权利。
@@ -50912,6 +50965,10 @@
     const CLOUD_SYNC_REMOTE_MERGE_DEBOUNCE_MS = 2000;
     const CLOUD_SYNC_RENDER_DEBOUNCE_MS = 500;
     const CLOUD_SYNC_PERSIST_DEBOUNCE_MS = 1500;
+    /** 用户正在编辑时推迟全量 render，避免 innerHTML 重建清空输入 */
+    let renderDeferredWhileEditing = false;
+    let renderWhenEditingEndsTimer = null;
+    const RENDER_WHEN_EDITING_POLL_MS = 400;
     const CLOUD_SYNC_FULL_PUSH_MIN_INTERVAL_MS = 300000;
     const CLOUD_SYNC_FULL_PUSH_IDLE_MS = 20000;
     /** pulse 截止期限：待上传的周键 / 封闭清单 id / TW020 周次（构建 payload 后清空） */
@@ -51697,24 +51754,13 @@
       cloudSyncPulseTw020WeekNums.add(String(weekNum));
     }
 
-    function compactClosedListItemForDeadlinePulse(item) {
+    function cloneClosedListItemForPulse(item) {
       if (!item || item.id == null) return null;
-      const out = { id: item.id };
-      const d = normalizeDeadlineAtMs(item.deadlineAt);
-      if (d != null) out.deadlineAt = d;
-      const du = Number(item.deadlineUpdatedAt);
-      if (Number.isFinite(du) && du > 0) out.deadlineUpdatedAt = du;
-      const u = Number(item.updatedAt);
-      if (Number.isFinite(u) && u > 0) out.updatedAt = u;
-      if (item.completed) out.completed = true;
-      if (item.mirrorOf && typeof item.mirrorOf === "object") {
-        try {
-          out.mirrorOf = JSON.parse(JSON.stringify(item.mirrorOf));
-        } catch (_moErr) {
-          out.mirrorOf = item.mirrorOf;
-        }
+      try {
+        return JSON.parse(JSON.stringify(item));
+      } catch (_clErr) {
+        return Object.assign({}, item);
       }
-      return out;
     }
 
     function buildCloudSyncWeeklyPlanPulseSlice() {
@@ -51737,16 +51783,15 @@
       return Object.keys(out).length ? out : null;
     }
 
-    function buildCloudSyncClosedListDeadlinePulseSlice() {
-      if (!cloudSyncPulseClosedListIds || !cloudSyncPulseClosedListIds.size) return null;
-      const ids = cloudSyncPulseClosedListIds;
+    /**
+     * 封闭清单 pulse：每次上传完整条目快照（与周计划 pulse 同策略）。
+     * 原先仅传截止期限字段，添加/勾选/结转/删除无法及时同步，三端数据易分叉。
+     */
+    function buildCloudSyncClosedListPulseSlice() {
       cloudSyncPulseClosedListIds = null;
-      const items = [];
-      (Array.isArray(state.closedList) ? state.closedList : []).forEach(function (item) {
-        if (!item || item.id == null || !ids.has(String(item.id))) return;
-        const compact = compactClosedListItemForDeadlinePulse(item);
-        if (compact) items.push(compact);
-      });
+      const items = (Array.isArray(state.closedList) ? state.closedList : [])
+        .map(cloneClosedListItemForPulse)
+        .filter(Boolean);
       return items.length ? items : null;
     }
 
@@ -52045,10 +52090,15 @@
       if (forgePulse) pulseState.forge = forgePulse;
       const weeklyPlanPulse = buildCloudSyncWeeklyPlanPulseSlice();
       if (weeklyPlanPulse) pulseState.weeklyPlan = weeklyPlanPulse;
-      const closedListPulse = buildCloudSyncClosedListDeadlinePulseSlice();
+      const closedListPulse = buildCloudSyncClosedListPulseSlice();
       if (closedListPulse) pulseState.closedList = closedListPulse;
       const tw020Pulse = buildCloudSyncAnniversaryTw020PulseSlice();
       if (tw020Pulse) pulseState.anniversaryTw020 = tw020Pulse;
+      const ts =
+        state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : null;
+      if (ts && Object.keys(ts).length > 0) {
+        pulseState.syncTombstones = Object.assign({}, ts);
+      }
       return pulseState;
     }
 
@@ -52365,12 +52415,16 @@
       const hasWeeklyPlan =
         pulseState.weeklyPlan && typeof pulseState.weeklyPlan === "object" && Object.keys(pulseState.weeklyPlan).length > 0;
       const hasClosedList = Array.isArray(pulseState.closedList) && pulseState.closedList.length > 0;
+      const hasTombstones =
+        pulseState.syncTombstones &&
+        typeof pulseState.syncTombstones === "object" &&
+        Object.keys(pulseState.syncTombstones).length > 0;
       const hasTw020 =
         pulseState.anniversaryTw020 &&
         pulseState.anniversaryTw020.weeks &&
         typeof pulseState.anniversaryTw020.weeks === "object" &&
         Object.keys(pulseState.anniversaryTw020.weeks).length > 0;
-      if (!hasDone && !hasHc && !hasForge && !hasWeeklyPlan && !hasClosedList && !hasTw020) {
+      if (!hasDone && !hasHc && !hasForge && !hasWeeklyPlan && !hasClosedList && !hasTombstones && !hasTw020) {
         return Promise.resolve();
       }
       const ts =
@@ -53065,6 +53119,38 @@
      * 对同一 id，任一侧 completed 为 true 则结果必为已完成，completedAt 取较大者（与 mergeIdRecordArraysPreferLocalOnTie 配合）。
      * 若胜出条目缺少 mirrorOf（周计划镜像），则从本地/远端侧补回，避免双向同步关联丢失。
      */
+    /** pulse 曾只传截止期限字段；合并时从任一侧补全标题/子步骤，避免「胜出条」缺 text 覆盖完整条目 */
+    function fillClosedListMergedItemFromSides(out, L, R) {
+      if (!out || out.id == null) return out;
+      if (!String(out.text || "").trim()) {
+        const t = (L && L.text) || (R && R.text);
+        if (t) out.text = t;
+      }
+      if (!String(out.miniStep || "").trim()) {
+        const m = (L && L.miniStep) || (R && R.miniStep);
+        if (m) out.miniStep = m;
+      }
+      const subL = L && Array.isArray(L.subSteps) ? L.subSteps : [];
+      const subR = R && Array.isArray(R.subSteps) ? R.subSteps : [];
+      if (!Array.isArray(out.subSteps) || !out.subSteps.length) {
+        if (subL.length) out.subSteps = subL.slice();
+        else if (subR.length) out.subSteps = subR.slice();
+      }
+      if (out.avoidance == null) {
+        const av = L && L.avoidance != null ? L.avoidance : R && R.avoidance;
+        if (av != null) out.avoidance = av;
+      }
+      if (out.createdAt == null) {
+        const ca = (L && L.createdAt) || (R && R.createdAt);
+        if (ca != null) out.createdAt = ca;
+      }
+      if (out.listOrder == null) {
+        const lo = L && L.listOrder != null ? L.listOrder : R && R.listOrder;
+        if (lo != null) out.listOrder = lo;
+      }
+      return out;
+    }
+
     function mergeClosedListArraysForSync(localArr, remoteArr) {
       const loc = Array.isArray(localArr) ? localArr : [];
       const rem = Array.isArray(remoteArr) ? remoteArr : [];
@@ -53103,6 +53189,7 @@
           if (L || R) {
             out = Object.assign({}, out);
             applyDeadlineMergeToItem(out, dlPick);
+            fillClosedListMergedItemFromSides(out, L, R);
             const u = Math.max(revBump, Number(out.updatedAt) || 0, Number(dlPick.deadlineUpdatedAt) || 0);
             if (u > 0) out.updatedAt = u;
           }
@@ -53114,6 +53201,7 @@
           out.mirrorOf = moMirror;
         }
         applyDeadlineMergeToItem(out, dlPick);
+        fillClosedListMergedItemFromSides(out, L, R);
         const ca = [L && L.completedAt, R && R.completedAt, item.completedAt]
           .map((t) => Number(t))
           .filter((t) => Number.isFinite(t) && t > 0);
@@ -60879,7 +60967,14 @@
       }
     }
 
-    const DEFAULT_AGE_40_GOALS = ["净值达到300万", "体脂率降到22%以下", "去做「隐适美」"];
+    const AGE_GOAL_SLOT_COUNT = 4;
+    const DEFAULT_AGE_40_GOALS = [
+      "净值达到300万",
+      "体脂率降到22%以下",
+      "去做「隐适美」",
+      "还清妈妈的14万借款"
+    ];
+    const LEGACY_DEFAULT_AGE_40_GOALS = DEFAULT_AGE_40_GOALS.slice(0, 3);
 
     function normalizeAgeGoalSlot(raw) {
       if (raw && typeof raw === "object" && !Array.isArray(raw)) {
@@ -60919,27 +61014,32 @@
         state.ageGoals[key] = DEFAULT_AGE_40_GOALS.map((t) => normalizeAgeGoalSlot(t));
         return true;
       }
-      const padded = arr.slice(0, 3).map(normalizeAgeGoalSlot);
-      while (padded.length < 3) padded.push(normalizeAgeGoalSlot(""));
+      const padded = arr.slice(0, AGE_GOAL_SLOT_COUNT).map(normalizeAgeGoalSlot);
+      while (padded.length < AGE_GOAL_SLOT_COUNT) padded.push(normalizeAgeGoalSlot(""));
       if (padded.every((s) => !ageGoalSlotHasAnyContent(s))) {
         state.ageGoals[key] = DEFAULT_AGE_40_GOALS.map((t) => normalizeAgeGoalSlot(t));
         return true;
       }
+      let migrated = false;
+      if (!ageGoalSlotHasAnyContent(padded[3])) {
+        const first3Titles = padded.slice(0, 3).map(ageGoalTitle);
+        const matchesLegacyDefaults = LEGACY_DEFAULT_AGE_40_GOALS.every((t, i) => first3Titles[i] === t);
+        if (matchesLegacyDefaults) {
+          padded[3] = normalizeAgeGoalSlot(DEFAULT_AGE_40_GOALS[3]);
+          migrated = true;
+        }
+      }
       state.ageGoals[key] = padded;
-      return false;
+      return migrated;
     }
 
     function getAgeGoalTargets(age) {
       const key = String(age);
       if (!Array.isArray(state.ageGoals[key])) {
-        state.ageGoals[key] = [
-          normalizeAgeGoalSlot(""),
-          normalizeAgeGoalSlot(""),
-          normalizeAgeGoalSlot("")
-        ];
+        state.ageGoals[key] = Array.from({ length: AGE_GOAL_SLOT_COUNT }, () => normalizeAgeGoalSlot(""));
       }
-      const arr = state.ageGoals[key].slice(0, 3).map(normalizeAgeGoalSlot);
-      while (arr.length < 3) arr.push(normalizeAgeGoalSlot(""));
+      const arr = state.ageGoals[key].slice(0, AGE_GOAL_SLOT_COUNT).map(normalizeAgeGoalSlot);
+      while (arr.length < AGE_GOAL_SLOT_COUNT) arr.push(normalizeAgeGoalSlot(""));
       state.ageGoals[key] = arr;
       return arr;
     }
@@ -60949,14 +61049,10 @@
       ageGoalsCountdownList.querySelectorAll(".age-goal-item").forEach((el) => {
         const age = el.dataset.age;
         if (!age) return;
-        const base = [
-          normalizeAgeGoalSlot(""),
-          normalizeAgeGoalSlot(""),
-          normalizeAgeGoalSlot("")
-        ];
+        const base = Array.from({ length: AGE_GOAL_SLOT_COUNT }, () => normalizeAgeGoalSlot(""));
         el.querySelectorAll(".age-goal-edit-slot").forEach(function (wrap) {
           const si = Number(wrap.dataset.slot);
-          if (si !== si || si < 0 || si > 2) return;
+          if (si !== si || si < 0 || si >= AGE_GOAL_SLOT_COUNT) return;
           const titleInp = wrap.querySelector(".age-goal-input");
           const detailTa = wrap.querySelector(".age-goal-field-detail");
           const whyTa = wrap.querySelector(".age-goal-field-why");
@@ -61009,10 +61105,10 @@
     function getAgeEditSlotCount(age, targets) {
       const key = String(age);
       const nFilled = targets.filter((t) => ageGoalSlotHasAnyContent(t)).length;
-      const auto = nFilled === 0 ? 1 : Math.min(3, nFilled + 1);
+      const auto = nFilled === 0 ? 1 : Math.min(AGE_GOAL_SLOT_COUNT, nFilled + 1);
       const manual = state.ageGoalsEditSlots && state.ageGoalsEditSlots[key];
-      if (typeof manual === "number" && manual >= 1 && manual <= 3) {
-        return Math.min(3, Math.max(auto, manual));
+      if (typeof manual === "number" && manual >= 1 && manual <= AGE_GOAL_SLOT_COUNT) {
+        return Math.min(AGE_GOAL_SLOT_COUNT, Math.max(auto, manual));
       }
       return auto;
     }
@@ -61052,6 +61148,33 @@
 
     function wrapAgeGoalHighlightNumbers(text) {
       return String(text).replace(/(\d+)/g, '<span class="age-goal-countdown-num">$1</span>');
+    }
+
+    function getAgeGoalViewIconConfig(age, slotIdx) {
+      if (age === 40 && slotIdx >= 0 && slotIdx < AGE_40_GOAL_VIEW_ICONS.length) {
+        return AGE_40_GOAL_VIEW_ICONS[slotIdx];
+      }
+      var i = slotIdx % AGE_GOAL_VIEW_ICON_FALLBACKS.length;
+      return AGE_GOAL_VIEW_ICON_FALLBACKS[i];
+    }
+
+    function createAgeGoalViewIconChip(age, slotIdx) {
+      var cfg = getAgeGoalViewIconConfig(age, slotIdx);
+      var chip = document.createElement("span");
+      chip.className = "age-goal-view-icon-chip";
+      chip.setAttribute("aria-hidden", "true");
+      chip.style.backgroundColor = cfg.bg;
+      chip.style.color = cfg.color;
+      chip.textContent = cfg.symbol;
+      return chip;
+    }
+
+    function wrapAgeGoalTitleEmphasis(text) {
+      var s = String(text || "").trim();
+      if (!s) return "（未命名目标）";
+      s = s.replace(/(\d+(?:\.\d+)?(?:万|%)?)/g, '<span class="age-goal-view-em">$1</span>');
+      s = s.replace(/(「[^」]+」)/g, '<span class="age-goal-view-em">$1</span>');
+      return s;
     }
 
     /** 年岁倒计时胶囊：40～60 各一条色相，浅底区分 */
@@ -61403,6 +61526,11 @@
 
     function renderAgeGoalsCountdown() {
       if (!ageGoalsCountdownList) return;
+      if (typeof isAppUiEditingInProgress === "function" && isAppUiEditingInProgress()) {
+        renderDeferredWhileEditing = true;
+        scheduleRenderWhenEditingEnds();
+        return;
+      }
       ageGoalsCountdownList.innerHTML = "";
       const now = new Date();
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -61464,7 +61592,9 @@
         item.appendChild(summary);
 
         const targets = getAgeGoalTargets(age);
-        const filledIdx = [0, 1, 2].filter((i) => ageGoalSlotHasAnyContent(targets[i]));
+        const filledIdx = Array.from({ length: AGE_GOAL_SLOT_COUNT }, (_, i) => i).filter((i) =>
+          ageGoalSlotHasAnyContent(targets[i])
+        );
 
         if (!ageGoalsEditMode) {
           if (filledIdx.length === 0) {
@@ -61488,12 +61618,15 @@
               li.className = "age-goal-view-row";
               li.dataset.goalSlot = String(slotIdx);
               const slotObj = normalizeAgeGoalSlot(targets[slotIdx]);
+              const iconChip = createAgeGoalViewIconChip(age, slotIdx);
+              li.appendChild(iconChip);
+
               const rowMain = document.createElement("div");
               rowMain.className = "age-goal-view-row-main";
 
               const textSpan = document.createElement("span");
               textSpan.className = "age-goal-view-text";
-              textSpan.textContent = slotObj.title ? slotObj.title : "（未命名目标）";
+              textSpan.innerHTML = wrapAgeGoalTitleEmphasis(slotObj.title);
 
               rowMain.appendChild(textSpan);
 
@@ -61668,7 +61801,7 @@
               img.className = "goal-poster-img age-goals-poster-img";
               img.src = "./assets/age-goals-poster-40.png";
               img.alt =
-                "40岁生日目标海报：净值300万、体脂22%以下、隐适美，目标日2026-12-09";
+                "40岁生日目标海报：净值300万、体脂22%以下、隐适美、还清妈妈的14万借款，目标日2026-12-09";
               img.loading = "lazy";
               img.decoding = "async";
               figure.appendChild(img);
@@ -61835,7 +61968,7 @@
             inputsWrap.appendChild(slotWrap);
           }
           item.appendChild(inputsWrap);
-          if (slotCount < 3) {
+          if (slotCount < AGE_GOAL_SLOT_COUNT) {
             const addBtn = document.createElement("button");
             addBtn.type = "button";
             addBtn.className = "age-goal-add-btn";
@@ -61843,7 +61976,7 @@
             addBtn.addEventListener("click", () => {
               if (!state.ageGoalsEditSlots) state.ageGoalsEditSlots = {};
               const key = String(age);
-              const next = Math.min(3, slotCount + 1);
+              const next = Math.min(AGE_GOAL_SLOT_COUNT, slotCount + 1);
               state.ageGoalsEditSlots[key] = next;
               saveState();
               render();
@@ -65420,11 +65553,16 @@
       const n = milestone.n;
       const diffDays = milestone.diffDays;
       const raw = getAgeGoalTargets(n);
-      const arr = [0, 1, 2].map((i) => {
+      const circledNums = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"];
+      const arr = Array.from({ length: AGE_GOAL_SLOT_COUNT }, (_, i) => {
         const t = ageGoalTitle(raw[i]);
         return t ? t : "（未填）";
       });
-      const goalsPart = n + "岁目标：①" + arr[0] + "；②" + arr[1] + "；③" + arr[2] + "。";
+      const goalsPart =
+        n +
+        "岁目标：" +
+        arr.map((t, i) => (circledNums[i] || String(i + 1)) + t).join("；") +
+        "。";
       const countdownLead =
         diffDays > 0
           ? "倒数日：仅剩" + diffDays + "天。"
@@ -72659,6 +72797,8 @@
 
       const summary = document.createElement("summary");
       summary.className = "anniversary-deep-time-stats-summary";
+      const totalGroup = document.createElement("span");
+      totalGroup.className = "anniversary-deep-time-stats-total-group";
       const totalLabel = document.createElement("span");
       totalLabel.className = "anniversary-deep-time-stats-total__label";
       totalLabel.textContent = "总深度时间";
@@ -72668,10 +72808,15 @@
       const totalUnit = document.createElement("span");
       totalUnit.className = "anniversary-deep-time-stats-total__unit";
       totalUnit.textContent = "小时";
-      summary.appendChild(totalLabel);
-      summary.appendChild(totalVal);
-      summary.appendChild(totalUnit);
+      totalGroup.appendChild(totalLabel);
+      totalGroup.appendChild(totalVal);
+      totalGroup.appendChild(totalUnit);
+      summary.appendChild(totalGroup);
       summary.appendChild(buildAnniversaryDeepTimeStatsCountdownEl(suffix));
+      const statsTagline = document.createElement("span");
+      statsTagline.className = "anniversary-deep-time-stats-tagline";
+      statsTagline.textContent = "早上•晚上•周末➠改写命运时间块";
+      summary.appendChild(statsTagline);
       stats.appendChild(summary);
 
       const statsBody = document.createElement("div");
@@ -75225,7 +75370,52 @@
       render();
     }
 
+    function isAppUiEditingInProgress() {
+      if (ageGoalsEditMode) return true;
+      const ae = document.activeElement;
+      if (ae && ae !== document.body && ae !== document.documentElement) {
+        const tag = ae.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+        if (ae.isContentEditable) return true;
+      }
+      if (document.querySelector("[data-manual-editing=\"1\"]")) return true;
+      const wpTitleEdit = document.querySelector(
+        ".weekly-plan-main-title-input.weekly-plan-main-title-editing"
+      );
+      if (wpTitleEdit && !wpTitleEdit.readOnly) return true;
+      if (document.querySelector(".daily-win-modern-card--pending.is-editing")) return true;
+      if (document.querySelector(".rule100-card--name-editing")) return true;
+      const storyTa = document.querySelector('textarea[id$="FutureStory"]');
+      if (storyTa && !storyTa.readOnly) return true;
+      return false;
+    }
+
+    function scheduleRenderWhenEditingEnds() {
+      if (renderWhenEditingEndsTimer) clearTimeout(renderWhenEditingEndsTimer);
+      renderWhenEditingEndsTimer = setTimeout(function () {
+        renderWhenEditingEndsTimer = null;
+        if (isAppUiEditingInProgress()) {
+          scheduleRenderWhenEditingEnds();
+          return;
+        }
+        if (renderDeferredWhileEditing) {
+          renderDeferredWhileEditing = false;
+          render();
+        }
+      }, RENDER_WHEN_EDITING_POLL_MS);
+    }
+
     function render() {
+      if (isAppUiEditingInProgress()) {
+        renderDeferredWhileEditing = true;
+        scheduleRenderWhenEditingEnds();
+        return;
+      }
+      renderDeferredWhileEditing = false;
+      if (renderWhenEditingEndsTimer) {
+        clearTimeout(renderWhenEditingEndsTimer);
+        renderWhenEditingEndsTimer = null;
+      }
       if (!selectedDoneDate) selectedDoneDate = formatDateInputValue(new Date());
       if (!selectedClosedListDate) selectedClosedListDate = formatDateInputValue(new Date());
       if (kineticHeaderDateInput) kineticHeaderDateInput.value = selectedDoneDate;
@@ -80936,6 +81126,23 @@
 
     setInterval(renderKineticCountdowns, 60000);
     setInterval(renderDailyReminder, 3600000);
+
+    document.addEventListener(
+      "focusout",
+      function () {
+        if (!renderDeferredWhileEditing) return;
+        setTimeout(function () {
+          if (!renderDeferredWhileEditing || isAppUiEditingInProgress()) return;
+          renderDeferredWhileEditing = false;
+          if (renderWhenEditingEndsTimer) {
+            clearTimeout(renderWhenEditingEndsTimer);
+            renderWhenEditingEndsTimer = null;
+          }
+          render();
+        }, 0);
+      },
+      true
+    );
   </script>
   <script>
     (function () {
