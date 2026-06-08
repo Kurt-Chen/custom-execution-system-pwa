@@ -33710,16 +33710,46 @@
 
     .age-goal-view-row {
       display: flex;
-      align-items: flex-start;
-      gap: 8px;
+      align-items: center;
+      gap: 10px;
       margin: 0;
-      padding: 8px 10px;
+      padding: 10px 12px;
       background: #ffffff;
       border: 1px solid #e2e8f0;
-      border-radius: 8px;
+      border-radius: 12px;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
       color: #334155;
       font-size: 12px;
       line-height: 1.5;
+    }
+
+    .age-goal-view-icon-chip {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .age-goal-view-text .age-goal-view-em {
+      font-weight: 700;
+    }
+
+    @media (max-width: 480px) {
+      .age-goal-view-icon-chip {
+        width: 32px;
+        height: 32px;
+        font-size: 16px;
+        border-radius: 8px;
+      }
+
+      .age-goal-view-text {
+        font-size: 12px;
+      }
     }
 
     .age-goal-view-row-main {
@@ -40691,7 +40721,7 @@
                 <section class="submodule-card submodule-card-nested habit-en-row" data-habit-key="idealFuelCoffee">
                   <div class="habit-en-icon habit-en-icon--coffee" aria-hidden="true">☕</div>
                   <div class="habit-en-body">
-                    <h3 class="submodule-title">喝理想燃料咖啡<span class="habit-title-paren--desktop">（代餐）</span></h3>
+                    <h3 class="submodule-title">喝理想燃料咖啡</h3>
                   </div>
                   <div class="habit-en-actions">
                     <div class="habit-en-punch-meta">
@@ -50906,6 +50936,8 @@
     let activateKineticTab = null;
     /** Habit & Routine 顶栏子 Tab：用于切入模块时回到「始终向后衡量」 */
     let activateHabitRoutineSubTab = null;
+    /** Purpose & Values 顶栏子 Tab：用于快捷跳转到 Extreme Agency 等面板 */
+    let activatePurposeSubTab = null;
     let activePrimaryModuleKey = "dynamic";
 
     let selectedDoneDate = "";
@@ -57588,7 +57620,7 @@
       faceAvoidedProblem: "去面对「逃避的问题」",
       haveDifficultConversation: "去进行「艰难的对话」",
       coldShower: "洗冷水澡",
-      idealFuelCoffee: "喝理想燃料咖啡（代餐）",
+      idealFuelCoffee: "喝理想燃料咖啡",
       lowCarbDiet: "低碳水饮食",
       moisturizeSunscreen: "保湿·防晒",
       flossMouthwash: "使用「牙线·漱口水」",
@@ -60976,6 +61008,19 @@
     ];
     const LEGACY_DEFAULT_AGE_40_GOALS = DEFAULT_AGE_40_GOALS.slice(0, 3);
 
+    const AGE_40_GOAL_VIEW_ICONS = [
+      { symbol: "📈", bg: "#ede9fe", color: "#5b21b6" },
+      { symbol: "🔥", bg: "#dcfce7", color: "#15803d" },
+      { symbol: "✨", bg: "#ffedd5", color: "#c2410c" },
+      { symbol: "❤️", bg: "#fce7f3", color: "#be185d" }
+    ];
+    const AGE_GOAL_VIEW_ICON_FALLBACKS = [
+      { symbol: "🎯", bg: "#e0f2fe", color: "#0369a1" },
+      { symbol: "⭐", bg: "#fef9c3", color: "#a16207" },
+      { symbol: "💡", bg: "#f3e8ff", color: "#7e22ce" },
+      { symbol: "🏁", bg: "#f1f5f9", color: "#475569" }
+    ];
+
     function normalizeAgeGoalSlot(raw) {
       if (raw && typeof raw === "object" && !Array.isArray(raw)) {
         return {
@@ -61123,7 +61168,7 @@
         ageGoalsSection.classList.remove("collapsed");
         if (toggleAgeGoalsBtn) setDisclosureToggleState(toggleAgeGoalsBtn, true);
       }
-      render();
+      renderAgeGoalsCountdown();
       requestAnimationFrame(function () {
         if (ageGoalsSection && typeof ageGoalsSection.scrollIntoView === "function") {
           ageGoalsSection.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -61526,7 +61571,7 @@
 
     function renderAgeGoalsCountdown() {
       if (!ageGoalsCountdownList) return;
-      if (typeof isAppUiEditingInProgress === "function" && isAppUiEditingInProgress()) {
+      if (typeof isAppUiFieldEditingInProgress === "function" && isAppUiFieldEditingInProgress()) {
         renderDeferredWhileEditing = true;
         scheduleRenderWhenEditingEnds();
         return;
@@ -75370,24 +75415,61 @@
       render();
     }
 
+    /** 仅当编辑控件在当前可见面板内时才推迟 render（避免隐藏 Tab 里的 input 误拦全页刷新） */
+    function isFieldVisibleForEditGuard(el) {
+      if (!el || typeof el.closest !== "function") return false;
+      if (el.closest(".module-tab-hidden, .kinetic-tab-hidden, [hidden]")) return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 || rect.height > 0;
+    }
+
+    /** 当前焦点是否在可编辑字段上（只读 / 非文本类 input 不算编辑中） */
+    function isActiveEditableField(el) {
+      if (!el || !isFieldVisibleForEditGuard(el)) return false;
+      if (el.isContentEditable) return true;
+      const tag = el.tagName;
+      if (tag === "TEXTAREA") return !el.readOnly;
+      if (tag === "SELECT") return true;
+      if (tag === "INPUT") {
+        const type = String(el.type || "text").toLowerCase();
+        if (
+          type === "checkbox" ||
+          type === "radio" ||
+          type === "button" ||
+          type === "submit" ||
+          type === "reset" ||
+          type === "hidden" ||
+          type === "file" ||
+          type === "image"
+        ) {
+          return false;
+        }
+        return !el.readOnly;
+      }
+      return false;
+    }
+
+    /** 焦点级编辑检测（不含年岁目标编辑模式；供 renderAgeGoalsCountdown 等局部刷新） */
+    function isAppUiFieldEditingInProgress() {
+      const ae = document.activeElement;
+      if (!ae || ae === document.body || ae === document.documentElement) return false;
+      if (isActiveEditableField(ae)) return true;
+      const manualEditing = document.querySelector("[data-manual-editing=\"1\"]");
+      if (
+        manualEditing &&
+        isFieldVisibleForEditGuard(manualEditing) &&
+        typeof manualEditing.contains === "function" &&
+        manualEditing.contains(ae) &&
+        isActiveEditableField(ae)
+      ) {
+        return true;
+      }
+      return false;
+    }
+
     function isAppUiEditingInProgress() {
       if (ageGoalsEditMode) return true;
-      const ae = document.activeElement;
-      if (ae && ae !== document.body && ae !== document.documentElement) {
-        const tag = ae.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
-        if (ae.isContentEditable) return true;
-      }
-      if (document.querySelector("[data-manual-editing=\"1\"]")) return true;
-      const wpTitleEdit = document.querySelector(
-        ".weekly-plan-main-title-input.weekly-plan-main-title-editing"
-      );
-      if (wpTitleEdit && !wpTitleEdit.readOnly) return true;
-      if (document.querySelector(".daily-win-modern-card--pending.is-editing")) return true;
-      if (document.querySelector(".rule100-card--name-editing")) return true;
-      const storyTa = document.querySelector('textarea[id$="FutureStory"]');
-      if (storyTa && !storyTa.readOnly) return true;
-      return false;
+      return isAppUiFieldEditingInProgress();
     }
 
     function scheduleRenderWhenEditingEnds() {
@@ -76393,9 +76475,9 @@
                   ? tc > 0
                     ? String(tc)
                     : ""
-                  : "今日累计 " + String(v.wordCount) + " 词 · 打卡 " + String(tc) + " 次";
+                  : "累计 " + String(v.wordCount) + " 词 · 打卡 " + String(tc) + " 次";
               } else if (checked && v === true) {
-                todayNote.textContent = isHabitRoutineCompactMobile() ? "" : "今日已打卡";
+                todayNote.textContent = isHabitRoutineCompactMobile() ? "" : "已打卡";
               } else {
                 todayNote.textContent = "";
               }
@@ -76418,9 +76500,9 @@
                   ? tc > 0
                     ? String(tc)
                     : ""
-                  : "今日累计 " + String(v.minutes) + " 分钟 · 打卡 " + String(tc) + " 次";
+                  : "累计 " + String(v.minutes) + " 分钟 · 打卡 " + String(tc) + " 次";
               } else if (checked && v === true) {
-                todayNote.textContent = isHabitRoutineCompactMobile() ? "" : "今日已打卡";
+                todayNote.textContent = isHabitRoutineCompactMobile() ? "" : "已打卡";
               } else {
                 todayNote.textContent = "";
               }
@@ -76456,9 +76538,9 @@
                   ? tc > 0
                     ? String(tc)
                     : ""
-                  : "今日累计 " + String(Number(v.yuan)) + " 元 · 打卡 " + String(tc) + " 次";
+                  : "累计 " + String(Number(v.yuan)) + " 元 · 打卡 " + String(tc) + " 次";
               } else if (savingsChecked && v === true) {
-                todayNote.textContent = isHabitRoutineCompactMobile() ? "" : "今日已打卡";
+                todayNote.textContent = isHabitRoutineCompactMobile() ? "" : "已打卡";
               } else {
                 todayNote.textContent = "";
               }
@@ -76487,7 +76569,7 @@
                 if (compact) {
                   todayNote.textContent = tc > 0 ? String(tc) : "";
                 } else {
-                  let note = "今日打卡 " + String(tc) + " 次";
+                  let note = "打卡 " + String(tc) + " 次";
                   if (remarkStr) {
                     const maxLen = 40;
                     const snip = remarkStr.length > maxLen ? remarkStr.slice(0, maxLen) + "…" : remarkStr;
@@ -76521,7 +76603,7 @@
                 if (compact) {
                   todayNote.textContent = tc > 0 ? String(tc) : "";
                 } else {
-                  let note = "今日累计 " + String(v.experiments) + " 次实验 · 打卡 " + String(tc) + " 次";
+                  let note = "累计 " + String(v.experiments) + " 次实验 · 打卡 " + String(tc) + " 次";
                   const rm = getHabitRemarkFromCheckinValue(v);
                   if (rm) {
                     const maxLen = 36;
@@ -76531,7 +76613,7 @@
                   todayNote.textContent = note;
                 }
               } else if (checked && v === true) {
-                todayNote.textContent = isHabitRoutineCompactMobile() ? "" : "今日已打卡";
+                todayNote.textContent = isHabitRoutineCompactMobile() ? "" : "已打卡";
               } else {
                 todayNote.textContent = "";
               }
@@ -76596,7 +76678,7 @@
               if (isHabitRoutineCompactMobile()) {
                 todayNote.textContent = tc > 0 ? String(tc) : "";
               } else {
-                todayNote.textContent = tc > 0 ? "今日打卡 " + String(tc) + " 次" : "今日已打卡";
+                todayNote.textContent = tc > 0 ? "打卡 " + String(tc) + " 次" : "已打卡";
               }
             } else {
               todayNote.textContent = "";
@@ -76630,7 +76712,7 @@
           btnEl.textContent = checked ? "取消" : "打卡";
           btnEl.removeAttribute("title");
         } else {
-          btnEl.textContent = checked ? "✓ 今日已打卡" : "今日打卡";
+          btnEl.textContent = checked ? "✓ 已打卡" : "打卡";
           btnEl.setAttribute("title", checked ? "点击取消" : "");
         }
         btnEl.classList.toggle("checked", checked);
@@ -78194,6 +78276,16 @@
       if (!block || block.dataset.anniversaryDesireBound === "1") return;
       block.dataset.anniversaryDesireBound = "1";
       const head = block.querySelector(".anniversary-genuine-desire-head");
+      const shortcutBtn = head ? head.querySelector("#anniversaryExtremeAgencyShortcutBtn") : null;
+      if (shortcutBtn && shortcutBtn.dataset.eaShortcutBound !== "1") {
+        shortcutBtn.dataset.eaShortcutBound = "1";
+        shortcutBtn.addEventListener("click", function (event) {
+          event.stopPropagation();
+          if (typeof openPurposeExtremeAgencyShortcut === "function") {
+            openPurposeExtremeAgencyShortcut();
+          }
+        });
+      }
       const btn = head ? head.querySelector("button.toggle-chevron") : null;
       if (!head || !btn) return;
       setDisclosureToggleState(btn, !block.classList.contains("collapsed"));
@@ -78205,15 +78297,6 @@
         if (event.target.closest("button")) return;
         toggleSection(block, btn);
       });
-      const shortcutBtn = head.querySelector("#anniversaryExtremeAgencyShortcutBtn");
-      if (shortcutBtn) {
-        shortcutBtn.addEventListener("click", function (event) {
-          event.stopPropagation();
-          if (typeof openPurposeExtremeAgencyShortcut === "function") {
-            openPurposeExtremeAgencyShortcut();
-          }
-        });
-      }
     }
 
     function getModulePanelToggleBtn(panelEl) {
@@ -78415,7 +78498,7 @@
         "My Goals 子模块标签"
       );
 
-      initModuleSubTabs(
+      activatePurposeSubTab = initModuleSubTabs(
         purposeValuesIdentityModule,
         Array.from(document.querySelectorAll("#purposeValuesIdentityModule .submodule-grid > section")).map((panelEl, idx) => ({
           key: "purpose-" + idx,
@@ -81063,16 +81146,39 @@
     }
 
     function openPurposeExtremeAgencyShortcut() {
-      setPrimaryModuleFocus("purpose");
+      const panelId = "purposeExtremeAgencySection";
+      try {
+        setPrimaryModuleFocus("purpose");
+      } catch (_primaryFocusErr) {
+        /* render() 异常时不阻断后续子 Tab 激活 */
+      }
       requestAnimationFrame(function () {
         requestAnimationFrame(function () {
-          const eaPanel = document.getElementById("purposeExtremeAgencySection");
+          const eaPanel = document.getElementById(panelId);
           const tab =
             eaPanel &&
             document.querySelector(
-              '#purposeValuesIdentityModule button.module-sub-tab-btn[aria-controls="' + eaPanel.id + '"]'
+              '#purposeValuesIdentityModule button.module-sub-tab-btn[aria-controls="' + panelId + '"]'
             );
-          if (tab) tab.click();
+          const tabKey =
+            tab && tab.id && tab.id.indexOf("moduleSubTabBtn-") === 0
+              ? tab.id.slice("moduleSubTabBtn-".length)
+              : "purpose-3";
+          if (typeof activatePurposeSubTab === "function" && tabKey) {
+            activatePurposeSubTab(tabKey);
+          } else if (tab) {
+            tab.click();
+          }
+          if (
+            purposeExtremeAgencySection &&
+            purposeExtremeAgencySection.classList.contains("collapsed") &&
+            togglePurposeExtremeAgencyBtn
+          ) {
+            toggleSection(purposeExtremeAgencySection, togglePurposeExtremeAgencyBtn);
+          }
+          if (eaPanel && typeof eaPanel.scrollIntoView === "function") {
+            eaPanel.scrollIntoView({ block: "start", behavior: "smooth" });
+          }
         });
       });
     }
