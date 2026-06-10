@@ -35669,6 +35669,15 @@
         flex-shrink: 0;
       }
 
+      /* 阅读计划「查看全部 N 章」：排除全局 button 触控高度，保证折叠入口可见 */
+      .reading-plan-chapter-expand-btn {
+        min-height: 0;
+        height: auto;
+        padding: 6px 8px;
+        line-height: 1.35;
+        -webkit-tap-highlight-color: transparent;
+      }
+
       .toggle-btn {
         padding: 8px 12px;
         font-size: 12px;
@@ -52355,6 +52364,8 @@
     let closedListExpandedTaskIds = new Set();
     /** 有子步骤时默认展开；用户手动收起后记入此集合（仅内存） */
     let closedListCollapsedTaskIds = new Set();
+    /** 阅读计划：章节「查看全部」已展开（仅内存；避免持久化导致手机端无法默认折叠前 6 章） */
+    let readingPlanAllChaptersExpandedIds = new Set();
 
     let cloudSyncReady = false;
     let cloudSyncApplyingRemote = false;
@@ -72986,7 +72997,6 @@
       touchReadingPlanBookUpdatedAt(book);
       ensureWeeklyPlanUi();
       state.weeklyPlanUi.readingPlanExpandedBooks[bookId] = true;
-      state.weeklyPlanUi.readingPlanAllChaptersExpanded[bookId] = true;
       saveState();
       renderReadingPlan();
     }
@@ -73130,14 +73140,15 @@
     }
 
     function isReadingPlanAllChaptersExpanded(bookId) {
-      ensureWeeklyPlanUi();
-      return Boolean(state.weeklyPlanUi.readingPlanAllChaptersExpanded[bookId]);
+      return readingPlanAllChaptersExpandedIds.has(bookId);
     }
 
     function toggleReadingPlanAllChaptersExpanded(bookId) {
-      ensureWeeklyPlanUi();
-      state.weeklyPlanUi.readingPlanAllChaptersExpanded[bookId] = !isReadingPlanAllChaptersExpanded(bookId);
-      saveState();
+      if (readingPlanAllChaptersExpandedIds.has(bookId)) {
+        readingPlanAllChaptersExpandedIds.delete(bookId);
+      } else {
+        readingPlanAllChaptersExpandedIds.add(bookId);
+      }
       renderReadingPlan();
     }
 
@@ -73316,6 +73327,9 @@
         const pct = totalChapters > 0 ? Math.round((doneChapters / totalChapters) * 100) : 0;
         const display = parseReadingPlanBookDisplay(book.title);
         const expanded = isReadingPlanBookExpanded(book.id);
+        const isReadingPlanMobile =
+          typeof window.matchMedia === "function" && window.matchMedia("(max-width: 767px)").matches;
+        const bookPanelOpen = expanded || (isReadingPlanMobile && chapters.length > 0);
         const allChaptersExpanded = isReadingPlanAllChaptersExpanded(book.id);
         const chapterDisplay = buildReadingPlanChapterDisplayRows(chapters, allChaptersExpanded);
 
@@ -73381,7 +73395,7 @@
 
         const chaptersWrap = document.createElement("div");
         chaptersWrap.className = "reading-plan-chapters-wrap";
-        if (!expanded) chaptersWrap.hidden = true;
+        if (!bookPanelOpen) chaptersWrap.hidden = true;
 
         const chapterUl = document.createElement("ul");
         chapterUl.className = "reading-plan-chapter-list";
