@@ -6189,21 +6189,21 @@
       flex-direction: column;
       width: 100%;
       align-self: stretch;
-      border-radius: 12px;
+      border-radius: 10px;
       border: 1px solid #e5e7eb;
-      border-left-width: 4px;
+      border-left-width: 3px;
       background: #fff;
-      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+      box-shadow: none;
       overflow: hidden;
     }
 
     .reading-plan-item--tone-reading {
-      border-left-color: #10b981;
+      border-left-color: #1d9e75;
     }
 
     .reading-plan-item--tone-planned,
     .reading-plan-item--tone-completed {
-      border-left-color: #8b5cf6;
+      border-left-color: #5b4fcf;
     }
 
     .reading-plan-item-body {
@@ -6237,8 +6237,8 @@
       display: block;
       width: 100%;
       text-align: left;
-      font-size: 15px;
-      font-weight: 700;
+      font-size: 14px;
+      font-weight: 600;
       color: #111827;
       line-height: 1.3;
       word-break: break-word;
@@ -6261,10 +6261,14 @@
       width: 100%;
       text-align: left;
       margin-top: 2px;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 500;
       color: #9ca3af;
       line-height: 1.3;
+    }
+
+    .reading-plan-item-toolbar .btn-delete {
+      display: none !important;
     }
 
     .reading-plan-item-toolbar {
@@ -6349,8 +6353,8 @@
     }
 
     .reading-plan-item-progress-track {
-      height: 6px;
-      border-radius: 999px;
+      height: 5px;
+      border-radius: 5px;
       background: #e5e7eb;
       overflow: hidden;
       min-width: 0;
@@ -6358,14 +6362,14 @@
 
     .reading-plan-item-progress-fill {
       height: 100%;
-      border-radius: 999px;
-      background: #10b981;
+      border-radius: 5px;
+      background: #1d9e75;
       transition: width 0.2s ease;
     }
 
     .reading-plan-item--tone-planned .reading-plan-item-progress-fill,
     .reading-plan-item--tone-completed .reading-plan-item-progress-fill {
-      background: #8b5cf6;
+      background: #1d9e75;
     }
 
     .reading-plan-item-progress-pct {
@@ -6378,8 +6382,8 @@
     }
 
     .reading-plan-chapters-wrap {
-      padding-top: 10px;
-      border-top: 1px dashed #e5e7eb;
+      padding-top: 8px;
+      border-top: none;
     }
 
     .reading-plan-chapters-wrap[hidden] {
@@ -6392,7 +6396,7 @@
       padding: 0;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 0;
     }
 
     .reading-plan-chapter-group {
@@ -6427,6 +6431,13 @@
       align-items: center;
       gap: 8px;
       min-width: 0;
+      padding: 8px 0;
+      border-top: 0.5px solid #e5e7eb;
+    }
+
+    .reading-plan-chapter-item:first-child,
+    .reading-plan-chapter-group + .reading-plan-chapter-item {
+      border-top: none;
     }
 
     .reading-plan-chapter-dot {
@@ -6434,15 +6445,17 @@
       height: 8px;
       min-width: 8px;
       border-radius: 999px;
-      background: #d1d5db;
-      border: none;
+      background: transparent;
+      border: 1.5px solid #d1d5db;
       padding: 0;
       cursor: pointer;
       flex-shrink: 0;
+      box-sizing: border-box;
     }
 
     .reading-plan-chapter-item--done .reading-plan-chapter-dot {
-      background: #10b981;
+      background: #1d9e75;
+      border-color: #1d9e75;
     }
 
     .reading-plan-chapter-text {
@@ -6459,8 +6472,9 @@
     }
 
     .reading-plan-chapter-item--done .reading-plan-chapter-text {
-      color: #111827;
-      font-weight: 600;
+      color: #9ca3af;
+      font-weight: 400;
+      text-decoration: line-through;
     }
 
     .reading-plan-chapter-text:focus {
@@ -6472,16 +6486,13 @@
     }
 
     .reading-plan-chapter-del {
-      flex-shrink: 0;
-      opacity: 0.45;
-    }
-
-    .reading-plan-chapter-item:hover .reading-plan-chapter-del {
-      opacity: 1;
+      display: none !important;
     }
 
     .reading-plan-chapter-add {
-      margin-top: 8px;
+      margin-top: 0;
+      padding-top: 8px;
+      border-top: 1px dashed #e5e7eb;
     }
 
     .reading-plan-chapter-add-input {
@@ -53266,13 +53277,117 @@
       return changed;
     }
 
+    /** 阅读计划 pulse 合并：同 id 书目合并章节列表，避免手机端空 chapters 覆盖桌面端完整数据 */
+    function mergeReadingPlanChaptersForSync(locChapters, remChapters) {
+      const loc = Array.isArray(locChapters) ? locChapters : [];
+      const rem = Array.isArray(remChapters) ? remChapters : [];
+      const byId = new Map();
+      function ingest(ch) {
+        if (!ch || typeof ch !== "object" || ch.id == null) return;
+        const id = String(ch.id);
+        const text = String(ch.text || "").trim();
+        if (!text) return;
+        const cur = byId.get(id);
+        if (!cur) {
+          byId.set(id, { id: id, text: text, done: Boolean(ch.done) });
+          return;
+        }
+        byId.set(id, {
+          id: id,
+          text: text || cur.text,
+          done: Boolean(ch.done || cur.done)
+        });
+      }
+      rem.forEach(ingest);
+      loc.forEach(ingest);
+      return Array.from(byId.values());
+    }
+
+    function mergeReadingPlanOneBookForSync(L, R, preferLocalOnTie) {
+      const l = L && typeof L === "object" ? L : null;
+      const r = R && typeof R === "object" ? R : null;
+      if (!l && !r) return null;
+      if (!l) return normalizeReadingPlanBook(r);
+      if (!r) return normalizeReadingPlanBook(l);
+      const lts = recordTieTimestampForSync(l);
+      const rts = recordTieTimestampForSync(r);
+      let winner;
+      let loser;
+      if (lts > rts) {
+        winner = l;
+        loser = r;
+      } else if (rts > lts) {
+        winner = r;
+        loser = l;
+      } else {
+        winner = preferLocalOnTie ? l : r;
+        loser = preferLocalOnTie ? r : l;
+      }
+      const locCh = Array.isArray(l.chapters) ? l.chapters : [];
+      const remCh = Array.isArray(r.chapters) ? r.chapters : [];
+      const mergedChapters = mergeReadingPlanChaptersForSync(locCh, remCh);
+      const out = normalizeReadingPlanBook(Object.assign({}, winner, { chapters: mergedChapters }));
+      if (!out) return normalizeReadingPlanBook(loser);
+      if (!String(out.title || "").trim() && loser.title) {
+        out.title = String(loser.title || "").trim();
+      }
+      if (winner.status !== "completed" && loser.status === "completed") {
+        out.status = "completed";
+        out.completedAt = Math.max(
+          Number(winner.completedAt) || 0,
+          Number(loser.completedAt) || 0,
+          Date.now()
+        );
+      }
+      out.updatedAt = Math.max(
+        Number(l.updatedAt) || 0,
+        Number(r.updatedAt) || 0,
+        Number(out.updatedAt) || 0,
+        Number(out.createdAt) || 0
+      );
+      return out;
+    }
+
+    function mergeReadingPlanBooksForSync(localArr, remoteArr) {
+      const loc = Array.isArray(localArr) ? localArr : [];
+      const rem = Array.isArray(remoteArr) ? remoteArr : [];
+      const mapLoc = new Map(
+        loc
+          .filter(function (x) {
+            return x && x.id != null;
+          })
+          .map(function (x) {
+            return [String(x.id), x];
+          })
+      );
+      const mapRem = new Map(
+        rem
+          .filter(function (x) {
+            return x && x.id != null;
+          })
+          .map(function (x) {
+            return [String(x.id), x];
+          })
+      );
+      const ids = new Set(Array.from(mapLoc.keys()).concat(Array.from(mapRem.keys())));
+      const merged = [];
+      ids.forEach(function (id) {
+        const book = mergeReadingPlanOneBookForSync(mapLoc.get(id), mapRem.get(id), true);
+        if (book) merged.push(book);
+      });
+      merged.sort(function (a, b) {
+        return recordTieTimestampForSync(b) - recordTieTimestampForSync(a);
+      });
+      return merged;
+    }
+
     function mergeCloudSyncReadingPlanPulseIntoState(books) {
       if (!Array.isArray(books) || !books.length) return false;
       ensureReadingPlan();
       const ts =
         state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
       const merged = omitTombstonedIdRecords(
-        mergeIdRecordArraysPreferLocalOnTie(state.readingPlan.books, books),
+        mergeReadingPlanBooksForSync(state.readingPlan.books, books),
         ts
       );
       const normalized = merged.map(normalizeReadingPlanBook).filter(Boolean);
@@ -57109,7 +57224,7 @@
         : [];
       base.readingPlan = {
         books: omitTombstonedIdRecords(
-          mergeIdRecordArraysPreferLocalOnTie(localReadingBooks, remoteReadingBooks),
+          mergeReadingPlanBooksForSync(localReadingBooks, remoteReadingBooks),
           ts
         )
       };
@@ -72669,8 +72784,15 @@
         chapters: chapters,
         status: status,
         createdAt: createdAt,
-        completedAt: completedAt
+        completedAt: completedAt,
+        updatedAt: Number.isFinite(Number(x.updatedAt)) ? Number(x.updatedAt) : createdAt
       };
+    }
+
+    /** 章节/书名变更时刷新 updatedAt，供云合并比较新旧 */
+    function touchReadingPlanBookUpdatedAt(book) {
+      if (!book || typeof book !== "object") return;
+      book.updatedAt = Date.now();
     }
 
     function ensureReadingPlan() {
@@ -72745,6 +72867,7 @@
       const book = getReadingPlanBooks().find((b) => b.id === bookId);
       if (!book) return;
       book.title = t;
+      touchReadingPlanBookUpdatedAt(book);
       saveState();
       render();
     }
@@ -72760,6 +72883,7 @@
         text: text,
         done: false
       });
+      touchReadingPlanBookUpdatedAt(book);
       ensureWeeklyPlanUi();
       state.weeklyPlanUi.readingPlanExpandedBooks[bookId] = true;
       state.weeklyPlanUi.readingPlanAllChaptersExpanded[bookId] = true;
@@ -72805,6 +72929,7 @@
       const chapter = book.chapters.find((c) => c.id === chapterId);
       if (!chapter) return;
       chapter.done = Boolean(checked);
+      touchReadingPlanBookUpdatedAt(book);
       const lane = applyReadingPlanChapterStatusRules(book);
       if (lane) {
         setReadingPlanLane(lane);
@@ -72822,6 +72947,7 @@
       const chapter = book.chapters.find((c) => c.id === chapterId);
       if (!chapter) return;
       chapter.text = text;
+      touchReadingPlanBookUpdatedAt(book);
       saveState();
     }
 
@@ -72838,6 +72964,7 @@
         });
       }
       book.chapters = book.chapters.filter((c) => c.id !== chapterId);
+      touchReadingPlanBookUpdatedAt(book);
       saveState();
       renderReadingPlan();
     }
@@ -72950,7 +73077,6 @@
       const saveBtn = mkToolBtn("btn-save", ICON_BTN_SAVE_SVG, "保存书名");
       saveBtn.disabled = true;
       saveBtn.hidden = true;
-      const delBtn = mkToolBtn("btn-delete", ICON_BTN_DELETE_SVG, "删除书目");
 
       let editing = false;
       let titleInput = null;
@@ -73014,15 +73140,9 @@
         finishEdit(true);
       });
 
-      delBtn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        deleteReadingPlanBook(book.id);
-      });
-
       toolbarEl.appendChild(toggleBtn);
       toolbarEl.appendChild(editBtn);
       toolbarEl.appendChild(saveBtn);
-      toolbarEl.appendChild(delBtn);
     }
 
     function renderReadingPlanLane(listEl, emptyEl, books, countEl, lane) {
@@ -73033,11 +73153,14 @@
         lane === "reading" ? "reading" : lane === "completed" ? "completed" : "planned";
       books.forEach((book) => {
         const chapters = Array.isArray(book.chapters) ? book.chapters : [];
-        const doneChapters = chapters.filter((c) => c.done).length;
-        const totalChapters = chapters.length;
+        const contentChapters = chapters.filter((c) => !isReadingPlanChapterGroupLabel(c.text));
+        const doneChapters = contentChapters.filter((c) => c.done).length;
+        const totalChapters = contentChapters.length;
         const pct = totalChapters > 0 ? Math.round((doneChapters / totalChapters) * 100) : 0;
         const display = parseReadingPlanBookDisplay(book.title);
         const expanded = isReadingPlanBookExpanded(book.id);
+        const allChaptersExpanded = isReadingPlanAllChaptersExpanded(book.id);
+        const chapterDisplay = buildReadingPlanChapterDisplayRows(chapters, allChaptersExpanded);
 
         const li = document.createElement("li");
         li.className = "reading-plan-item reading-plan-item--tone-" + tone;
@@ -73105,7 +73228,15 @@
 
         const chapterUl = document.createElement("ul");
         chapterUl.className = "reading-plan-chapter-list";
-        chapters.forEach((chapter) => {
+        chapterDisplay.rows.forEach((entry) => {
+          if (entry.isGroup) {
+            const gLi = document.createElement("li");
+            gLi.className = "reading-plan-chapter-group";
+            gLi.textContent = entry.chapter.text;
+            chapterUl.appendChild(gLi);
+            return;
+          }
+          const chapter = entry.chapter;
           const cLi = document.createElement("li");
           cLi.className = "reading-plan-chapter-item";
           if (chapter.done) cLi.classList.add("reading-plan-chapter-item--done");
@@ -73144,6 +73275,20 @@
           chapterUl.appendChild(cLi);
         });
         chaptersWrap.appendChild(chapterUl);
+
+        if (chapterDisplay.showExpandBtn) {
+          const expandBtn = document.createElement("button");
+          expandBtn.type = "button";
+          expandBtn.className = "reading-plan-chapter-expand-btn";
+          expandBtn.textContent = allChaptersExpanded
+            ? "⌃ 收起"
+            : "⌄ 查看全部 " + String(chapterDisplay.totalChapters) + " 章";
+          expandBtn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            toggleReadingPlanAllChaptersExpanded(book.id);
+          });
+          chaptersWrap.appendChild(expandBtn);
+        }
 
         const chapterAdd = document.createElement("div");
         chapterAdd.className = "reading-plan-chapter-add";
