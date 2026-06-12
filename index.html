@@ -40702,6 +40702,12 @@
         line-height: 1 !important;
       }
 
+      /* 展开后删除钮与 ⋯ 间距加大，降低误触 */
+      #weeklyPlanSection .lane-task-card-toolbar .manual-item-actions-wrap,
+      #closedList .lane-task-card-toolbar .manual-item-actions-wrap {
+        gap: 12px !important;
+      }
+
       #weeklyPlanSection .lane-task-card-title-row .weekly-plan-main-check {
         display: none !important;
       }
@@ -54577,14 +54583,18 @@
           });
           map.set(id, loc ? mergeWeeklyPlanOneTaskForSync(loc, t, true) : normalizeWeeklyPlanTask(t));
         });
+        /* 远端 pulse 该周空 bucket = 该周任务已全部删除，勿把本地残留并回 */
+        if (!(pulseWeekKeys.has(wk) && ra.length === 0)) {
         la.forEach(function (t) {
           if (!t || t.id == null) return;
           const id = String(t.id);
           if (map.has(id)) return;
+          if (Object.prototype.hasOwnProperty.call(ts, id)) return;
           const remoteLoc = remoteById.get(id);
           if (remoteLoc && remoteLoc.weekKey !== wk) return;
           map.set(id, normalizeWeeklyPlanTask(t));
         });
+        }
         const bucket = omitTombstonedIdRecords(Array.from(map.values()), ts).map(function (task) {
           const normalized = normalizeWeeklyPlanTask(task);
           normalized.microTasks = omitTombstonedWeeklyPlanMicros(normalized.microTasks, ts);
@@ -54615,6 +54625,9 @@
       const next = mergeWeeklyPlanPulseSliceForSync(state.weeklyPlan, planSlice, ts);
       state.weeklyPlan = next;
       dedupeWeeklyPlanDuplicateIdsAcrossBuckets();
+      if (reconcileWeeklyPlanTasksToDeadlineWeeks()) {
+        /* 截止期限 pulse 后按 deadline 归位到正确 weekKey */
+      }
       try {
         if (JSON.stringify(before) !== JSON.stringify(state.weeklyPlan)) return true;
       } catch (_wpCmp) {
@@ -54848,6 +54861,15 @@
       saveStateWithCloudPulseImmediate();
     }
 
+    /** 周计划删除/结构变更：pulse 须含对应 weekKey + tombstone，立即上传 */
+    function saveStateAfterWeeklyPlanStructuralChange(weekKeys) {
+      const keys = Array.isArray(weekKeys) ? weekKeys : weekKeys != null ? [weekKeys] : [];
+      keys.forEach(function (wk) {
+        noteCloudSyncWeeklyPlanPulseWeekKey(wk);
+      });
+      saveStateWithCloudPulseImmediate();
+    }
+
     function cloudSyncDonePulseSignature(item) {
       if (!item || item.id == null) return "";
       let forgeSig = "";
@@ -54976,6 +54998,18 @@
       let changed = false;
       cloudSyncSuppressPush = true;
       try {
+        if (pulseState.syncTombstones && typeof pulseState.syncTombstones === "object") {
+          const mergedTs = mergeSyncTombstoneMaps(state.syncTombstones, pulseState.syncTombstones);
+          try {
+            if (JSON.stringify(state.syncTombstones || {}) !== JSON.stringify(mergedTs)) {
+              state.syncTombstones = mergedTs;
+              changed = true;
+            }
+          } catch (_tsCmp) {
+            state.syncTombstones = mergedTs;
+            changed = true;
+          }
+        }
         if (Array.isArray(pulseState.done) && pulseState.done.length) {
           const mergedDone = mergeDoneArraysForSync(
             Array.isArray(state.done) ? state.done : [],
@@ -72937,7 +72971,7 @@
         if (!mo || mo.kind !== "weeklyPlan" || mo.weekKey !== weekKey || mo.id !== taskId) return true;
         return false;
       });
-      saveState();
+      saveStateAfterWeeklyPlanStructuralChange(weekKey);
       render();
     }
 
@@ -73542,9 +73576,11 @@
       }
       task.microTasks = task.microTasks.filter((x) => x.id !== microId);
       applyWeeklyPlanMainDoneFromMicros(task);
+      touchWeeklyPlanTaskRevision(task);
       saveWeeklyPlanTasksForWeek(tasks);
       syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewWeekKey());
-      saveState();
+      noteCloudSyncWeeklyPlanPulseWeekKey(wk);
+      flushCloudSyncPulseImmediate();
       render();
     }
 
