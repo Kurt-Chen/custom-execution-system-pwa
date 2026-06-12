@@ -22886,6 +22886,28 @@
       background: #f8fafc;
     }
 
+    #habitRoutineModule .habit-en-minutes-input.habit-en-numeric-input--invalid,
+    #habitRoutineModule .habit-en-wordcount-input.habit-en-numeric-input--invalid,
+    #habitRoutineModule .habit-en-yuan-input.habit-en-numeric-input--invalid {
+      border-color: #dc2626;
+      background: #fef2f2;
+      box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.12);
+    }
+
+    #habitRoutineModule .habit-en-input-hint {
+      flex: 0 0 100%;
+      width: 100%;
+      font-size: 10px;
+      font-weight: 600;
+      line-height: 1.25;
+      color: #dc2626;
+      text-align: right;
+    }
+
+    #habitRoutineModule .habit-en-input-hint[hidden] {
+      display: none !important;
+    }
+
     /* 平板/桌面操作列：个数/分钟/元数字框约为原宽一半，够 2–4 位数字 */
     @media (min-width: 768px) {
       #habitRoutineModule .habit-en-actions .habit-en-minutes-input,
@@ -22988,7 +23010,7 @@
       width: auto;
       max-width: min(280px, 40vw);
       flex-shrink: 0;
-      margin-right: 4px;
+      margin-right: 8px;
       box-sizing: border-box;
       min-width: 0;
     }
@@ -23266,8 +23288,18 @@
       }
 
       #habitRoutineModule .habit-en-actions {
-        gap: 4px 6px;
+        gap: 8px 12px;
         max-width: min(100%, 300px);
+      }
+
+      #habitRoutineModule .habit-en-actions:has(.habit-en-minutes-input),
+      #habitRoutineModule .habit-en-actions:has(.habit-en-wordcount-input),
+      #habitRoutineModule .habit-en-actions:has(.habit-en-yuan-input) {
+        gap: 8px 14px;
+      }
+
+      #habitRoutineModule .habit-en-actions .habit-en-check-btn {
+        margin-left: 2px;
       }
 
       #habitRoutineModule .habit-en-week-cell {
@@ -61331,6 +61363,51 @@
       state.habitCheckins[dateStr][habitKey] = false;
     }
 
+    /** 习惯数值输入校验：行内提示 + 高亮，避免原生 alert 弹窗 */
+    function clearHabitNumericInputError(input) {
+      if (!input) return;
+      input.classList.remove("habit-en-numeric-input--invalid");
+      input.removeAttribute("aria-invalid");
+      const row = input.closest(".habit-en-minutes-row") || input.parentElement;
+      const hint = row && row.querySelector(".habit-en-input-hint");
+      if (hint) hint.hidden = true;
+      if (input._habitInputHintTimer) {
+        clearTimeout(input._habitInputHintTimer);
+        input._habitInputHintTimer = null;
+      }
+    }
+
+    function flashHabitNumericInputError(input, message) {
+      if (!input) return;
+      const row = input.closest(".habit-en-minutes-row") || input.parentElement;
+      input.classList.add("habit-en-numeric-input--invalid");
+      input.setAttribute("aria-invalid", "true");
+      let hint = row && row.querySelector(".habit-en-input-hint");
+      if (!hint && row) {
+        hint = document.createElement("span");
+        hint.className = "habit-en-input-hint";
+        hint.setAttribute("role", "alert");
+        hint.hidden = true;
+        row.appendChild(hint);
+      }
+      if (hint) {
+        hint.textContent = message;
+        hint.hidden = false;
+      }
+      try {
+        input.focus({ preventScroll: false });
+      } catch (_fErr) {
+        input.focus();
+      }
+      try {
+        input.select();
+      } catch (_sErr) {}
+      if (input._habitInputHintTimer) clearTimeout(input._habitInputHintTimer);
+      input._habitInputHintTimer = setTimeout(function () {
+        clearHabitNumericInputError(input);
+      }, 3500);
+    }
+
     function toggleHabitMinutesCheckin(habitKey) {
       const dateKey = formatDateInputValue(new Date());
       if (!state.habitCheckins[dateKey]) {
@@ -61341,7 +61418,7 @@
       const raw = input && String(input.value).trim();
       const add = parseInt(raw, 10);
       if (!Number.isFinite(add) || add < 1 || add > 999) {
-        alert("请填写本次分钟数（1–999 的正整数）。");
+        flashHabitNumericInputError(input, "请填 1–999 分钟");
         return;
       }
       const current = state.habitCheckins[dateKey][habitKey];
@@ -61351,7 +61428,7 @@
       }
       const newTotal = base + add;
       if (newTotal > 99999) {
-        alert("今日累计分钟数过大，请先点击「减一次」撤回最近一次后再试。");
+        flashHabitNumericInputError(input, "累计过大，请先点「减一次」");
         return;
       }
       const stampTimes = getHabitNumericStampTimes(current, "minutes") + 1;
@@ -61367,6 +61444,7 @@
       };
       syncHabitMinutesToDone(habitKey, dateKey, add, newTotal, stampTimes);
       if (input) {
+        clearHabitNumericInputError(input);
         input.value = "";
       }
       saveStateAfterHabitCheckin();
@@ -61383,7 +61461,7 @@
       const raw = input && String(input.value).trim();
       const add = parseInt(raw, 10);
       if (!Number.isFinite(add) || add < 1 || add > 9999) {
-        alert("请填写本次单词个数（1–9999 的正整数）。");
+        flashHabitNumericInputError(input, "请填 1–9999 个");
         return;
       }
       const current = state.habitCheckins[dateKey][habitKey];
@@ -61393,7 +61471,7 @@
       }
       const newTotal = base + add;
       if (newTotal > 999999) {
-        alert("今日累计词数过大，请先点击「减一次」撤回最近一次后再试。");
+        flashHabitNumericInputError(input, "累计过大，请先点「减一次」");
         return;
       }
       const stampTimes = getHabitNumericStampTimes(current, "wordCount") + 1;
@@ -61409,6 +61487,7 @@
       };
       syncHabitWordCountToDone(habitKey, dateKey, add, newTotal, stampTimes);
       if (input) {
+        clearHabitNumericInputError(input);
         input.value = "";
       }
       saveStateAfterHabitCheckin();
@@ -61425,7 +61504,7 @@
       const raw = input && String(input.value).trim();
       const add = parseInt(raw, 10);
       if (!Number.isFinite(add) || add < 1 || add > 99999) {
-        alert("请填写本次转入金额（1–99999 的正整数，单位：元）。");
+        flashHabitNumericInputError(input, "请填 1–99999 元");
         return;
       }
       const current = state.habitCheckins[dateKey][habitKey];
@@ -61435,7 +61514,7 @@
       }
       const newTotal = base + add;
       if (newTotal > 999999) {
-        alert("今日累计转入金额过大，请先点击「减一次」撤回最近一次后再试。");
+        flashHabitNumericInputError(input, "累计过大，请先点「减一次」");
         return;
       }
       const stampTimes = getHabitNumericStampTimes(current, "yuan") + 1;
@@ -61451,6 +61530,7 @@
       };
       syncHabitSavingsToDone(habitKey, dateKey, add, newTotal, stampTimes);
       if (input) {
+        clearHabitNumericInputError(input);
         input.value = "";
       }
       saveStateAfterHabitCheckin();
@@ -82014,6 +82094,13 @@
           decrementHabitStampOnce(key);
         });
       }
+      card.querySelectorAll(".habit-en-minutes-input, .habit-en-wordcount-input, .habit-en-yuan-input").forEach(function (numInput) {
+        if (numInput.dataset.habitNumericInputBound) return;
+        numInput.dataset.habitNumericInputBound = "1";
+        numInput.addEventListener("input", function () {
+          clearHabitNumericInputError(numInput);
+        });
+      });
       const remarkTa = card.querySelector(".habit-en-remark-input");
       if (remarkTa && key && (isHabitOptionalRemarkKey(key) || key === "experimentLab10000")) {
         if (!remarkTa.dataset.remarkBlurBound) {
