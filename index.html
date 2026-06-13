@@ -2180,8 +2180,9 @@
       font-weight: 700;
       line-height: 1.2;
       white-space: nowrap;
-      background: #ccfbf1;
-      color: #0f766e;
+      border: 1px solid #c4b5fd;
+      background: #ede9fe;
+      color: #6d28d9;
     }
 
     /* 宽屏（≥768px 才显示副标题）：Closed-List 快捷方式箭头前后各留一字空 */
@@ -2196,8 +2197,9 @@
     }
 
     .done-kinetic-shortcut--closed-pending .done-kinetic-shortcut__closed-note {
-      background: #ffedd5;
-      color: #c2410c;
+      border-color: #a78bfa;
+      background: #f5f3ff;
+      color: #5b21b6;
     }
 
     /* 窄屏：仅隐藏 Highest-Leverage Action 的 ⚡；使命 🔥 / 目标 🎯 图标保留 */
@@ -18570,7 +18572,7 @@
 
     #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-zone--work {
       padding: 12px;
-      border: 1px solid #cbd5e1;
+      border: 2px solid #94a3b8;
       border-radius: 10px;
       background: #ffffff;
       box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
@@ -18583,7 +18585,7 @@
     #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-zone--reference {
       margin-top: 14px;
       padding: 12px 14px 14px;
-      border: 1px solid #a5b4fc;
+      border: 1.5px solid #818cf8;
       border-radius: 10px;
       background: #f8fafc;
       box-shadow: 0 1px 2px rgba(79, 70, 229, 0.08);
@@ -18925,7 +18927,7 @@
     #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-footer-reminder {
       margin-top: 0;
       padding: 12px 14px;
-      border: 1px solid #c4b5fd;
+      border: 1.5px solid #a78bfa;
       border-radius: 8px;
       background: #faf5ff;
       box-shadow: 0 1px 2px rgba(109, 40, 217, 0.08);
@@ -19046,6 +19048,19 @@
       font-size: 13px;
       line-height: 1.58;
       color: #334155;
+    }
+
+    #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-signal-ref__list li {
+      display: block;
+      margin-bottom: 6px;
+      padding: 8px 10px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: #ffffff;
+    }
+
+    #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-signal-ref__list li:last-child {
+      margin-bottom: 0;
     }
 
     #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-signal-ref__list li + li {
@@ -55476,6 +55491,8 @@
     const CLOUD_SYNC_PERSIST_DEBOUNCE_MS = 1500;
     /** 用户正在编辑时推迟全量 render，避免 innerHTML 重建清空输入 */
     let renderDeferredWhileEditing = false;
+    /** 向后衡量保存后：本轮 render 保持刚写入的周期键，避免立刻跳到下一期导致表单被清空 */
+    let backwardMeasureHoldPeriodAfterSave = null;
     let renderWhenEditingEndsTimer = null;
     const RENDER_WHEN_EDITING_POLL_MS = 400;
     const CLOUD_SYNC_FULL_PUSH_MIN_INTERVAL_MS = 300000;
@@ -80586,9 +80603,19 @@
     }
 
     function syncBackwardMeasurePeriodKeysFromSchedule(nowRef) {
-      state.backwardMeasurePeriod.weekly = getBackwardWeeklyReviewKeyFromNextDue(nowRef);
-      state.backwardMeasurePeriod.monthly = getBackwardMonthlyReviewKeyFromNextDue(nowRef);
-      state.backwardMeasurePeriod.quarterly = getBackwardQuarterKeyFromNextDue(nowRef);
+      const hold = backwardMeasureHoldPeriodAfterSave;
+      state.backwardMeasurePeriod.weekly =
+        hold && hold.kind === "weekly"
+          ? hold.key
+          : getBackwardWeeklyReviewKeyFromNextDue(nowRef);
+      state.backwardMeasurePeriod.monthly =
+        hold && hold.kind === "monthly"
+          ? hold.key
+          : getBackwardMonthlyReviewKeyFromNextDue(nowRef);
+      state.backwardMeasurePeriod.quarterly =
+        hold && hold.kind === "quarterly"
+          ? hold.key
+          : getBackwardQuarterKeyFromNextDue(nowRef);
     }
 
     /** 本地正午，避免夏令时边界问题 */
@@ -81263,6 +81290,23 @@
       updateBackwardMeasureDueAlerts(nowRef);
     }
 
+    function blurBackwardMeasureListFocus(listEl) {
+      const ae = document.activeElement;
+      if (listEl && ae && listEl.contains(ae) && typeof ae.blur === "function") {
+        ae.blur();
+      }
+    }
+
+    function blurThinkDayInputsFocus() {
+      for (let i = 1; i <= 5; i++) {
+        const el = document.getElementById("thinkDayInput" + i);
+        if (el && document.activeElement === el && typeof el.blur === "function") {
+          el.blur();
+          return;
+        }
+      }
+    }
+
     function saveThinkDay() {
       ensureBackwardMeasurePeriod();
       const mk = state.backwardMeasurePeriod.monthly;
@@ -81273,7 +81317,7 @@
       if (!state.backwardMeasure.thinkDay || typeof state.backwardMeasure.thinkDay !== "object") {
         state.backwardMeasure.thinkDay = {};
       }
-      state.backwardMeasure.thinkDay[mk] = {
+      const payload = {
         q1: readQ("thinkDayInput1"),
         q2: readQ("thinkDayInput2"),
         q3: readQ("thinkDayInput3"),
@@ -81281,8 +81325,14 @@
         q5: readQ("thinkDayInput5"),
         updatedAt: Date.now()
       };
+      state.backwardMeasure.thinkDay[mk] = payload;
+      if (thinkDayEntryHasContent(payload)) {
+        backwardMeasureHoldPeriodAfterSave = { kind: "monthly", key: mk };
+      }
+      blurThinkDayInputsFocus();
       saveState();
       render();
+      backwardMeasureHoldPeriodAfterSave = null;
     }
 
     function saveBackwardMeasure(kind) {
@@ -81314,12 +81364,15 @@
       if (items.length) {
         state.backwardMeasure[kind][key] = payload;
         syncBackwardMeasureToDone(kind, key);
+        backwardMeasureHoldPeriodAfterSave = { kind: kind, key: key };
       } else {
         state.backwardMeasure[kind][key] = { items: [], text: "", updatedAt: 0 };
         removeBackwardMeasureDoneCopy(kind, key);
       }
+      blurBackwardMeasureListFocus(listEl);
       saveState();
       render();
+      backwardMeasureHoldPeriodAfterSave = null;
     }
 
     /** 仅当编辑控件在当前可见面板内时才推迟 render（避免隐藏 Tab 里的 input 误拦全页刷新） */
