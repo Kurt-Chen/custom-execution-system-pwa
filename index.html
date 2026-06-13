@@ -44839,7 +44839,7 @@
                 aria-controls="habitCategoryPanelCreativity"
               >
                 <span class="habit-category-tab__stack">
-                  <span class="habit-category-tab__name">创意·灵感·解决方案</span>
+                  <span class="habit-category-tab__name">灵感·解决方案</span>
                   <span class="habit-category-tab__prog">0/1</span>
                 </span>
               </button>
@@ -45782,7 +45782,7 @@
 
           <div id="habitCategoryPanelCreativity" class="submodule-group submodule-group-creativity collapsed habit-category-panel" data-habit-category="creativity">
             <div class="submodule-group-header">
-              <h3 class="submodule-group-title">创意·灵感·解决方案</h3>
+              <h3 class="submodule-group-title">灵感·解决方案</h3>
               <span id="habitCreativityProgress" class="habit-en-learning-progress habit-group-header-progress" aria-live="polite">0/1</span>
               <button type="button" class="toggle-btn toggle-chevron submodule-group-toggle" aria-label="切换此区块" aria-expanded="false"></button>
             </div>
@@ -80792,10 +80792,18 @@
       });
     }
 
+    function getBackwardMeasurePeriodKeyForDue(kind, dueDate) {
+      if (!(dueDate instanceof Date) || Number.isNaN(dueDate.getTime())) return "";
+      if (kind === "weekly") return formatDateInputValue(dueDate);
+      if (kind === "monthly") return getBackwardMonthKey(dueDate);
+      if (kind === "quarterly") return getBackwardQuarterKey(dueDate);
+      return "";
+    }
+
     function shouldBackwardMeasureShowDueAlert(kind, dueDate, nowRef) {
-      ensureBackwardMeasurePeriod();
-      const periodKey = state.backwardMeasurePeriod[kind];
-      if (!periodKey || !isBackwardDueAlertWindowActive(kind, dueDate, nowRef)) return false;
+      if (!isBackwardDueAlertWindowActive(kind, dueDate, nowRef)) return false;
+      const periodKey = getBackwardMeasurePeriodKeyForDue(kind, dueDate);
+      if (!periodKey) return false;
       return !isBackwardMeasurePeriodComplete(kind, periodKey, dueDate);
     }
 
@@ -81044,12 +81052,12 @@
       return row;
     }
 
-    function renderBackwardMeasureItemsList(kind, periodKey) {
+    function renderBackwardMeasureItemsList(kind, periodKey, forceRefresh) {
       const ui = BACKWARD_MEASURE_UI[kind];
       if (!ui) return;
       const listEl = document.getElementById(ui.listId);
       if (!listEl) return;
-      if (listEl.contains(document.activeElement)) return;
+      if (!forceRefresh && listEl.contains(document.activeElement)) return;
 
       const norm = normalizeBackwardMeasurePeriodEntry(state.backwardMeasure[kind][periodKey]);
       let items = norm.items.slice();
@@ -81172,7 +81180,8 @@
       }
     }
 
-    function renderBackwardMeasure() {
+    function renderBackwardMeasure(opt) {
+      const forceLists = Boolean(opt && opt.forceLists);
       ensureBackwardMeasurePeriod();
       const nowRef = new Date();
       const dueWeekly = getEffectiveWeeklyDueDate(nowRef);
@@ -81242,9 +81251,9 @@
         meta.textContent = updatedAt ? "已保存 · " + formatBackwardSavedAt(updatedAt) : "";
       };
 
-      renderBackwardMeasureItemsList("weekly", wk);
-      renderBackwardMeasureItemsList("monthly", mk);
-      renderBackwardMeasureItemsList("quarterly", qk);
+      renderBackwardMeasureItemsList("weekly", wk, forceLists);
+      renderBackwardMeasureItemsList("monthly", mk, forceLists);
+      renderBackwardMeasureItemsList("quarterly", qk, forceLists);
       bindMeta("backwardWeeklyMeta", "weekly", wk);
       bindMeta("backwardMonthlyMeta", "monthly", mk);
       bindMeta("backwardQuarterlyMeta", "quarterly", qk);
@@ -81276,7 +81285,7 @@
           : null;
       for (let i = 1; i <= 5; i++) {
         const ta = document.getElementById("thinkDayInput" + i);
-        if (ta && document.activeElement !== ta) {
+        if (ta && (forceLists || document.activeElement !== ta)) {
           const v = td && typeof td["q" + i] === "string" ? td["q" + i] : "";
           ta.value = v;
         }
@@ -81288,6 +81297,12 @@
       }
 
       updateBackwardMeasureDueAlerts(nowRef);
+    }
+
+    /** 保存后立即刷新向后衡量 UI 与到期提醒（不依赖全页 render 是否因编辑中而推迟） */
+    function flushBackwardMeasureSaveUi() {
+      renderBackwardMeasure({ forceLists: true });
+      updateBackwardMeasureDueAlerts(new Date());
     }
 
     function blurBackwardMeasureListFocus(listEl) {
@@ -81331,8 +81346,8 @@
       }
       blurThinkDayInputsFocus();
       saveState();
+      flushBackwardMeasureSaveUi();
       render();
-      backwardMeasureHoldPeriodAfterSave = null;
     }
 
     function saveBackwardMeasure(kind) {
@@ -81371,8 +81386,8 @@
       }
       blurBackwardMeasureListFocus(listEl);
       saveState();
+      flushBackwardMeasureSaveUi();
       render();
-      backwardMeasureHoldPeriodAfterSave = null;
     }
 
     /** 仅当编辑控件在当前可见面板内时才推迟 render（避免隐藏 Tab 里的 input 误拦全页刷新） */
@@ -81647,6 +81662,7 @@
         stampDailyThreeWinsDoneBtn.textContent = stampSuppressed ? "重新记入 My Done" : "记入 My Done";
       }
       renderBackwardMeasure();
+      backwardMeasureHoldPeriodAfterSave = null;
       renderFuelScore();
       renderHabitCheckins();
       initHabitCategoryDesktopTabs();
