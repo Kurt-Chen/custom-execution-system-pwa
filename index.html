@@ -19342,10 +19342,23 @@
     #kineticCountdownList .kinetic-countdown-meta {
       grid-area: meta;
       margin: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-self: start;
+      width: 100%;
+      text-align: left;
+      gap: 2px;
       font-size: 11px;
-      line-height: 1.2;
+      line-height: 1.25;
       word-break: normal;
       overflow-wrap: anywhere;
+    }
+
+    #kineticCountdownList .kinetic-countdown-meta-lunar,
+    #kineticCountdownList .kinetic-countdown-meta-greg {
+      width: 100%;
+      text-align: left;
     }
 
     #kineticCountdownList .kinetic-countdown-item > .actions {
@@ -19397,7 +19410,8 @@
       }
 
       #kineticCountdownList .kinetic-countdown-meta {
-        align-self: center;
+        align-self: flex-start;
+        justify-self: start;
         min-width: 0;
       }
 
@@ -42787,9 +42801,8 @@
             </footer>
             <section
               class="closed-list-zone closed-list-zone--reference closed-list-signal-ref"
-              aria-label="参考 · Signal vs Noise"
+              aria-label="信号与噪音参考"
             >
-              <h3 class="closed-list-signal-ref__heading">参考 · Signal vs Noise</h3>
               <article class="closed-list-signal-ref__card">
                 <p class="closed-list-signal-ref__attr">Kevin O'Leary on Elon Musk</p>
                 <blockquote class="closed-list-signal-ref__quote">
@@ -66332,18 +66345,46 @@
       if (changed) saveState();
     }
 
-    function formatKineticCountdownMetaLine(item) {
-      const g = formatIsoDate(new Date(item.targetAt));
-      if (item.calendar !== "lunar") {
-        return "目标（公历）：" + g;
+    function formatKineticCountdownLunarLine(item) {
+      if (item.calendar === "lunar") {
+        const mi = item.lunarMonth;
+        const mLab = mi >= 1 && mi <= 12 ? KINETIC_LUNAR_MONTH_LABELS[mi - 1] : "";
+        const dayLab =
+          item.lunarDay >= 1 && item.lunarDay <= 30
+            ? KINETIC_LUNAR_DAY_CN[item.lunarDay - 1]
+            : String(item.lunarDay);
+        const leap = item.lunarLeap ? "闰" : "";
+        return "农历" + item.lunarYear + "年" + leap + mLab + dayLab;
       }
-      const mi = item.lunarMonth;
-      const mLab = mi >= 1 && mi <= 12 ? KINETIC_LUNAR_MONTH_LABELS[mi - 1] : "";
-      const dayLab = item.lunarDay >= 1 && item.lunarDay <= 30 ? KINETIC_LUNAR_DAY_CN[item.lunarDay - 1] : String(item.lunarDay);
-      const leap = item.lunarLeap ? "闰" : "";
-      return (
-        "农历" + item.lunarYear + "年" + leap + mLab + dayLab + " · 公历 " + g
-      );
+      const lunar = formatInlineLunarForGregorianDate(new Date(item.targetAt));
+      if (!lunar) {
+        return "";
+      }
+      if (/^农历/.test(lunar)) {
+        return lunar;
+      }
+      return "农历" + lunar;
+    }
+
+    function formatKineticCountdownGregorianLine(item) {
+      const g = formatIsoDate(new Date(item.targetAt));
+      return "公历 " + g;
+    }
+
+    function getKineticCountdownMetaLines(item) {
+      const lunar = formatKineticCountdownLunarLine(item);
+      return {
+        lunar: lunar || null,
+        gregorian: formatKineticCountdownGregorianLine(item)
+      };
+    }
+
+    function formatKineticCountdownMetaLine(item) {
+      const lines = getKineticCountdownMetaLines(item);
+      if (lines.lunar) {
+        return lines.lunar + "\n" + lines.gregorian;
+      }
+      return lines.gregorian;
     }
 
     function parseDateInputToLocalNoon(dateStr) {
@@ -77960,7 +78001,17 @@
 
         const metaEl = document.createElement("div");
         metaEl.className = "kinetic-countdown-meta";
-        metaEl.textContent = formatKineticCountdownMetaLine(item);
+        const metaLines = getKineticCountdownMetaLines(item);
+        if (metaLines.lunar) {
+          const lunarEl = document.createElement("div");
+          lunarEl.className = "kinetic-countdown-meta-lunar";
+          lunarEl.textContent = metaLines.lunar;
+          metaEl.appendChild(lunarEl);
+        }
+        const gregEl = document.createElement("div");
+        gregEl.className = "kinetic-countdown-meta-greg";
+        gregEl.textContent = metaLines.gregorian;
+        metaEl.appendChild(gregEl);
 
         main.appendChild(titleEl);
         main.appendChild(remainEl);
@@ -79837,6 +79888,36 @@
         String(ANNIVERSARY_DEEP_TIME_GREEN_CAP_HOURS) +
         " 小时封顶）。";
       mount.appendChild(intro);
+    }
+
+    /** 十二周年 #20/#21/#22 周任务列表：全量 replaceChildren 重绘前保存 scrollTop，重绘后恢复 */
+    const ANNIVERSARY_TW_WEEK_LIST_IDS = [
+      "anniversary020WeekList",
+      "anniversary021WeekList",
+      "anniversary022WeekList"
+    ];
+
+    function captureAnniversaryTwWeekListScrollTops() {
+      const saved = {};
+      ANNIVERSARY_TW_WEEK_LIST_IDS.forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) saved[id] = el.scrollTop;
+      });
+      return saved;
+    }
+
+    function restoreAnniversaryTwWeekListScrollTops(saved) {
+      if (!saved || typeof saved !== "object") return;
+      const apply = function () {
+        ANNIVERSARY_TW_WEEK_LIST_IDS.forEach(function (id) {
+          const el = document.getElementById(id);
+          if (el && saved[id] != null) el.scrollTop = saved[id];
+        });
+      };
+      apply();
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(apply);
+      }
     }
 
     function renderAnniversaryTw020() {
@@ -82246,9 +82327,11 @@
       renderWeeklyPlanUI();
       renderKineticCountdowns();
       renderTrash();
+      const annTwWeekListScroll = captureAnniversaryTwWeekListScrollTops();
       renderAnniversaryTw020();
       renderAnniversaryTw021();
       renderAnniversaryTw022();
+      restoreAnniversaryTwWeekListScrollTops(annTwWeekListScroll);
       refreshDynamicModuleLunarHints();
       if (typeof activateKineticTab === "function") {
         const activeKineticBtn = document.querySelector("#dynamicModule .kinetic-tab-btn[aria-selected='true']");
