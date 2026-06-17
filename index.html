@@ -56344,6 +56344,7 @@
       weeklyPlanUi: { addLane: "life", shell: "life", closedListViewDate: null, readingPlanLane: "reading" },
       readingPlan: { books: [] },
       weeklyPlanDoneRef: {},
+      weeklyPlanDoneSuppress: {},
       ageGoalsEditSlots: {},
       projectTasks: { quoteApp: [] },
       kineticCountdowns: [],
@@ -64873,10 +64874,18 @@
 
     function syncClosedListToDone(item) {
       removeClosedListDoneCopy(item.id);
+      const at =
+        normalizeWeeklyPlanCompletedAtMs(item && item.completedAt) ||
+        normalizeWeeklyPlanCompletedAtMs(item && item.createdAt) ||
+        (function () {
+          const dk = getClosedListItemAssignmentDateKey(item);
+          return dk ? habitDateToCompletedAt(dk) : null;
+        })() ||
+        Date.now();
       state.done.unshift({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: "【Closed-List】" + item.text,
-        completedAt: Date.now(),
+        completedAt: at,
         closedListMeta: { sourceId: item.id }
       });
     }
@@ -69329,6 +69338,9 @@
       }
       if (task.weeklyPlanMeta && task.weeklyPlanMeta.weekKey) {
         revertWeeklyPlanCompletionFromDoneMeta(task.weeklyPlanMeta);
+        if (task.weeklyPlanMeta.taskId) {
+          suppressWeeklyPlanDoneMirrorForTask(task.weeklyPlanMeta.taskId);
+        }
         const wk = task.weeklyPlanMeta.weekKey;
         const sk = task.weeklyPlanMeta.syncKey;
         if (!state.weeklyPlanDoneRef || typeof state.weeklyPlanDoneRef !== "object") {
@@ -69555,6 +69567,9 @@
       if (listName === "done") {
         if (task.weeklyPlanMeta && task.weeklyPlanMeta.weekKey) {
           revertWeeklyPlanCompletionFromDoneMeta(task.weeklyPlanMeta);
+          if (task.weeklyPlanMeta.taskId) {
+            suppressWeeklyPlanDoneMirrorForTask(task.weeklyPlanMeta.taskId);
+          }
           const wk = task.weeklyPlanMeta.weekKey;
           const sk = task.weeklyPlanMeta.syncKey;
           if (!state.weeklyPlanDoneRef || typeof state.weeklyPlanDoneRef !== "object") {
@@ -74483,25 +74498,137 @@
       return nr;
     }
 
-    /** 周计划主任务：从 My Done 镜像 / 封闭清单取最早完成时刻（Done List 按 completedAt 归时段） */
+    function ensureWeeklyPlanDoneSuppressMap() {
+      if (!state.weeklyPlanDoneSuppress || typeof state.weeklyPlanDoneSuppress !== "object") {
+        state.weeklyPlanDoneSuppress = {};
+      }
+      return state.weeklyPlanDoneSuppress;
+    }
+
+    /** 用户在 My Done 删掉周计划镜像后：不再自动补回（直至手动再勾选周计划） */
+    function suppressWeeklyPlanDoneMirrorForTask(taskId) {
+      const tid = String(taskId || "");
+      if (!tid) return;
+      ensureWeeklyPlanDoneSuppressMap()[tid] = true;
+    }
+
+    function clearWeeklyPlanDoneMirrorSuppressForTask(taskId) {
+      const tid = String(taskId || "");
+      if (!tid) return;
+      const m = state.weeklyPlanDoneSuppress;
+      if (!m || typeof m !== "object") return;
+      delete m[tid];
+    }
+
+    function isWeeklyPlanDoneMirrorSuppressed(taskId) {
+      const m = state.weeklyPlanDoneSuppress;
+      return Boolean(m && m[String(taskId || "")]);
+    }
+
+    function findWeeklyPlanMainDoneEntryInState(taskId) {
+      const tid = String(taskId || "");
+      if (!tid) return null;
+      return (
+        (state.done || []).find(function (d) {
+          const meta = d && d.weeklyPlanMeta;
+          return meta && meta.taskId === tid && meta.kind === "main";
+        }) || null
+      );
+    }
+
+    /** 周计划主任务：从 My Done / 封闭清单 / Closed-List 行取最早完成时刻 */
     function findWeeklyPlanCompletionTimestampFromEvidence(taskId) {
       const tid = String(taskId || "");
       if (!tid) return null;
       let earliest = null;
+      function consider(ts) {
+        const n = normalizeWeeklyPlanCompletedAtMs(ts);
+        if (n != null && (earliest == null || n < earliest)) earliest = n;
+      }
       (state.done || []).forEach(function (d) {
         const m = d && d.weeklyPlanMeta;
-        if (!m || m.taskId !== tid) return;
-        if (m.kind === "micro") return;
-        const ts = normalizeWeeklyPlanCompletedAtMs(d.completedAt);
-        if (ts != null && (earliest == null || ts < earliest)) earliest = ts;
+        if (m && m.taskId === tid && m.kind !== "micro") {
+          consider(d.completedAt);
+          return;
+        }
+        const clMeta = d && d.closedListMeta;
+        if (!clMeta || !clMeta.sourceId) return;
+        const clItem = (state.closedList || []).find(function (x) {
+          return x && x.id === clMeta.sourceId;
+        });
+        const mo = clItem && clItem.mirrorOf;
+        if (!mo || mo.kind !== "weeklyPlan" || String(mo.id) !== tid) return;
+        if (!clItem.completed) return;
+        consider(d.completedAt);
       });
       (state.closedList || []).forEach(function (item) {
         const mo = item && item.mirrorOf;
         if (!mo || mo.kind !== "weeklyPlan" || mo.id !== tid || !item.completed) return;
-        const ts = normalizeWeeklyPlanCompletedAtMs(item.completedAt);
-        if (ts != null && (earliest == null || ts < earliest)) earliest = ts;
+        consider(item.completedAt);
+        consider(item.createdAt);
+        const dk = getClosedListItemAssignmentDateKey(item);
+        if (dk) consider(habitDateToCompletedAt(dk));
       });
       return earliest;
+    }
+
+    function backdateWeeklyPlanCompletionFromEvidence(task, microId) {
+      if (!task) return;
+      if (microId) {
+        const m = (task.microTasks || []).find(function (x) {
+          return x.id === microId;
+        });
+        if (!m) return;
+        const evidence = findWeeklyPlanMicroCompletionTimestampFromEvidence(task.id, microId);
+        const cur = normalizeWeeklyPlanCompletedAtMs(m.completedAt);
+        if (evidence != null && (cur == null || evidence < cur)) {
+          m.completedAt = evidence;
+        }
+        return;
+      }
+      const evidence = findWeeklyPlanCompletionTimestampFromEvidence(task.id);
+      const cur = normalizeWeeklyPlanCompletedAtMs(task.completedAt);
+      if (evidence != null && (cur == null || evidence < cur)) {
+        task.completedAt = evidence;
+      }
+    }
+
+    /**
+     * 纠正被 repair/同步误打成「今天」的周计划 Done 行：按封闭清单等证据回拨 completedAt。
+     */
+    function repairWeeklyPlanDoneListTimestampsInState() {
+      if (!Array.isArray(state.done)) return false;
+      let changed = false;
+      state.done.forEach(function (d) {
+        const meta = d && d.weeklyPlanMeta;
+        if (!meta || !meta.taskId) return;
+        const evidence =
+          meta.kind === "micro" && meta.microId
+            ? findWeeklyPlanMicroCompletionTimestampFromEvidence(meta.taskId, meta.microId)
+            : findWeeklyPlanCompletionTimestampFromEvidence(meta.taskId);
+        const cur = normalizeWeeklyPlanCompletedAtMs(d.completedAt);
+        if (evidence == null || cur == null || cur <= evidence) return;
+        d.completedAt = evidence;
+        changed = true;
+      });
+      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
+        return changed;
+      }
+      Object.keys(state.weeklyPlan).forEach(function (weekKey) {
+        const raw = state.weeklyPlan[weekKey];
+        if (!Array.isArray(raw)) return;
+        raw.forEach(function (task) {
+          if (!task || !task.id) return;
+          const before = normalizeWeeklyPlanCompletedAtMs(task.completedAt);
+          backdateWeeklyPlanCompletionFromEvidence(task, null);
+          (task.microTasks || []).forEach(function (m) {
+            backdateWeeklyPlanCompletionFromEvidence(task, m.id);
+          });
+          const after = normalizeWeeklyPlanCompletedAtMs(task.completedAt);
+          if (before !== after) changed = true;
+        });
+      });
+      return changed;
     }
 
     function findWeeklyPlanMicroCompletionTimestampFromEvidence(taskId, microId) {
@@ -74604,19 +74731,23 @@
             m.done = true;
             const microTs = findWeeklyPlanMicroCompletionTimestampFromEvidence(task.id, m.id);
             stampWeeklyPlanMicroDone(m, true, microTs);
+            backdateWeeklyPlanCompletionFromEvidence(task, m.id);
           }
         });
         applyWeeklyPlanMainDoneFromMicros(task);
+        backdateWeeklyPlanCompletionFromEvidence(task, null);
       } else {
         if (!task.mainDone) task.mainDone = true;
         const evidenceTs = findWeeklyPlanCompletionTimestampFromEvidence(task.id);
         stampWeeklyPlanMainDone(task, true, evidenceTs);
+        backdateWeeklyPlanCompletionFromEvidence(task, null);
       }
     }
 
     /** 载入/同步后：仅在「全部子步骤/主任务」均有完成证据时补全周计划勾选，避免部分 Done 条目拖垮整项 */
     function shouldRepairWeeklyPlanTaskFromEvidence(weekKey, task) {
       if (!task) return false;
+      if (isWeeklyPlanDoneMirrorSuppressed(task.id)) return false;
       if (isWeeklyPlanMainComplete(normalizeWeeklyPlanTask(task))) return false;
       if (weeklyPlanDoneRefShowsTaskComplete(weekKey, task.id, task)) return true;
       if (weeklyPlanDoneListShowsTaskComplete(task.id, task)) return true;
@@ -74752,6 +74883,9 @@
       const items = ref.items || (ref.items = {});
 
       tasks.forEach((task) => {
+        if (isWeeklyPlanDoneMirrorSuppressed(task.id)) {
+          return;
+        }
         const micros = task.microTasks || [];
         const hasMicro = micros.length > 0;
         micros.forEach((m) => {
@@ -74831,6 +74965,35 @@
               }
             }
           }
+          return;
+        }
+        const reused = kind === "main" ? findWeeklyPlanMainDoneEntryInState(taskId) : null;
+        if (reused && reused.id) {
+          items[syncKey] = reused.id;
+          if (!reused.weeklyPlanMeta) {
+            reused.weeklyPlanMeta = { weekKey, syncKey, kind, taskId, microId };
+          } else {
+            reused.weeklyPlanMeta.weekKey = weekKey;
+            reused.weeklyPlanMeta.syncKey = syncKey;
+            reused.weeklyPlanMeta.kind = kind;
+            reused.weeklyPlanMeta.taskId = taskId;
+            reused.weeklyPlanMeta.microId = microId;
+          }
+          if (reused.text !== text) {
+            reused.text = text;
+            changed = true;
+          }
+          const prevAt = normalizeWeeklyPlanCompletedAtMs(reused.completedAt);
+          const nextAt = normalizeWeeklyPlanCompletedAtMs(ts);
+          if (nextAt != null && (prevAt == null || nextAt < prevAt || reused.completedAt !== nextAt)) {
+            if (prevAt != null && nextAt > prevAt) {
+              /* 保留更早完成时刻 */
+            } else if (reused.completedAt !== nextAt) {
+              reused.completedAt = nextAt;
+              changed = true;
+            }
+          }
+          changed = true;
           return;
         }
         const newId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -76649,6 +76812,9 @@
       const tasks = getWeeklyPlanTasksForViewSprint();
       const task = tasks.find((t) => t.id === taskId);
       if (!task) return;
+      if (checked) {
+        clearWeeklyPlanDoneMirrorSuppressForTask(taskId);
+      }
       const micros = task.microTasks || [];
       if (micros.length > 0) {
         micros.forEach((m) => {
@@ -76671,6 +76837,9 @@
       const tasks = getWeeklyPlanTasksForViewSprint();
       const task = tasks.find((t) => t.id === taskId);
       if (!task) return;
+      if (checked) {
+        clearWeeklyPlanDoneMirrorSuppressForTask(taskId);
+      }
       const m = task.microTasks.find((x) => x.id === microId);
       if (!m) return;
       m.done = checked;
@@ -82551,6 +82720,7 @@
       if (refreshLife4000DoneEntryTexts()) doneHygieneChanged = true;
       if (dedupeClosedListWeeklyPlanMirrorsInState()) doneHygieneChanged = true;
       if (pruneRedundantDoneEntriesInState()) doneHygieneChanged = true;
+      if (repairWeeklyPlanDoneListTimestampsInState()) doneHygieneChanged = true;
       if (doneHygieneChanged) saveState();
       if (repairWeeklyPlanCompletionFromEvidence()) doneHygieneChanged = true;
       rolloverWeeklyPlanIncompleteToCurrentWeek();
