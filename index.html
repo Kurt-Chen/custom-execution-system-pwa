@@ -6795,6 +6795,46 @@
       text-align: center;
     }
 
+    .weekly-plan-lane-seg__title-wrap {
+      position: relative;
+      display: inline-block;
+      max-width: 100%;
+      vertical-align: middle;
+    }
+
+    /* 3-Day Sprint 末日下午最后 6h：Life / Work 标题右下角 Assess→Adjust 提示 */
+    .weekly-plan-lane-seg__assess-capsule {
+      display: none;
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      transform: translate(42%, 48%);
+      padding: 1px 5px;
+      border-radius: 999px;
+      border: 1px solid #fecaca;
+      background: #fff;
+      font-size: 8px;
+      font-weight: 700;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+      color: #dc2626;
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 1;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+    }
+
+    .weekly-plan-lane-seg__assess-capsule.is-visible {
+      display: block;
+    }
+
+    @media (min-width: 768px) {
+      .weekly-plan-lane-seg__assess-capsule {
+        font-size: 9px;
+        padding: 1px 6px;
+      }
+    }
+
     .weekly-plan-stat-row {
       display: inline-flex;
       align-items: center;
@@ -42845,7 +42885,14 @@
                 aria-label="Life"
               >
                 <span class="weekly-plan-lane-seg__stack">
-                  <span class="weekly-plan-lane-seg__title">Life</span>
+                  <span class="weekly-plan-lane-seg__title-wrap">
+                    <span class="weekly-plan-lane-seg__title">Life</span>
+                    <span
+                      class="weekly-plan-lane-seg__assess-capsule"
+                      aria-hidden="true"
+                      title="Sprint 末日下午：回顾与调整"
+                    >Assess→Adjust</span>
+                  </span>
                 </span>
               </button>
               <button
@@ -42857,7 +42904,14 @@
                 aria-label="Work"
               >
                 <span class="weekly-plan-lane-seg__stack">
-                  <span class="weekly-plan-lane-seg__title">Work</span>
+                  <span class="weekly-plan-lane-seg__title-wrap">
+                    <span class="weekly-plan-lane-seg__title">Work</span>
+                    <span
+                      class="weekly-plan-lane-seg__assess-capsule"
+                      aria-hidden="true"
+                      title="Sprint 末日下午：回顾与调整"
+                    >Assess→Adjust</span>
+                  </span>
                 </span>
               </button>
               <button
@@ -76785,6 +76839,55 @@
       syncWeeklyPlanLaneTabsUI();
     }
 
+    /** 3-Day Sprint 末日下午最后 N 小时显示 Life/Work「Assess→Adjust」胶囊 */
+    const WEEKLY_PLAN_ASSESS_ADJUST_LAST_HOURS = 6;
+
+    function isWeeklyPlanSprintAssessAdjustWindow(refDate) {
+      const now = refDate ? new Date(refDate) : new Date();
+      if (isNaN(now.getTime())) return false;
+      const todayKey = formatDateInputValue(now);
+      const sprintStartKey = getSprintStartKeyForDate(now);
+      const sprintEndKey = getSprintEndKeyFromStart(sprintStartKey);
+      if (todayKey !== sprintEndKey) return false;
+      return now.getHours() >= 24 - WEEKLY_PLAN_ASSESS_ADJUST_LAST_HOURS;
+    }
+
+    let weeklyPlanAssessAdjustTickerId = null;
+
+    function stopWeeklyPlanAssessAdjustTicker() {
+      if (weeklyPlanAssessAdjustTickerId) {
+        clearInterval(weeklyPlanAssessAdjustTickerId);
+        weeklyPlanAssessAdjustTickerId = null;
+      }
+    }
+
+    function ensureWeeklyPlanAssessAdjustTicker() {
+      const now = new Date();
+      const todayKey = formatDateInputValue(now);
+      const sprintEndKey = getSprintEndKeyFromStart(getSprintStartKeyForDate(now));
+      if (todayKey !== sprintEndKey) {
+        stopWeeklyPlanAssessAdjustTicker();
+        return;
+      }
+      if (weeklyPlanAssessAdjustTickerId) return;
+      weeklyPlanAssessAdjustTickerId = window.setInterval(function () {
+        syncWeeklyPlanAssessAdjustCapsules();
+      }, 30000);
+    }
+
+    /** Life / Work 子 Tab：Sprint 最后一天 18:00 起显示 Assess→Adjust 胶囊 */
+    function syncWeeklyPlanAssessAdjustCapsules() {
+      const show = isWeeklyPlanSprintAssessAdjustWindow();
+      [weeklyPlanLaneLifeBtn, weeklyPlanLaneWorkBtn].forEach(function (btn) {
+        if (!btn) return;
+        const cap = btn.querySelector(".weekly-plan-lane-seg__assess-capsule");
+        if (!cap) return;
+        cap.classList.toggle("is-visible", show);
+        cap.setAttribute("aria-hidden", show ? "false" : "true");
+      });
+      ensureWeeklyPlanAssessAdjustTicker();
+    }
+
     function syncWeeklyPlanLaneTabsUI() {
       if (!weeklyPlanLaneLifeBtn || !weeklyPlanLaneWorkBtn) return;
       const shell = getWeeklyPlanShell();
@@ -76815,6 +76918,7 @@
         }
       }
       applyWeeklyPlanShellLayout();
+      syncWeeklyPlanAssessAdjustCapsules();
     }
 
     /**
