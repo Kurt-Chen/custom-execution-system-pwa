@@ -72153,7 +72153,10 @@
                     )
                   : br.inner;
               main.appendChild(createDoneEntryPill(pillInner, variant));
-              textEl.textContent = br.rest;
+              textEl.textContent =
+                variant === "weekly"
+                  ? compactDoneWeeklyPlanDisplayRest(br.rest)
+                  : br.rest;
             }
           }
           main.appendChild(textEl);
@@ -72192,7 +72195,10 @@
                     )
                   : br.inner;
               taskLine.appendChild(createDoneEntryPill(pillInner, variant));
-              textEl.textContent = br.rest;
+              textEl.textContent =
+                variant === "weekly"
+                  ? compactDoneWeeklyPlanDisplayRest(br.rest)
+                  : br.rest;
             }
           }
           taskLine.appendChild(textEl);
@@ -73115,7 +73121,7 @@
       const isoRangeDot =
         /^\d{4}-\d{2}-\d{2}\s*\([^)]+\)\s*(?:[~～\-\u2013\u2014]+|\s+--\s+)\s*\d{4}-\d{2}-\d{2}\s*\([^)]+\)\s*·\s*/;
       const compactRangeDot =
-        /^\d{1,2}\/\d{1,2}\s*(?:[\u2013\u2014~～\-]+|\s+--\s+)\s*\d{1,2}\/\d{1,2}\s*·\s*/;
+        /^\d{1,2}\/\d{1,2}(?:[\u2013\u2014~～\-]+\d{1,2}|\s*(?:[\u2013\u2014~～\-]+|\s+--\s+)\s*\d{1,2}\/\d{1,2})\s*·\s*/;
       for (let g = 0; g < 4; g++) {
         const t = s.replace(isoRangeDot, "").replace(compactRangeDot, "").trim();
         if (t === s) break;
@@ -73829,15 +73835,36 @@
       const d = new Date(weekKey + "T12:00:00");
       if (isNaN(d.getTime())) return "";
       const { sprintStart, sprintEnd } = getSprintThreeDayWindow(d);
-      return (
-        (sprintStart.getMonth() + 1) +
-        "/" +
-        sprintStart.getDate() +
-        " – " +
-        (sprintEnd.getMonth() + 1) +
-        "/" +
-        sprintEnd.getDate()
-      );
+      const sm = sprintStart.getMonth() + 1;
+      const sd = sprintStart.getDate();
+      const em = sprintEnd.getMonth() + 1;
+      const ed = sprintEnd.getDate();
+      if (sm === em && sprintStart.getFullYear() === sprintEnd.getFullYear()) {
+        return sm + "/" + sd + "–" + ed;
+      }
+      return sm + "/" + sd + "–" + em + "/" + ed;
+    }
+
+    /** Done List 展示：把旧版完整 ISO 区间压成短格式（与 formatWeeklyPlanRangeCompactForWeekKey 一致） */
+    function compactDoneWeeklyPlanDisplayRest(rest) {
+      let s = String(rest || "").trim();
+      const isoRange =
+        /^(\d{4})-(\d{2})-(\d{2})\s*\([^)]+\)\s*(?:[~～\u2013\u2014\-]+\s*)\s*(\d{4})-(\d{2})-(\d{2})\s*\([^)]+\)\s*/;
+      const m = s.match(isoRange);
+      if (!m) return s;
+      const y1 = m[1];
+      const mo1 = parseInt(m[2], 10);
+      const d1 = parseInt(m[3], 10);
+      const y2 = m[4];
+      const mo2 = parseInt(m[5], 10);
+      const d2 = parseInt(m[6], 10);
+      let compact;
+      if (y1 === y2 && mo1 === mo2) {
+        compact = mo1 + "/" + d1 + "–" + d2;
+      } else {
+        compact = mo1 + "/" + d1 + "–" + mo2 + "/" + d2;
+      }
+      return (compact + s.slice(m[0].length)).trim();
     }
 
     function isWeeklyPlanMainComplete(task) {
@@ -74633,7 +74660,7 @@
       }
 
       const desiredKeys = new Set();
-      const rangeLabel = formatWeeklyPlanRangeForWeekKey(weekKey);
+      const rangeLabel = formatWeeklyPlanRangeCompactForWeekKey(weekKey);
       const items = ref.items || (ref.items = {});
 
       tasks.forEach((task) => {
