@@ -64988,7 +64988,7 @@
       if (mirrorJustAttached && Boolean(item.completed) === Boolean(checked)) {
         const moEarly = item.mirrorOf;
         if (moEarly && moEarly.kind === "weeklyPlan") {
-          applyWeeklyPlanCompletionFromMirror(moEarly, Boolean(item.completed));
+          applyWeeklyPlanCompletionFromMirror(moEarly, Boolean(item.completed), item.completedAt);
           syncAllWeeklyPlanMirrorsForWeek(moEarly.weekKey);
           saveState();
           render();
@@ -65018,7 +65018,7 @@
       }
       const mo = item.mirrorOf;
       if (mo && mo.kind === "weeklyPlan") {
-        applyWeeklyPlanCompletionFromMirror(mo, Boolean(checked));
+        applyWeeklyPlanCompletionFromMirror(mo, Boolean(checked), item.completedAt);
         syncAllWeeklyPlanMirrorsForWeek(mo.weekKey);
       } else if (mo && mo.kind === "anniversaryTw") {
         applyAnniversaryCompletionFromMirror(mo, Boolean(checked));
@@ -65146,7 +65146,7 @@
       }
       const mo = item.mirrorOf;
       if (mo && mo.kind === "weeklyPlan") {
-        applyWeeklyPlanCompletionFromMirror(mo, want);
+        applyWeeklyPlanCompletionFromMirror(mo, want, item.completedAt);
         syncAllWeeklyPlanMirrorsForWeek(mo.weekKey);
       } else if (mo && mo.kind === "anniversaryTw") {
         applyAnniversaryCompletionFromMirror(mo, want);
@@ -74035,30 +74035,44 @@
       return Number.isFinite(n) && n > 0 ? n : null;
     }
 
-    function stampWeeklyPlanMicroDone(micro, done) {
+    function stampWeeklyPlanMicroDone(micro, done, preferredAtMs) {
       if (!micro) return;
       const now = Date.now();
       micro.statusAt = now;
       if (done) {
         if (!normalizeWeeklyPlanCompletedAtMs(micro.completedAt)) {
-          micro.completedAt = now;
+          const pref = normalizeWeeklyPlanCompletedAtMs(preferredAtMs);
+          micro.completedAt = pref != null ? pref : now;
         }
       } else {
         delete micro.completedAt;
       }
     }
 
-    function stampWeeklyPlanMainDone(task, done) {
+    function stampWeeklyPlanMainDone(task, done, preferredAtMs) {
       if (!task) return;
       const now = Date.now();
       task.statusAt = now;
       if (done) {
         if (!normalizeWeeklyPlanCompletedAtMs(task.completedAt)) {
-          task.completedAt = now;
+          const pref = normalizeWeeklyPlanCompletedAtMs(preferredAtMs);
+          task.completedAt = pref != null ? pref : now;
         }
       } else {
         delete task.completedAt;
       }
+    }
+
+    /** 主任务无子步骤时：取各微任务 completedAt 的最晚值（全部勾完的时刻） */
+    function getWeeklyPlanMainCompletionFromMicros(task) {
+      const micros = task && Array.isArray(task.microTasks) ? task.microTasks : [];
+      if (!micros.length) return null;
+      let latest = null;
+      micros.forEach(function (m) {
+        const ts = normalizeWeeklyPlanCompletedAtMs(m && m.completedAt);
+        if (ts != null && (latest == null || ts > latest)) latest = ts;
+      });
+      return latest;
     }
 
     function touchWeeklyPlanTaskRevision(task) {
@@ -74091,7 +74105,7 @@
       if (!Array.isArray(task.microTasks) || task.microTasks.length === 0) return;
       if (task.microTasks.every((m) => m.done)) {
         task.mainDone = true;
-        stampWeeklyPlanMainDone(task, true);
+        stampWeeklyPlanMainDone(task, true, getWeeklyPlanMainCompletionFromMicros(task));
       } else {
         task.mainDone = false;
         delete task.completedAt;
@@ -74321,7 +74335,7 @@
     }
 
     /** Closed-List「自周计划」镜像 ↔ 周计划主任务：勾选任一侧，另一侧同步完成状态 */
-    function applyWeeklyPlanCompletionFromMirror(mirrorOf, complete) {
+    function applyWeeklyPlanCompletionFromMirror(mirrorOf, complete, completedAtMs) {
       if (!mirrorOf || mirrorOf.kind !== "weeklyPlan") return;
       const resolved = resolveWeeklyPlanMirrorLocation(mirrorOf);
       if (!resolved) return;
@@ -74333,12 +74347,13 @@
       const task = tasks.find((t) => t.id === mirrorOf.id);
       if (!task) return;
       if (complete) {
+        const atMs = normalizeWeeklyPlanCompletedAtMs(completedAtMs);
         task.mainDone = true;
         (task.microTasks || []).forEach(function (m) {
           m.done = true;
-          stampWeeklyPlanMicroDone(m, true);
+          stampWeeklyPlanMicroDone(m, true, atMs);
         });
-        stampWeeklyPlanMainDone(task, true);
+        stampWeeklyPlanMainDone(task, true, atMs);
       } else {
         task.mainDone = false;
         (task.microTasks || []).forEach(function (m) {
@@ -74376,7 +74391,8 @@
         if (Boolean(item.completed) === want) return;
         item.completed = want;
         if (want) {
-          item.completedAt = Date.now();
+          const wpAt = getWeeklyPlanDoneSyncTimestampMs(task, null);
+          item.completedAt = wpAt != null ? wpAt : Date.now();
           const tid = String(mo.id);
           if (!syncedDoneForTask.has(tid)) {
             syncedDoneForTask.add(tid);
@@ -74413,23 +74429,39 @@
       return nr;
     }
 
+    /** 周计划主任务：从 My Done 镜像 / 封闭清单取最早完成时刻（Done List 按 completedAt 归时段） */
     function findWeeklyPlanCompletionTimestampFromEvidence(taskId) {
       const tid = String(taskId || "");
       if (!tid) return null;
-      let best = null;
+      let earliest = null;
       (state.done || []).forEach(function (d) {
         const m = d && d.weeklyPlanMeta;
         if (!m || m.taskId !== tid) return;
+        if (m.kind === "micro") return;
         const ts = normalizeWeeklyPlanCompletedAtMs(d.completedAt);
-        if (ts != null && (best == null || ts > best)) best = ts;
+        if (ts != null && (earliest == null || ts < earliest)) earliest = ts;
       });
       (state.closedList || []).forEach(function (item) {
         const mo = item && item.mirrorOf;
         if (!mo || mo.kind !== "weeklyPlan" || mo.id !== tid || !item.completed) return;
         const ts = normalizeWeeklyPlanCompletedAtMs(item.completedAt);
-        if (ts != null && (best == null || ts > best)) best = ts;
+        if (ts != null && (earliest == null || ts < earliest)) earliest = ts;
       });
-      return best;
+      return earliest;
+    }
+
+    function findWeeklyPlanMicroCompletionTimestampFromEvidence(taskId, microId) {
+      const tid = String(taskId || "");
+      const mid = String(microId || "");
+      if (!tid || !mid) return null;
+      let earliest = null;
+      (state.done || []).forEach(function (d) {
+        const m = d && d.weeklyPlanMeta;
+        if (!m || m.taskId !== tid || m.kind !== "micro" || m.microId !== mid) return;
+        const ts = normalizeWeeklyPlanCompletedAtMs(d.completedAt);
+        if (ts != null && (earliest == null || ts < earliest)) earliest = ts;
+      });
+      return earliest;
     }
 
     function weeklyPlanDoneRefShowsTaskComplete(weekKey, taskId, task) {
@@ -74516,13 +74548,15 @@
         micros.forEach(function (m) {
           if (!m.done) {
             m.done = true;
-            stampWeeklyPlanMicroDone(m, true);
+            const microTs = findWeeklyPlanMicroCompletionTimestampFromEvidence(task.id, m.id);
+            stampWeeklyPlanMicroDone(m, true, microTs);
           }
         });
         applyWeeklyPlanMainDoneFromMicros(task);
       } else {
         if (!task.mainDone) task.mainDone = true;
-        stampWeeklyPlanMainDone(task, true);
+        const evidenceTs = findWeeklyPlanCompletionTimestampFromEvidence(task.id);
+        stampWeeklyPlanMainDone(task, true, evidenceTs);
       }
     }
 
@@ -74732,9 +74766,15 @@
               entry.text = text;
               changed = true;
             }
-            if (entry.completedAt !== ts) {
-              entry.completedAt = ts;
-              changed = true;
+            const prevAt = normalizeWeeklyPlanCompletedAtMs(entry.completedAt);
+            const nextAt = normalizeWeeklyPlanCompletedAtMs(ts);
+            if (nextAt != null && (prevAt == null || nextAt < prevAt || entry.completedAt !== nextAt)) {
+              if (prevAt != null && nextAt > prevAt) {
+                /* 已有更早完成时刻：不往后推，避免条目归到错误日期/时段 */
+              } else if (entry.completedAt !== nextAt) {
+                entry.completedAt = nextAt;
+                changed = true;
+              }
             }
           }
           return;
