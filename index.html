@@ -55643,7 +55643,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260613a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260618a";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** 本机已合并的 pulse.updatedAt（今日打卡快通道，远小于整包 v2） */
@@ -57120,6 +57120,13 @@
         });
         cloudSyncPulseWeeklyPlanWeekKeys = null;
       }
+      /* 全量 bucket：避免仅同步「今天/当前视图」导致他端旧期次任务丢失 */
+      if (state.weeklyPlan && typeof state.weeklyPlan === "object") {
+        Object.keys(state.weeklyPlan).forEach(function (wk) {
+          const arr = state.weeklyPlan[wk];
+          if (Array.isArray(arr) && arr.length) keys.add(wk);
+        });
+      }
       const out = {};
       keys.forEach(function (wk) {
         const tasks = getWeeklyPlanTasksForWeekKey(wk);
@@ -57610,6 +57617,14 @@
       if (readingPlanPulse) pulseState.readingPlan = { books: readingPlanPulse };
       const tw020Pulse = buildCloudSyncAnniversaryTw020PulseSlice();
       if (tw020Pulse) pulseState.anniversaryTw020 = tw020Pulse;
+      const suppressMap = state.weeklyPlanDoneSuppress;
+      if (suppressMap && typeof suppressMap === "object" && Object.keys(suppressMap).length) {
+        try {
+          pulseState.weeklyPlanDoneSuppress = JSON.parse(JSON.stringify(suppressMap));
+        } catch (_wpSupErr) {
+          pulseState.weeklyPlanDoneSuppress = Object.assign({}, suppressMap);
+        }
+      }
       const ts =
         state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : null;
       if (ts && Object.keys(ts).length > 0) {
@@ -57683,6 +57698,24 @@
         }
         if (pulseState.weeklyPlan && typeof pulseState.weeklyPlan === "object") {
           if (mergeCloudSyncWeeklyPlanPulseIntoState(pulseState.weeklyPlan)) changed = true;
+        }
+        if (
+          pulseState.weeklyPlanDoneSuppress &&
+          typeof pulseState.weeklyPlanDoneSuppress === "object"
+        ) {
+          const nextSup = mergeWeeklyPlanDoneSuppressForSync(
+            state.weeklyPlanDoneSuppress,
+            pulseState.weeklyPlanDoneSuppress
+          );
+          try {
+            if (JSON.stringify(state.weeklyPlanDoneSuppress || {}) !== JSON.stringify(nextSup)) {
+              state.weeklyPlanDoneSuppress = nextSup;
+              changed = true;
+            }
+          } catch (_wpSupCmp) {
+            state.weeklyPlanDoneSuppress = nextSup;
+            changed = true;
+          }
         }
         if (Array.isArray(pulseState.closedList) && pulseState.closedList.length) {
           if (mergeCloudSyncClosedListPulseIntoState(pulseState.closedList)) changed = true;
@@ -57969,6 +58002,10 @@
         pulseState.anniversaryTw020.weeks &&
         typeof pulseState.anniversaryTw020.weeks === "object" &&
         Object.keys(pulseState.anniversaryTw020.weeks).length > 0;
+      const hasWpSuppress =
+        pulseState.weeklyPlanDoneSuppress &&
+        typeof pulseState.weeklyPlanDoneSuppress === "object" &&
+        Object.keys(pulseState.weeklyPlanDoneSuppress).length > 0;
       if (
         !hasDone &&
         !hasHc &&
@@ -57977,7 +58014,8 @@
         !hasClosedList &&
         !hasReadingPlan &&
         !hasTombstones &&
-        !hasTw020
+        !hasTw020 &&
+        !hasWpSuppress
       ) {
         return Promise.resolve();
       }
@@ -59906,6 +59944,7 @@
       });
       if (
         (pulseState && pulseState.weeklyPlan) ||
+        (pulseState && pulseState.weeklyPlanDoneSuppress) ||
         (pulseState && Array.isArray(pulseState.closedList) && pulseState.closedList.length) ||
         (pulseState && pulseState.anniversaryTw020)
       ) {
@@ -59955,6 +59994,17 @@
       const out = {};
       keys.forEach(function (k) {
         out[k] = Boolean(a[k]) || Boolean(b[k]);
+      });
+      return out;
+    }
+
+    /** 周计划 Done 镜像抑制：任一端删除镜像后，合并为抑制（避免他端 render 补回） */
+    function mergeWeeklyPlanDoneSuppressForSync(loc, rem) {
+      const lo = loc && typeof loc === "object" ? loc : {};
+      const ro = rem && typeof rem === "object" ? rem : {};
+      const out = Object.assign({}, lo);
+      Object.keys(ro).forEach(function (k) {
+        if (ro[k]) out[k] = true;
       });
       return out;
     }
@@ -61321,6 +61371,10 @@
         state.weeklyPlanDoneRef,
         remoteState.weeklyPlanDoneRef
       );
+      base.weeklyPlanDoneSuppress = mergeWeeklyPlanDoneSuppressForSync(
+        state.weeklyPlanDoneSuppress,
+        remoteState.weeklyPlanDoneSuppress
+      );
       base.anniversaryDoneRef = mergeAnniversaryDoneRefForSync(
         state.anniversaryDoneRef,
         remoteState.anniversaryDoneRef
@@ -62231,6 +62285,9 @@
           }
           if (!state.weeklyPlanDoneRef || typeof state.weeklyPlanDoneRef !== "object") {
             state.weeklyPlanDoneRef = {};
+          }
+          if (!state.weeklyPlanDoneSuppress || typeof state.weeklyPlanDoneSuppress !== "object") {
+            state.weeklyPlanDoneSuppress = {};
           }
           if (!state.ageGoalsEditSlots || typeof state.ageGoalsEditSlots !== "object") {
             state.ageGoalsEditSlots = {};
@@ -73627,6 +73684,8 @@
 
     /** 3-Day Sprint 周期天数（滚动窗口：start 当天起连续 3 天） */
     const WEEKLY_PLAN_SPRINT_DAYS = 3;
+    /** 固定 epoch：各端 bucket 键一致，避免「以今天为锚」导致跨设备键漂移 */
+    const WEEKLY_PLAN_SPRINT_EPOCH = "2020-01-01";
 
     function getSundayToSaturdayWeek(refDate) {
       const d = new Date(refDate);
@@ -73658,23 +73717,66 @@
       return formatDateInputValue(sprintEnd);
     }
 
-    /** 当前 3-Day Sprint 起始日 = 今天（「本期」锚点） */
+    /** 当前 3-Day Sprint 起始日 = 含今天在内的固定 3 日块首日（各端一致） */
     function getCurrentWeeklyPlanSprintStartKey() {
-      return formatDateInputValue(new Date());
+      return getSprintStartKeyForDate(new Date());
     }
 
-    /** 以今天为锚点，将任意日期映射到所在 3 日 Sprint 的起始日（state.weeklyPlan bucket 键） */
+    /** 将任意日期映射到所在 3 日 Sprint 起始日（state.weeklyPlan bucket 键；固定 epoch） */
     function getSprintStartKeyForDate(refDate) {
-      const anchor = new Date();
-      anchor.setHours(0, 0, 0, 0);
+      const epoch = new Date(WEEKLY_PLAN_SPRINT_EPOCH + "T12:00:00");
+      epoch.setHours(0, 0, 0, 0);
       const d = new Date(refDate);
       d.setHours(0, 0, 0, 0);
-      const diffDays = Math.round((d.getTime() - anchor.getTime()) / 86400000);
+      if (isNaN(d.getTime())) {
+        return getCurrentWeeklyPlanSprintStartKey();
+      }
+      const diffDays = Math.round((d.getTime() - epoch.getTime()) / 86400000);
       const blockOffset =
         Math.floor(diffDays / WEEKLY_PLAN_SPRINT_DAYS) * WEEKLY_PLAN_SPRINT_DAYS;
-      const sprintStart = new Date(anchor);
-      sprintStart.setDate(anchor.getDate() + blockOffset);
+      const sprintStart = new Date(epoch);
+      sprintStart.setDate(epoch.getDate() + blockOffset);
       return formatDateInputValue(sprintStart);
+    }
+
+    /**
+     * 迁移旧版「每天一个 bucket 键」数据到固定 3 日块键；合并同 id 任务并修正 mirrorOf.weekKey。
+     */
+    function migrateWeeklyPlanSprintBucketKeys() {
+      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
+      const keys = Object.keys(state.weeklyPlan);
+      let changed = false;
+      keys.forEach(function (k) {
+        const raw = state.weeklyPlan[k];
+        if (!Array.isArray(raw) || raw.length === 0) {
+          delete state.weeklyPlan[k];
+          changed = true;
+          return;
+        }
+        const canonical = getSprintStartKeyForDate(new Date(k + "T12:00:00"));
+        if (k === canonical) return;
+        const incoming = raw.map(normalizeWeeklyPlanTask);
+        const dest = readWeeklyPlanBucketNormalized(canonical);
+        const map = new Map();
+        dest.forEach(function (t) {
+          map.set(t.id, t);
+        });
+        incoming.forEach(function (t) {
+          if (map.has(t.id)) {
+            map.set(t.id, mergeWeeklyPlanOneTaskForSync(map.get(t.id), t, true));
+          } else {
+            map.set(t.id, t);
+          }
+        });
+        state.weeklyPlan[canonical] = Array.from(map.values()).map(normalizeWeeklyPlanTask);
+        delete state.weeklyPlan[k];
+        incoming.forEach(function (t) {
+          repointWeeklyPlanMirrorWeekKeys(t.id, canonical);
+        });
+        changed = true;
+      });
+      if (changed && dedupeWeeklyPlanTasksInStorage()) changed = true;
+      return changed;
     }
 
     /** 截止时刻所在 3-Day Sprint 的 sprintStartKey，与 weeklyPlan bucket 键一致 */
@@ -75772,7 +75874,14 @@
         state.weeklyPlan = {};
       }
       state.weeklyPlan[k] = tasks;
+      noteCloudSyncWeeklyPlanPulseWeekKey(k);
       saveState();
+    }
+
+    /** 周计划结构/完成态变更：本地持久化后立即 pulse，减少跨端漏同步 */
+    function saveWeeklyPlanTasksForWeekWithPulse(tasks, weekKeyOverride) {
+      saveWeeklyPlanTasksForWeek(tasks, weekKeyOverride);
+      flushCloudSyncPulseImmediate();
     }
 
     /** 同组（仅未完成之间或仅已完成之间）重排并持久化；仅允许同一 lane（生活/工作）内拖拽。 */
@@ -75910,7 +76019,7 @@
         microTasks: []
       };
       touchWeeklyPlanTaskRevision(newTask);
-      saveWeeklyPlanTasksForWeek(insertWeeklyPlanTaskForLane(tasks, newTask, lane));
+      saveWeeklyPlanTasksForWeekWithPulse(insertWeeklyPlanTaskForLane(tasks, newTask, lane));
       weeklyPlanTaskInput.value = "";
       focusWeeklyPlanComposerInput();
       render();
@@ -76802,9 +76911,8 @@
       });
       applyWeeklyPlanMainDoneFromMicros(task);
       touchWeeklyPlanTaskRevision(task);
-      saveWeeklyPlanTasksForWeek(tasks);
+      saveWeeklyPlanTasksForWeekWithPulse(tasks);
       syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewSprintStartKey());
-      saveState();
       render();
     }
 
@@ -76827,9 +76935,8 @@
         stampWeeklyPlanMainDone(task, Boolean(checked));
       }
       touchWeeklyPlanTaskRevision(task);
-      saveWeeklyPlanTasksForWeek(tasks);
+      saveWeeklyPlanTasksForWeekWithPulse(tasks);
       syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewSprintStartKey());
-      saveState();
       render();
     }
 
@@ -76846,9 +76953,8 @@
       stampWeeklyPlanMicroDone(m, Boolean(checked));
       applyWeeklyPlanMainDoneFromMicros(task);
       touchWeeklyPlanTaskRevision(task);
-      saveWeeklyPlanTasksForWeek(tasks);
+      saveWeeklyPlanTasksForWeekWithPulse(tasks);
       syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewSprintStartKey());
-      saveState();
       render();
     }
 
@@ -84333,6 +84439,9 @@
       return out;
     });
     repointStaleWeeklyPlanMirrorsInClosedList();
+    if (migrateWeeklyPlanSprintBucketKeys()) {
+      saveState();
+    }
     if (reconcileWeeklyPlanTasksToDeadlineWeeks()) {
       saveState();
     }
