@@ -8291,12 +8291,39 @@
       }
 
       .sprint-kanban {
-        display: grid;
+        display: none;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 12px;
         padding: 0 12px 12px;
         min-width: 0;
         box-sizing: border-box;
+      }
+
+      .sprint-kanban.sprint-view-kanban-active {
+        display: grid;
+      }
+
+      .sprint-kanban[hidden] {
+        display: none !important;
+      }
+
+      #weeklyPlanList.sprint-view-list-hidden,
+      #closedList.sprint-view-list-hidden {
+        display: none !important;
+      }
+
+      #weeklyPlanTasksPanel .weekly-plan-lane-add-shell.sprint-view-list-hidden,
+      #weeklyPlanClosedPanel .closed-list-one-thing-block.sprint-view-list-hidden,
+      #weeklyPlanClosedPanel .closed-list-add-slot.sprint-view-list-hidden {
+        display: none !important;
+      }
+
+      .sprint-kanban-footer.sprint-view-kanban-active {
+        display: block;
+      }
+
+      .sprint-kanban-footer:not(.sprint-view-kanban-active) {
+        display: none !important;
       }
 
       .sprint-kanban-col {
@@ -76314,9 +76341,9 @@
     }
 
     const SPRINT_KANBAN_COLUMNS = [
-      { key: "done", label: "已完成" },
+      { key: "todo", label: "未开始" },
       { key: "active", label: "进行中" },
-      { key: "todo", label: "未开始" }
+      { key: "done", label: "已完成" }
     ];
 
     function renderSprintKanbanBoard(container, items, kind, accentShell, addOpts) {
@@ -76377,7 +76404,7 @@
       renderSprintKanbanBoard(closedListKanban, items, "closedList", "closed", {
         showAdd: isEditable,
         onAdd: function () {
-          if (closedListOneThingBlock) closedListOneThingBlock.style.display = "";
+          setSprintViewMode("closed", "list");
           if (closedListInput) {
             closedListInput.focus();
             if (typeof closedListInput.select === "function") closedListInput.select();
@@ -76392,10 +76419,7 @@
       renderSprintKanbanBoard(weeklyPlanKanban, tasks, "weeklyPlan", accent, {
         showAdd: true,
         onAdd: function () {
-          const composerShell = document.querySelector(
-            "#weeklyPlanTasksPanel .weekly-plan-lane-add-shell"
-          );
-          if (composerShell) composerShell.hidden = false;
+          setSprintViewMode(lane, "list");
           if (weeklyPlanTaskInput) {
             weeklyPlanTaskInput.focus();
             if (typeof weeklyPlanTaskInput.select === "function") weeklyPlanTaskInput.select();
@@ -76414,14 +76438,26 @@
       const closedMode = desktop && shell === "closed" ? getSprintViewMode("closed") : "list";
       syncSprintViewToggleButtons(closedListViewToggle, closedMode);
       const closedKanbanOn = closedMode === "kanban";
-      if (closedList) closedList.hidden = closedKanbanOn;
-      if (closedListOneThingBlock && closedKanbanOn) {
-        const inputFocused = closedListInput && document.activeElement === closedListInput;
-        closedListOneThingBlock.style.display = inputFocused ? "" : "none";
+      if (closedList) {
+        closedList.hidden = closedKanbanOn;
+        closedList.classList.toggle("sprint-view-list-hidden", closedKanbanOn);
       }
-      if (closedListAddSlotBtn && closedKanbanOn) closedListAddSlotBtn.hidden = true;
-      if (closedListKanban) closedListKanban.hidden = !closedKanbanOn;
-      if (closedListKanbanFooter) closedListKanbanFooter.hidden = !closedKanbanOn;
+      if (closedListOneThingBlock) {
+        closedListOneThingBlock.classList.toggle("sprint-view-list-hidden", closedKanbanOn);
+        if (!closedKanbanOn) closedListOneThingBlock.style.display = "";
+      }
+      if (closedListAddSlotBtn) {
+        closedListAddSlotBtn.classList.toggle("sprint-view-list-hidden", closedKanbanOn);
+        if (closedKanbanOn) closedListAddSlotBtn.hidden = true;
+      }
+      if (closedListKanban) {
+        closedListKanban.hidden = !closedKanbanOn;
+        closedListKanban.classList.toggle("sprint-view-kanban-active", closedKanbanOn);
+      }
+      if (closedListKanbanFooter) {
+        closedListKanbanFooter.hidden = !closedKanbanOn;
+        closedListKanbanFooter.classList.toggle("sprint-view-kanban-active", closedKanbanOn);
+      }
       if (closedListEmpty && closedKanbanOn) closedListEmpty.style.display = "none";
 
       if (weeklyPlanViewToggle) {
@@ -76434,16 +76470,21 @@
       const wpKanbanOn = wpMode === "kanban" && (shell === "life" || shell === "work");
       const composerShell = document.querySelector("#weeklyPlanTasksPanel .weekly-plan-lane-add-shell");
       if (composerShell) {
-        if (wpKanbanOn) {
-          const inputFocused = weeklyPlanTaskInput && document.activeElement === weeklyPlanTaskInput;
-          composerShell.hidden = !inputFocused;
-        } else {
-          composerShell.hidden = false;
-        }
+        composerShell.hidden = wpKanbanOn;
+        composerShell.classList.toggle("sprint-view-list-hidden", wpKanbanOn);
       }
-      if (weeklyPlanList) weeklyPlanList.hidden = wpKanbanOn;
-      if (weeklyPlanKanban) weeklyPlanKanban.hidden = !wpKanbanOn;
-      if (weeklyPlanKanbanFooter) weeklyPlanKanbanFooter.hidden = !wpKanbanOn;
+      if (weeklyPlanList) {
+        weeklyPlanList.hidden = wpKanbanOn;
+        weeklyPlanList.classList.toggle("sprint-view-list-hidden", wpKanbanOn);
+      }
+      if (weeklyPlanKanban) {
+        weeklyPlanKanban.hidden = !wpKanbanOn;
+        weeklyPlanKanban.classList.toggle("sprint-view-kanban-active", wpKanbanOn);
+      }
+      if (weeklyPlanKanbanFooter) {
+        weeklyPlanKanbanFooter.hidden = !wpKanbanOn;
+        weeklyPlanKanbanFooter.classList.toggle("sprint-view-kanban-active", wpKanbanOn);
+      }
       if (weeklyPlanEmpty && wpKanbanOn) weeklyPlanEmpty.style.display = "none";
     }
 
