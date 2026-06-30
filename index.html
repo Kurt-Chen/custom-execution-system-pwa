@@ -60755,20 +60755,17 @@
       saveStateWithCloudPulseImmediate();
     }
 
-    /** pulse 合并后：先补 Done 再 reconcile，避免 habitCheckins 被空 Done 冲掉 */
+    /** pulse 合并后：先补 Done 再 reconcile；habitCheckins 已在 mergeCloudSyncPulseIntoState 合并，勿再 Math.max 覆盖 */
     function reconcileCloudSyncPulseDerivedState(pulseState) {
-      let pulseHcSnapshot = null;
-      if (pulseState && pulseState.habitCheckins && typeof pulseState.habitCheckins === "object") {
-        try {
-          pulseHcSnapshot = JSON.parse(JSON.stringify(pulseState.habitCheckins));
-        } catch (_hcSnapErr) {
-          pulseHcSnapshot = pulseState.habitCheckins;
-        }
-      }
       repairDoneListCompletedAtFromHabitMeta();
       const dates = new Set([formatDateInputValue(new Date())]);
-      if (pulseHcSnapshot) {
-        Object.keys(pulseHcSnapshot).forEach(function (d) {
+      if (pulseState && pulseState.habitCheckins && typeof pulseState.habitCheckins === "object") {
+        Object.keys(pulseState.habitCheckins).forEach(function (d) {
+          dates.add(d);
+        });
+      }
+      if (state.habitCheckins && typeof state.habitCheckins === "object") {
+        Object.keys(state.habitCheckins).forEach(function (d) {
           dates.add(d);
         });
       }
@@ -60780,14 +60777,6 @@
       try {
         reconcileDerivedCheckinsFromDoneAfterLoad();
       } catch (_recErr) {}
-      if (pulseHcSnapshot) {
-        state.habitCheckins = mergeHabitCheckinsForSync(state.habitCheckins, pulseHcSnapshot);
-      }
-      dates.forEach(function (d) {
-        try {
-          rebuildMissingHabitDoneRowsForDate(d);
-        } catch (_postDoneErr) {}
-      });
       if (
         (pulseState && pulseState.weeklyPlan) ||
         (pulseState && pulseState.weeklyPlanDoneSuppress) ||
@@ -62530,9 +62519,7 @@
         normalizeDoneListJournalFieldsInState();
         normalizeDoneOutcomeKindsInState();
         repairDoneListCompletedAtFromHabitMeta();
-        restoreDoneListFromHabitCheckinsIfMissing();
         reconcileDerivedCheckinsFromDoneAfterLoad();
-        restoreDoneListFromHabitCheckinsIfMissing();
         if (reconcileWeeklyPlanTasksToDeadlineWeeks()) {
           /* 不写 saveState，避免合并过程中再次 push */
         }
@@ -63830,6 +63817,13 @@
     function getHabitNumericDayTotal(habitKey, dateStr) {
       const opts = getHabitNumericSanitizeOpts(habitKey);
       if (!opts) return 0;
+      const rows = getHabitDoneRowsForDay(habitKey, dateStr);
+      if (rows.length) {
+        const fromDone = computeHabitNumericDayTotalFromDoneRows(habitKey, dateStr);
+        if (fromDone > 0) {
+          return fromDone;
+        }
+      }
       const hc = state.habitCheckins && typeof state.habitCheckins === "object" ? state.habitCheckins : {};
       const raw = hc[dateStr] ? hc[dateStr][habitKey] : null;
       if (raw && typeof raw === "object") {
@@ -64826,9 +64820,17 @@
           const daySlot = state.habitCheckins[dateStr];
           const cur = daySlot && daySlot[habitKey];
           const fromDoneRows = computeHabitNumericDayTotalFromDoneRows(habitKey, dateStr);
+          const optsForCur = getHabitNumericSanitizeOpts(habitKey);
+          let curFieldTotal = 0;
+          if (cur && typeof cur === "object" && optsForCur) {
+            const cf = Number(cur[optsForCur.valueKey]);
+            if (Number.isFinite(cf) && cf > 0) {
+              curFieldTotal = cf;
+            }
+          }
           if (pruned) {
             rebuildHabitCheckinFromDoneList(habitKey, dateStr);
-          } else if ((cur === false || cur == null) && fromDoneRows > 0) {
+          } else if (fromDoneRows > 0 && (cur === false || cur == null || curFieldTotal > fromDoneRows)) {
             rebuildHabitCheckinFromDoneList(habitKey, dateStr);
           }
           if (!state.habitCheckins[dateStr]) return;
@@ -64863,6 +64865,12 @@
         if (!day || typeof day !== "object") return;
         ["exmindVocab", "miraaShadowing", "audibleMeditation", "zhanZhuang", CITIC_DEBIT_SAVE_FIRST_100K_KEY].forEach(function (habitKey) {
           if (!Object.prototype.hasOwnProperty.call(day, habitKey)) return;
+          const fromDoneRows = computeHabitNumericDayTotalFromDoneRows(habitKey, dateStr);
+          if (fromDoneRows > 0 && getHabitDoneRowsForDay(habitKey, dateStr).length > 0) {
+            rebuildHabitCheckinFromDoneList(habitKey, dateStr);
+            changed = true;
+            return;
+          }
           const opts = isHabitWordCountKey(habitKey)
             ? { valueKey: "wordCount", maxBatch: 9999, maxDaily: 999999 }
             : isHabitSavingsKey(habitKey)
@@ -64908,6 +64916,7 @@
       if (!state.habitCheckins || typeof state.habitCheckins !== "object") {
         state.habitCheckins = {};
       }
+      restoreDoneListFromHabitCheckinsIfMissing({ allDates: true });
       const pairs = new Set();
       const dailyWinDates = new Set();
       (Array.isArray(state.done) ? state.done : []).forEach(function (item) {
@@ -85175,7 +85184,7 @@
       updateMeasureSegmentDesktopTabsLayout();
     }
 
-    const HABIT_NUMERIC_LIFETIME_REPAIR_VER = 3;
+    const HABIT_NUMERIC_LIFETIME_REPAIR_VER = 4;
     let habitNumericLifetimeRepairAppliedVer = 0;
 
     function renderHabitCheckins() {
@@ -86401,14 +86410,19 @@
       return changed;
     }
 
-    function restoreDoneListFromHabitCheckinsIfMissing() {
+    function restoreDoneListFromHabitCheckinsIfMissing(opts) {
       let changed = false;
       const today = formatDateInputValue(new Date());
-      const dates = [today];
-      if (selectedDoneDate && dates.indexOf(selectedDoneDate) === -1) {
-        dates.push(selectedDoneDate);
+      const dateSet = new Set([today]);
+      if (selectedDoneDate) {
+        dateSet.add(selectedDoneDate);
       }
-      dates.forEach(function (d) {
+      if (opts && opts.allDates && state.habitCheckins && typeof state.habitCheckins === "object") {
+        Object.keys(state.habitCheckins).forEach(function (d) {
+          dateSet.add(d);
+        });
+      }
+      dateSet.forEach(function (d) {
         if (rebuildMissingHabitDoneRowsForDate(d)) changed = true;
       });
       return changed;
