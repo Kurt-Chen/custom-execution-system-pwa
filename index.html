@@ -58114,6 +58114,26 @@
       return false;
     }
 
+    /** 封闭清单 pulse 变更签名：含子步骤完成态，避免仅勾选子步骤时合并结果被丢弃 */
+    function closedListPulseSignature(item) {
+      if (!item || item.id == null) return "";
+      const steps = getClosedListSubStepsNormalized(item);
+      const stepsSig = steps
+        .map(function (s) {
+          return String(s.text || "").trim() + ":" + (s.completed ? "1" : "0");
+        })
+        .join("|");
+      return (
+        String(item.deadlineAt || "") +
+        ":" +
+        String(item.deadlineUpdatedAt || "") +
+        ":" +
+        Boolean(item.completed) +
+        ":" +
+        stepsSig
+      );
+    }
+
     function mergeCloudSyncClosedListPulseIntoState(items) {
       if (!Array.isArray(items) || !items.length) return false;
       const merged = mergeClosedListArraysForSync(
@@ -58126,25 +58146,12 @@
         const sigMap = new Map();
         loc.forEach(function (x) {
           if (!x || x.id == null) return;
-          sigMap.set(
-            String(x.id),
-            String(x.deadlineAt || "") +
-              ":" +
-              String(x.deadlineUpdatedAt || "") +
-              ":" +
-              Boolean(x.completed)
-          );
+          sigMap.set(String(x.id), closedListPulseSignature(x));
         });
         for (let i = 0; i < merged.length; i++) {
           const m = merged[i];
           if (!m || m.id == null) continue;
-          const sig =
-            String(m.deadlineAt || "") +
-            ":" +
-            String(m.deadlineUpdatedAt || "") +
-            ":" +
-            Boolean(m.completed);
-          if (sigMap.get(String(m.id)) !== sig) {
+          if (sigMap.get(String(m.id)) !== closedListPulseSignature(m)) {
             changed = true;
             break;
           }
@@ -59557,6 +59564,31 @@
      * 对同一 id，任一侧 completed 为 true 则结果必为已完成，completedAt 取较大者（与 mergeIdRecordArraysPreferLocalOnTie 配合）。
      * 若胜出条目缺少 mirrorOf（周计划镜像），则从本地/远端侧补回，避免双向同步关联丢失。
      */
+    /** 封闭清单子步骤：同文案并集，任一侧 completed 则保留已完成（与阅读计划章节 merge 同思路） */
+    function mergeClosedListSubStepsForSync(locSteps, remSteps) {
+      const loc = Array.isArray(locSteps) ? locSteps : [];
+      const rem = Array.isArray(remSteps) ? remSteps : [];
+      const byKey = new Map();
+      function ingest(entry) {
+        const parsed = parseClosedListSubStepStored(entry);
+        const text = String(parsed.text || "").trim();
+        if (!text) return;
+        const key = text.toLowerCase();
+        const cur = byKey.get(key);
+        if (!cur) {
+          byKey.set(key, { text: text, completed: Boolean(parsed.completed) });
+          return;
+        }
+        byKey.set(key, {
+          text: text || cur.text,
+          completed: Boolean(parsed.completed || cur.completed)
+        });
+      }
+      rem.forEach(ingest);
+      loc.forEach(ingest);
+      return Array.from(byKey.values());
+    }
+
     /** pulse 曾只传截止期限字段；合并时从任一侧补全标题/子步骤，避免「胜出条」缺 text 覆盖完整条目 */
     function fillClosedListMergedItemFromSides(out, L, R) {
       if (!out || out.id == null) return out;
@@ -59570,7 +59602,17 @@
       }
       const subL = L && Array.isArray(L.subSteps) ? L.subSteps : [];
       const subR = R && Array.isArray(R.subSteps) ? R.subSteps : [];
-      if (!Array.isArray(out.subSteps) || !out.subSteps.length) {
+      const mergedSub = mergeClosedListSubStepsForSync(subL, subR);
+      if (mergedSub.length) {
+        out.subSteps = mergedSub
+          .map(serializeClosedListSubStepEntry)
+          .filter(function (x) {
+            return x != null && x !== "";
+          });
+        if (!String(out.miniStep || "").trim() && mergedSub[0]) {
+          out.miniStep = mergedSub[0].text;
+        }
+      } else if (!Array.isArray(out.subSteps) || !out.subSteps.length) {
         if (subL.length) out.subSteps = subL.slice();
         else if (subR.length) out.subSteps = subR.slice();
       }
@@ -60725,13 +60767,50 @@
         : Date.now();
     }
 
-    /** 日常保存只写 pulse（KB 级），不读整房间、不 merge 全状态 */
+    /**
+     * pulse 写入前吸收房间内尚未处理的远端 pulse，避免陈旧本机快照覆盖他端刚完成的冲刺/封闭清单状态。
+     * pulse 节点为整包覆盖写，不先合并会导致后写入的一端抹掉先完成的勾选。
+     */
+    function absorbRemoteCloudSyncPulseBeforePush() {
+      if (!cloudSyncReady || !cloudSyncRoomRef || cloudSyncApplyingRemote) {
+        return Promise.resolve(false);
+      }
+      return readCloudSyncRoomChildValue("pulse")
+        .then(function (remoteNode) {
+          if (!remoteNode || !remoteNode.state) return false;
+          if (remoteNode.updatedBy === cloudSyncClientId) return false;
+          const pu = coerceCloudUpdatedAt(remoteNode.updatedAt);
+          const last = getCloudLastPulseSeen();
+          if (pu > 0 && pu <= last) return false;
+          const changed = mergeCloudSyncPulseIntoState(remoteNode.state);
+          if (pu > 0) setCloudLastPulseSeen(pu);
+          if (!changed) return false;
+          reconcileCloudSyncPulseDerivedState(remoteNode.state);
+          setCloudSyncHashFromCurrentState();
+          try {
+            persistStateToLocalStorage();
+          } catch (_absorbPersistErr) {}
+          return true;
+        })
+        .catch(function () {
+          return false;
+        });
+    }
+
+    /** 日常保存只写 pulse（KB 级）；写入前先合并房间内 pulse，再上传本机快照 */
     function pushCloudSyncPulseOnly() {
       if (!cloudSyncReady || cloudSyncApplyingRemote || !cloudSyncRef) return;
-      pushCloudSyncPulseToRoom(getCloudSyncServerTimestamp()).catch(function (err) {
-        console.warn("pulse 同步失败:", err);
-        setCloudSyncError(err, "今日快同步失败");
-      });
+      absorbRemoteCloudSyncPulseBeforePush()
+        .then(function (didMerge) {
+          if (didMerge) {
+            scheduleCloudSyncRenderDebounced();
+          }
+          return pushCloudSyncPulseToRoom(getCloudSyncServerTimestamp());
+        })
+        .catch(function (err) {
+          console.warn("pulse 同步失败:", err);
+          setCloudSyncError(err, "今日快同步失败");
+        });
     }
 
     /** 取消防抖并立即上传今日 pulse（切后台 / 习惯打卡后，避免平板未发出） */
@@ -66058,12 +66137,12 @@
         if (moEarly && moEarly.kind === "weeklyPlan") {
           applyWeeklyPlanCompletionFromMirror(moEarly, Boolean(item.completed), item.completedAt);
           syncAllWeeklyPlanMirrorsForWeek(moEarly.weekKey);
-          saveState();
+          saveStateWithCloudPulseImmediate();
           render();
         } else if (moEarly && moEarly.kind === "anniversaryTw") {
           applyAnniversaryCompletionFromMirror(moEarly, Boolean(item.completed));
           syncAllAnniversaryMirrorsForTask(moEarly.module, moEarly.taskId);
-          saveState();
+          saveStateWithCloudPulseImmediate();
           render();
         }
         return;
@@ -66092,7 +66171,7 @@
         applyAnniversaryCompletionFromMirror(mo, Boolean(checked));
         syncAllAnniversaryMirrorsForTask(mo.module, mo.taskId);
       }
-      saveState();
+      saveStateWithCloudPulseImmediate();
       render();
     }
 
@@ -66252,7 +66331,7 @@
         item.miniStep = arr[0].text;
       }
       syncClosedListParentCompleteFromSubSteps(item);
-      saveState();
+      saveStateWithCloudPulseImmediate();
       render();
     }
 
@@ -75422,7 +75501,7 @@
         });
         stampWeeklyPlanMainDone(task, false);
       }
-      saveWeeklyPlanTasksForWeek(tasks, wk);
+      saveWeeklyPlanTasksForWeekWithPulse(tasks, wk);
     }
 
     function syncAllWeeklyPlanMirrorsForWeek(weekKey) {
