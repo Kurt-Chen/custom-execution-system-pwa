@@ -48848,7 +48848,7 @@
                 </div>
               </div>
               <div class="forge-body-tab-panel" id="forgeBodyPanelBw" role="tabpanel" aria-labelledby="forgeBodyTabBw" hidden data-forge-body-tab="bw">
-                <p class="forge-body-panel-meta forge-task-group-meta">无额外负重；站桩等为 min、平板/侧平为 sec、其余多为 Reps；慢跑 km、冲刺 Set（组）；与壶铃、囚徒互补</p>
+                <p class="forge-body-panel-meta forge-task-group-meta">无额外负重；平板/侧平为 sec、其余多为 Reps；慢跑 km、冲刺 Set（组）；与壶铃、囚徒互补</p>
                 <div class="forge-task-row forge-task-card forge-task-card--body" data-forge-wp-goal-sync="true">
 
                   <div class="forge-task-card-top">
@@ -48857,13 +48857,13 @@
 
                     <div class="forge-task-card-title-wrap">
 
-                      <span class="forge-task-text">站桩 <em>Zhan Zhuang</em></span>
+                      <span class="forge-task-text">棒铃练习 <em>Clubbell</em></span>
 
                     </div>
 
                     <div class="forge-task-card-right">
 
-                      <span class="forge-task-val forge-task-val--idle">— / — min</span>
+                      <span class="forge-task-val forge-task-val--idle">— / — Reps</span>
 
                       <span class="forge-task-card-checkin-slot"></span>
 
@@ -70137,8 +70137,50 @@
 
     let forgeLifetimeAggCache = null;
 
+    /** Forge Body：站桩已改名为棒铃练习，迁移打卡键与周最低标签 */
+    function migrateForgeZhanZhuangToClubbellIfNeeded() {
+      if (migrateForgeZhanZhuangToClubbellIfNeeded._done) return false;
+      migrateForgeZhanZhuangToClubbellIfNeeded._done = true;
+      const newLabel = "棒铃练习";
+      function isLegacyZhanZhuangKey(raw) {
+        const s = String(raw || "").trim();
+        if (!s) return false;
+        if (s.indexOf("站桩") === 0) return true;
+        const n = forgeWpNormalizeTaskKey(s);
+        return n.indexOf("站桩") === 0 || /zhanzhuang/.test(n);
+      }
+      let changed = false;
+      if (state.done && Array.isArray(state.done)) {
+        state.done.forEach(function (task) {
+          if (!task.forgeBodyMeta) return;
+          const rk = task.forgeBodyMeta.rowKey != null ? String(task.forgeBodyMeta.rowKey).trim() : "";
+          const fromDone = extractForgeDoneLabelForMatch(task);
+          if (
+            isLegacyZhanZhuangKey(rk) ||
+            isLegacyZhanZhuangKey(fromDone) ||
+            /【Forge·Body】站桩/.test(String(task.text || ""))
+          ) {
+            task.forgeBodyMeta.rowKey = newLabel;
+            changed = true;
+          }
+        });
+      }
+      if (state.forge && Array.isArray(state.forge.weeklyMinimums)) {
+        state.forge.weeklyMinimums.forEach(function (r) {
+          if (!r || r.realm !== "body") return;
+          const lb = String(r.label || "").trim();
+          if (lb && isLegacyZhanZhuangKey(lb)) {
+            r.label = newLabel;
+            changed = true;
+          }
+        });
+      }
+      return changed;
+    }
+
     function refreshAllForgeTodayTaskRowsFromDone() {
       migrateForgeMindMetaRowKeysIfNeeded();
+      if (migrateForgeZhanZhuangToClubbellIfNeeded()) saveState();
       if (migrateForgeDailyMinimumsHygiene()) saveState();
       applyForgeTaskIdlePlaceholdersNoDailyGoal();
       const mod = document.getElementById("forgeModule");
@@ -87712,12 +87754,12 @@
       if (/跑|公里|慢跑|跑步/.test(s)) return "km";
       if (/平板支撑|侧平板|Side\s*Plank|Plank\s*Hold/i.test(s)) return "sec";
       if (
-        /壶铃|摆荡|深蹲|波比|开合|弹跳|登山|箭步|俯卧撑|引体|硬拉|卧推|单手|双手|负重|乌鸦|倒立|卷腹|腹肌轮|凯格尔|Kegel|超人|引体向上|^桥\s|囚徒|第\s*[一二三四五六七八九十\d]+\s*式|^第\s*\d|生理叹息|循环换气/.test(s)
+        /壶铃|棒铃|摆荡|深蹲|波比|开合|弹跳|登山|箭步|俯卧撑|引体|硬拉|卧推|单手|双手|负重|乌鸦|倒立|卷腹|腹肌轮|凯格尔|Kegel|超人|引体向上|^桥\s|囚徒|第\s*[一二三四五六七八九十\d]+\s*式|^第\s*\d|生理叹息|循环换气/.test(s)
       ) {
         return "Reps";
       }
       if (/^Edging\s*$/i.test(s) || /^边缘控制$/.test(s)) return "min";
-      if (/心灵|正念|预演|冥想|观呼吸|NSDR|晨间|冷水|时空|视觉|控制|预想|俯瞰|终局|爱命运|晚间|分钟|剧场|站桩/.test(s)) return "min";
+      if (/心灵|正念|预演|冥想|观呼吸|NSDR|晨间|冷水|时空|视觉|控制|预想|俯瞰|终局|爱命运|晚间|分钟|剧场/.test(s)) return "min";
       return "min";
     }
 
