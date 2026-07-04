@@ -8326,6 +8326,7 @@
 
       #weeklyPlanTasksPanel .weekly-plan-lane-add-shell.sprint-view-list-hidden,
       #weeklyPlanClosedPanel .closed-list-one-thing-block.sprint-view-list-hidden,
+      #weeklyPlanClosedPanel .closed-list-add-actions-row.sprint-view-list-hidden,
       #weeklyPlanClosedPanel .closed-list-add-slot.sprint-view-list-hidden {
         display: none !important;
       }
@@ -77378,6 +77379,7 @@
       }
       if (closedListAddAnniversaryTwBtn) {
         closedListAddAnniversaryTwBtn.classList.toggle("sprint-view-list-hidden", closedKanbanOn);
+        if (closedKanbanOn) closedListAddAnniversaryTwBtn.hidden = true;
       }
       if (closedListKanban) {
         closedListKanban.hidden = !closedKanbanOn;
@@ -77943,7 +77945,6 @@
     }
 
     function moduleHasAnniversaryTwAnchor(moduleKey) {
-      if (moduleKey === "tw020") return Boolean(tw020AnchorDate());
       return Boolean(anniversaryTwAnchorDateForModule(moduleKey));
     }
 
@@ -80508,6 +80509,11 @@
       return e;
     }
 
+    /** 十二周年#20 固定周日起算（与 ANNIVERSARY_TW020_ANCHOR 一致） */
+    function tw020AnchorDate() {
+      return tw020WeekStartSunday(1);
+    }
+
     function getTw020Week12DeadlineMs() {
       return endOfLocalCalendarDayMs(tw020WeekEndSaturday(12));
     }
@@ -80944,7 +80950,7 @@
         ensureAnniversaryTwDynamicPanelDom(moduleKey, anniversaryTwNumberFromModuleKey(moduleKey));
       });
       if (changed) saveState();
-      refreshAnniversaryTwSubTabs();
+      if (changed) refreshAnniversaryTwSubTabs();
       return changed;
     }
 
@@ -80976,6 +80982,7 @@
       if (anniversaryTwArchiveViewKey) {
         activateAnniversaryTwSubTab("__archive__" + anniversaryTwArchiveViewKey, { archiveView: true });
         updateAnniversaryTwArchiveViewBar();
+        syncAnniversaryTwActiveCycleSegmentTabs();
         return;
       }
       updateAnniversaryTwArchiveViewBar();
@@ -80985,10 +80992,12 @@
       });
       if (prevKey && visibleKeys.indexOf(prevKey) !== -1) {
         activateAnniversaryTwSubTab(prevKey);
+        syncAnniversaryTwActiveCycleSegmentTabs();
         return;
       }
       const newest = visible[visible.length - 1];
       activateAnniversaryTwSubTab("anniversary-" + newest.key);
+      syncAnniversaryTwActiveCycleSegmentTabs();
     }
 
     function renderAnniversaryTwArchiveDropdown() {
@@ -82464,6 +82473,38 @@
           initialIndex = 0;
         }
         activate(initialIndex);
+      });
+    }
+
+    /** 周期子 Tab 切换后，确保当前可见周期内部分段 Tab 显隐正确 */
+    function syncAnniversaryTwActiveCycleSegmentTabs() {
+      const activeCycle = document.querySelector(
+        "#anniversaryModule .anniversary-tw-grid > section.anniversary-tw020-card:not(.module-tab-hidden)"
+      );
+      if (!activeCycle) return;
+      const tablist = activeCycle.querySelector('.anniversary-tw-seg-tablist[role="tablist"]');
+      if (!tablist) return;
+      const tabs = Array.from(tablist.querySelectorAll('.anniversary-tw-seg-btn[role="tab"]'));
+      if (tabs.length < 2) return;
+      const panels = tabs.map(function (tab) {
+        const id = tab.getAttribute("aria-controls");
+        return id ? document.getElementById(id) : null;
+      });
+      if (panels.some(function (p) {
+        return !p;
+      })) {
+        return;
+      }
+      let index = tabs.findIndex(function (t) {
+        return t.getAttribute("aria-selected") === "true";
+      });
+      if (index < 0) index = 0;
+      tabs.forEach(function (tab, i) {
+        const active = i === index;
+        tab.setAttribute("aria-selected", active ? "true" : "false");
+        tab.tabIndex = active ? 0 : -1;
+        panels[i].classList.toggle("module-tab-hidden", !active);
+        panels[i].classList.toggle("module-tab-active", active);
       });
     }
 
@@ -84255,6 +84296,7 @@
     }
 
     function anniversaryTwAnchorDateForModule(moduleKey) {
+      if (moduleKey === "tw020") return tw020AnchorDate();
       if (moduleKey === "tw021") return tw021AnchorDate();
       if (moduleKey === "tw022") return tw022AnchorDate();
       return anniversaryTwDynamicAnchorDate(moduleKey);
@@ -85658,7 +85700,11 @@
       renderWeeklyPlanUI();
       renderKineticCountdowns();
       renderTrash();
-      ensureAnniversaryTwArchivePass();
+      try {
+        ensureAnniversaryTwArchivePass();
+      } catch (err) {
+        console.warn("[十二周年] 归档检查失败:", err);
+      }
       const annTwWeekListScroll = captureAnniversaryTwWeekListScrollTops();
       renderAnniversaryTw020();
       renderAnniversaryTw021();
@@ -85670,7 +85716,9 @@
       });
       restoreAnniversaryTwWeekListScrollTops(annTwWeekListScroll);
       scrollAnniversaryTwPendingWeekIntoView();
-      if (typeof refreshAnniversaryTwSubTabs === "function") refreshAnniversaryTwSubTabs();
+      if (typeof syncAnniversaryTwActiveCycleSegmentTabs === "function") {
+        syncAnniversaryTwActiveCycleSegmentTabs();
+      }
       refreshDynamicModuleLunarHints();
       if (typeof activateKineticTab === "function") {
         const activeKineticBtn = document.querySelector("#dynamicModule .kinetic-tab-btn[aria-selected='true']");
@@ -87727,15 +87775,23 @@
         addClosedListBtn.disabled = Boolean(isClosedListEditable && nClosed >= CLOSED_LIST_DAY_MAX_ITEMS);
       }
       const showAddSlot = Boolean(isClosedListEditable && nClosed < CLOSED_LIST_DAY_MAX_ITEMS);
+      const onClosedShell = getWeeklyPlanShell() === "closed";
       if (closedListAddActionsRow) {
-        closedListAddActionsRow.hidden = !showAddSlot;
+        closedListAddActionsRow.hidden = !onClosedShell || !showAddSlot;
       }
       if (closedListAddSlotBtn) {
-        closedListAddSlotBtn.hidden = !showAddSlot;
+        closedListAddSlotBtn.hidden = !onClosedShell || !showAddSlot;
       }
       if (closedListAddAnniversaryTwBtn) {
-        const jumpTarget = showAddSlot ? resolveAnniversaryTwJumpTargetForDate(dateKey) : null;
-        closedListAddAnniversaryTwBtn.hidden = !showAddSlot || !jumpTarget;
+        let jumpTarget = null;
+        if (onClosedShell && showAddSlot) {
+          try {
+            jumpTarget = resolveAnniversaryTwJumpTargetForDate(dateKey);
+          } catch (err) {
+            console.warn("[封闭清单] 十二周年跳转目标解析失败:", err);
+          }
+        }
+        closedListAddAnniversaryTwBtn.hidden = !onClosedShell || !showAddSlot || !jumpTarget;
         closedListAddAnniversaryTwBtn.disabled = !jumpTarget;
       }
       if (closedListAddSlotLabel) {
