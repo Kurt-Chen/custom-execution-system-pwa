@@ -77993,15 +77993,24 @@
       if (!anniversaryTwPendingScrollTarget) return;
       const t = anniversaryTwPendingScrollTarget;
       anniversaryTwPendingScrollTarget = null;
+      if (t.segment) {
+        activateAnniversaryTwSegmentTab(t.moduleKey, t.segment);
+      }
       const suffix = anniversaryTwSuffixFromModuleKey(t.moduleKey);
-      const weekBody = document.getElementById("anniversary" + suffix + "WeekBody-" + t.weekNum);
-      const scrollTarget =
-        weekBody ||
-        document.querySelector(
-          "#anniversary" + suffix + "WeekList .tw020-week-item:nth-child(" + t.weekNum + ")"
-        );
-      if (scrollTarget && typeof scrollTarget.scrollIntoView === "function") {
-        scrollTarget.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      const applyScroll = function () {
+        const weekBody = document.getElementById("anniversary" + suffix + "WeekBody-" + t.weekNum);
+        const scrollTarget =
+          weekBody ||
+          document.querySelector(
+            "#anniversary" + suffix + "WeekList .tw020-week-item:nth-child(" + t.weekNum + ")"
+          );
+        if (scrollTarget && typeof scrollTarget.scrollIntoView === "function") {
+          scrollTarget.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        }
+      };
+      applyScroll();
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(applyScroll);
       }
     }
 
@@ -78019,7 +78028,8 @@
       anniversaryTwArchiveViewKey = null;
       anniversaryTwPendingScrollTarget = {
         moduleKey: target.moduleKey,
-        weekNum: target.weekNum
+        weekNum: target.weekNum,
+        segment: "tactics"
       };
       saveState();
       ensureAnniversaryTwRegistry();
@@ -82469,6 +82479,52 @@
         }
         activate(initialIndex);
       });
+    }
+
+    /** 十二周年内部分段 Tab：deeptime / vision / tactics / score / review */
+    function getAnniversaryTwSegmentTabIndex(segmentKey) {
+      const map = {
+        deeptime: 0,
+        vision: 1,
+        tactics: 2,
+        score: 3,
+        review: 4
+      };
+      return Object.prototype.hasOwnProperty.call(map, segmentKey) ? map[segmentKey] : -1;
+    }
+
+    function activateAnniversaryTwSegmentTab(moduleKey, segmentKey) {
+      const suffix = anniversaryTwSuffixFromModuleKey(moduleKey);
+      const subBody = document.getElementById("anniversary" + suffix + "SubBody");
+      if (!subBody) return false;
+      const tablist = subBody.querySelector('.anniversary-tw-seg-tablist[role="tablist"]');
+      if (!tablist) return false;
+      const tabs = Array.from(tablist.querySelectorAll('.anniversary-tw-seg-btn[role="tab"]'));
+      if (tabs.length < 2) return false;
+      let index = getAnniversaryTwSegmentTabIndex(segmentKey);
+      if (index < 0) {
+        index = tabs.findIndex(function (tab) {
+          return (tab.id || "").indexOf("SegTabTactics") !== -1;
+        });
+      }
+      if (index < 0 || index >= tabs.length) return false;
+      const panels = tabs.map(function (tab) {
+        const id = tab.getAttribute("aria-controls");
+        return id ? document.getElementById(id) : null;
+      });
+      if (panels.some(function (p) {
+        return !p;
+      })) {
+        return false;
+      }
+      tabs.forEach(function (tab, i) {
+        const active = i === index;
+        tab.setAttribute("aria-selected", active ? "true" : "false");
+        tab.tabIndex = active ? 0 : -1;
+        panels[i].classList.toggle("module-tab-hidden", !active);
+        panels[i].classList.toggle("module-tab-active", active);
+      });
+      return true;
     }
 
     /** 周期子 Tab 切换后，确保当前可见周期内部分段 Tab 显隐正确 */
