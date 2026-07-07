@@ -57944,7 +57944,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260707a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260707b";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** 本机已合并的 pulse.updatedAt（今日打卡快通道，远小于整包 v2） */
@@ -67303,7 +67303,7 @@
       }
       closedListInput.value = "";
       saveState();
-      render();
+      renderClosedListPanel();
       closedListInput.focus();
     }
 
@@ -67938,7 +67938,7 @@
       });
     }
 
-    function persistClosedListSubSteps(taskId, entries) {
+    function persistClosedListSubSteps(taskId, entries, options) {
       const item = state.closedList.find((x) => x.id === taskId);
       if (!item) return;
       let arr = (Array.isArray(entries) ? entries : []).map(function (e) {
@@ -67962,7 +67962,8 @@
       }
       syncClosedListParentCompleteFromSubSteps(item);
       saveStateWithCloudPulseImmediate();
-      render();
+      if (options && options.forceRender) renderClosedListPanel();
+      else render();
     }
 
     function addClosedListSubStepWithText(taskId, lineText) {
@@ -67972,7 +67973,7 @@
       if (!v) return;
       const cur = getClosedListSubStepsNormalized(item);
       cur.push({ text: v, completed: false });
-      persistClosedListSubSteps(taskId, cur);
+      persistClosedListSubSteps(taskId, cur, { forceRender: true });
     }
 
     function updateClosedListMiniStep(id, value) {
@@ -74769,6 +74770,9 @@
       if (listName === "memo" && task.completed) {
         li.classList.add("memo-completed");
       }
+      if (listName === "closedList") {
+        li.dataset.closedListId = task.id;
+      }
       if (listName === "closedList" && isClosedListItemEffectivelyComplete(task)) {
         li.classList.add("closed-list-completed");
       }
@@ -79042,8 +79046,8 @@
       touchWeeklyPlanTaskRevision(newTask);
       saveWeeklyPlanTasksForWeekWithPulse(insertWeeklyPlanTaskForLane(tasks, newTask, lane));
       weeklyPlanTaskInput.value = "";
+      refreshWeeklyPlanListAfterStructureChange();
       focusWeeklyPlanComposerInput();
-      render();
     }
 
     function deleteWeeklyPlanTask(taskId) {
@@ -79730,6 +79734,38 @@
     }
 
     /** 十二周年周任务条：复用周计划 lane-task-card 卡片结构（不含周底添加输入行） */
+    function appendAnniversaryTwSubTaskRow(subUl, opts, taskId, sub) {
+      const sli = document.createElement("li");
+      if (sub.done) {
+        sli.classList.add("tw020-sub-done");
+      }
+      const subCb = document.createElement("input");
+      subCb.type = "checkbox";
+      subCb.className = "tw020-sub-done-cb";
+      subCb.checked = Boolean(sub.done);
+      subCb.setAttribute("aria-label", "标记子任务完成");
+      subCb.addEventListener("change", () => {
+        opts.onSetSubDone(taskId, sub.id, subCb.checked);
+      });
+      const subInp = document.createElement("input");
+      subInp.type = "text";
+      subInp.placeholder = "子任务";
+      subInp.value = sub.text || "";
+      sli.appendChild(subCb);
+      sli.appendChild(subInp);
+      appendAnniversaryManualActionsWrap(sli, {
+        module: opts.module,
+        weekNum: opts.weekNum,
+        taskId: taskId,
+        subId: sub.id,
+        textInput: subInp,
+        onSave: (v) => opts.onUpdateSubText(taskId, sub.id, v),
+        onDelete: () => opts.onDeleteSub(taskId, sub.id)
+      });
+      subUl.appendChild(sli);
+      return subInp;
+    }
+
     function appendAnniversaryTwLaneTaskCard(tasksWrap, opts) {
       const module = opts.module;
       const weekNum = opts.weekNum;
@@ -79740,6 +79776,7 @@
 
       const block = document.createElement("div");
       block.className = "tw020-task-block anniversary-tw-task-card";
+      block.dataset.taskId = task.id;
       if (task.done) {
         block.classList.add("tw020-task-block-done");
       }
@@ -79956,34 +79993,7 @@
       const subUl = document.createElement("ul");
       subUl.className = "tw020-sub-list";
       subs.forEach((sub) => {
-        const sli = document.createElement("li");
-        if (sub.done) {
-          sli.classList.add("tw020-sub-done");
-        }
-        const subCb = document.createElement("input");
-        subCb.type = "checkbox";
-        subCb.className = "tw020-sub-done-cb";
-        subCb.checked = Boolean(sub.done);
-        subCb.setAttribute("aria-label", "标记子任务完成");
-        subCb.addEventListener("change", () => {
-          opts.onSetSubDone(task.id, sub.id, subCb.checked);
-        });
-        const subInp = document.createElement("input");
-        subInp.type = "text";
-        subInp.placeholder = "子任务";
-        subInp.value = sub.text || "";
-        sli.appendChild(subCb);
-        sli.appendChild(subInp);
-        appendAnniversaryManualActionsWrap(sli, {
-          module: module,
-          weekNum: weekNum,
-          taskId: task.id,
-          subId: sub.id,
-          textInput: subInp,
-          onSave: (v) => opts.onUpdateSubText(task.id, sub.id, v),
-          onDelete: () => opts.onDeleteSub(task.id, sub.id)
-        });
-        subUl.appendChild(sli);
+        appendAnniversaryTwSubTaskRow(subUl, opts, task.id, sub);
       });
 
       const addSubBtn = document.createElement("button");
@@ -80057,7 +80067,10 @@
       touchWeeklyPlanTaskRevision(task);
       saveWeeklyPlanTasksForWeekWithPulse(tasks);
       syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewSprintStartKey());
-      render();
+      const micro = task.microTasks[task.microTasks.length - 1];
+      if (!patchWeeklyPlanAfterMicroAdded(taskId, micro)) {
+        refreshWeeklyPlanListAfterStructureChange();
+      }
     }
 
     function toggleWeeklyPlanMainDone(taskId, checked) {
@@ -82814,6 +82827,310 @@
       else renderAnniversaryTw020();
     }
 
+    function buildAnniversaryTwWeekCardOpts(moduleKey, weekNum) {
+      const w = weekNum;
+      if (moduleKey === "tw020") {
+        return {
+          module: "tw020",
+          weekNum: w,
+          uiStateModule: state.anniversaryTw020,
+          supportsDeadline: true,
+          taskBodyIdPrefix: "anniversary020-task-body-",
+          onSetTaskDone: (taskId, done) => setTw020TaskDone(w, taskId, done),
+          onUpdateTaskText: (taskId, v) => updateTw020TaskText(w, taskId, v),
+          onDeleteTask: (taskId) => deleteTw020Task(w, taskId),
+          onUpdateDeadline: (taskId, ms) => updateTw020TaskDeadline(w, taskId, ms),
+          onSetSubDone: (taskId, subId, done) => setTw020SubDone(w, taskId, subId, done),
+          onUpdateSubText: (taskId, subId, v) => updateTw020SubText(w, taskId, subId, v),
+          onDeleteSub: (taskId, subId) => deleteTw020SubTask(w, taskId, subId),
+          onAddSub: (taskId) => addTw020SubTask(w, taskId)
+        };
+      }
+      if (moduleKey === "tw021") {
+        return {
+          module: "tw021",
+          weekNum: w,
+          uiStateModule: state.anniversaryTw021,
+          supportsDeadline: false,
+          taskBodyIdPrefix: "anniversary021-task-body-",
+          onSetTaskDone: (taskId, done) => setTw021TaskDone(w, taskId, done),
+          onUpdateTaskText: (taskId, v) => updateTw021TaskText(w, taskId, v),
+          onDeleteTask: (taskId) => deleteTw021Task(w, taskId),
+          onUpdateDeadline: () => {},
+          onSetSubDone: (taskId, subId, done) => setTw021SubDone(w, taskId, subId, done),
+          onUpdateSubText: (taskId, subId, v) => updateTw021SubText(w, taskId, subId, v),
+          onDeleteSub: (taskId, subId) => deleteTw021SubTask(w, taskId, subId),
+          onAddSub: (taskId) => addTw021SubTask(w, taskId)
+        };
+      }
+      if (moduleKey === "tw022") {
+        return {
+          module: "tw022",
+          weekNum: w,
+          uiStateModule: state.anniversaryTw022,
+          supportsDeadline: false,
+          taskBodyIdPrefix: "anniversary022-task-body-",
+          onSetTaskDone: (taskId, done) => setTw022TaskDone(w, taskId, done),
+          onUpdateTaskText: (taskId, v) => updateTw022TaskText(w, taskId, v),
+          onDeleteTask: (taskId) => deleteTw022Task(w, taskId),
+          onUpdateDeadline: () => {},
+          onSetSubDone: (taskId, subId, done) => setTw022SubDone(w, taskId, subId, done),
+          onUpdateSubText: (taskId, subId, v) => updateTw022SubText(w, taskId, subId, v),
+          onDeleteSub: (taskId, subId) => deleteTw022SubTask(w, taskId, subId),
+          onAddSub: (taskId) => addTw022SubTask(w, taskId)
+        };
+      }
+      const mod = getAnniversaryTwStateModule(moduleKey);
+      const suffix = anniversaryTwSuffixFromModuleKey(moduleKey);
+      return {
+        module: moduleKey,
+        weekNum: w,
+        uiStateModule: mod,
+        supportsDeadline: false,
+        taskBodyIdPrefix: "anniversary" + suffix + "-task-body-",
+        onSetTaskDone: (taskId, done) => setAnniversaryTwTaskDone(moduleKey, w, taskId, done),
+        onUpdateTaskText: (taskId, v) => updateAnniversaryTwTaskText(moduleKey, w, taskId, v),
+        onDeleteTask: (taskId) => deleteAnniversaryTwTask(moduleKey, w, taskId),
+        onUpdateDeadline: () => {},
+        onSetSubDone: (taskId, subId, done) => setAnniversaryTwSubDone(moduleKey, w, taskId, subId, done),
+        onUpdateSubText: (taskId, subId, v) => updateAnniversaryTwSubText(moduleKey, w, taskId, subId, v),
+        onDeleteSub: (taskId, subId) => deleteAnniversaryTwSubTask(moduleKey, w, taskId, subId),
+        onAddSub: (taskId) => addAnniversaryTwSubTask(moduleKey, w, taskId)
+      };
+    }
+
+    function buildAnniversaryTwWeekAddHandler(moduleKey, weekNum) {
+      if (moduleKey === "tw020") return (text) => addTw020Task(weekNum, text);
+      if (moduleKey === "tw021") return (text) => addTw021Task(weekNum, text);
+      if (moduleKey === "tw022") return (text) => addTw022Task(weekNum, text);
+      return (text) => addAnniversaryTwTask(moduleKey, weekNum, text);
+    }
+
+    function getAnniversaryTwWeekTasksWrapEl(moduleKey, weekNum) {
+      const suffix = anniversaryTwSuffixFromModuleKey(moduleKey);
+      const weekBody = document.getElementById("anniversary" + suffix + "WeekBody-" + weekNum);
+      if (!weekBody) return null;
+      return weekBody.querySelector(".tw020-week-tasks-panel");
+    }
+
+    /** 仅重绘单周任务区（看板模式或局部补丁失败时的回退） */
+    function refreshAnniversaryTwWeekTasksPanel(moduleKey, weekNum) {
+      const tasksWrap = getAnniversaryTwWeekTasksWrapEl(moduleKey, weekNum);
+      if (!tasksWrap) return false;
+      const tasks = getAnniversaryTwWeekTasks(moduleKey, weekNum);
+      const cardOpts = buildAnniversaryTwWeekCardOpts(moduleKey, weekNum);
+      tasksWrap.replaceChildren();
+      fillAnniversaryTwWeekTasksPanel(
+        tasksWrap,
+        moduleKey,
+        weekNum,
+        tasks,
+        cardOpts,
+        buildAnniversaryTwWeekAddHandler(moduleKey, weekNum)
+      );
+      return true;
+    }
+
+    function patchAnniversaryTwAfterTaskAdded(moduleKey, weekNum, task) {
+      const tasksWrap = getAnniversaryTwWeekTasksWrapEl(moduleKey, weekNum);
+      if (!tasksWrap || !task) return false;
+      if (
+        isSprintKanbanDesktopEnabled() &&
+        getAnniversaryTwWeekViewMode(moduleKey, weekNum) === "kanban"
+      ) {
+        return false;
+      }
+      const addRow = tasksWrap.querySelector(".tw020-week-actions");
+      if (!addRow) return false;
+      const tempWrap = document.createElement("div");
+      appendAnniversaryTwLaneTaskCard(
+        tempWrap,
+        Object.assign({ task: task }, buildAnniversaryTwWeekCardOpts(moduleKey, weekNum))
+      );
+      const block = tempWrap.firstElementChild;
+      if (!block) return false;
+      tasksWrap.insertBefore(block, addRow);
+      return true;
+    }
+
+    function patchAnniversaryTwAfterSubAdded(moduleKey, weekNum, taskId, sub) {
+      const tasksWrap = getAnniversaryTwWeekTasksWrapEl(moduleKey, weekNum);
+      if (!tasksWrap || !sub) return false;
+      const block = tasksWrap.querySelector('[data-task-id="' + taskId + '"]');
+      if (!block) return false;
+      const taskBody = block.querySelector(".tw020-task-body");
+      const subUl = block.querySelector(".tw020-sub-list");
+      const addSubBtn = block.querySelector(".tw020-btn-mini");
+      if (!taskBody || !subUl || !addSubBtn) return false;
+      const cardOpts = buildAnniversaryTwWeekCardOpts(moduleKey, weekNum);
+      const subInp = appendAnniversaryTwSubTaskRow(subUl, cardOpts, taskId, sub);
+      taskBody.classList.remove("collapsed");
+      const toggleBtn = block.querySelector(".reading-plan-item-tool-btn--toggle");
+      if (toggleBtn) {
+        toggleBtn.classList.add("is-active");
+        toggleBtn.setAttribute("aria-expanded", "true");
+        toggleBtn.setAttribute("aria-label", "收起子任务");
+      }
+      if (subInp) {
+        subInp.focus();
+      }
+      return true;
+    }
+
+    function afterAnniversaryTwTaskAdded(moduleKey, weekNum, task) {
+      if (!patchAnniversaryTwAfterTaskAdded(moduleKey, weekNum, task)) {
+        refreshAnniversaryTwWeekTasksPanel(moduleKey, weekNum);
+      }
+    }
+
+    function afterAnniversaryTwSubAdded(moduleKey, weekNum, taskId, sub) {
+      const mod = getAnniversaryTwStateModule(moduleKey);
+      ensureAnniversaryTwModuleUi(mod);
+      mod.ui.taskExpanded[anniversaryTwTaskUiKey(weekNum, taskId)] = true;
+      if (!patchAnniversaryTwAfterSubAdded(moduleKey, weekNum, taskId, sub)) {
+        refreshAnniversaryTwWeekTasksPanel(moduleKey, weekNum);
+      }
+    }
+
+    function createWeeklyPlanMicroItemLi(taskId, micro, index) {
+      const mLi = document.createElement("li");
+      mLi.className = "weekly-plan-micro-item";
+      if (micro.done) {
+        mLi.classList.add("weekly-plan-micro-item-done");
+      }
+      const stepNum = document.createElement("span");
+      stepNum.className = "weekly-plan-micro-step-num";
+      stepNum.textContent = String(index + 1);
+      const chk = document.createElement("input");
+      chk.type = "checkbox";
+      chk.checked = Boolean(micro.done);
+      chk.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+      chk.addEventListener("change", (event) => {
+        event.stopPropagation();
+        toggleWeeklyPlanMicroDone(taskId, micro.id, event.target.checked);
+      });
+      const txt = document.createElement("input");
+      txt.type = "text";
+      txt.className = "weekly-plan-micro-text done-filter";
+      txt.value = micro.text;
+      txt.title = String(micro.text || "").trim();
+      txt.addEventListener("change", (event) => {
+        updateWeeklyPlanMicroText(taskId, micro.id, event.target.value);
+      });
+      const delM = document.createElement("button");
+      delM.type = "button";
+      delM.className = "btn-delete btn-icon-action weekly-plan-micro-del-btn";
+      delM.innerHTML = ICON_BTN_DELETE_SVG;
+      delM.setAttribute("aria-label", "删除");
+      delM.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        deleteWeeklyPlanMicroTask(taskId, micro.id);
+      });
+      mLi.appendChild(stepNum);
+      mLi.appendChild(chk);
+      mLi.appendChild(txt);
+      appendManualDeleteOnlyWrap(mLi, delM, "weekly-plan-micro-actions-wrap");
+      return mLi;
+    }
+
+    function patchWeeklyPlanAfterMicroAdded(taskId, micro) {
+      const li = document.getElementById("weeklyPlanTask-" + taskId);
+      if (!li || !micro) return false;
+      const microUl = li.querySelector(".weekly-plan-micro-list");
+      const microWrap = li.querySelector(".weekly-plan-micro-wrap");
+      if (!microUl || !microWrap) return false;
+      weeklyPlanMicroExpandedIds.add(taskId);
+      microWrap.classList.remove("collapsed");
+      const toggleBtn = li.querySelector(".reading-plan-item-tool-btn--toggle");
+      if (toggleBtn) {
+        toggleBtn.classList.add("is-active");
+        toggleBtn.setAttribute("aria-expanded", "true");
+      }
+      const index = microUl.querySelectorAll(".weekly-plan-micro-item").length;
+      microUl.appendChild(createWeeklyPlanMicroItemLi(taskId, micro, index));
+      return true;
+    }
+
+    function refreshWeeklyPlanListAfterStructureChange() {
+      if (dedupeWeeklyPlanTasksInStorage()) {
+        saveState();
+      }
+      renderWeeklyPlanList();
+    }
+
+    function getFilteredClosedListItemsForView() {
+      const filteredClosedListItemsRaw = getClosedListItemsVisibleForViewDate(selectedClosedListDate);
+      const allClosedListHaveListOrder =
+        filteredClosedListItemsRaw.length > 0 &&
+        filteredClosedListItemsRaw.every((x) => typeof x.listOrder === "number");
+      return filteredClosedListItemsRaw.slice().sort((a, b) =>
+        compareClosedListItemsForSort(a, b, allClosedListHaveListOrder)
+      );
+    }
+
+    /** 仅刷新封闭清单面板（不含全页 render） */
+    function renderClosedListPanel() {
+      if (!closedList) return;
+      let filteredClosedListItems = getFilteredClosedListItemsForView();
+      let closedListParentSyncChanged = false;
+      filteredClosedListItems.forEach(function (item) {
+        if (syncClosedListParentCompleteFromSubSteps(item)) {
+          closedListParentSyncChanged = true;
+        }
+      });
+      if (closedListParentSyncChanged) {
+        saveState();
+        filteredClosedListItems = getFilteredClosedListItemsForView();
+      }
+      const closedKanbanOn =
+        getWeeklyPlanShell() === "closed" &&
+        isSprintKanbanDesktopEnabled() &&
+        getSprintViewMode("closed") === "kanban";
+      if (closedKanbanOn) {
+        closedList.innerHTML = "";
+        renderClosedListKanban(filteredClosedListItems);
+      } else {
+        renderList(closedList, filteredClosedListItems, "closedList");
+      }
+      closedList.classList.toggle(
+        "closed-list-over-cap",
+        filteredClosedListItems.length > CLOSED_LIST_DAY_MAX_ITEMS
+      );
+      if (closedListEmpty) {
+        closedListEmpty.style.display = filteredClosedListItems.length ? "none" : "block";
+      }
+      const closedProgress = countClosedListProgressUnits(filteredClosedListItems);
+      if (closedListDayQuota) {
+        const quotaDenom = closedProgress.total > 0 ? closedProgress.total : CLOSED_LIST_DAY_MAX_ITEMS;
+        closedListDayQuota.textContent =
+          "已完成 " + String(closedProgress.done) + "/" + String(quotaDenom);
+      }
+      const closedDone = closedProgress.done;
+      const closedTotal = closedProgress.total;
+      const allClosedDone = closedTotal > 0 && closedDone === closedTotal;
+      const filledSegs =
+        closedTotal === 0
+          ? 0
+          : Math.min(
+              CLOSED_LIST_DAY_MAX_ITEMS,
+              Math.round((closedDone / closedTotal) * CLOSED_LIST_DAY_MAX_ITEMS)
+            );
+      if (closedListDayProgress) {
+        closedListDayProgress.querySelectorAll(".closed-list-day-progress__seg").forEach(function (el, i) {
+          el.classList.toggle("is-filled", i < filledSegs);
+        });
+        closedListDayProgress.classList.toggle("is-all-done", allClosedDone);
+        closedListDayProgress.setAttribute("aria-valuenow", String(filledSegs));
+        closedListDayProgress.setAttribute(
+          "aria-valuetext",
+          closedDone + "/" + closedTotal + " 已完成"
+        );
+      }
+      syncClosedListDateNavUi(filteredClosedListItems.length);
+    }
+
     function appendAnniversaryTwWeekAddRow(tasksWrap, onAddTask, kanbanOn) {
       const addRow = document.createElement("div");
       addRow.className = "tw020-week-actions";
@@ -82825,6 +83142,7 @@
         if (ev.key === "Enter") {
           ev.preventDefault();
           onAddTask(addInp.value);
+          addInp.value = "";
         }
       });
       const addBtn = document.createElement("button");
@@ -82836,6 +83154,7 @@
       addBtn.style.borderRadius = "8px";
       addBtn.addEventListener("click", function () {
         onAddTask(addInp.value);
+        addInp.value = "";
       });
       addRow.appendChild(addInp);
       addRow.appendChild(addBtn);
@@ -82943,8 +83262,9 @@
         subs: [],
         done: false
       });
+      const newTask = state.anniversaryTw020.weeks[key][state.anniversaryTw020.weeks[key].length - 1];
       saveState();
-      render();
+      afterAnniversaryTwTaskAdded("tw020", weekNum, newTask);
     }
 
     function updateTw020TaskText(weekNum, taskId, text) {
@@ -83001,8 +83321,9 @@
         task.subs = [];
       }
       task.subs.push({ id: newTw020Id(), text: "", done: false });
+      const sub = task.subs[task.subs.length - 1];
       saveState();
-      render();
+      afterAnniversaryTwSubAdded("tw020", weekNum, taskId, sub);
     }
 
     function updateTw020SubText(weekNum, taskId, subId, text) {
@@ -85487,8 +85808,9 @@
         subs: [],
         done: false
       });
+      const newTask = state.anniversaryTw021.weeks[key][state.anniversaryTw021.weeks[key].length - 1];
       saveState();
-      render();
+      afterAnniversaryTwTaskAdded("tw021", weekNum, newTask);
     }
 
     function updateTw021TaskText(weekNum, taskId, text) {
@@ -85534,8 +85856,9 @@
         task.subs = [];
       }
       task.subs.push({ id: newTw020Id(), text: "", done: false });
+      const sub = task.subs[task.subs.length - 1];
       saveState();
-      render();
+      afterAnniversaryTwSubAdded("tw021", weekNum, taskId, sub);
     }
 
     function updateTw021SubText(weekNum, taskId, subId, text) {
@@ -85609,8 +85932,9 @@
       const key = String(weekNum);
       if (!Array.isArray(mod.weeks[key])) mod.weeks[key] = [];
       mod.weeks[key].push({ id: newTw020Id(), text: t, subs: [], done: false });
+      const newTask = mod.weeks[key][mod.weeks[key].length - 1];
       saveState();
-      render();
+      afterAnniversaryTwTaskAdded(moduleKey, weekNum, newTask);
     }
 
     function updateAnniversaryTwTaskText(moduleKey, weekNum, taskId, text) {
@@ -85658,8 +85982,9 @@
       if (!task) return;
       if (!Array.isArray(task.subs)) task.subs = [];
       task.subs.push({ id: newTw020Id(), text: "", done: false });
+      const sub = task.subs[task.subs.length - 1];
       saveState();
-      render();
+      afterAnniversaryTwSubAdded(moduleKey, weekNum, taskId, sub);
     }
 
     function updateAnniversaryTwSubText(moduleKey, weekNum, taskId, subId, text) {
@@ -86382,8 +86707,9 @@
         subs: [],
         done: false
       });
+      const newTask = state.anniversaryTw022.weeks[key][state.anniversaryTw022.weeks[key].length - 1];
       saveState();
-      render();
+      afterAnniversaryTwTaskAdded("tw022", weekNum, newTask);
     }
 
     function updateTw022TaskText(weekNum, taskId, text) {
@@ -86429,8 +86755,9 @@
         task.subs = [];
       }
       task.subs.push({ id: newTw020Id(), text: "", done: false });
+      const sub = task.subs[task.subs.length - 1];
       saveState();
-      render();
+      afterAnniversaryTwSubAdded("tw022", weekNum, taskId, sub);
     }
 
     function updateTw022SubText(weekNum, taskId, subId, text) {
@@ -87482,22 +87809,6 @@
       const filteredDoneTasks = dedupeDoneTasksForDisplay(filteredDoneTasksRaw);
       const filteredDoneTasksForStats = filteredDoneTasks.filter(isDoneCountedAsDayProduction);
       const filteredMemoItems = state.memo.slice();
-      const filteredClosedListItemsRaw = getClosedListItemsVisibleForViewDate(selectedClosedListDate);
-      const allClosedListHaveListOrder =
-        filteredClosedListItemsRaw.length > 0 &&
-        filteredClosedListItemsRaw.every((x) => typeof x.listOrder === "number");
-      const filteredClosedListItems = filteredClosedListItemsRaw.slice().sort((a, b) =>
-        compareClosedListItemsForSort(a, b, allClosedListHaveListOrder)
-      );
-      let closedListParentSyncChanged = false;
-      filteredClosedListItems.forEach(function (item) {
-        if (syncClosedListParentCompleteFromSubSteps(item)) {
-          closedListParentSyncChanged = true;
-        }
-      });
-      if (closedListParentSyncChanged) {
-        saveState();
-      }
       const baseDailyWinDate = selectedDailyWinDate || formatDateInputValue(new Date());
       const dailyWinTomorrowKey = getDailyWinTomorrowKey(baseDailyWinDate);
       const filteredDailyWinTodayTasks = getDailyWinTasksForDate(baseDailyWinDate);
@@ -87513,22 +87824,7 @@
         hatersDoubtersEmpty.style.display = n ? "none" : "block";
       }
       renderList(memoList, filteredMemoItems, "memo");
-      const closedKanbanOn =
-        getWeeklyPlanShell() === "closed" &&
-        isSprintKanbanDesktopEnabled() &&
-        getSprintViewMode("closed") === "kanban";
-      if (closedKanbanOn) {
-        if (closedList) closedList.innerHTML = "";
-        renderClosedListKanban(filteredClosedListItems);
-      } else {
-        renderList(closedList, filteredClosedListItems, "closedList");
-      }
-      if (closedList) {
-        closedList.classList.toggle(
-          "closed-list-over-cap",
-          filteredClosedListItems.length > CLOSED_LIST_DAY_MAX_ITEMS
-        );
-      }
+      renderClosedListPanel();
       renderList(doneList, filteredDoneTasks, "done");
       renderList(dailyWinList, filteredDailyWinTasks, "dailyWin");
       ensureDonePastFoldClickSetup();
@@ -87537,36 +87833,6 @@
       stopDoingCount.textContent = state.stopDoing.length;
       notToDoCount.textContent = state.notToDo.length;
       memoCount.textContent = filteredMemoItems.length;
-      {
-        const closedProgress = countClosedListProgressUnits(filteredClosedListItems);
-        if (closedListDayQuota) {
-          const quotaDenom = closedProgress.total > 0 ? closedProgress.total : CLOSED_LIST_DAY_MAX_ITEMS;
-          closedListDayQuota.textContent =
-            "已完成 " + String(closedProgress.done) + "/" + String(quotaDenom);
-        }
-        const closedDone = closedProgress.done;
-        const closedTotal = closedProgress.total;
-        const allClosedDone = closedTotal > 0 && closedDone === closedTotal;
-        const filledSegs =
-          closedTotal === 0
-            ? 0
-            : Math.min(
-                CLOSED_LIST_DAY_MAX_ITEMS,
-                Math.round((closedDone / closedTotal) * CLOSED_LIST_DAY_MAX_ITEMS)
-              );
-        if (closedListDayProgress) {
-          closedListDayProgress.querySelectorAll(".closed-list-day-progress__seg").forEach(function (el, i) {
-            el.classList.toggle("is-filled", i < filledSegs);
-          });
-          closedListDayProgress.classList.toggle("is-all-done", allClosedDone);
-          closedListDayProgress.setAttribute("aria-valuenow", String(filledSegs));
-          closedListDayProgress.setAttribute(
-            "aria-valuetext",
-            closedDone + "/" + closedTotal + " 已完成"
-          );
-        }
-      }
-      syncClosedListDateNavUi(filteredClosedListItems.length);
       renderDoneOutcomeDayStats(doneOutcomeDayStats, filteredDoneTasksForStats);
       renderDoneDayStats(doneDayStats, filteredDoneTasksForStats);
       if (typeof updateDoneClosedListShortcutAppearance === "function") {
@@ -87620,7 +87886,6 @@
       stopDoingEmpty.style.display = state.stopDoing.length ? "none" : "block";
       notToDoEmpty.style.display = state.notToDo.length ? "none" : "block";
       memoEmpty.style.display = filteredMemoItems.length ? "none" : "block";
-      closedListEmpty.style.display = filteredClosedListItems.length ? "none" : "block";
       doneEmpty.style.display = filteredDoneTasks.length ? "none" : "block";
       dailyWinEmpty.style.display = (filteredDailyWinTasks.length || isDailyWinModernMode()) ? "none" : "block";
       if (stampDailyThreeWinsDoneBtn) {
