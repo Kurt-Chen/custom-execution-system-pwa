@@ -11374,11 +11374,6 @@
     }
 
     @media (max-width: 767px) {
-      /* Forge 手机端：不展示终身累计（× 蓝胶囊） */
-      #forgeModule .forge-task-lifetime-total:not(.forge-task-lifetime-total--hide) {
-        display: none !important;
-      }
-
       #forgeModule #forgeMindCardBody .forge-task-card-title-wrap:has(.forge-task-lifetime-total:not(.forge-task-lifetime-total--hide)) {
         display: flex;
         flex-direction: column;
@@ -15330,7 +15325,7 @@
         font-size: 10px;
       }
       ul.app-done-time-timeline .done-time-block-sprint-urgency {
-        font-size: 10px;
+        font-size: 12px;
       }
 
       /* 手机：底栏中央短文案为紫色（桌面仍用宽行中文 + 默认色链） */
@@ -23114,25 +23109,39 @@
       flex: 0 0 auto;
       margin-left: auto;
       text-align: right;
-      font-weight: 700;
-      color: #dc2626;
-      letter-spacing: 0.02em;
+      font-family: inherit;
+      font-weight: 400;
+      font-synthesis: none;
+      color: #7c3aed;
+      letter-spacing: 0.06em;
       white-space: nowrap;
+      -webkit-font-smoothing: antialiased;
     }
 
     #habitRoutineModule #habitBasicGroup > .habit-basic-attention-lead .habit-basic-attention-lead__summary-title {
       flex: 1 1 auto;
       min-width: 0;
       text-align: left;
-      font-weight: 700;
+      font-family: inherit;
+      font-weight: 400;
+      font-synthesis: none;
       color: #0f766e;
+      letter-spacing: inherit;
+      -webkit-font-smoothing: antialiased;
     }
 
     #habitRoutineModule #habitBasicGroup > .habit-basic-attention-lead .habit-attention-lead-summary {
       list-style: none;
       cursor: pointer;
       color: #0f766e;
-      font-weight: 600;
+      font-family: "Ma Shan Zheng", "STXingkai", "华文行楷", "Xingkai SC", "行楷", KaiTi, "楷体", cursive;
+      font-size: inherit;
+      font-style: normal;
+      font-weight: 400;
+      font-synthesis: none;
+      letter-spacing: 0.04em;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
       padding: 0;
       margin: 0;
       min-width: 0;
@@ -23685,8 +23694,6 @@
         vertical-align: baseline;
       }
 
-      /* 终身累计 × / 日最低：仅 ≤599px 隐藏；600px+（含 iPad mini 744 等小平板）与桌面一致，见下方 @media (max-width: 599px) */
-
       #habitRoutineModule .habit-en-row--finance-invest .habit-en-finance-title-wrap {
         grid-column: 2;
         grid-row: 1;
@@ -24187,29 +24194,10 @@
       }
     }
 
-    /* 手机窄屏（≤599px）：隐藏习惯终身累计（× 胶囊）、日最低与分类周目标进度；600px+ 平板与桌面一致展示 */
+    /* 手机窄屏（≤599px）：隐藏分类周目标进度；× 终身累计 / 日最低各端一致展示 */
     @media (max-width: 599px) {
-      #habitRoutineModule .submodule-title .habit-title-lifetime-num,
-      #habitRoutineModule .submodule-title .habit-title-lifetime-minutes,
-      #habitRoutineModule .submodule-title .habit-title-daily-min,
-      #habitRoutineModule .habit-category-panel .habit-en-experiment-lifetime-ratio,
-      #habitRoutineModule .habit-category-panel .habit-en-savings-lifetime-ratio,
       #habitRoutineModule .habit-group-header-progress,
       #habitRoutineModule .habit-en-learning-progress.habit-group-header-progress {
-        display: none !important;
-      }
-
-      #habitRoutineModule .habit-en-row--experiment-lab .habit-en-experiment-lifetime-ratio {
-        display: none !important;
-      }
-
-      #habitRoutineModule .habit-en-row--savings-goal .habit-en-savings-lifetime-ratio {
-        display: none !important;
-      }
-
-      /* 理财·投资：手机端隐藏全部累计（× 次数 / 金额进度） */
-      #habitRoutineModule .habit-category-panel[data-habit-category="financeInvest"] .habit-title-lifetime-num,
-      #habitRoutineModule .habit-category-panel[data-habit-category="financeInvest"] .habit-en-savings-lifetime-ratio {
         display: none !important;
       }
     }
@@ -58637,7 +58625,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260708q";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260708s";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** 本机已合并的 pulse.updatedAt（今日打卡快通道，远小于整包 v2） */
@@ -60751,7 +60739,151 @@
       }
       if (!out.key) out.key = metaA.key || metaB.key || "";
       if (!out.date) out.date = metaA.date || metaB.date || "";
+      const ltA = Number(metaA.lifetimeTotal);
+      const ltB = Number(metaB.lifetimeTotal);
+      if (Number.isFinite(ltA) || Number.isFinite(ltB)) {
+        const maxLt = Math.max(Number.isFinite(ltA) ? ltA : 0, Number.isFinite(ltB) ? ltB : 0);
+        if (maxLt > 0) out.lifetimeTotal = maxLt;
+      }
       return out;
+    }
+
+    /** 云合并 reconcile 期间：传入合并前两端的 state，用于累计取较大值 */
+    let cloudSyncLifetimeEnforceSides = null;
+
+    function setCloudSyncLifetimeEnforceSides(localSt, remoteSt) {
+      cloudSyncLifetimeEnforceSides =
+        localSt || remoteSt ? { local: localSt || null, remote: remoteSt || null } : null;
+    }
+
+    function clearCloudSyncLifetimeEnforceSides() {
+      cloudSyncLifetimeEnforceSides = null;
+    }
+
+    function getHabitNumericDayTotalFromState(st, habitKey, dateStr) {
+      if (!st) return 0;
+      return withTemporaryStateForSyncRead(st, function () {
+        return getHabitNumericDayTotal(habitKey, dateStr);
+      });
+    }
+
+    function collectHabitNumericDateKeysFromState(st, habitKey) {
+      if (!st) return [];
+      return withTemporaryStateForSyncRead(st, function () {
+        return Array.from(collectHabitNumericDateKeys(habitKey));
+      });
+    }
+
+    /** 将某日习惯数值打卡抬到 targetTotal（与标题 × 累计口径一致） */
+    function enforceHabitNumericDayTotalOnStateObject(st, habitKey, dateStr, targetTotal) {
+      const opts = getHabitNumericSanitizeOpts(habitKey);
+      if (!opts || !Number.isFinite(targetTotal) || targetTotal <= 0) return false;
+      if (!st.habitCheckins || typeof st.habitCheckins !== "object") st.habitCheckins = {};
+      if (!st.habitCheckins[dateStr] || typeof st.habitCheckins[dateStr] !== "object") {
+        st.habitCheckins[dateStr] = {};
+      }
+      const saved = state;
+      state = st;
+      try {
+        const curTotal = getHabitNumericDayTotal(habitKey, dateStr);
+        if (targetTotal <= curTotal + 1e-6) return false;
+        const prev = st.habitCheckins[dateStr][habitKey];
+        const capped = Math.min(Math.round(targetTotal), opts.maxDaily);
+        let next;
+        if (prev && typeof prev === "object") {
+          next = Object.assign({}, prev);
+          next[opts.valueKey] = capped;
+          const prevTimes = Number(prev.times);
+          next.times = Math.max(Number.isFinite(prevTimes) ? prevTimes : 0, 1);
+        } else {
+          next = {
+            times: 1,
+            batches: capped <= opts.maxBatch ? [capped] : [opts.maxBatch]
+          };
+          next[opts.valueKey] = capped;
+        }
+        const sanitized = sanitizeHabitNumericCheckinValue(next, opts);
+        st.habitCheckins[dateStr][habitKey] = mergeHabitCheckinValueForSync(
+          prev,
+          sanitized === false ? false : sanitized
+        );
+        return true;
+      } finally {
+        state = saved;
+      }
+    }
+
+    /** habitCheckins：各日累计不低于合并前本地/远端较大值 */
+    function enforceHabitCheckinsLifetimeMaxOnStateObject(st, localSt, remoteSt) {
+      if (!st) return false;
+      let changed = false;
+      const dateKeys = new Set();
+      HABIT_NUMERIC_LIFETIME_KEYS.forEach(function (habitKey) {
+        [localSt, remoteSt, st].forEach(function (side) {
+          collectHabitNumericDateKeysFromState(side, habitKey).forEach(function (d) {
+            dateKeys.add(d);
+          });
+        });
+      });
+      dateKeys.forEach(function (dateStr) {
+        HABIT_NUMERIC_LIFETIME_KEYS.forEach(function (habitKey) {
+          const target = Math.max(
+            getHabitNumericDayTotalFromState(localSt, habitKey, dateStr),
+            getHabitNumericDayTotalFromState(remoteSt, habitKey, dateStr),
+            getHabitNumericDayTotalFromState(st, habitKey, dateStr)
+          );
+          if (enforceHabitNumericDayTotalOnStateObject(st, habitKey, dateStr, target)) {
+            changed = true;
+          }
+        });
+      });
+      return changed;
+    }
+
+    /** Forge Done：并集重合并，同 id meta 取较大完成量 */
+    function enforceForgeDoneUnionMaxOnStateObject(st, localSt, remoteSt, preferRemoteOnConflict) {
+      if (!st) return false;
+      const locDone = localSt && Array.isArray(localSt.done) ? localSt.done : [];
+      const remDone = remoteSt && Array.isArray(remoteSt.done) ? remoteSt.done : [];
+      const curDone = Array.isArray(st.done) ? st.done : [];
+      const merged = mergeDoneArraysForSync(
+        mergeDoneArraysForSync(locDone, remDone, Boolean(preferRemoteOnConflict)),
+        curDone,
+        false
+      );
+      const ts = st.syncTombstones && typeof st.syncTombstones === "object" ? st.syncTombstones : {};
+      const nextDone = omitTombstonedIdRecords(merged, ts);
+      if (nextDone.length === curDone.length) {
+        let same = true;
+        const sigMap = new Map();
+        curDone.forEach(function (x) {
+          if (x && x.id != null) sigMap.set(String(x.id), cloudSyncDonePulseSignature(x));
+        });
+        for (let i = 0; i < nextDone.length; i++) {
+          const n = nextDone[i];
+          if (sigMap.get(String(n.id)) !== cloudSyncDonePulseSignature(n)) {
+            same = false;
+            break;
+          }
+        }
+        if (same) return false;
+      }
+      st.done = nextDone;
+      return true;
+    }
+
+    /** 云合并后：习惯 / Forge 终身累计不低于合并前两端的较大值（与界面 × 胶囊一致） */
+    function enforceCloudSyncLifetimeMaxOnStateObject(st, localSt, remoteSt, preferRemoteOnConflict) {
+      if (!st) return false;
+      let changed = enforceForgeDoneUnionMaxOnStateObject(st, localSt, remoteSt, preferRemoteOnConflict);
+      if (enforceHabitCheckinsLifetimeMaxOnStateObject(st, localSt, remoteSt)) {
+        changed = true;
+      }
+      return changed;
+    }
+
+    function enforceCloudSyncLifetimeMaxFromSides(localSt, remoteSt) {
+      return enforceCloudSyncLifetimeMaxOnStateObject(state, localSt, remoteSt, true);
     }
 
     /**
@@ -61003,10 +61135,23 @@
       const last = getCloudLastPulseSeen();
       if (pu > 0 && pu <= last) return false;
       const lifetimeBefore = captureCloudSyncLifetimeSnapshot(state);
-      const changed = mergeCloudSyncPulseIntoState(pulseNode.state);
-      if (pu > 0) setCloudLastPulseSeen(pu);
-      if (!changed) return false;
-      reconcileCloudSyncPulseDerivedState(pulseNode.state);
+      let localSnap = null;
+      try {
+        localSnap = JSON.parse(JSON.stringify(state));
+      } catch (_pulseLocSnap) {
+        localSnap = null;
+      }
+      setCloudSyncLifetimeEnforceSides(localSnap, pulseNode.state);
+      let changed = false;
+      try {
+        changed = mergeCloudSyncPulseIntoState(pulseNode.state);
+        if (pu > 0) setCloudLastPulseSeen(pu);
+        if (!changed) return false;
+        reconcileCloudSyncPulseDerivedState(pulseNode.state);
+        enforceCloudSyncLifetimeMaxFromSides(localSnap, pulseNode.state);
+      } finally {
+        clearCloudSyncLifetimeEnforceSides();
+      }
       sanityCheckForgeAndHabitLifetimeAfterSync(lifetimeBefore, "pulse 合并");
       setCloudSyncHashFromCurrentState();
       scheduleCloudSyncPersistDebounced();
@@ -64948,7 +65093,13 @@
         }
       }
 
-      reconcileDerivedCheckinsOnStateObject(base);
+      setCloudSyncLifetimeEnforceSides(state, remoteState);
+      try {
+        reconcileDerivedCheckinsOnStateObject(base);
+        enforceCloudSyncLifetimeMaxOnStateObject(base, state, remoteState, serverNewer);
+      } finally {
+        clearCloudSyncLifetimeEnforceSides();
+      }
       return base;
     }
 
@@ -64993,10 +65144,21 @@
           const lastSeen = getCloudLastSeenUpdatedAt();
           if (payload && payload.state && Array.isArray(payload.state.done)) {
             const remoteAt = coerceCloudUpdatedAt(payload.updatedAt);
+            let localSnapForEnforce = null;
+            try {
+              localSnapForEnforce = JSON.parse(JSON.stringify(state));
+            } catch (_locEnfSnap) {
+              localSnapForEnforce = null;
+            }
             const merged = mergeLocalStateWithRemotePayloadBeforePush(payload.state, remoteAt, lastSeen);
             if (merged) {
-              applyMergedCloudStateInMemory(merged, { skipRender: true });
+              applyMergedCloudStateInMemory(merged, {
+                skipRender: true,
+                lifetimeEnforceLocal: localSnapForEnforce,
+                lifetimeEnforceRemote: payload.state
+              });
             }
+            clearCloudSyncLifetimeEnforceSides();
           }
           nextHash = serializeStateForCloud();
           const localDoneBeforeUpload = countDoneRecordsInState(state);
@@ -65144,14 +65306,18 @@
       if (!merged || !Array.isArray(merged.done)) return { ok: false };
       const skipRender = Boolean(opts && opts.skipRender);
       const lifetimeBefore = captureCloudSyncLifetimeSnapshot(state);
+      const localEnforce = opts && opts.lifetimeEnforceLocal ? opts.lifetimeEnforceLocal : null;
+      const remoteEnforce = opts && opts.lifetimeEnforceRemote ? opts.lifetimeEnforceRemote : null;
       cloudSyncApplyingRemote = true;
       cloudSyncSuppressPush = true;
+      setCloudSyncLifetimeEnforceSides(localEnforce, remoteEnforce);
       try {
         state = merged;
         normalizeDoneListJournalFieldsInState();
         normalizeDoneOutcomeKindsInState();
         repairDoneListCompletedAtFromHabitMeta();
         reconcileDerivedCheckinsFromDoneAfterLoad();
+        enforceCloudSyncLifetimeMaxFromSides(localEnforce, remoteEnforce);
         sanityCheckForgeAndHabitLifetimeAfterSync(lifetimeBefore, "整包合并");
         if (reconcileWeeklyPlanTasksToDeadlineWeeks()) {
           /* 不写 saveState，避免合并过程中再次 push */
@@ -65165,6 +65331,7 @@
       } finally {
         cloudSyncSuppressPush = false;
         cloudSyncApplyingRemote = false;
+        clearCloudSyncLifetimeEnforceSides();
       }
     }
 
@@ -65226,13 +65393,23 @@
         setCloudSyncStatus("同步错误", "status-error");
         return false;
       }
+      let localSnapForEnforce = null;
+      try {
+        localSnapForEnforce = JSON.parse(JSON.stringify(state));
+      } catch (_locEnfSnap) {
+        localSnapForEnforce = null;
+      }
       const merged = mergeLocalStateWithRemotePayloadBeforePush(
         payload.state,
         coerceCloudUpdatedAt(payload.updatedAt),
         getCloudLastSeenUpdatedAt()
       );
       if (!merged) return false;
-      const r = applyMergedCloudStateInMemory(merged, opts);
+      const mergeOpts = Object.assign({}, opts || {}, {
+        lifetimeEnforceLocal: localSnapForEnforce,
+        lifetimeEnforceRemote: payload.state
+      });
+      const r = applyMergedCloudStateInMemory(merged, mergeOpts);
       return Boolean(r && r.ok);
     }
 
@@ -67685,6 +67862,12 @@
       }
       if (hcBeforeReconcile) {
         state.habitCheckins = mergeHabitCheckinsForSync(hcBeforeReconcile, state.habitCheckins);
+      }
+      if (cloudSyncLifetimeEnforceSides) {
+        enforceCloudSyncLifetimeMaxFromSides(
+          cloudSyncLifetimeEnforceSides.local,
+          cloudSyncLifetimeEnforceSides.remote
+        );
       }
     }
 
