@@ -9664,6 +9664,8 @@
       min-width: 0;
       display: flex;
       align-items: center;
+      container-type: inline-size;
+      container-name: wp-composer-field;
     }
 
     #weeklyPlanSection .weekly-plan-composer-trigger__input {
@@ -9696,21 +9698,24 @@
     }
 
     #weeklyPlanSection .weekly-plan-composer-trigger__input:placeholder-shown ~ .weekly-plan-composer-trigger__hint {
-      display: flex;
-      gap: 12px;
-      padding: 0 4px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      align-items: center;
+      gap: clamp(6px, 1.4vw, 14px);
+      padding: 0 2px;
     }
 
     #weeklyPlanSection .weekly-plan-composer-trigger__hint-lead,
     #weeklyPlanSection .weekly-plan-composer-trigger__hint-compass {
-      flex: 1 1 0;
+      width: 100%;
+      max-width: 100%;
       min-width: 0;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 0;
       text-align: center;
-      font-size: clamp(10px, 0.85vw + 0.35rem, 15px);
+      font-size: clamp(9px, 0.55vw + 0.42rem, 14px);
       font-style: italic;
       font-weight: 700;
       line-height: 1.25;
@@ -9718,7 +9723,7 @@
       overflow: hidden;
       text-overflow: ellipsis;
       box-sizing: border-box;
-      padding: clamp(2px, 0.4vw, 3px) clamp(4px, 1vw, 10px);
+      padding: clamp(2px, 0.35vw, 3px) clamp(3px, 0.8vw, 8px);
       border: 1px dashed #c4b5fd;
       border-radius: 8px;
       background: rgba(255, 255, 255, 0.55);
@@ -9831,22 +9836,24 @@
       display: inline-flex;
     }
 
-    @media (min-width: 768px) {
-      #weeklyPlanSection .weekly-plan-composer-trigger__input:placeholder-shown ~ .weekly-plan-composer-trigger__hint {
-        gap: 16px;
-        overflow: visible;
+    @container wp-composer-field (max-width: 560px) {
+      #weeklyPlanSection .weekly-plan-composer-trigger__hint-lead {
+        display: none;
       }
 
-      #weeklyPlanSection .weekly-plan-composer-trigger__hint-lead,
+      #weeklyPlanSection .weekly-plan-composer-trigger__input:placeholder-shown ~ .weekly-plan-composer-trigger__hint {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
       #weeklyPlanSection .weekly-plan-composer-trigger__hint-compass {
-        overflow: visible;
-        text-overflow: clip;
+        font-size: clamp(10px, 3.2cqw, 14px);
       }
     }
 
     @media (max-width: 767px) {
       #weeklyPlanSection .weekly-plan-composer-trigger__input:placeholder-shown ~ .weekly-plan-composer-trigger__hint {
         gap: 0;
+        grid-template-columns: minmax(0, 1fr);
       }
 
       #weeklyPlanSection .weekly-plan-composer-trigger__hint-lead {
@@ -9854,12 +9861,8 @@
       }
 
       #weeklyPlanSection .weekly-plan-composer-trigger__hint-compass {
-        flex: 1 1 auto;
-        max-width: 100%;
         justify-content: center;
         font-size: clamp(11px, 3.2vw, 15px);
-        overflow: visible;
-        text-overflow: clip;
       }
     }
 
@@ -43048,12 +43051,25 @@
 
       /* 手机端：05:00 / 11:00 / 17:00 分隔条结束时刻标语横幅（桌面仍隐藏） */
       :is(#dynamicModule, #forgeModule) ul.app-done-time-timeline .done-time-block-slogan-banner {
-        display: block;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         margin: 0 10px 8px;
         padding: 7px 10px;
         border: 2px solid var(--done-slogan-border, #333333);
         border-radius: 4px;
         background: #0a0a0a;
+        box-sizing: border-box;
+        overflow: hidden;
+        min-width: 0;
+      }
+      :is(#dynamicModule, #forgeModule) ul.app-done-time-timeline .done-time-block-slogan-banner__inner {
+        display: inline-flex;
+        flex-wrap: nowrap;
+        align-items: center;
+        justify-content: center;
+        max-width: 100%;
+        min-width: 0;
         text-align: center;
         font-family: "Permanent Marker", "Ma Shan Zheng", "STXingkai", "华文行楷", cursive;
         font-size: 15px;
@@ -43062,10 +43078,14 @@
         font-synthesis: none;
         line-height: 1.35;
         letter-spacing: 0.02em;
-        white-space: normal;
-        word-break: break-word;
+        white-space: nowrap;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
+      }
+      :is(#dynamicModule, #forgeModule) ul.app-done-time-timeline .done-time-block-slogan-span {
+        display: inline;
+        flex: 0 0 auto;
+        white-space: inherit;
       }
       :is(#dynamicModule, #forgeModule)
         ul.app-done-time-timeline
@@ -78701,6 +78721,19 @@
       return ordered;
     }
 
+    /** 手机端：标语横幅内文居中；宽度不足时逐步缩小字号避免叠字 */
+    function fitDoneTimeBlockSloganBanner(banner) {
+      const inner = banner && banner.querySelector(".done-time-block-slogan-banner__inner");
+      if (!inner) return;
+      inner.style.fontSize = "15px";
+      const maxW = Math.max(0, banner.clientWidth - 4);
+      let size = 15;
+      while (inner.scrollWidth > maxW && size > 8) {
+        size -= 0.5;
+        inner.style.fontSize = size + "px";
+      }
+    }
+
     /** 手机端：在分隔条 head 正下方插入结束时刻标语横幅（须在 applyDoneTimeBlockSprintLayer 之后） */
     function appendDoneTimeBlockMobileSloganBanner(body, blockKey) {
       const spans = DONE_TIME_BLOCK_MOBILE_SLOGAN_BANNERS[blockKey];
@@ -78711,13 +78744,19 @@
       banner.className =
         "done-time-block-slogan-banner done-time-block-slogan-banner--" + blockKey;
       banner.setAttribute("aria-hidden", "true");
+      const inner = document.createElement("span");
+      inner.className = "done-time-block-slogan-banner__inner";
       spans.forEach(function (sp) {
         const el = document.createElement("span");
         el.className = "done-time-block-slogan-span " + sp.cls;
         el.textContent = sp.text;
-        banner.appendChild(el);
+        inner.appendChild(el);
       });
+      banner.appendChild(inner);
       head.insertAdjacentElement("afterend", banner);
+      requestAnimationFrame(function () {
+        fitDoneTimeBlockSloganBanner(banner);
+      });
     }
 
     function renderDoneTimeBlockTimeline(ul, orderedTasks, listName) {
