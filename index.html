@@ -15573,7 +15573,7 @@
       }
     }
 
-    /* 窄屏笔记本（Desktop）：缩小标语字号/间距，去掉 ellipsis，三句全文显示；day-moments 优先完整 */
+    /* 窄屏 768–1366 共用：去掉 ellipsis，三句全文；字号按指针粗细分流 */
     @media (min-width: 768px) and (max-width: 1366px) {
       .done-manual-input-wrap--done-slogan .done-manual-input:placeholder-shown:not(:focus) ~ .done-manual-input-slogan {
         gap: 0 0.35em;
@@ -15588,16 +15588,38 @@
         min-width: 0;
         overflow: visible;
         text-overflow: clip;
-        font-size: 11px;
         letter-spacing: 0;
       }
 
       .done-manual-input-wrap--done-slogan .done-manual-input-slogan__day-moments {
         flex: 0 0 auto;
         margin-left: auto;
-        font-size: 10.5px;
         letter-spacing: 0;
         white-space: nowrap;
+      }
+    }
+
+    /* 窄屏笔记本（细指针）：偏小字号防挤出 */
+    @media (min-width: 768px) and (max-width: 1366px) and (pointer: fine) {
+      .done-manual-input-wrap--done-slogan .done-manual-input-slogan__lead,
+      .done-manual-input-wrap--done-slogan .done-manual-input-slogan__mid {
+        font-size: 11px;
+      }
+
+      .done-manual-input-wrap--done-slogan .done-manual-input-slogan__day-moments {
+        font-size: 10.5px;
+      }
+    }
+
+    /* 平板触控（粗指针，含横屏）：明显更大，仍完整显示；放不下由 fitDoneManualInputSlogan 略缩 */
+    @media (min-width: 768px) and (max-width: 1366px) and (pointer: coarse) {
+      .done-manual-input-wrap--done-slogan .done-manual-input-slogan__lead,
+      .done-manual-input-wrap--done-slogan .done-manual-input-slogan__mid {
+        font-size: 14px;
+      }
+
+      .done-manual-input-wrap--done-slogan .done-manual-input-slogan__day-moments {
+        font-size: 13px;
       }
     }
 
@@ -79733,7 +79755,7 @@
       }
     }
 
-    /** Done List 工具栏标语：窄屏桌面先缩 lead/mid，尽量保住「1天=8640瞬间」完整 */
+    /** Done List 工具栏标语：窄屏先缩 lead/mid，尽量保住「1天=8640瞬间」；平板粗指针默认更大 */
     function fitDoneManualInputSlogan() {
       const wrap = document.querySelector(
         "#dynamicModule .kinetic-sub-done .done-manual-input-wrap--done-slogan"
@@ -79746,9 +79768,8 @@
       const day = slogan.querySelector(".done-manual-input-slogan__day-moments");
       if (!lead || !mid || !day) return;
 
-      const isNarrowDesktop =
-        typeof window.matchMedia === "function" &&
-        window.matchMedia("(min-width: 768px) and (max-width: 1366px)").matches;
+      const mq = typeof window.matchMedia === "function" ? window.matchMedia.bind(window) : null;
+      const isNarrowDesktop = mq && mq("(min-width: 768px) and (max-width: 1366px)").matches;
       if (!isNarrowDesktop) {
         lead.style.fontSize = "";
         mid.style.fontSize = "";
@@ -79756,8 +79777,11 @@
         return;
       }
 
-      let leadSize = 11;
-      let daySize = 10.5;
+      const isTabletCoarse = mq && mq("(pointer: coarse)").matches;
+      let leadSize = isTabletCoarse ? 14 : 11;
+      let daySize = isTabletCoarse ? 13 : 10.5;
+      const leadFloor = isTabletCoarse ? 11 : 9;
+      const dayFloor = isTabletCoarse ? 11 : 9;
       lead.style.fontSize = leadSize + "px";
       mid.style.fontSize = leadSize + "px";
       day.style.fontSize = daySize + "px";
@@ -79766,12 +79790,12 @@
         return slogan.scrollWidth > slogan.clientWidth + 1;
       }
 
-      while (sloganOverflows() && leadSize > 9) {
+      while (sloganOverflows() && leadSize > leadFloor) {
         leadSize -= 0.5;
         lead.style.fontSize = leadSize + "px";
         mid.style.fontSize = leadSize + "px";
       }
-      while (sloganOverflows() && daySize > 9) {
+      while (sloganOverflows() && daySize > dayFloor) {
         daySize -= 0.5;
         day.style.fontSize = daySize + "px";
       }
