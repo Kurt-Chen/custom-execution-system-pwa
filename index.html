@@ -7140,15 +7140,18 @@
       padding: 10px 36px 10px 12px;
       box-sizing: border-box;
       text-align: center;
-      font-family: KaiTi, "楷体", "STKaiti", serif;
+      font-family: "Kaiti SC", "STKaiti", KaiTi, "楷体", "BiauKai", serif;
       font-size: 20px;
       font-weight: 600;
       font-style: normal;
-      line-height: 1.55;
+      line-height: 1.35;
       color: #334155;
       position: relative;
       user-select: none;
       -webkit-tap-highlight-color: transparent;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: clip;
     }
 
     #weeklyPlanSection .weekly-plan-io-noise-slogan > summary::-webkit-details-marker {
@@ -7218,6 +7221,14 @@
 
       #weeklyPlanSection .weekly-plan-io-noise-slogan__en-list li {
         font-size: 15px;
+      }
+    }
+
+    /* 平板触控：红框中文标语强制楷体 */
+    @media (min-width: 768px) and (max-width: 1366px) and (pointer: coarse) {
+      #weeklyPlanSection .weekly-plan-io-noise-slogan > summary {
+        font-family: "Kaiti SC", "STKaiti", KaiTi, "楷体", "BiauKai", serif;
+        font-style: normal;
       }
     }
 
@@ -36426,7 +36437,7 @@
       max-width: none;
       box-sizing: border-box;
       padding: 2px 0;
-      font-family: KaiTi, "楷体", "STKaiti", serif;
+      font-family: "Kaiti SC", "STKaiti", KaiTi, "楷体", "BiauKai", serif;
       font-size: 16px;
       font-weight: 600;
       font-style: normal;
@@ -36519,15 +36530,19 @@
         flex: unset;
         justify-content: center;
         text-align: center;
-        font-family: KaiTi, "楷体", "STKaiti", serif;
+        font-family: "Kaiti SC", "STKaiti", KaiTi, "楷体", "BiauKai", serif;
+        font-style: normal;
         font-size: 17px;
         line-height: 1.55;
         gap: 7px;
       }
 
-      #anniversaryModule .anniversary-principle-banner__text {
+      #anniversaryModule .anniversary-principle-banner__text,
+      #anniversaryModule .anniversary-principle-banner__lhs,
+      #anniversaryModule .anniversary-principle-banner__rhs {
         text-align: center;
         font-family: inherit;
+        font-style: normal;
       }
 
       #anniversaryModule .anniversary-principle-banner__divider {
@@ -47500,7 +47515,7 @@
 
           <details class="weekly-plan-io-noise-slogan" aria-label="输入输出方程标语">
             <summary>
-              除了<span class="weekly-plan-io-noise-slogan__eq">输入输出方程</span>，其他一切都是<span class="weekly-plan-io-noise-slogan__noise">噪音与干扰</span>。
+              除了<span class="weekly-plan-io-noise-slogan__eq">输入输出方程</span>，其他一切都是<span class="weekly-plan-io-noise-slogan__noise">噪音与干扰</span>
             </summary>
             <div class="weekly-plan-io-noise-slogan__body">
               <ol class="weekly-plan-io-noise-slogan__en-list">
@@ -60911,7 +60926,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260712d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260713d";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** 本机已合并的 pulse.updatedAt（今日打卡快通道，远小于整包 v2） */
@@ -68944,18 +68959,24 @@
       return Number.isFinite(n) && n > 0 && n <= opts.maxBatch ? n : 0;
     }
 
-    /** 取同日最新一条习惯 Done 文案中的「今日累计」 */
+    /** 取同日习惯 Done 文案中「今日累计」的最大值（云合并后 Done 顺序不定，不能只看 filter 首条） */
     function getHabitDoneDayCumulativeFromLatestText(habitKey, dateStr) {
       const opts = getHabitNumericSanitizeOpts(habitKey);
       if (!opts) return 0;
       const rows = getHabitDoneRowsForDay(habitKey, dateStr);
       if (!rows.length) return 0;
-      const text = rows[0] && rows[0].text;
-      if (!text) return 0;
-      const m = String(text).match(/今日累计\s+([\d,]+)/);
-      if (!m) return 0;
-      const n = parseInt(String(m[1]).replace(/,/g, ""), 10);
-      return Number.isFinite(n) && n > 0 && n <= opts.maxDaily ? n : 0;
+      let max = 0;
+      rows.forEach(function (row) {
+        const text = row && row.text;
+        if (!text) return;
+        const m = String(text).match(/今日累计\s+([\d,]+)/);
+        if (!m) return;
+        const n = parseInt(String(m[1]).replace(/,/g, ""), 10);
+        if (Number.isFinite(n) && n > 0 && n <= opts.maxDaily && n > max) {
+          max = n;
+        }
+      });
+      return max;
     }
 
     /** 由同日 Done 行重建数值型 checkin（增量用「本次 +」，当日总量以最新「今日累计」为准） */
@@ -69049,8 +69070,8 @@
         }
       }
       if (rows.length > 0) {
-        if (fromDone > 0) {
-          return fromDone;
+        if (fromDone > 0 || fromCheckin > 0) {
+          return Math.max(fromDone, fromCheckin);
         }
         const built = buildHabitNumericCheckinFromDoneRows(habitKey, dateStr);
         if (built && typeof built === "object") {
@@ -69059,9 +69080,6 @@
             return Math.min(bf, opts.maxDaily);
           }
         }
-      }
-      if (fromCheckin > 0 && fromDone > 0 && fromCheckin > fromDone) {
-        return fromDone;
       }
       if (fromCheckin > 0) {
         return fromCheckin;
@@ -69106,7 +69124,11 @@
         return sumSimpleHabitStampsLifetime(habitKey);
       }
       if (isHabitMinutesKey(habitKey)) {
-        return sumHabitMinutesLifetime(habitKey);
+        const byDay = sumHabitMinutesLifetime(habitKey);
+        if (byDay > 0) {
+          return byDay;
+        }
+        return sumHabitDoneBatchIncrementsLifetime(habitKey);
       }
       if (isHabitWordCountKey(habitKey)) {
         const byDay = sumHabitWordCountLifetime(habitKey);
@@ -69673,12 +69695,16 @@
     }
 
     function getHabitDoneRowsForDay(habitKey, dateStr) {
-      return state.done.filter(
-        (item) =>
-          item.habitMeta &&
-          item.habitMeta.key === habitKey &&
-          item.habitMeta.date === dateStr
-      );
+      return state.done
+        .filter(
+          (item) =>
+            item.habitMeta &&
+            item.habitMeta.key === habitKey &&
+            item.habitMeta.date === dateStr
+        )
+        .sort(function (a, b) {
+          return Number(b.completedAt || 0) - Number(a.completedAt || 0);
+        });
     }
 
     /** 根据 My Done 剩余条目重建当日 habitCheckins；与既有槽位取较大累计，避免 Done 不全时盖掉云合并结果 */
@@ -75268,7 +75294,9 @@
       const lifeEntry = lifeMap[nKey];
       const lifeSum =
         lifeEntry && typeof lifeEntry.sum === "number" && !Number.isNaN(lifeEntry.sum) ? lifeEntry.sum : 0;
-      lifeEl.textContent = "\u00d7 " + forgeWpFormatProgressNum(lifeSum);
+      const lifeCount = countForgeCheckinsLifetimeForNormalizedKey(nKey, realm);
+      const lifeDisplay = realm === "mind" ? Math.max(lifeSum, lifeCount) : lifeSum;
+      lifeEl.textContent = "\u00d7 " + forgeWpFormatProgressNum(lifeDisplay);
       lifeEl.classList.remove("forge-task-lifetime-total--hide");
 
       const dateKey = selectedDoneDate || formatDateInputValue(new Date());
@@ -75354,8 +75382,18 @@
     function syncForgeTaskRowValFromDoneAggregates(row, dateKey) {
       if (!row || !dateKey) return;
       const valEl = row.querySelector(".forge-task-val");
-      if (!valEl || !valEl.hasAttribute("data-forge-idle")) return;
+      if (!valEl) {
+        syncForgeTaskWeekMinProgressUi(row);
+        return;
+      }
+      if (!valEl.hasAttribute("data-forge-idle")) {
+        valEl.setAttribute("data-forge-idle", valEl.textContent.trim());
+      }
       const idle = valEl.getAttribute("data-forge-idle");
+      if (!idle) {
+        syncForgeTaskWeekMinProgressUi(row);
+        return;
+      }
       const goalRight = forgeParseTaskValGoalRight(idle);
       const beforeSlash = forgeWpRowBeforeSlashFromDom(row);
       const key = forgeWpNormalizeTaskKey(beforeSlash);
@@ -75445,7 +75483,10 @@
       if (!mod) return;
       mod.querySelectorAll(".forge-task-row[data-forge-wp-goal-sync]").forEach(function (row) {
         const valEl = row.querySelector(".forge-task-val");
-        if (!valEl || !valEl.hasAttribute("data-forge-idle")) return;
+        if (!valEl) return;
+        if (!valEl.hasAttribute("data-forge-idle")) {
+          valEl.setAttribute("data-forge-idle", valEl.textContent.trim());
+        }
         const beforeSlash = forgeWpRowBeforeSlashFromDom(row);
         const u = inferForgeWpGoalUnit(beforeSlash);
         const idle = "— / — " + u;
@@ -75591,6 +75632,9 @@
       };
       mod.querySelectorAll(".forge-task-row").forEach(function (row) {
         syncForgeTaskRowValFromDoneAggregates(row, dateKey);
+      });
+      mod.querySelectorAll(".forge-task-row.forge-task-card").forEach(function (row) {
+        syncForgeTaskWeekMinProgressUi(row);
       });
       forgeLifetimeAggCache = null;
       syncAllForgeOuterTitleDailyMinShortfall();
@@ -79965,11 +80009,58 @@
     }
 
     /** Done List 工具栏标语：窄屏先缩 lead/mid，尽量保住「1天=8640瞬间」；平板粗指针默认更大 */
+    /** 测量 flex 行内可见子元素总宽（含 gap），避免 scrollWidth 漏检重叠 */
+    function measureFlexRowChildrenWidth(container) {
+      if (!container) return 0;
+      const cs = getComputedStyle(container);
+      const gapRaw = cs.columnGap && cs.columnGap !== "normal" ? cs.columnGap : cs.gap;
+      const gap = parseFloat(gapRaw) || 0;
+      const kids = Array.from(container.children).filter(function (ch) {
+        const chcs = getComputedStyle(ch);
+        return chcs.display !== "none" && chcs.visibility !== "hidden";
+      });
+      let total = 0;
+      kids.forEach(function (ch, idx) {
+        total += ch.getBoundingClientRect().width;
+        if (idx < kids.length - 1) total += gap;
+      });
+      return total;
+    }
+
+    /** 单行标语：从基线字号向下微调，保证完整显示且不重叠 */
+    function fitSingleLineFontSize(el, opts) {
+      if (!el) return;
+      const base = opts && opts.baseSizePx != null ? opts.baseSizePx : 14;
+      const floor = opts && opts.floorPx != null ? opts.floorPx : 8;
+      const padReserve =
+        opts && opts.padReservePx != null ? opts.padReservePx : 0;
+      let size = base;
+      el.style.fontSize = size + "px";
+      const avail = Math.max(0, el.clientWidth - padReserve);
+      function overflows() {
+        if (opts && opts.measureChildren) {
+          return measureFlexRowChildrenWidth(el) > avail + 0.5;
+        }
+        return el.scrollWidth > avail + 0.5;
+      }
+      while (overflows() && size > floor) {
+        size -= 0.25;
+        el.style.fontSize = size + "px";
+      }
+    }
+
+    function resetDoneManualInputSloganFontSizes(lead, mid, day) {
+      if (lead) lead.style.fontSize = "";
+      if (mid) mid.style.fontSize = "";
+      if (day) day.style.fontSize = "";
+    }
+
     function fitDoneManualInputSlogan() {
       const wrap = document.querySelector(
         "#dynamicModule .kinetic-sub-done .done-manual-input-wrap--done-slogan"
       );
       if (!wrap) return;
+      const input = wrap.querySelector(".done-manual-input");
       const slogan = wrap.querySelector(".done-manual-input-slogan");
       if (!slogan) return;
       const lead = slogan.querySelector(".done-manual-input-slogan__lead");
@@ -79977,37 +80068,86 @@
       const day = slogan.querySelector(".done-manual-input-slogan__day-moments");
       if (!lead || !mid || !day) return;
 
-      const mq = typeof window.matchMedia === "function" ? window.matchMedia.bind(window) : null;
-      const isNarrowDesktop = mq && mq("(min-width: 768px) and (max-width: 1366px)").matches;
-      if (!isNarrowDesktop) {
-        lead.style.fontSize = "";
-        mid.style.fontSize = "";
-        day.style.fontSize = "";
+      const visible =
+        input &&
+        input.matches(":placeholder-shown") &&
+        document.activeElement !== input &&
+        getComputedStyle(slogan).display !== "none";
+      if (!visible) {
+        resetDoneManualInputSloganFontSizes(lead, mid, day);
         return;
       }
 
+      const mq =
+        typeof window.matchMedia === "function" ? window.matchMedia.bind(window) : null;
+      const isMobile = mq && mq("(max-width: 767px)").matches;
+      const isNarrow = mq && mq("(min-width: 768px) and (max-width: 1366px)").matches;
       const isTabletCoarse = mq && mq("(pointer: coarse)").matches;
-      let leadSize = isTabletCoarse ? 14 : 10;
-      let daySize = isTabletCoarse ? 13 : 9.5;
-      const leadFloor = isTabletCoarse ? 11 : 8.5;
-      const dayFloor = isTabletCoarse ? 11 : 8.5;
+      const isFineNarrow = isNarrow && mq && mq("(pointer: fine)").matches;
+
+      let leadSize = 14;
+      let daySize = 12;
+      let leadFloor = 8;
+      let dayFloor = 8;
+      if (isMobile) {
+        leadSize = 12;
+        daySize = 10.5;
+        leadFloor = 7.5;
+        dayFloor = 7;
+      } else if (isFineNarrow) {
+        leadSize = 10;
+        daySize = 9.5;
+        leadFloor = 8;
+        dayFloor = 8;
+      } else if (isNarrow && isTabletCoarse) {
+        leadSize = 14;
+        daySize = 13;
+        leadFloor = 9;
+        dayFloor = 9;
+      }
+
       lead.style.fontSize = leadSize + "px";
       mid.style.fontSize = leadSize + "px";
       day.style.fontSize = daySize + "px";
 
-      function sloganOverflows() {
-        return slogan.scrollWidth > slogan.clientWidth + 1;
+      const cs = getComputedStyle(slogan);
+      const padL = parseFloat(cs.paddingLeft) || 0;
+      const padR = parseFloat(cs.paddingRight) || 0;
+      const avail = Math.max(0, slogan.clientWidth - padL - padR);
+
+      function overflows() {
+        return measureFlexRowChildrenWidth(slogan) > avail + 0.5;
       }
 
-      while (sloganOverflows() && leadSize > leadFloor) {
-        leadSize -= 0.5;
+      while (overflows() && leadSize > leadFloor) {
+        leadSize -= 0.25;
         lead.style.fontSize = leadSize + "px";
         mid.style.fontSize = leadSize + "px";
       }
-      while (sloganOverflows() && daySize > dayFloor) {
-        daySize -= 0.5;
+      while (overflows() && daySize > dayFloor) {
+        daySize -= 0.25;
         day.style.fontSize = daySize + "px";
       }
+    }
+
+    /** 3-Day Sprint 输入输出方程标语：单行完整显示，随宽度缩字 */
+    function fitWeeklyPlanIoNoiseSlogan() {
+      const summary = document.querySelector(
+        "#weeklyPlanSection .weekly-plan-io-noise-slogan > summary"
+      );
+      if (!summary) return;
+      const mq =
+        typeof window.matchMedia === "function" ? window.matchMedia.bind(window) : null;
+      const isDesktop = mq && mq("(min-width: 768px)").matches;
+      const base = isDesktop ? 22 : 17;
+      const floor = 10;
+      summary.style.whiteSpace = "nowrap";
+      fitSingleLineFontSize(summary, { baseSizePx: base, floorPx: floor });
+    }
+
+    function fitResponsiveSingleLineSlogans() {
+      fitDoneManualInputSlogan();
+      fitWeeklyPlanIoNoiseSlogan();
     }
 
     function renderDoneTimeBlockTimeline(ul, orderedTasks, listName) {
@@ -92152,6 +92292,7 @@
       renderForgeDailyMinRows();
       renderForgeWeeklyMinRows();
       syncExtremeDeadlineChipsInDocument();
+      requestAnimationFrame(fitResponsiveSingleLineSlogans);
     }
 
     function formatFuelDateLineCN(dateStr) {
@@ -93642,18 +93783,24 @@
           addManualDone();
         }
       });
+      doneManualInput.addEventListener("focus", () => {
+        requestAnimationFrame(fitResponsiveSingleLineSlogans);
+      });
+      doneManualInput.addEventListener("blur", () => {
+        requestAnimationFrame(fitResponsiveSingleLineSlogans);
+      });
     }
-    requestAnimationFrame(fitDoneManualInputSlogan);
-    let doneManualSloganResizeTimer = null;
+    requestAnimationFrame(fitResponsiveSingleLineSlogans);
+    let responsiveSloganResizeTimer = null;
     window.addEventListener("resize", () => {
-      clearTimeout(doneManualSloganResizeTimer);
-      doneManualSloganResizeTimer = setTimeout(fitDoneManualInputSlogan, 120);
+      clearTimeout(responsiveSloganResizeTimer);
+      responsiveSloganResizeTimer = setTimeout(fitResponsiveSingleLineSlogans, 120);
     });
-    const mqDoneSloganNarrow = window.matchMedia("(min-width: 768px) and (max-width: 1366px)");
-    if (mqDoneSloganNarrow && mqDoneSloganNarrow.addEventListener) {
-      mqDoneSloganNarrow.addEventListener("change", fitDoneManualInputSlogan);
-    } else if (mqDoneSloganNarrow && mqDoneSloganNarrow.addListener) {
-      mqDoneSloganNarrow.addListener(fitDoneManualInputSlogan);
+    const mqResponsiveSlogan = window.matchMedia("(max-width: 1366px)");
+    if (mqResponsiveSlogan && mqResponsiveSlogan.addEventListener) {
+      mqResponsiveSlogan.addEventListener("change", fitResponsiveSingleLineSlogans);
+    } else if (mqResponsiveSlogan && mqResponsiveSlogan.addListener) {
+      mqResponsiveSlogan.addListener(fitResponsiveSingleLineSlogans);
     }
     const weeklyPlanPrevWeekBtn = document.getElementById("weeklyPlanPrevWeekBtn");
     const weeklyPlanNextWeekBtn = document.getElementById("weeklyPlanNextWeekBtn");
@@ -95381,8 +95528,8 @@
             refreshAnniversaryTwSubTabs({ preferCurrentCycle: true });
           }
         }
-        if (tabKey === "done") {
-          requestAnimationFrame(fitDoneManualInputSlogan);
+        if (tabKey === "done" || tabKey === "weekly") {
+          requestAnimationFrame(fitResponsiveSingleLineSlogans);
         }
         if (tabKey === "dailyReminder") {
           if (typeof renderDailyReminder === "function") renderDailyReminder();
@@ -95663,6 +95810,49 @@
       return n;
     }
 
+    /** Forge 全期：按规范化动作键统计 My Done 打卡条数（Mind 分钟型 × 徽章与次数对齐兜底） */
+    function countForgeCheckinsLifetimeForNormalizedKey(rowNormalizedKey, realmFilter) {
+      if (!rowNormalizedKey || !state.done || !Array.isArray(state.done)) return 0;
+      let n = 0;
+      state.done.forEach(function (task) {
+        const meta = task.forgeMindMeta || task.forgeBodyMeta;
+        if (!meta) return;
+        const isMind = !!task.forgeMindMeta;
+        if (realmFilter === "mind" && !isMind) return;
+        if (realmFilter === "body" && isMind) return;
+        if (realmFilter === "spt" && isMind) return;
+        const k = isMind ? forgeMindDoneAggregateKey(task) : forgeBodyDoneAggregateKey(task);
+        if (!k || k !== rowNormalizedKey) return;
+        if (realmFilter === "spt" && !isMind && !forgeWpIsSptExclusiveWeeklyMinName(k)) return;
+        if (realmFilter === "body" && !isMind && forgeWpIsSptExclusiveWeeklyMinName(k)) return;
+        n++;
+      });
+      return n;
+    }
+
+    /** 聚合单条 Forge Done：解析失败时 Mind 用 meta.minutes 或计 1 次，避免 × 累计卡住 */
+    function accumulateForgeDoneCheckinIntoMap(map, task, isMind, key, labelHint) {
+      const meta = task.forgeMindMeta || task.forgeBodyMeta;
+      if (!meta || !key) return;
+      let parsed = parseForgeWpActualAmount(meta.amount, isMind, meta, labelHint);
+      if (!parsed || typeof parsed.n !== "number" || Number.isNaN(parsed.n)) {
+        if (isMind) {
+          const mm = Number(meta.minutes);
+          if (Number.isFinite(mm) && mm > 0) {
+            parsed = { n: mm, u: "min" };
+          } else if (String(meta.amount || "").trim()) {
+            parsed = { n: 1, u: "min" };
+          }
+        }
+      }
+      if (!parsed || typeof parsed.n !== "number" || Number.isNaN(parsed.n)) return;
+      if (!map[key]) {
+        map[key] = { sum: 0, unit: parsed.u };
+      }
+      map[key].sum += parsed.n;
+      if (!map[key].unit && parsed.u) map[key].unit = parsed.u;
+    }
+
     function parseForgeWpActualAmount(amtRaw, isMind, meta, taskLabelHint) {
       const hintRaw = String(taskLabelHint || "").trim();
       const hintName = hintRaw.split("/")[0].trim();
@@ -95720,13 +95910,7 @@
           const ld = info.stripped.lastIndexOf(" · ");
           labelHint = ld >= 0 ? info.stripped.slice(0, ld).trim() : info.stripped.trim();
         }
-        const parsed = parseForgeWpActualAmount(meta.amount, isMind, meta, labelHint);
-        if (!parsed || typeof parsed.n !== "number" || Number.isNaN(parsed.n)) return;
-        if (!map[key]) {
-          map[key] = { sum: 0, unit: parsed.u };
-        }
-        map[key].sum += parsed.n;
-        if (!map[key].unit && parsed.u) map[key].unit = parsed.u;
+        accumulateForgeDoneCheckinIntoMap(map, task, isMind, key, labelHint);
       });
       return map;
     }
@@ -95785,13 +95969,7 @@
           const ld = info.stripped.lastIndexOf(" · ");
           labelHint = ld >= 0 ? info.stripped.slice(0, ld).trim() : info.stripped.trim();
         }
-        const parsed = parseForgeWpActualAmount(meta.amount, isMind, meta, labelHint);
-        if (!parsed || typeof parsed.n !== "number" || Number.isNaN(parsed.n)) return;
-        if (!map[key]) {
-          map[key] = { sum: 0, unit: parsed.u };
-        }
-        map[key].sum += parsed.n;
-        if (!map[key].unit && parsed.u) map[key].unit = parsed.u;
+        accumulateForgeDoneCheckinIntoMap(map, task, isMind, key, labelHint);
       });
       return map;
     }
