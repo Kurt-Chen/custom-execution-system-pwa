@@ -24474,6 +24474,8 @@
     #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-left {
       flex: 1 1 auto;
       min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
       text-align: center;
       font-family: inherit;
       font-size: inherit;
@@ -24490,7 +24492,10 @@
       align-items: center;
       justify-content: center;
       gap: 2px;
+      width: 100%;
       max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
       font-family: Georgia, "Segoe UI", "Times New Roman", "Liberation Serif", Times, serif;
       font-size: inherit;
       font-style: italic;
@@ -24502,9 +24507,13 @@
 
     #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-money-inline__line {
       display: block;
+      width: 100%;
       max-width: 100%;
+      box-sizing: border-box;
       font-size: inherit;
       white-space: nowrap;
+      overflow: hidden;
+      text-align: center;
       background: linear-gradient(105deg, #7c2d12 0%, #b45309 34%, #dc2626 70%, #7e22ce 100%);
       -webkit-background-clip: text;
       background-clip: text;
@@ -24522,7 +24531,10 @@
     }
 
     #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-right .tsf-inline {
-      display: inline;
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
       font-family: Georgia, "Segoe UI", "Times New Roman", "Liberation Serif", Times, serif;
       font-size: inherit;
       font-style: italic;
@@ -24531,6 +24543,8 @@
       letter-spacing: 0.04em;
       line-height: 1.14;
       white-space: nowrap;
+      overflow: hidden;
+      text-align: center;
     }
 
     #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-right .tsf-inline__part--think {
@@ -24556,7 +24570,10 @@
 
     #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-right {
       flex: 0 1 auto;
+      min-width: 0;
+      max-width: 46%;
       margin-left: auto;
+      overflow: hidden;
       display: inline-flex;
       flex-direction: column;
       align-items: center;
@@ -24594,7 +24611,9 @@
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-right {
         flex: 0 1 auto;
         min-width: 0;
+        max-width: 46%;
         margin-left: 0;
+        overflow: hidden;
         text-align: center;
       }
     }
@@ -68448,6 +68467,8 @@
       if (!payload || !payload.state || !Array.isArray(payload.state.done)) return false;
       const force = Boolean(opts && opts.force);
       if (force) {
+        /* 即便调用方要求整包覆盖，也先过「少不覆盖多」守卫 */
+        if (guardAgainstFewerRecordsOverwrite(payload.state)) return true;
         return applyRemoteState(payload.state, true);
       }
       const localLen = Array.isArray(state.done) ? state.done.length : 0;
@@ -68478,11 +68499,78 @@
       return Boolean(r && r.ok);
     }
 
+    /**
+     * 统计一份 state 的「业务记录条数」总量（用于「少不覆盖多」保护）。
+     * 覆盖：My Done、备忘、封闭清单、Stop Doing、Not To Do、周计划任务、十二周年周任务、习惯打卡天数。
+     */
+    function countBusinessRecordsInState(st) {
+      if (!st || typeof st !== "object") return 0;
+      let n = 0;
+      const arrKeys = ["done", "memo", "closedList", "stopDoing", "notToDo", "dailyWin", "kineticCountdowns"];
+      arrKeys.forEach(function (k) {
+        if (Array.isArray(st[k])) n += st[k].length;
+      });
+      if (st.weeklyPlan && typeof st.weeklyPlan === "object") {
+        Object.keys(st.weeklyPlan).forEach(function (wk) {
+          if (Array.isArray(st.weeklyPlan[wk])) n += st.weeklyPlan[wk].length;
+        });
+      }
+      n += countAnniversaryWeekTasksInState(st);
+      if (st.habitCheckins && typeof st.habitCheckins === "object") {
+        n += Object.keys(st.habitCheckins).length;
+      }
+      return n;
+    }
+
+    /**
+     * 「少不覆盖多」硬保护：拉取/同步时若远端总记录数严格少于本机，
+     * 不整包覆盖，改走并集合并（保留本机独有记录），合并后再回写云端。
+     * 返回 true 表示已用合并方式处理，调用方无需再整包覆盖。
+     */
+    function guardAgainstFewerRecordsOverwrite(remoteState) {
+      if (!remoteState || typeof remoteState !== "object") return false;
+      const localN = countBusinessRecordsInState(state);
+      const remoteN = countBusinessRecordsInState(remoteState);
+      if (localN === 0 || remoteN >= localN) return false;
+      let localSnapForEnforce = null;
+      try {
+        localSnapForEnforce = JSON.parse(JSON.stringify(state));
+      } catch (_snapErr) {
+        localSnapForEnforce = null;
+      }
+      const merged = mergeLocalStateWithRemotePayloadBeforePush(
+        remoteState,
+        coerceCloudUpdatedAt(remoteState.updatedAt),
+        getCloudLastSeenUpdatedAt()
+      );
+      if (!merged) return false;
+      applyMergedCloudStateInMemory(merged, {
+        lifetimeEnforceLocal: localSnapForEnforce,
+        lifetimeEnforceRemote: remoteState
+      });
+      console.warn(
+        "[云同步] 远端记录(" +
+          remoteN +
+          ") 少于本机(" +
+          localN +
+          ")，已改为并集合并而非整包覆盖，避免丢数据。"
+      );
+      /* 合并后本机可能仍多于云端：立即回写，避免他端再拉丢 */
+      if (typeof pushCloudSyncPulseOnly === "function") pushCloudSyncPulseOnly();
+      cloudSyncLastFullPushAt = 0;
+      if (typeof scheduleCloudSyncFullPushDeferred === "function") scheduleCloudSyncFullPushDeferred();
+      return true;
+    }
+
     function applyRemoteState(remoteState, force) {
       if (!remoteState || typeof remoteState !== "object") return false;
       if (!Array.isArray(remoteState.done)) {
         console.warn("云同步：已忽略无效远端数据（缺少 done 数组）。");
         return false;
+      }
+      /* 「少不覆盖多」：整包覆盖前若远端记录更少，改走并集合并 */
+      if (force && guardAgainstFewerRecordsOverwrite(remoteState)) {
+        return true;
       }
       const remoteRaw = JSON.stringify(remoteState);
       if (!remoteRaw) return false;
@@ -68523,7 +68611,7 @@
         return;
       }
       const ok = window.confirm(
-        "将从云端拉取并与本机并集合并（保留本机已有的今日完成、习惯打卡与十二周年周任务；冲突字段以云端较新为准）。\n\n确定拉取？"
+        "将从云端拉取并与本机并集合并（保留本机已有的今日完成、习惯打卡与十二周年周任务；冲突字段以云端较新为准）。\n若云端记录比本机少，不会整包覆盖本机。\n\n确定拉取？"
       );
       if (!ok) return;
       try {
@@ -81084,9 +81172,40 @@
       fitSingleLineFontSize(summary, { baseSizePx: base, floorPx: floor });
     }
 
+    /** Habit 顶栏：下行 MONEY chain / TSF 按半区宽度缩字，避免左右重叠裁切 */
+    function fitHabitHabitsAttentionLeadSlogan() {
+      const root = document.querySelector(
+        "#habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead"
+      );
+      if (!root || getComputedStyle(root).display === "none") return;
+      const left = root.querySelector(".habit-habits-attention-lead__summary-left");
+      const right = root.querySelector(".habit-habits-attention-lead__summary-right");
+      const chain = root.querySelector(".habit-money-inline__line--chain");
+      const tsf = root.querySelector(".habit-habits-attention-lead__summary-right .tsf-inline");
+      if (chain) chain.style.fontSize = "";
+      if (tsf) tsf.style.fontSize = "";
+      const base = parseFloat(getComputedStyle(root).fontSize) || 14;
+      const floor = 7.5;
+      function fitLine(el, host) {
+        if (!el || !host) return base;
+        let size = base;
+        el.style.fontSize = size + "px";
+        const avail = Math.max(0, host.clientWidth);
+        if (avail < 8) return size;
+        while (el.scrollWidth > avail + 0.5 && size > floor) {
+          size -= 0.25;
+          el.style.fontSize = size + "px";
+        }
+        return size;
+      }
+      fitLine(chain, left);
+      fitLine(tsf, right);
+    }
+
     function fitResponsiveSingleLineSlogans() {
       fitDoneManualInputSlogan();
       fitWeeklyPlanIoNoiseSlogan();
+      fitHabitHabitsAttentionLeadSlogan();
     }
 
     function renderDoneTimeBlockTimeline(ul, orderedTasks, listName) {

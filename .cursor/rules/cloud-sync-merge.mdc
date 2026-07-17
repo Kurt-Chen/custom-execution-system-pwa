@@ -1,0 +1,38 @@
+---
+description: 云同步与「从云端拉取最新」的合并安全规则（双端共用，index.html 实现）
+globs:
+  - index.html
+  - sw.js
+alwaysApply: false
+---
+
+# 云同步合并安全
+
+**核心原则：拉取最新与同步时，不要以「更少的记录」覆盖「更多的记录」。** 任何合并都以并集为默认；整包覆盖仅在明确安全时才允许。
+
+## 硬性要求（改动同步逻辑必须遵守）
+
+1. **少不覆盖多**：写入本机（拉取/收云端/合并）前，若远端业务记录**总量少于**本机，禁止整包覆盖，必须改走**并集合并**，保留本机独有记录，并在合并后回写云端。
+   - 统一入口：`countBusinessRecordsInState(st)` 统计总量；`guardAgainstFewerRecordsOverwrite(remoteState)` 执行守卫。
+   - 覆盖字段：`done`、`memo`、`closedList`、`stopDoing`、`notToDo`、`dailyWin`、`kineticCountdowns`、`weeklyPlan` 任务、十二周年 `anniversaryTw*` 周任务、`habitCheckins` 天数。
+   - 所有 `applyRemoteState(remoteState, force=true)` 与 `applyCloudPayloadWithMerge(..., {force:true})` 路径都先过该守卫。
+2. **空远端不覆盖**：远端 `done` 为空而本机非空时，保留本机并报错提示，不写入（见 `applyCloudPayloadWithMerge`）。
+3. **本机空可吸收**：仅当本机记录为 0（`countBusinessRecordsInState(state) === 0`）时，才允许整包吸收远端（`absorbCloudPayloadPreferringRemoteWhenLocalEmpty`）。
+4. **合并方向**：冲突字段按 `updatedAt`（服务端时间，`getCloudLastSeenUpdatedAt` / `coerceCloudUpdatedAt`）判新旧；数组类按 id 并集，删除靠 `syncTombstones`，不要用本机保存时间判定。
+5. **合并后回写**：本机合并后若仍多于云端，立即 `pushCloudSyncPulseOnly()` + `scheduleCloudSyncFullPushDeferred()`，避免他端再次拉丢。
+6. **紧急备份只增不减**：`STATE_EMERGENCY_BACKUP_KEY` 的写入在 `nextDone < prevDone` 时跳过；拉取后用 `mergeMissingRecordsFromEmergencyBackup()` 并回缺失记录，不整包回滚。
+
+## 关键函数（index.html）
+
+- 守卫：`countBusinessRecordsInState`、`guardAgainstFewerRecordsOverwrite`
+- 拉取：`pullLatestStateFromCloud`（`force:false` 并集）
+- 覆盖/合并：`applyRemoteState`、`applyCloudPayloadWithMerge`、`applyMergedCloudStateInMemory`、`mergeLocalStateWithRemotePayloadBeforePush`
+- 空本机吸收：`absorbCloudPayloadPreferringRemoteWhenLocalEmpty`
+- 备份：`mergeMissingRecordsFromEmergencyBackup`、`tryRestoreStateFromEmergencyBackup`
+- 十二周年：`countAnniversaryWeekTasksInState`、`mergeAnniversaryModulesFromRemoteSnapshot`；房间有 v2 时全量写 `v2/core`（`cloudSyncRoomHasV2Meta`）
+
+## 修改注意
+
+- 新增会写本机 state 的云端路径时，**先调用 `guardAgainstFewerRecordsOverwrite`** 再决定是否整包覆盖。
+- 新增业务列表字段时，同步加入 `countBusinessRecordsInState` 统计，否则守卫会漏算。
+- 端别：**Desktop / Mobile / Both** 同一套逻辑。
