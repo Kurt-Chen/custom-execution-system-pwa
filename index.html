@@ -24495,6 +24495,7 @@
       width: 100%;
       max-width: 100%;
       min-width: 0;
+      overflow: hidden;
       box-sizing: border-box;
       font-family: Georgia, "Segoe UI", "Times New Roman", "Liberation Serif", Times, serif;
       font-size: inherit;
@@ -24509,6 +24510,7 @@
       display: block;
       width: 100%;
       max-width: 100%;
+      min-width: 0;
       box-sizing: border-box;
       font-size: inherit;
       white-space: nowrap;
@@ -24527,20 +24529,22 @@
     }
 
     #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-money-inline__line--chain {
-      letter-spacing: 0.01em;
+      letter-spacing: 0;
+      font-size: 0.72em;
     }
 
     #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-right .tsf-inline {
       display: block;
       width: 100%;
       max-width: 100%;
+      min-width: 0;
       box-sizing: border-box;
       font-family: Georgia, "Segoe UI", "Times New Roman", "Liberation Serif", Times, serif;
-      font-size: inherit;
+      font-size: 0.72em;
       font-style: normal;
       font-weight: 800;
       font-synthesis: none;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.01em;
       line-height: 1.14;
       white-space: nowrap;
       overflow: hidden;
@@ -24565,13 +24569,13 @@
       font-family: Georgia, "Times New Roman", "Liberation Serif", Times, serif;
       font-style: normal;
       font-weight: 400;
-      padding: 0 0.08em;
+      padding: 0 0.04em;
     }
 
     #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-right {
       flex: 0 1 auto;
       min-width: 0;
-      max-width: 46%;
+      max-width: 42%;
       margin-left: auto;
       overflow: hidden;
       display: inline-flex;
@@ -24595,30 +24599,33 @@
       white-space: nowrap;
     }
 
-    /* 宽屏：按内容伸缩，左多右少，不做半区平分 */
+    /* 宽屏：左右半区用定宽比例，避免 nowrap 把整行撑出卡片外导致裁切 */
     @media (min-width: 768px) {
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-attention-lead-summary {
         justify-content: space-between;
-        gap: 16px;
+        gap: 10px;
+        overflow: hidden;
       }
 
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-left {
-        flex: 1 1 auto;
+        flex: 1 1 0;
         min-width: 0;
+        max-width: none;
+        overflow: hidden;
         text-align: center;
       }
 
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-right {
-        flex: 0 1 auto;
+        flex: 0 1 38%;
         min-width: 0;
-        max-width: 46%;
+        max-width: 38%;
         margin-left: 0;
         overflow: hidden;
         text-align: center;
       }
     }
 
-    /* 笔记本视口（768–1365px）：整块略收字号，左右/上下行保持同一字号 */
+    /* 笔记本视口（768–1365px）：顶栏略收；下行再小一档并由 JS 适配 */
     @media (min-width: 768px) and (max-width: 1365px) {
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead {
         font-size: 14px;
@@ -24632,12 +24639,10 @@
         letter-spacing: 0.01em;
       }
 
-      #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-money-inline__line--chain {
-        letter-spacing: 0;
-      }
-
+      #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-money-inline__line--chain,
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-right .tsf-inline {
-        letter-spacing: 0.01em;
+        font-size: 0.64em;
+        letter-spacing: 0;
       }
 
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-right .tsf-inline__arrow {
@@ -24646,6 +24651,8 @@
 
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-right {
         letter-spacing: 0;
+        max-width: 36%;
+        flex-basis: 36%;
       }
     }
 
@@ -81177,24 +81184,68 @@
       const root = document.querySelector(
         "#habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead"
       );
-      if (!root || getComputedStyle(root).display === "none") return;
+      if (!root) return;
+      const summary = root.querySelector(".habit-attention-lead-summary");
+      if (!summary || getComputedStyle(summary).display === "none") return;
+      if (summary.clientWidth < 40) return;
       const left = root.querySelector(".habit-habits-attention-lead__summary-left");
       const right = root.querySelector(".habit-habits-attention-lead__summary-right");
       const chain = root.querySelector(".habit-money-inline__line--chain");
       const tsf = root.querySelector(".habit-habits-attention-lead__summary-right .tsf-inline");
-      if (chain) chain.style.fontSize = "";
-      if (tsf) tsf.style.fontSize = "";
-      const base = parseFloat(getComputedStyle(root).fontSize) || 14;
-      const floor = 7.5;
+      function resetLine(el) {
+        if (!el) return;
+        el.style.fontSize = "";
+        el.style.width = "";
+        el.style.maxWidth = "";
+        el.style.transform = "";
+        el.style.transformOrigin = "";
+      }
+      resetLine(chain);
+      resetLine(tsf);
+      const rootPx = parseFloat(getComputedStyle(root).fontSize) || 14;
+      /* 下行起点更小；CSS 已有 0.72em，再按实测继续压 */
+      const base = Math.max(6.5, Math.min(rootPx * 0.68, 10));
+      const floor = 5;
+      function measureUnconstrainedWidth(el) {
+        const prev = {
+          width: el.style.width,
+          maxWidth: el.style.maxWidth,
+          position: el.style.position,
+          left: el.style.left,
+          visibility: el.style.visibility,
+          whiteSpace: el.style.whiteSpace
+        };
+        el.style.position = "absolute";
+        el.style.left = "-99999px";
+        el.style.visibility = "hidden";
+        el.style.width = "max-content";
+        el.style.maxWidth = "none";
+        el.style.whiteSpace = "nowrap";
+        const w = el.scrollWidth || el.getBoundingClientRect().width;
+        el.style.width = prev.width;
+        el.style.maxWidth = prev.maxWidth;
+        el.style.position = prev.position;
+        el.style.left = prev.left;
+        el.style.visibility = prev.visibility;
+        el.style.whiteSpace = prev.whiteSpace;
+        return w;
+      }
       function fitLine(el, host) {
         if (!el || !host) return base;
+        const avail = Math.max(0, host.clientWidth - 6);
+        if (avail < 8) return base;
         let size = base;
         el.style.fontSize = size + "px";
-        const avail = Math.max(0, host.clientWidth);
-        if (avail < 8) return size;
-        while (el.scrollWidth > avail + 0.5 && size > floor) {
-          size -= 0.25;
+        let textW = measureUnconstrainedWidth(el);
+        while (textW > avail + 0.5 && size > floor) {
+          size -= 0.2;
           el.style.fontSize = size + "px";
+          textW = measureUnconstrainedWidth(el);
+        }
+        if (textW > avail + 0.5 && avail > 0) {
+          const scale = Math.max(0.45, avail / textW);
+          el.style.transform = "scale(" + scale + ")";
+          el.style.transformOrigin = "center center";
         }
         return size;
       }
