@@ -15788,19 +15788,38 @@
       }
     }
 
-    /* 窄屏笔记本（细指针）：三句同字号；放不下由 fitDoneManualInputSlogan 同步缩小；大屏 ≥1367 不改字号 */
+    /* 窄屏笔记本（细指针）：三句同字号同字重；放不下由 fitDoneManualInputSlogan 同步缩字，保证全文、不重叠、不溢出；大屏 ≥1367 不改 */
     @media (min-width: 768px) and (max-width: 1366px) and (pointer: fine) {
       .done-manual-input-wrap--done-slogan .done-manual-input:placeholder-shown:not(:focus) ~ .done-manual-input-slogan {
-        overflow: visible;
+        overflow: hidden;
+        gap: 0 0.35em;
       }
 
       .done-manual-input-wrap--done-slogan .done-manual-input-slogan__lead,
       .done-manual-input-wrap--done-slogan .done-manual-input-slogan__mid,
       .done-manual-input-wrap--done-slogan .done-manual-input-slogan__day-moments {
         flex: 0 0 auto;
-        overflow: visible;
+        min-width: 0;
+        overflow: hidden;
         text-overflow: clip;
-        font-size: 15px;
+        font-family: Georgia, "Times New Roman", "Liberation Serif", Times, serif;
+        font-style: italic;
+        font-weight: 700;
+        font-size: 17px;
+        letter-spacing: 0;
+        line-height: 1.2;
+        white-space: nowrap;
+      }
+
+      /* Escape Number 与前两句同字号/字重，避免因 800 显得更大 */
+      .done-manual-input-wrap--done-slogan .done-manual-input-slogan__escape,
+      .done-manual-input-wrap--done-slogan .done-manual-input-slogan__escape-label,
+      .done-manual-input-wrap--done-slogan .done-manual-input-slogan__escape-amount {
+        font-family: Georgia, "Times New Roman", "Liberation Serif", Times, serif;
+        font-style: italic;
+        font-weight: 700;
+        font-size: inherit;
+        letter-spacing: 0;
       }
     }
 
@@ -81186,6 +81205,33 @@
       if (day) day.style.fontSize = "";
     }
 
+    /** 检测 flex 行是否溢出容器或子项互相重叠（含 margin-left:auto 布局） */
+    function flexRowOverflowsOrOverlaps(container) {
+      if (!container) return false;
+      const cs = getComputedStyle(container);
+      const padL = parseFloat(cs.paddingLeft) || 0;
+      const padR = parseFloat(cs.paddingRight) || 0;
+      const avail = Math.max(0, container.clientWidth - padL - padR);
+      if (measureFlexRowChildrenWidth(container) > avail + 0.5) return true;
+      const cRect = container.getBoundingClientRect();
+      const kids = Array.from(container.children).filter(function (ch) {
+        const chcs = getComputedStyle(ch);
+        return chcs.display !== "none" && chcs.visibility !== "hidden";
+      });
+      let prevRight = cRect.left + padL;
+      for (let i = 0; i < kids.length; i++) {
+        const r = kids[i].getBoundingClientRect();
+        if (r.width < 0.5) continue;
+        if (r.left < prevRight - 0.5) return true;
+        prevRight = r.right;
+      }
+      if (kids.length) {
+        const last = kids[kids.length - 1].getBoundingClientRect();
+        if (last.right > cRect.right - padR + 0.5) return true;
+      }
+      return false;
+    }
+
     function fitDoneManualInputSlogan() {
       const wrap = document.querySelector(
         "#dynamicModule .kinetic-sub-done .done-manual-input-wrap--done-slogan"
@@ -81226,9 +81272,9 @@
         leadFloor = 7.5;
         dayFloor = 7;
       } else if (isFineNarrow) {
-        /* 窄屏笔记本：三句同大，避免先缩前两句导致 Escape Number 显得更大 */
-        leadSize = 15;
-        daySize = 15;
+        /* 窄屏笔记本：三句同大并同步缩字；大屏 ≥1367 不改此分支 */
+        leadSize = 17;
+        daySize = 17;
         leadFloor = 8;
         dayFloor = 8;
       } else if (isNarrow && isTabletCoarse) {
@@ -81248,6 +81294,7 @@
       const avail = Math.max(0, slogan.clientWidth - padL - padR);
 
       function overflows() {
+        if (isFineNarrow) return flexRowOverflowsOrOverlaps(slogan);
         return measureFlexRowChildrenWidth(slogan) > avail + 0.5;
       }
 
