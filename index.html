@@ -36863,15 +36863,40 @@
       background: #ddd6fe;
     }
 
+    /* 电脑（细指针）：两式各占半区并在半区内居中；手机/平板规则不变 */
     @media (min-width: 768px) and (pointer: fine) {
       #anniversaryModule .anniversary-principle-banner {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
+        justify-content: stretch;
+        align-items: center;
+        column-gap: 0;
+        row-gap: 0;
+        gap: 0;
         padding: 12px 12px;
-        gap: 12px 18px;
       }
 
       #anniversaryModule .anniversary-principle-banner__item {
+        width: 100%;
+        max-width: 100%;
+        flex: unset;
+        justify-content: center;
+        text-align: center;
         font-size: 17px;
         gap: 7px;
+      }
+
+      #anniversaryModule .anniversary-principle-banner__text,
+      #anniversaryModule .anniversary-principle-banner__lhs,
+      #anniversaryModule .anniversary-principle-banner__rhs {
+        text-align: center;
+      }
+
+      #anniversaryModule .anniversary-principle-banner__divider {
+        display: block;
+        flex: none;
+        width: 1px;
+        justify-self: center;
       }
 
       #anniversaryModule .anniversary-principle-banner__icon {
@@ -38884,10 +38909,58 @@
       min-width: 0;
     }
 
-    /* OKR 区（#021 起）：O 只读 + KR 列表 */
+    /* OKR 区（#021 起）：默认可折叠；O 只读 + KR 列表 */
     #anniversaryModule .anniversary-tw-okr-mount {
       margin: 0 0 10px;
       min-width: 0;
+    }
+
+    #anniversaryModule .anniversary-tw-okr-fold {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    #anniversaryModule .anniversary-tw-okr-fold-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      width: 100%;
+      margin: 0;
+      padding: 8px 12px;
+      border-radius: 10px;
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      box-sizing: border-box;
+      font: inherit;
+      color: #0f172a;
+      cursor: pointer;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    #anniversaryModule .anniversary-tw-okr-fold-head-label {
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.25;
+      letter-spacing: 0.02em;
+    }
+
+    #anniversaryModule .anniversary-tw-okr-fold-chevron {
+      flex-shrink: 0;
+      font-size: 12px;
+      line-height: 1;
+      color: #64748b;
+    }
+
+    #anniversaryModule .anniversary-tw-okr-fold-body {
+      min-width: 0;
+    }
+
+    #anniversaryModule .anniversary-tw-okr-fold.collapsed .anniversary-tw-okr-fold-body {
+      display: none !important;
     }
 
     #anniversaryModule .anniversary-tw-okr-block {
@@ -67580,13 +67653,26 @@
       };
     }
 
-    /** 折叠偏好仅存本机：若与远端并集，云端残留的展开 key 会把「刚删除的折叠」并回来，推送合并后会 render 弹回展开。 */
+    /**
+     * 十二周年 UI 偏好仅存本机（不与远端并集）。
+     * 必须保留 weekViewMode / weekKanbanHintSeen：若合并时丢掉，render 里 ensureAnniversaryTwModuleUi
+     * 会再补全 list，JSON 对比永远「有变化」→ 云同步重渲死循环（抖动、无法编辑、看板弹回列表）。
+     */
     function mergeAnniversaryTwUiOverlay(localUi, _remoteUi) {
       const lui = localUi && typeof localUi === "object" ? localUi : {};
-      return {
+      const out = {
         weekExpanded: { ...(lui.weekExpanded || {}) },
-        taskExpanded: { ...(lui.taskExpanded || {}) }
+        taskExpanded: { ...(lui.taskExpanded || {}) },
+        weekViewMode: { ...(lui.weekViewMode || {}) },
+        weekKanbanHintSeen: { ...(lui.weekKanbanHintSeen || {}) }
       };
+      if (lui.pendingKanbanHintWeek != null) {
+        out.pendingKanbanHintWeek = lui.pendingKanbanHintWeek;
+      }
+      if (lui.pendingFocusWeekAdd != null) {
+        out.pendingFocusWeekAdd = lui.pendingFocusWeekAdd;
+      }
+      return out;
     }
 
     function normalizeAnniversaryTwReviewShape(review) {
@@ -67757,7 +67843,12 @@
         }
         byId[kr.id] = merged;
       });
-      return Object.values(byId).slice(0, ANNIVERSARY_TW_OKR_MAX_KEY_RESULTS);
+      return Object.keys(byId)
+        .sort()
+        .map(function (id) {
+          return byId[id];
+        })
+        .slice(0, ANNIVERSARY_TW_OKR_MAX_KEY_RESULTS);
     }
 
     function mergeAnniversaryTwAnchorModuleForSync(localMod, remoteMod, preferRemote) {
@@ -89002,7 +89093,39 @@
       return li;
     }
 
-    /** #021 起：OKR 区（#021 静态楷体 / #022+ 可编辑 KR） */
+    /** OKR 外层折叠壳：默认收起；重渲时保留用户展开/收起状态 */
+    function wrapAnniversaryTwOkrFold(block, startCollapsed) {
+      const fold = document.createElement("div");
+      fold.className = "anniversary-tw-okr-fold" + (startCollapsed ? " collapsed" : "");
+      const head = document.createElement("button");
+      head.type = "button";
+      head.className = "anniversary-tw-okr-fold-head";
+      head.setAttribute("aria-expanded", startCollapsed ? "false" : "true");
+      head.setAttribute("aria-label", "展开或收起 OKR");
+      const label = document.createElement("span");
+      label.className = "anniversary-tw-okr-fold-head-label";
+      label.textContent = "OKR";
+      const chevron = document.createElement("span");
+      chevron.className = "anniversary-tw-okr-fold-chevron";
+      chevron.setAttribute("aria-hidden", "true");
+      chevron.textContent = startCollapsed ? "▸" : "▾";
+      head.appendChild(label);
+      head.appendChild(chevron);
+      const body = document.createElement("div");
+      body.className = "anniversary-tw-okr-fold-body";
+      body.appendChild(block);
+      fold.appendChild(head);
+      fold.appendChild(body);
+      head.addEventListener("click", function () {
+        fold.classList.toggle("collapsed");
+        const collapsed = fold.classList.contains("collapsed");
+        head.setAttribute("aria-expanded", collapsed ? "false" : "true");
+        chevron.textContent = collapsed ? "▸" : "▾";
+      });
+      return fold;
+    }
+
+    /** #021 起：OKR 区（#021 静态楷体 / #022+ 可编辑 KR）；默认折叠 */
     function renderAnniversaryTwOkrPanel(suffix, moduleKey) {
       if (!anniversaryTwModuleHasOkr(moduleKey)) {
         return;
@@ -89014,6 +89137,9 @@
       if (shouldSkipAnniversaryOkrMountRefresh(mount)) {
         return;
       }
+
+      const prevFold = mount.querySelector(".anniversary-tw-okr-fold");
+      const startCollapsed = prevFold ? prevFold.classList.contains("collapsed") : true;
 
       mount.replaceChildren();
 
@@ -89030,7 +89156,7 @@
           body.appendChild(p);
         });
         block.appendChild(body);
-        mount.appendChild(block);
+        mount.appendChild(wrapAnniversaryTwOkrFold(block, startCollapsed));
         return;
       }
 
@@ -89038,7 +89164,6 @@
       const mod = getAnniversaryTwStateModule(moduleKey);
       normalizeAnniversaryTwKeyResultsOnModule(mod);
 
-      mount.replaceChildren();
       const block = document.createElement("section");
       block.className = "anniversary-tw-okr-block";
       block.setAttribute("aria-label", "OKR");
@@ -89091,7 +89216,7 @@
       });
       block.appendChild(addBtn);
 
-      mount.appendChild(block);
+      mount.appendChild(wrapAnniversaryTwOkrFold(block, startCollapsed));
     }
 
     function renderAnniversaryTacticsSummaryRow(summaryId, getTasksForWeek, currentWeekIndex) {
@@ -96772,8 +96897,11 @@
       tabListEl.setAttribute("aria-label", "Kinetic Execution 标签");
       const tabButtonMap = new Map();
 
+      let lastActivatedKineticTabKey = null;
       activateKineticTab = (tabKey, opts = {}) => {
         const focus = Boolean(opts.focus);
+        const switchingTab = lastActivatedKineticTabKey !== tabKey;
+        lastActivatedKineticTabKey = tabKey;
         tabs.forEach((tab) => {
           const active = tab.key === tabKey;
           tab.sectionEl.classList.add("kinetic-tab-panel");
@@ -96792,7 +96920,8 @@
           if (opts.preferCurrentCycle && typeof refreshAnniversaryTwSubTabs === "function") {
             refreshAnniversaryTwSubTabs({ preferCurrentCycle: true });
           }
-          if (typeof ensureAnniversaryWeeksFromCloudIfNeeded === "function") {
+          /* 仅切入十二周年时拉云补周；每次 render 再 activate 同 Tab 会合并→重渲死循环 */
+          if (switchingTab && typeof ensureAnniversaryWeeksFromCloudIfNeeded === "function") {
             ensureAnniversaryWeeksFromCloudIfNeeded();
           }
         }
