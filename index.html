@@ -40451,6 +40451,55 @@
       font-weight: 600;
     }
 
+    /* 本周唯一目标：进度条与任务列表之间；图二式纯文本行 */
+    #anniversaryModule .tw020-week-goal-row {
+      display: flex;
+      align-items: baseline;
+      gap: 0;
+      margin: 8px 4px 6px;
+      padding: 0 2px;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+
+    #anniversaryModule .tw020-week-goal-prefix {
+      flex: 0 0 auto;
+      font-size: 14px;
+      font-weight: 600;
+      color: #1e293b;
+      line-height: 1.55;
+      white-space: nowrap;
+    }
+
+    #anniversaryModule .tw020-week-goal-input {
+      flex: 1 1 auto;
+      min-width: 0;
+      width: 100%;
+      border: none;
+      border-bottom: 1px solid transparent;
+      border-radius: 0;
+      background: transparent;
+      padding: 0 0 1px;
+      margin: 0;
+      font-size: 14px;
+      font-weight: 500;
+      color: #1e293b;
+      line-height: 1.55;
+      outline: none;
+      box-shadow: none;
+      box-sizing: border-box;
+    }
+
+    #anniversaryModule .tw020-week-goal-input::placeholder {
+      color: #94a3b8;
+      font-weight: 400;
+    }
+
+    #anniversaryModule .tw020-week-goal-input:focus {
+      border-bottom-color: #cbd5e1;
+      outline: none;
+    }
+
     #anniversaryModule .tw020-week-tasks-panel {
       margin-top: 2px;
       padding: 8px 8px 10px;
@@ -63822,7 +63871,10 @@
           outWeeks[key] = arr.map(cloneTwTaskForMerge);
         });
       }
-      return Object.keys(outWeeks).length ? { weeks: outWeeks } : null;
+      if (!Object.keys(outWeeks).length) return null;
+      const goals =
+        mod && mod.weekGoals && typeof mod.weekGoals === "object" ? Object.assign({}, mod.weekGoals) : {};
+      return { weeks: outWeeks, weekGoals: goals };
     }
 
     /** @deprecated 命名保留；等同 buildCloudSyncAnniversaryModulePulseSlice("tw020") */
@@ -64294,7 +64346,10 @@
         const pWeeks = p.weeks && typeof p.weeks === "object" ? p.weeks : {};
         const nWeeks = n.weeks && typeof n.weeks === "object" ? n.weeks : {};
         const mergedWeeks = Object.assign({}, pWeeks, nWeeks);
-        next[sk] = Object.assign({}, p, n, { weeks: mergedWeeks });
+        const pGoals = p.weekGoals && typeof p.weekGoals === "object" ? p.weekGoals : {};
+        const nGoals = n.weekGoals && typeof n.weekGoals === "object" ? n.weekGoals : {};
+        const mergedGoals = Object.assign({}, pGoals, nGoals);
+        next[sk] = Object.assign({}, p, n, { weeks: mergedWeeks, weekGoals: mergedGoals });
       });
       if (!next.weeklyPlan && prev.weeklyPlan) next.weeklyPlan = prev.weeklyPlan;
       if (
@@ -64317,32 +64372,47 @@
 
     /** 十二周年 pulse 合并：按周并集，并剔除 syncTombstones 已删 id */
     function mergeCloudSyncAnniversaryModulePulseIntoState(moduleKey, twSlice) {
-      if (!twSlice || !twSlice.weeks || typeof twSlice.weeks !== "object") return false;
+      if (!twSlice || typeof twSlice !== "object") return false;
       if (typeof normalizeAnniversaryTwModuleStateByKey === "function") {
         normalizeAnniversaryTwModuleStateByKey(moduleKey);
       }
       const mod = typeof getAnniversaryTwStateModule === "function" ? getAnniversaryTwStateModule(moduleKey) : null;
       if (!mod || typeof mod !== "object") return false;
       if (!mod.weeks || typeof mod.weeks !== "object") mod.weeks = {};
+      ensureAnniversaryTwWeekGoalsOnModule(mod);
       const ts =
         state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
       let changed = false;
-      Object.keys(twSlice.weeks).forEach(function (wk) {
-        const remArr = Array.isArray(twSlice.weeks[wk]) ? twSlice.weeks[wk] : [];
-        const locArr = Array.isArray(mod.weeks[wk]) ? mod.weeks[wk] : [];
-        let next = mergeTwWeekTasksForSync(remArr, locArr, true).filter(function (t) {
-          return t && t.id != null && !Object.prototype.hasOwnProperty.call(ts, String(t.id));
-        });
-        try {
-          if (JSON.stringify(locArr) !== JSON.stringify(next)) {
+      if (twSlice.weeks && typeof twSlice.weeks === "object") {
+        Object.keys(twSlice.weeks).forEach(function (wk) {
+          const remArr = Array.isArray(twSlice.weeks[wk]) ? twSlice.weeks[wk] : [];
+          const locArr = Array.isArray(mod.weeks[wk]) ? mod.weeks[wk] : [];
+          let next = mergeTwWeekTasksForSync(remArr, locArr, true).filter(function (t) {
+            return t && t.id != null && !Object.prototype.hasOwnProperty.call(ts, String(t.id));
+          });
+          try {
+            if (JSON.stringify(locArr) !== JSON.stringify(next)) {
+              mod.weeks[wk] = next;
+              changed = true;
+            }
+          } catch (_twCmp) {
             mod.weeks[wk] = next;
             changed = true;
           }
-        } catch (_twCmp) {
-          mod.weeks[wk] = next;
+        });
+      }
+      if (twSlice.weekGoals && typeof twSlice.weekGoals === "object") {
+        const mergedGoals = mergeAnniversaryWeekGoalsForSync(mod.weekGoals, twSlice.weekGoals, true);
+        try {
+          if (JSON.stringify(mod.weekGoals || {}) !== JSON.stringify(mergedGoals)) {
+            mod.weekGoals = mergedGoals;
+            changed = true;
+          }
+        } catch (_wgCmp) {
+          mod.weekGoals = mergedGoals;
           changed = true;
         }
-      });
+      }
       return changed;
     }
 
@@ -68497,11 +68567,36 @@
       mod.review = normalizeAnniversaryTwReviewShape(mod.review);
     }
 
+    /** 十二周年各周「本周唯一目标」文案：按周键并集，非空冲突随 preferRemote */
+    function mergeAnniversaryWeekGoalsForSync(localGoals, remoteGoals, preferRemote) {
+      const lo = localGoals && typeof localGoals === "object" ? localGoals : {};
+      const ro = remoteGoals && typeof remoteGoals === "object" ? remoteGoals : {};
+      const out = {};
+      const keys = new Set(Object.keys(lo).concat(Object.keys(ro)));
+      keys.forEach(function (k) {
+        const v = mergeTwDisjointString(
+          typeof lo[k] === "string" ? lo[k] : "",
+          typeof ro[k] === "string" ? ro[k] : "",
+          preferRemote
+        );
+        if (v) out[k] = v;
+      });
+      return out;
+    }
+
+    function ensureAnniversaryTwWeekGoalsOnModule(mod) {
+      if (!mod || typeof mod !== "object") return;
+      if (!mod.weekGoals || typeof mod.weekGoals !== "object") {
+        mod.weekGoals = {};
+      }
+    }
+
     function mergeAnniversaryTw020ModuleForSync(localMod, remoteMod, preferRemote, tombstones) {
       const lo = localMod && typeof localMod === "object" ? localMod : { weeks: {}, futureStory: "" };
       const ro = remoteMod && typeof remoteMod === "object" ? remoteMod : { weeks: {}, futureStory: "" };
       return {
         weeks: mergeTw020WeeksMapsForSync(lo.weeks || {}, ro.weeks || {}, preferRemote, tombstones),
+        weekGoals: mergeAnniversaryWeekGoalsForSync(lo.weekGoals, ro.weekGoals, preferRemote),
         futureStory: mergeTwDisjointString(lo.futureStory, ro.futureStory, preferRemote),
         ui: mergeAnniversaryTwUiOverlay(lo.ui, ro.ui),
         progressBands: mergeAnniversaryProgressBands(lo.progressBands, ro.progressBands, preferRemote),
@@ -68619,6 +68714,7 @@
       return {
         anchor: anchor,
         weeks: mergeTw020WeeksMapsForSync(lo.weeks || {}, ro.weeks || {}, preferRemote, tombstones),
+        weekGoals: mergeAnniversaryWeekGoalsForSync(lo.weekGoals, ro.weekGoals, preferRemote),
         futureStory: mergeTwDisjointString(lo.futureStory, ro.futureStory, preferRemote),
         longTermVision: mergeTwDisjointString(lo.longTermVision, ro.longTermVision, preferRemote),
         twelveWeekGoal: mergeTwDisjointString(lo.twelveWeekGoal, ro.twelveWeekGoal, preferRemote),
@@ -89798,6 +89894,7 @@
         });
       }
       ensureAnniversaryTwModuleUi(state.anniversaryTw020);
+      ensureAnniversaryTwWeekGoalsOnModule(state.anniversaryTw020);
       normalizeAnniversaryTwReviewOnModule(state.anniversaryTw020);
       normalizeProgressBandsOnModule(state.anniversaryTw020);
       ensureAnniversaryDeepTimeOnModule(state.anniversaryTw020);
@@ -90940,6 +91037,56 @@
       }
       const tail = band === "ok" ? "在轨" : band === "caution" ? "警戒" : "脱轨";
       return progress.pct + "% · " + tail;
+    }
+
+    function getAnniversaryTwWeekGoal(moduleKey, weekNum) {
+      const mod =
+        typeof getAnniversaryTwStateModule === "function" ? getAnniversaryTwStateModule(moduleKey) : null;
+      if (!mod) return "";
+      ensureAnniversaryTwWeekGoalsOnModule(mod);
+      const v = mod.weekGoals[String(weekNum)];
+      return typeof v === "string" ? v : "";
+    }
+
+    function setAnniversaryTwWeekGoal(moduleKey, weekNum, text) {
+      if (typeof normalizeAnniversaryTwModuleStateByKey === "function") {
+        normalizeAnniversaryTwModuleStateByKey(moduleKey);
+      }
+      const mod =
+        typeof getAnniversaryTwStateModule === "function" ? getAnniversaryTwStateModule(moduleKey) : null;
+      if (!mod) return;
+      ensureAnniversaryTwWeekGoalsOnModule(mod);
+      const t = String(text || "").trim();
+      const key = String(weekNum);
+      if (t) mod.weekGoals[key] = t;
+      else delete mod.weekGoals[key];
+      saveStateAfterAnniversaryWeekChange(moduleKey, weekNum);
+    }
+
+    /** 进度条与任务列表之间：本周唯一目标（图二式一行） */
+    function createAnniversaryTwWeekGoalRow(moduleKey, weekNum) {
+      const row = document.createElement("div");
+      row.className = "tw020-week-goal-row";
+      const prefix = document.createElement("span");
+      prefix.className = "tw020-week-goal-prefix";
+      prefix.textContent = "本周唯一目标：";
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.className = "tw020-week-goal-input";
+      inp.placeholder = "本周目标（一句话）";
+      inp.value = getAnniversaryTwWeekGoal(moduleKey, weekNum);
+      inp.setAttribute("aria-label", "第" + weekNum + "周目标（一句话）");
+      inp.addEventListener("change", function () {
+        setAnniversaryTwWeekGoal(moduleKey, weekNum, inp.value);
+      });
+      inp.addEventListener("blur", function () {
+        const next = String(inp.value || "").trim();
+        if (inp.value !== next) inp.value = next;
+        setAnniversaryTwWeekGoal(moduleKey, weekNum, next);
+      });
+      row.appendChild(prefix);
+      row.appendChild(inp);
+      return row;
     }
 
     function createAnniversaryWeekProgressBarElement(progress, bands) {
@@ -92423,6 +92570,7 @@
           delete state.anniversaryTw020.ui.pendingFocusWeekAdd;
         }
 
+        weekBody.appendChild(createAnniversaryTwWeekGoalRow("tw020", w));
         weekBody.appendChild(tasksWrap);
         if (pendingKanbanHintWeek020 === w) {
           showAnniversaryWeekKanbanHint(weekBody, "tw020", w);
@@ -92494,6 +92642,7 @@
         });
       }
       ensureAnniversaryTwModuleUi(state.anniversaryTw021);
+      ensureAnniversaryTwWeekGoalsOnModule(state.anniversaryTw021);
       normalizeAnniversaryTwReviewOnModule(state.anniversaryTw021);
       normalizeProgressBandsOnModule(state.anniversaryTw021);
       ensureAnniversaryDeepTimeOnModule(state.anniversaryTw021);
@@ -93332,6 +93481,7 @@
           delete mod.ui.pendingFocusWeekAdd;
         }
 
+        weekBody.appendChild(createAnniversaryTwWeekGoalRow(moduleKey, w));
         weekBody.appendChild(tasksWrap);
         if (pendingKanbanHintWeekMod === w) {
           showAnniversaryWeekKanbanHint(weekBody, moduleKey, w);
@@ -93416,6 +93566,7 @@
         });
       }
       ensureAnniversaryTwModuleUi(state.anniversaryTw022);
+      ensureAnniversaryTwWeekGoalsOnModule(state.anniversaryTw022);
       normalizeAnniversaryTwReviewOnModule(state.anniversaryTw022);
       normalizeProgressBandsOnModule(state.anniversaryTw022);
       ensureAnniversaryDeepTimeOnModule(state.anniversaryTw022);
@@ -93555,6 +93706,7 @@
         });
       }
       ensureAnniversaryTwModuleArchiveUi(mod);
+      ensureAnniversaryTwWeekGoalsOnModule(mod);
       normalizeAnniversaryTwReviewOnModule(mod);
       normalizeProgressBandsOnModule(mod);
       ensureAnniversaryDeepTimeOnModule(mod);
