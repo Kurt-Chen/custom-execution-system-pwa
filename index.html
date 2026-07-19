@@ -62108,7 +62108,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260720f";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260720g";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** 本机已合并的 pulse.updatedAt（今日打卡快通道，远小于整包 v2） */
@@ -63462,14 +63462,15 @@
       ) {
         try {
           const st = chosen.state;
+          const annTs = mergeSyncTombstoneMaps(st.syncTombstones, other.state.syncTombstones);
           listAnniversaryTwStateKeysForSync(st, other.state).forEach(function (sk) {
             const rem = other.state[sk];
             if (!rem || typeof rem !== "object") return;
             const mk = "tw" + String(sk).replace(/^anniversaryTw/i, "");
             st[sk] =
               mk === "tw020"
-                ? mergeAnniversaryTw020ModuleForSync(st[sk], rem, false)
-                : mergeAnniversaryTwAnchorModuleForSync(st[sk], rem, false);
+                ? mergeAnniversaryTw020ModuleForSync(st[sk], rem, false, annTs)
+                : mergeAnniversaryTwAnchorModuleForSync(st[sk], rem, false, annTs);
           });
         } catch (_annEnrich) {}
       }
@@ -64108,6 +64109,8 @@
       if (!remoteState || typeof remoteState !== "object") return false;
       if (typeof mergeAnniversaryTw020ModuleForSync !== "function") return false;
       let changed = false;
+      const annTs =
+        state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
       listAnniversaryTwStateKeysForSync(state, remoteState).forEach(function (sk) {
         const rem = remoteState[sk];
         if (!rem || typeof rem !== "object") return;
@@ -64115,8 +64118,8 @@
         const beforeMod = state[sk];
         const next =
           mk === "tw020"
-            ? mergeAnniversaryTw020ModuleForSync(beforeMod, rem, false)
-            : mergeAnniversaryTwAnchorModuleForSync(beforeMod, rem, false);
+            ? mergeAnniversaryTw020ModuleForSync(beforeMod, rem, false, annTs)
+            : mergeAnniversaryTwAnchorModuleForSync(beforeMod, rem, false, annTs);
         try {
           if (JSON.stringify(beforeMod || {}) !== JSON.stringify(next)) {
             state[sk] = next;
@@ -66682,6 +66685,7 @@
           }
           state.anniversaryTw020.weeks[key].push(p);
           ensureAnniversaryTwModuleUi(state.anniversaryTw020);
+          clearAnniversaryTwTrashTombstones(p);
           okRemoveTrash();
           saveState();
           render();
@@ -66700,6 +66704,7 @@
             return false;
           }
           task.subs.push(p);
+          clearAnniversaryTwTrashTombstones(p);
           okRemoveTrash();
           saveState();
           render();
@@ -66715,6 +66720,7 @@
           }
           state.anniversaryTw021.weeks[key].push(p);
           ensureAnniversaryTwModuleUi(state.anniversaryTw021);
+          clearAnniversaryTwTrashTombstones(p);
           okRemoveTrash();
           saveState();
           render();
@@ -66733,6 +66739,7 @@
             return false;
           }
           task.subs.push(p);
+          clearAnniversaryTwTrashTombstones(p);
           okRemoveTrash();
           saveState();
           render();
@@ -66748,6 +66755,7 @@
           }
           state.anniversaryTw022.weeks[key].push(p);
           ensureAnniversaryTwModuleUi(state.anniversaryTw022);
+          clearAnniversaryTwTrashTombstones(p);
           okRemoveTrash();
           saveState();
           render();
@@ -66766,6 +66774,7 @@
             return false;
           }
           task.subs.push(p);
+          clearAnniversaryTwTrashTombstones(p);
           okRemoveTrash();
           saveState();
           render();
@@ -66917,6 +66926,32 @@
       for (let i = 0; i < drop; i++) {
         delete state.syncTombstones[keys[i]];
       }
+    }
+
+    function clearSyncTombstone(id) {
+      if (id == null) return;
+      if (!state.syncTombstones || typeof state.syncTombstones !== "object") return;
+      delete state.syncTombstones[String(id)];
+    }
+
+    /** 十二周年主任务删除：主 id + 子任务 id 均记 tombstone，避免云并集复活 */
+    function recordAnniversaryTwTaskDeleteTombstones(task) {
+      if (!task || task.id == null) return;
+      recordSyncTombstone(task.id);
+      if (!Array.isArray(task.subs)) return;
+      task.subs.forEach(function (s) {
+        if (s && s.id != null) recordSyncTombstone(s.id);
+      });
+    }
+
+    /** 垃圾箱恢复十二周年任务/子任务时清除 tombstone */
+    function clearAnniversaryTwTrashTombstones(payload) {
+      if (!payload || typeof payload !== "object") return;
+      if (payload.id != null) clearSyncTombstone(payload.id);
+      if (!Array.isArray(payload.subs)) return;
+      payload.subs.forEach(function (s) {
+        if (s && s.id != null) clearSyncTombstone(s.id);
+      });
     }
 
     function mergeFuelScoresForSync(localArr, remoteArr) {
@@ -68240,15 +68275,22 @@
         .filter(Boolean);
     }
 
-    function mergeTw020WeeksMapsForSync(locWeeks, remWeeks, preferRemote) {
+    function mergeTw020WeeksMapsForSync(locWeeks, remWeeks, preferRemote, tombstones) {
+      const ts = tombstones && typeof tombstones === "object" ? tombstones : {};
       const out = {};
       for (let w = 1; w <= 13; w++) {
         const k = String(w);
-        out[k] = mergeTwWeekTasksForSync(
+        const merged = mergeTwWeekTasksForSync(
           (remWeeks && remWeeks[k]) || [],
           (locWeeks && locWeeks[k]) || [],
           preferRemote
         );
+        out[k] = omitTombstonedIdRecords(merged, ts).map(function (task) {
+          if (task && Array.isArray(task.subs) && task.subs.length) {
+            task.subs = omitTombstonedIdRecords(task.subs, ts);
+          }
+          return task;
+        });
       }
       return out;
     }
@@ -68413,11 +68455,11 @@
       mod.review = normalizeAnniversaryTwReviewShape(mod.review);
     }
 
-    function mergeAnniversaryTw020ModuleForSync(localMod, remoteMod, preferRemote) {
+    function mergeAnniversaryTw020ModuleForSync(localMod, remoteMod, preferRemote, tombstones) {
       const lo = localMod && typeof localMod === "object" ? localMod : { weeks: {}, futureStory: "" };
       const ro = remoteMod && typeof remoteMod === "object" ? remoteMod : { weeks: {}, futureStory: "" };
       return {
-        weeks: mergeTw020WeeksMapsForSync(lo.weeks || {}, ro.weeks || {}, preferRemote),
+        weeks: mergeTw020WeeksMapsForSync(lo.weeks || {}, ro.weeks || {}, preferRemote, tombstones),
         futureStory: mergeTwDisjointString(lo.futureStory, ro.futureStory, preferRemote),
         ui: mergeAnniversaryTwUiOverlay(lo.ui, ro.ui),
         progressBands: mergeAnniversaryProgressBands(lo.progressBands, ro.progressBands, preferRemote),
@@ -68517,7 +68559,7 @@
         .slice(0, ANNIVERSARY_TW_OKR_MAX_KEY_RESULTS);
     }
 
-    function mergeAnniversaryTwAnchorModuleForSync(localMod, remoteMod, preferRemote) {
+    function mergeAnniversaryTwAnchorModuleForSync(localMod, remoteMod, preferRemote, tombstones) {
       const lo = localMod && typeof localMod === "object" ? localMod : { anchor: null, weeks: {}, futureStory: "" };
       const ro = remoteMod && typeof remoteMod === "object" ? remoteMod : { anchor: null, weeks: {}, futureStory: "" };
       const la = lo.anchor != null ? String(lo.anchor) : null;
@@ -68534,7 +68576,7 @@
       }
       return {
         anchor: anchor,
-        weeks: mergeTw020WeeksMapsForSync(lo.weeks || {}, ro.weeks || {}, preferRemote),
+        weeks: mergeTw020WeeksMapsForSync(lo.weeks || {}, ro.weeks || {}, preferRemote, tombstones),
         futureStory: mergeTwDisjointString(lo.futureStory, ro.futureStory, preferRemote),
         longTermVision: mergeTwDisjointString(lo.longTermVision, ro.longTermVision, preferRemote),
         twelveWeekGoal: mergeTwDisjointString(lo.twelveWeekGoal, ro.twelveWeekGoal, preferRemote),
@@ -68848,17 +68890,20 @@
       base.anniversaryTw020 = mergeAnniversaryTw020ModuleForSync(
         state.anniversaryTw020,
         remoteState.anniversaryTw020,
-        anniversaryTwPreferRemote
+        anniversaryTwPreferRemote,
+        ts
       );
       base.anniversaryTw021 = mergeAnniversaryTwAnchorModuleForSync(
         state.anniversaryTw021,
         remoteState.anniversaryTw021,
-        anniversaryTwPreferRemote
+        anniversaryTwPreferRemote,
+        ts
       );
       base.anniversaryTw022 = mergeAnniversaryTwAnchorModuleForSync(
         state.anniversaryTw022,
         remoteState.anniversaryTw022,
-        anniversaryTwPreferRemote
+        anniversaryTwPreferRemote,
+        ts
       );
 
       const regLocal = state.anniversaryTwRegistry && typeof state.anniversaryTwRegistry === "object"
@@ -68880,7 +68925,8 @@
         base[sk] = mergeAnniversaryTwAnchorModuleForSync(
           state[sk],
           remoteState[sk],
-          anniversaryTwPreferRemote
+          anniversaryTwPreferRemote,
+          ts
         );
         if (!base.anniversaryDoneRef[moduleKey]) {
           base.anniversaryDoneRef[moduleKey] = { items: {} };
@@ -89755,6 +89801,7 @@
           payload: deepCloneForTrash(rm),
           meta: { weekNum: weekNum }
         });
+        recordAnniversaryTwTaskDeleteTombstones(rm);
       }
       removeAnniversaryClosedListMirrors("tw020", weekNum, taskId);
       state.anniversaryTw020.weeks[key] = arr.filter((x) => x.id !== taskId);
@@ -89805,6 +89852,7 @@
           payload: deepCloneForTrash(sub),
           meta: { weekNum: weekNum, taskId: taskId }
         });
+        recordSyncTombstone(subId);
       }
       removeAnniversaryClosedListMirrors("tw020", weekNum, taskId, subId);
       task.subs = task.subs.filter((s) => s.id !== subId);
@@ -92515,6 +92563,7 @@
           payload: deepCloneForTrash(rm),
           meta: { weekNum: weekNum }
         });
+        recordAnniversaryTwTaskDeleteTombstones(rm);
       }
       removeAnniversaryClosedListMirrors("tw021", weekNum, taskId);
       state.anniversaryTw021.weeks[key] = arr.filter((x) => x.id !== taskId);
@@ -92565,6 +92614,7 @@
           payload: deepCloneForTrash(sub),
           meta: { weekNum: weekNum, taskId: taskId }
         });
+        recordSyncTombstone(subId);
       }
       removeAnniversaryClosedListMirrors("tw021", weekNum, taskId, subId);
       task.subs = task.subs.filter((s) => s.id !== subId);
@@ -92641,6 +92691,7 @@
           payload: deepCloneForTrash(rm),
           meta: { weekNum: weekNum, moduleKey: moduleKey }
         });
+        recordAnniversaryTwTaskDeleteTombstones(rm);
       }
       removeAnniversaryClosedListMirrors(moduleKey, weekNum, taskId);
       mod.weeks[key] = arr.filter(function (x) {
@@ -92694,6 +92745,7 @@
           payload: deepCloneForTrash(sub),
           meta: { weekNum: weekNum, taskId: taskId, moduleKey: moduleKey }
         });
+        recordSyncTombstone(subId);
       }
       removeAnniversaryClosedListMirrors(moduleKey, weekNum, taskId, subId);
       task.subs = task.subs.filter(function (s) {
@@ -93564,6 +93616,7 @@
           payload: deepCloneForTrash(rm),
           meta: { weekNum: weekNum }
         });
+        recordAnniversaryTwTaskDeleteTombstones(rm);
       }
       removeAnniversaryClosedListMirrors("tw022", weekNum, taskId);
       state.anniversaryTw022.weeks[key] = arr.filter((x) => x.id !== taskId);
@@ -93614,6 +93667,7 @@
           payload: deepCloneForTrash(sub),
           meta: { weekNum: weekNum, taskId: taskId }
         });
+        recordSyncTombstone(subId);
       }
       removeAnniversaryClosedListMirrors("tw022", weekNum, taskId, subId);
       task.subs = task.subs.filter((s) => s.id !== subId);
