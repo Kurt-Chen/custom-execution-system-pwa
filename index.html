@@ -21770,31 +21770,32 @@
       color: #334155;
     }
 
-    /* Closed-List v3 手机：公式左、日期导航右上同一行；「昨天/明天/已完成」独占下一行 */
+    /* Closed-List v3 手机：隐藏公式；「昨天/明天」左对齐与日期导航同一行（桌面布局不变） */
     @media (max-width: 767px) {
       #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-date-nav-row {
-        flex-wrap: wrap;
-        row-gap: 6px;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 8px;
       }
 
       #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-date-nav-formula {
-        flex: 0 1 auto;
-        min-width: 0;
-        font-size: 12px;
-      }
-
-      #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-date-nav-center {
-        flex: 0 0 auto;
-        width: auto;
-        min-width: 0;
-        max-width: none;
-        margin-left: auto;
-        justify-content: flex-end;
+        display: none;
       }
 
       #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-date-nav-right {
-        flex: 1 1 100%;
-        width: 100%;
+        order: 1;
+        flex: 0 0 auto;
+        width: auto;
+        justify-content: flex-start;
+      }
+
+      #weeklyPlanClosedPanel.closed-list-ui-v3 .closed-list-date-nav-center {
+        order: 2;
+        flex: 1 1 auto;
+        width: auto;
+        min-width: 0;
+        max-width: none;
+        margin-left: 0;
         justify-content: center;
       }
 
@@ -39071,6 +39072,24 @@
       font-weight: 700;
       line-height: 1.25;
       letter-spacing: 0.02em;
+      min-width: 0;
+    }
+
+    #anniversaryModule .anniversary-tw-okr-metrics-panel__head-cd {
+      flex: 1 1 auto;
+      min-width: 0;
+      margin: 0;
+      justify-content: center;
+      text-align: center;
+    }
+
+    #anniversaryModule .anniversary-tw-okr-metrics-panel__head-cd .tw020-cd-remain {
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.25;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     #anniversaryModule .anniversary-tw-okr-metrics-panel__chevron {
@@ -39078,6 +39097,33 @@
       font-size: 12px;
       line-height: 1;
       color: #64748b;
+    }
+
+    /* 手机：OKR 折叠头三等分（标题 | 倒计时 | 箭头） */
+    @media (max-width: 767px) {
+      #anniversaryModule .anniversary-tw-okr-metrics-panel__head {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        align-items: center;
+        justify-content: stretch;
+        gap: 4px;
+      }
+
+      #anniversaryModule .anniversary-tw-okr-metrics-panel__head-label {
+        justify-self: start;
+        text-align: left;
+      }
+
+      #anniversaryModule .anniversary-tw-okr-metrics-panel__head-cd {
+        flex: unset;
+        justify-self: center;
+        width: 100%;
+        max-width: 100%;
+      }
+
+      #anniversaryModule .anniversary-tw-okr-metrics-panel__chevron {
+        justify-self: end;
+      }
     }
 
     #anniversaryModule .anniversary-tw-okr-metrics-panel__body {
@@ -49438,6 +49484,11 @@
                             aria-label="展开或收起 OKR 与周进度统计"
                           >
                             <span class="anniversary-tw-okr-metrics-panel__head-label">OKR · 周进度统计</span>
+                            <span
+                              id="anniversary021OkrHeadCountdown"
+                              class="anniversary-tw-okr-metrics-panel__head-cd anniversary-tw020-countdown anniversary-tw020-countdown--head"
+                              aria-live="polite"
+                            ></span>
                             <span class="anniversary-tw-okr-metrics-panel__chevron" aria-hidden="true">▸</span>
                           </button>
                           <div class="anniversary-tw-okr-metrics-panel__body">
@@ -49801,6 +49852,11 @@
                             aria-label="展开或收起 OKR 与周进度统计"
                           >
                             <span class="anniversary-tw-okr-metrics-panel__head-label">OKR · 周进度统计</span>
+                            <span
+                              id="anniversary022OkrHeadCountdown"
+                              class="anniversary-tw-okr-metrics-panel__head-cd anniversary-tw020-countdown anniversary-tw020-countdown--head"
+                              aria-live="polite"
+                            ></span>
                             <span class="anniversary-tw-okr-metrics-panel__chevron" aria-hidden="true">▸</span>
                           </button>
                           <div class="anniversary-tw-okr-metrics-panel__body">
@@ -61634,7 +61690,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260719e";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260719g";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** 本机已合并的 pulse.updatedAt（今日打卡快通道，远小于整包 v2） */
@@ -92316,6 +92372,36 @@
       if (changed) saveState();
     }
 
+    /** OKR · 周进度统计折叠头中间格：第12周截止倒计时（与愿景区同源） */
+    function syncAnniversaryTwOkrMetricsHeadCountdown(suffix, moduleKey) {
+      const host = document.getElementById("anniversary" + suffix + "OkrHeadCountdown");
+      if (!host) {
+        return;
+      }
+      host.replaceChildren();
+      if (!anniversaryTwAnchorDateForModule(moduleKey)) {
+        return;
+      }
+      const deadlineMs = getAnniversaryTwWeek12DeadlineMsForModule(moduleKey);
+      if (deadlineMs == null) {
+        return;
+      }
+      const dayDiff = kineticCalendarDaysFromToday(deadlineMs);
+      const remainEl = document.createElement("div");
+      remainEl.className = "tw020-cd-remain";
+      if (dayDiff > 0) {
+        remainEl.classList.add("future");
+        remainEl.textContent = "仅剩" + dayDiff + "天";
+      } else if (dayDiff === 0) {
+        remainEl.classList.add("today");
+        remainEl.textContent = "今天为第12周截止日";
+      } else {
+        remainEl.classList.add("past");
+        remainEl.textContent = "第12周截止已过 " + String(-dayDiff) + " 天";
+      }
+      host.appendChild(remainEl);
+    }
+
     function renderAnniversaryTwAnchorModule(moduleKey) {
       normalizeAnniversaryTwModuleStateByKey(moduleKey);
       const mod = getAnniversaryTwStateModule(moduleKey);
@@ -92409,6 +92495,7 @@
           elCur.style.display = "none";
         }
       }
+      syncAnniversaryTwOkrMetricsHeadCountdown(suffix, moduleKey);
 
       const elCycleStart = document.getElementById("anniversary" + suffix + "VisionCycleStart");
       const elCycleEnd = document.getElementById("anniversary" + suffix + "VisionCycleEnd");
