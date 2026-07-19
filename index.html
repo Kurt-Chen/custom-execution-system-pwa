@@ -40451,40 +40451,54 @@
       font-weight: 600;
     }
 
-    /* 本周唯一目标：进度条与任务列表之间；图二式纯文本行 */
-    #anniversaryModule .tw020-week-goal-row {
-      display: flex;
-      align-items: baseline;
-      gap: 0;
-      margin: 8px 4px 6px;
-      padding: 0 2px;
-      min-width: 0;
+    /* 本周目标卡：进度条与任务列表之间；两行（唯一目标 / 完成标准），操作同任务卡 */
+    #anniversaryModule .tw020-week-goal-card {
+      margin: 8px 2px 8px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid #bfdbfe;
+      background: #fff;
       box-sizing: border-box;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
     }
 
-    #anniversaryModule .tw020-week-goal-prefix {
-      flex: 0 0 auto;
-      font-size: 14px;
-      font-weight: 600;
-      color: #1e293b;
-      line-height: 1.55;
-      white-space: nowrap;
+    #anniversaryModule .tw020-week-goal-field {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    #anniversaryModule .tw020-week-goal-field-main {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    #anniversaryModule .tw020-week-goal-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: #be185d;
+      line-height: 1.3;
     }
 
     #anniversaryModule .tw020-week-goal-input {
-      flex: 1 1 auto;
-      min-width: 0;
       width: 100%;
+      min-width: 0;
       border: none;
-      border-bottom: 1px solid transparent;
       border-radius: 0;
       background: transparent;
-      padding: 0 0 1px;
+      padding: 0;
       margin: 0;
       font-size: 14px;
-      font-weight: 500;
-      color: #1e293b;
-      line-height: 1.55;
+      font-weight: 700;
+      color: #1e3a8a;
+      line-height: 1.4;
       outline: none;
       box-shadow: none;
       box-sizing: border-box;
@@ -40492,12 +40506,21 @@
 
     #anniversaryModule .tw020-week-goal-input::placeholder {
       color: #94a3b8;
-      font-weight: 400;
+      font-weight: 500;
     }
 
     #anniversaryModule .tw020-week-goal-input:focus {
-      border-bottom-color: #cbd5e1;
       outline: none;
+    }
+
+    #anniversaryModule .tw020-week-goal-input:not([readonly]) {
+      border-bottom: 1px solid #93c5fd;
+      padding-bottom: 1px;
+    }
+
+    #anniversaryModule .tw020-week-goal-field > .manual-item-actions-wrap {
+      flex-shrink: 0;
+      margin-top: 14px;
     }
 
     #anniversaryModule .tw020-week-tasks-panel {
@@ -68567,19 +68590,34 @@
       mod.review = normalizeAnniversaryTwReviewShape(mod.review);
     }
 
-    /** 十二周年各周「本周唯一目标」文案：按周键并集，非空冲突随 preferRemote */
+    /** 兼容旧版 weekGoals[周]=string → { goal, criteria } */
+    function normalizeAnniversaryWeekGoalEntry(raw) {
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        return {
+          goal: typeof raw.goal === "string" ? raw.goal : typeof raw.text === "string" ? raw.text : "",
+          criteria: typeof raw.criteria === "string" ? raw.criteria : ""
+        };
+      }
+      if (typeof raw === "string") {
+        return { goal: raw, criteria: "" };
+      }
+      return { goal: "", criteria: "" };
+    }
+
+    /** 十二周年各周目标卡：按周键并集，字段非空冲突随 preferRemote */
     function mergeAnniversaryWeekGoalsForSync(localGoals, remoteGoals, preferRemote) {
       const lo = localGoals && typeof localGoals === "object" ? localGoals : {};
       const ro = remoteGoals && typeof remoteGoals === "object" ? remoteGoals : {};
       const out = {};
       const keys = new Set(Object.keys(lo).concat(Object.keys(ro)));
       keys.forEach(function (k) {
-        const v = mergeTwDisjointString(
-          typeof lo[k] === "string" ? lo[k] : "",
-          typeof ro[k] === "string" ? ro[k] : "",
-          preferRemote
-        );
-        if (v) out[k] = v;
+        const a = normalizeAnniversaryWeekGoalEntry(lo[k]);
+        const b = normalizeAnniversaryWeekGoalEntry(ro[k]);
+        const merged = {
+          goal: mergeTwDisjointString(a.goal, b.goal, preferRemote),
+          criteria: mergeTwDisjointString(a.criteria, b.criteria, preferRemote)
+        };
+        if (merged.goal || merged.criteria) out[k] = merged;
       });
       return out;
     }
@@ -68588,7 +68626,13 @@
       if (!mod || typeof mod !== "object") return;
       if (!mod.weekGoals || typeof mod.weekGoals !== "object") {
         mod.weekGoals = {};
+        return;
       }
+      Object.keys(mod.weekGoals).forEach(function (k) {
+        const entry = normalizeAnniversaryWeekGoalEntry(mod.weekGoals[k]);
+        if (entry.goal || entry.criteria) mod.weekGoals[k] = entry;
+        else delete mod.weekGoals[k];
+      });
     }
 
     function mergeAnniversaryTw020ModuleForSync(localMod, remoteMod, preferRemote, tombstones) {
@@ -86133,6 +86177,9 @@
       const weekNum = opts.weekNum;
       const taskId = opts.taskId;
       const subId = opts.subId || null;
+      const omitClosedPromote = Boolean(opts.omitClosedPromote);
+      const omitDelete = Boolean(opts.omitDelete);
+      const allowEmptySave = Boolean(opts.allowEmptySave);
       if (!textInput) {
         return;
       }
@@ -86173,7 +86220,7 @@
       function syncSaveDisabled() {
         const editing = !textInput.readOnly;
         const trimmed = String(textInput.value || "").trim();
-        saveBtn.disabled = !editing || !trimmed;
+        saveBtn.disabled = !editing || (!allowEmptySave && !trimmed);
       }
 
       function collapseWrap() {
@@ -86219,13 +86266,17 @@
       function commitAnniversaryTitleSave(ev) {
         if (ev) ev.stopPropagation();
         const v = String(textInput.value || "").trim();
-        if (!v || textInput.readOnly) {
+        if (textInput.readOnly) {
+          return;
+        }
+        if (!allowEmptySave && !v) {
           return;
         }
         if (typeof onSave === "function") {
           onSave(v);
         }
         valueBeforeEdit = v;
+        textInput.value = v;
         exitEdit(false);
       }
 
@@ -86233,7 +86284,7 @@
         "pointerdown",
         (ev) => {
           if (saveBtn.disabled || textInput.readOnly) return;
-          if (!String(textInput.value || "").trim()) return;
+          if (!allowEmptySave && !String(textInput.value || "").trim()) return;
           commitAnniversaryTitleSave(ev);
         },
         true
@@ -86340,8 +86391,12 @@
       if (dlAddMenuBtn) {
         iconGroup.appendChild(dlAddMenuBtn);
       }
-      iconGroup.appendChild(closedBtn);
-      iconGroup.appendChild(delBtn);
+      if (!omitClosedPromote) {
+        iconGroup.appendChild(closedBtn);
+      }
+      if (!omitDelete) {
+        iconGroup.appendChild(delBtn);
+      }
       wrap.appendChild(iconGroup);
       wrap.appendChild(moreBtn);
       containerEl.appendChild(wrap);
@@ -91039,16 +91094,16 @@
       return progress.pct + "% · " + tail;
     }
 
-    function getAnniversaryTwWeekGoal(moduleKey, weekNum) {
+    function getAnniversaryTwWeekGoalEntry(moduleKey, weekNum) {
       const mod =
         typeof getAnniversaryTwStateModule === "function" ? getAnniversaryTwStateModule(moduleKey) : null;
-      if (!mod) return "";
+      if (!mod) return { goal: "", criteria: "" };
       ensureAnniversaryTwWeekGoalsOnModule(mod);
-      const v = mod.weekGoals[String(weekNum)];
-      return typeof v === "string" ? v : "";
+      return normalizeAnniversaryWeekGoalEntry(mod.weekGoals[String(weekNum)]);
     }
 
-    function setAnniversaryTwWeekGoal(moduleKey, weekNum, text) {
+    function setAnniversaryTwWeekGoalField(moduleKey, weekNum, field, text) {
+      if (field !== "goal" && field !== "criteria") return;
       if (typeof normalizeAnniversaryTwModuleStateByKey === "function") {
         normalizeAnniversaryTwModuleStateByKey(moduleKey);
       }
@@ -91056,37 +91111,59 @@
         typeof getAnniversaryTwStateModule === "function" ? getAnniversaryTwStateModule(moduleKey) : null;
       if (!mod) return;
       ensureAnniversaryTwWeekGoalsOnModule(mod);
-      const t = String(text || "").trim();
       const key = String(weekNum);
-      if (t) mod.weekGoals[key] = t;
+      const entry = normalizeAnniversaryWeekGoalEntry(mod.weekGoals[key]);
+      entry[field] = String(text || "").trim();
+      if (entry.goal || entry.criteria) mod.weekGoals[key] = entry;
       else delete mod.weekGoals[key];
       saveStateAfterAnniversaryWeekChange(moduleKey, weekNum);
     }
 
-    /** 进度条与任务列表之间：本周唯一目标（图二式一行） */
+    /** 进度条与任务列表之间：本周唯一目标 + 目标完成标准（任务卡式编辑） */
     function createAnniversaryTwWeekGoalRow(moduleKey, weekNum) {
-      const row = document.createElement("div");
-      row.className = "tw020-week-goal-row";
-      const prefix = document.createElement("span");
-      prefix.className = "tw020-week-goal-prefix";
-      prefix.textContent = "本周唯一目标：";
-      const inp = document.createElement("input");
-      inp.type = "text";
-      inp.className = "tw020-week-goal-input";
-      inp.placeholder = "本周目标（一句话）";
-      inp.value = getAnniversaryTwWeekGoal(moduleKey, weekNum);
-      inp.setAttribute("aria-label", "第" + weekNum + "周目标（一句话）");
-      inp.addEventListener("change", function () {
-        setAnniversaryTwWeekGoal(moduleKey, weekNum, inp.value);
-      });
-      inp.addEventListener("blur", function () {
-        const next = String(inp.value || "").trim();
-        if (inp.value !== next) inp.value = next;
-        setAnniversaryTwWeekGoal(moduleKey, weekNum, next);
-      });
-      row.appendChild(prefix);
-      row.appendChild(inp);
-      return row;
+      const entry = getAnniversaryTwWeekGoalEntry(moduleKey, weekNum);
+      const card = document.createElement("div");
+      card.className = "tw020-week-goal-card";
+      card.setAttribute("role", "group");
+      card.setAttribute("aria-label", "第" + weekNum + "周目标");
+
+      function appendGoalField(fieldKey, labelText, placeholder, value) {
+        const field = document.createElement("div");
+        field.className = "tw020-week-goal-field";
+        const main = document.createElement("div");
+        main.className = "tw020-week-goal-field-main";
+        const label = document.createElement("span");
+        label.className = "tw020-week-goal-label";
+        label.textContent = labelText;
+        const inp = document.createElement("input");
+        inp.type = "text";
+        inp.className = "tw020-week-goal-input";
+        inp.placeholder = placeholder;
+        inp.value = value || "";
+        inp.setAttribute("aria-label", "第" + weekNum + "周" + labelText);
+        main.appendChild(label);
+        main.appendChild(inp);
+        field.appendChild(main);
+        appendAnniversaryManualActionsWrap(field, {
+          module: moduleKey,
+          weekNum: weekNum,
+          textInput: inp,
+          omitClosedPromote: true,
+          allowEmptySave: true,
+          onSave: function (v) {
+            setAnniversaryTwWeekGoalField(moduleKey, weekNum, fieldKey, v);
+          },
+          onDelete: function () {
+            inp.value = "";
+            setAnniversaryTwWeekGoalField(moduleKey, weekNum, fieldKey, "");
+          }
+        });
+        card.appendChild(field);
+      }
+
+      appendGoalField("goal", "本周唯一目标", "本周目标（一句话）", entry.goal);
+      appendGoalField("criteria", "目标完成标准", "如何判断本周成功（一句话）", entry.criteria);
+      return card;
     }
 
     function createAnniversaryWeekProgressBarElement(progress, bands) {
