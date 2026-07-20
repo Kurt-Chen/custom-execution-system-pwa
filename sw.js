@@ -1,12 +1,13 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20260720j";
+const CACHE_NAME = "exec-system-pwa-v20260720l";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./index - 2026.3.31.html",
   "./manifest.webmanifest",
   "./icons/icon-192.svg",
-  "./icons/icon-512.svg"
+  "./icons/icon-512.svg",
+  "./icons/forge-heaven-hell.png"
 ];
 
 self.addEventListener("install", (event) => {
