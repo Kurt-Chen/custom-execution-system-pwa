@@ -2519,10 +2519,11 @@
 
     @media (max-width: 767px) {
       .done-vd-index-home {
-        padding: 4px 8px;
-        min-height: 28px;
+        padding: 3px 6px 3px 5px;
+        min-height: 26px;
         gap: 0;
         justify-content: center;
+        overflow: hidden;
       }
       /* 手机端：只显示算式（完整文案见 aria-label / title） */
       .done-vd-index-home__verdict,
@@ -2532,24 +2533,72 @@
       }
       .done-vd-index-home__value {
         flex: 1 1 auto;
-        font-size: 13px;
-        overflow: visible;
+        font-size: 10px;
+        overflow: hidden;
         text-overflow: clip;
         justify-content: center;
         min-width: 0;
-        padding: 2px 6px 2px 8px;
+        padding: 1px 2px 1px 3px;
+        gap: 0;
       }
       .done-vd-index-home__math-power,
       .done-vd-index-home__math-treason {
-        font-size: 13px;
+        font-size: 10px;
       }
       .done-vd-index-home__math-op {
-        font-size: 12px;
-        padding: 0 2px;
+        font-size: 9px;
+        padding: 0 1px;
       }
-      .done-vd-index-home__math-eq,
+      .done-vd-index-home__math-eq {
+        font-size: 10px;
+        padding: 0 1px;
+      }
+      /* 结果胶囊：缩小字号/内边距/3D 饰边，避免溢出外层浅绿胶囊 */
       .done-vd-index-home__math-index {
-        font-size: 14px;
+        font-size: 10px;
+        padding: 2px 6px 3px;
+        margin: 0 6px 0 1px;
+        border-bottom-width: 2px;
+        box-shadow:
+          0 2px 0 #14532d,
+          1px 3px 0 rgba(20, 83, 45, 0.3),
+          inset 0 1px 0 rgba(255, 255, 255, 0.35);
+      }
+      .done-vd-index-home__math-index--neg {
+        box-shadow:
+          0 2px 0 #7f1d1d,
+          1px 3px 0 rgba(127, 29, 29, 0.3),
+          inset 0 1px 0 rgba(255, 255, 255, 0.28);
+      }
+      .done-vd-index-home__math-index--flat {
+        box-shadow:
+          0 2px 0 #334155,
+          1px 3px 0 rgba(51, 65, 85, 0.28),
+          inset 0 1px 0 rgba(255, 255, 255, 0.3);
+      }
+      .done-vd-index-home__math-index--pos::after,
+      .done-vd-index-home__math-index--neg::after,
+      .done-vd-index-home__math-index--flat::after {
+        left: calc(100% + 2px);
+        top: 18%;
+        width: 1.5px;
+        height: 5px;
+        box-shadow: 3px 3px 0 0 currentColor, 5px 0 0 0 currentColor;
+      }
+      .done-vd-index-home__math-index--pos::after {
+        color: #86efac;
+        background: #86efac;
+        box-shadow: 3px 3px 0 0 #86efac, 5px 0 0 0 #bbf7d0;
+      }
+      .done-vd-index-home__math-index--neg::after {
+        color: #fecaca;
+        background: #fecaca;
+        box-shadow: 3px 3px 0 0 #fecaca, 5px 0 0 0 #fee2e2;
+      }
+      .done-vd-index-home__math-index--flat::after {
+        color: #e2e8f0;
+        background: #e2e8f0;
+        box-shadow: 3px 3px 0 0 #e2e8f0, 5px 0 0 0 #f1f5f9;
       }
       .done-outcome-head-row {
         gap: 4px;
@@ -64167,7 +64216,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260722b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260722c";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** 本机已合并的 pulse.updatedAt（今日打卡快通道，远小于整包 v2） */
@@ -66349,6 +66398,9 @@
       ) {
         next.readingPlan = prev.readingPlan;
       }
+      if (next.moveBreakDay || prev.moveBreakDay) {
+        next.moveBreakDay = mergeMoveBreakDayForSync(prev.moveBreakDay, next.moveBreakDay);
+      }
       return next;
     }
 
@@ -66993,6 +67045,13 @@
       if (ts && Object.keys(ts).length > 0) {
         pulseState.syncTombstones = Object.assign({}, ts);
       }
+      /* 久坐运动确认：计入今日 pulse，跨端即时同步角标次数 */
+      if (state.moveBreakDay && typeof state.moveBreakDay === "object") {
+        const mb = normalizeMoveBreakDayValue(state.moveBreakDay);
+        if (mb.dateKey === todayKey) {
+          pulseState.moveBreakDay = mb;
+        }
+      }
       return pulseState;
     }
 
@@ -67090,6 +67149,18 @@
         ) {
           if (mergeCloudSyncReadingPlanPulseIntoState(pulseState.readingPlan.books)) changed = true;
         }
+        if (pulseState.moveBreakDay && typeof pulseState.moveBreakDay === "object") {
+          const nextMb = mergeMoveBreakDayForSync(state.moveBreakDay, pulseState.moveBreakDay);
+          try {
+            if (JSON.stringify(state.moveBreakDay || {}) !== JSON.stringify(nextMb)) {
+              state.moveBreakDay = nextMb;
+              changed = true;
+            }
+          } catch (_mbCmp) {
+            state.moveBreakDay = nextMb;
+            changed = true;
+          }
+        }
         Object.keys(pulseState).forEach(function (sk) {
           if (!/^anniversaryTw\d+$/i.test(sk)) return;
           if (!pulseState[sk] || typeof pulseState[sk] !== "object") return;
@@ -67157,7 +67228,9 @@
         pulseNode.state.readingPlan &&
         Array.isArray(pulseNode.state.readingPlan.books) &&
         pulseNode.state.readingPlan.books.length > 0;
-      if (pulseHasHabit || pulseHasForge || pulseHasDeadline || pulseHasReadingPlan) {
+      const pulseHasMoveBreak =
+        pulseNode.state && pulseNode.state.moveBreakDay && typeof pulseNode.state.moveBreakDay === "object";
+      if (pulseHasHabit || pulseHasForge || pulseHasDeadline || pulseHasReadingPlan || pulseHasMoveBreak) {
         render();
       } else {
         scheduleCloudSyncRenderDebounced();
@@ -69132,6 +69205,68 @@
         }
       );
       return Array.from(map.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    }
+
+    /** 久坐运动提醒：规范化 dateKey / count / ackedHours（整点须为 0–23 数字） */
+    function normalizeMoveBreakDayValue(raw) {
+      const out = { dateKey: "", count: 0, ackedHours: [] };
+      if (!raw || typeof raw !== "object") return out;
+      out.dateKey = typeof raw.dateKey === "string" ? raw.dateKey : "";
+      const hours = [];
+      if (Array.isArray(raw.ackedHours)) {
+        raw.ackedHours.forEach(function (h) {
+          const n = Number(h);
+          if (!Number.isFinite(n) || n < 0 || n > 23) return;
+          const hour = Math.floor(n);
+          if (hours.indexOf(hour) === -1) hours.push(hour);
+        });
+      }
+      hours.sort(function (a, b) {
+        return a - b;
+      });
+      out.ackedHours = hours;
+      out.count = Math.max(0, Number(raw.count) || 0, hours.length);
+      return out;
+    }
+
+    /** 同日：ackedHours 并集，count 取较大值（至少不低于已确认整点数） */
+    function mergeSameDayMoveBreakDay(localDay, remoteDay) {
+      const L = normalizeMoveBreakDayValue(localDay);
+      const R = normalizeMoveBreakDayValue(remoteDay);
+      const hours = [];
+      L.ackedHours.concat(R.ackedHours).forEach(function (h) {
+        if (hours.indexOf(h) === -1) hours.push(h);
+      });
+      hours.sort(function (a, b) {
+        return a - b;
+      });
+      return {
+        dateKey: L.dateKey || R.dateKey,
+        count: Math.max(L.count, R.count, hours.length),
+        ackedHours: hours
+      };
+    }
+
+    /**
+     * 云合并运动确认：优先保留「今天」一侧；两侧同日则并集；
+     * 均非今日则取较新 dateKey（字符串 YYYY-MM-DD 可比）。
+     */
+    function mergeMoveBreakDayForSync(localVal, remoteVal) {
+      const today = formatDateInputValue(new Date());
+      const L = normalizeMoveBreakDayValue(localVal);
+      const R = normalizeMoveBreakDayValue(remoteVal);
+      const lToday = L.dateKey === today;
+      const rToday = R.dateKey === today;
+      if (lToday && rToday) return mergeSameDayMoveBreakDay(L, R);
+      if (lToday) return L;
+      if (rToday) return R;
+      if (L.dateKey && R.dateKey && L.dateKey === R.dateKey) {
+        return mergeSameDayMoveBreakDay(L, R);
+      }
+      if (L.dateKey && R.dateKey) {
+        return L.dateKey >= R.dateKey ? L : R;
+      }
+      return L.dateKey ? L : R;
     }
 
     function mergeHabitCheckinEntrySyncScore(obj) {
@@ -85781,6 +85916,14 @@
     }
 
     function normalizeDoneTaskDedupeKey(task) {
+      /**
+       * Forge 打卡允许同动作、同完成量、跨日甚至同日多次；去重键必须带 id。
+       * 否则 pruneRedundantDoneEntriesInState 会把「壶铃 · 10」跨日并成一条，
+       * 今日打卡顶掉往日记录 → ×终身累计看起来「打了也不涨」。
+       */
+      if (task && (task.forgeMindMeta || task.forgeBodyMeta) && task.id != null) {
+        return "forge:" + String(task.id);
+      }
       const stripped = stripDoneTextSourcePrefixesForDedupe(task && task.text != null ? task.text : "");
       if (!stripped) return "";
       const wpMeta = task && task.weeklyPlanMeta;
@@ -85858,6 +86001,7 @@
     /**
      * 清理 state.done 中同日同源重复行（与 dedupeDoneTasksForDisplay 规则一致，会写回存储）。
      * 典型成因：多条封闭清单镜像各自 syncClosedListToDone，或云同步按 id 并集保留多行。
+     * Forge 打卡（forgeMindMeta / forgeBodyMeta）按 id 去重键，不会因同文案跨日被合并。
      */
     function pruneRedundantDoneEntriesInState() {
       if (!Array.isArray(state.done) || state.done.length < 2) return false;
@@ -104892,8 +105036,23 @@
       if (state.moveBreakDay.dateKey !== today) {
         state.moveBreakDay = { dateKey: today, count: 0, ackedHours: [] };
       }
-      state.moveBreakDay.count = Math.max(0, Number(state.moveBreakDay.count) || 0);
-      if (!Array.isArray(state.moveBreakDay.ackedHours)) state.moveBreakDay.ackedHours = [];
+      const hours = [];
+      const seen = Object.create(null);
+      if (Array.isArray(state.moveBreakDay.ackedHours)) {
+        state.moveBreakDay.ackedHours.forEach(function (h) {
+          const n = Number(h);
+          if (!Number.isFinite(n) || n < 0 || n > 23) return;
+          const key = String(n);
+          if (seen[key]) return;
+          seen[key] = true;
+          hours.push(n);
+        });
+      }
+      hours.sort(function (a, b) {
+        return a - b;
+      });
+      state.moveBreakDay.ackedHours = hours;
+      state.moveBreakDay.count = Math.max(0, Number(state.moveBreakDay.count) || 0, hours.length);
       return state.moveBreakDay;
     }
 
@@ -104985,7 +105144,12 @@
       if (day.ackedHours.indexOf(hour) === -1) {
         day.ackedHours.push(hour);
       }
-      day.count += 1;
+      day.count = Math.max(Number(day.count) || 0, day.ackedHours.length) + 0;
+      /* 本小时新确认：保证 count 至少覆盖已确认整点数，并 +1 相对确认前 */
+      day.count = Math.max(day.ackedHours.length, (Number(day.count) || 0));
+      /* 上面在 push 前 count 可能已含旧值；以并集长度为准后再保证至少 +1 相对确认前 */
+      const prevCount = Math.max(0, (Number(day.count) || 0) - 1);
+      day.count = Math.max(day.ackedHours.length, prevCount + 1);
       saveState();
       flushCloudSyncPulseImmediate();
       renderDoneMoveHourlySlogan();
