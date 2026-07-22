@@ -67484,6 +67484,13 @@
         pulseState.weeklyPlanDoneSuppress &&
         typeof pulseState.weeklyPlanDoneSuppress === "object" &&
         Object.keys(pulseState.weeklyPlanDoneSuppress).length > 0;
+      const hasMoveBreak =
+        pulseState.moveBreakDay &&
+        typeof pulseState.moveBreakDay === "object" &&
+        (Number(pulseState.moveBreakDay.count) > 0 ||
+          (Array.isArray(pulseState.moveBreakDay.ackedHours) &&
+            pulseState.moveBreakDay.ackedHours.length > 0) ||
+          !!pulseState.moveBreakDay.dateKey);
       if (
         !hasDone &&
         !hasHc &&
@@ -67493,7 +67500,8 @@
         !hasReadingPlan &&
         !hasTombstones &&
         !hasAnniversaryTw &&
-        !hasWpSuppress
+        !hasWpSuppress &&
+        !hasMoveBreak
       ) {
         return Promise.resolve();
       }
@@ -71202,6 +71210,7 @@
         )
       };
       base.fuelScores = mergeFuelScoresForSync(state.fuelScores, remoteState.fuelScores);
+      base.moveBreakDay = mergeMoveBreakDayForSync(state.moveBreakDay, remoteState.moveBreakDay);
       base.habitCheckins = mergeHabitCheckinsForSync(state.habitCheckins, remoteState.habitCheckins);
       base.dailyWinTomorrowRef = filterDailyWinTomorrowRefByTombstones(
         mergeDailyWinTomorrowRefForSync(
@@ -105144,12 +105153,7 @@
       if (day.ackedHours.indexOf(hour) === -1) {
         day.ackedHours.push(hour);
       }
-      day.count = Math.max(Number(day.count) || 0, day.ackedHours.length) + 0;
-      /* 本小时新确认：保证 count 至少覆盖已确认整点数，并 +1 相对确认前 */
-      day.count = Math.max(day.ackedHours.length, (Number(day.count) || 0));
-      /* 上面在 push 前 count 可能已含旧值；以并集长度为准后再保证至少 +1 相对确认前 */
-      const prevCount = Math.max(0, (Number(day.count) || 0) - 1);
-      day.count = Math.max(day.ackedHours.length, prevCount + 1);
+      day.count = Math.max((Number(day.count) || 0) + 1, day.ackedHours.length);
       saveState();
       flushCloudSyncPulseImmediate();
       renderDoneMoveHourlySlogan();
