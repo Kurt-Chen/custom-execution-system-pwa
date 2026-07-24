@@ -10165,6 +10165,100 @@
       margin-top: 8px;
     }
 
+    /* Life/Work：今日 Closed-List 未完成时的 ISG 门禁页 */
+    #weeklyPlanIsgGate.weekly-plan-isg-gate {
+      display: none;
+      margin: 12px 12px 20px;
+      padding: 18px 16px 20px;
+      border-radius: 12px;
+      border: 1px solid #e2e8f0;
+      border-left: 4px solid #7c3aed;
+      background: linear-gradient(165deg, #faf5ff 0%, #ffffff 72%);
+      box-sizing: border-box;
+    }
+
+    #weeklyPlanSection.weekly-plan-shell-isg-locked #weeklyPlanIsgGate.weekly-plan-isg-gate {
+      display: block;
+    }
+
+    #weeklyPlanSection.weekly-plan-shell-isg-locked #weeklyPlanTasksPanel > .weekly-plan-modern-head,
+    #weeklyPlanSection.weekly-plan-shell-isg-locked #weeklyPlanTasksPanel > .weekly-plan-lane-add-shell--fields-only,
+    #weeklyPlanSection.weekly-plan-shell-isg-locked #weeklyPlanTasksPanel > .weekly-plan-lanes,
+    #weeklyPlanSection.weekly-plan-shell-isg-locked #weeklyPlanTasksPanel > #weeklyPlanFooterMeta {
+      display: none !important;
+    }
+
+    .weekly-plan-isg-gate__title {
+      margin: 0 0 14px;
+      font-size: 1.05rem;
+      font-weight: 700;
+      line-height: 1.35;
+      color: #5b21b6;
+      letter-spacing: -0.01em;
+    }
+
+    .weekly-plan-isg-gate__list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .weekly-plan-isg-gate__list > li {
+      margin: 0;
+      padding: 0;
+      font-size: 0.92rem;
+      line-height: 1.55;
+      color: #334155;
+    }
+
+    .weekly-plan-isg-gate__lead {
+      font-weight: 650;
+      color: #1e293b;
+    }
+
+    .weekly-plan-isg-gate__en {
+      display: block;
+      margin-top: 4px;
+      font-size: 0.86rem;
+      line-height: 1.5;
+      color: #64748b;
+      font-style: italic;
+    }
+
+    .weekly-plan-isg-gate__hint {
+      margin: 16px 0 0;
+      font-size: 0.82rem;
+      line-height: 1.45;
+      color: #7c3aed;
+      font-weight: 600;
+    }
+
+    #weeklyPlanSection .weekly-plan-lane-seg.weekly-plan-lane-seg--isg-locked:not(.is-active) {
+      opacity: 0.55;
+    }
+
+    #weeklyPlanSection .weekly-plan-lane-seg.weekly-plan-lane-seg--isg-locked.is-active {
+      opacity: 1;
+    }
+
+    @media (max-width: 767px) {
+      #weeklyPlanIsgGate.weekly-plan-isg-gate {
+        margin: 10px 8px 16px;
+        padding: 14px 12px 16px;
+      }
+
+      .weekly-plan-isg-gate__title {
+        font-size: 0.98rem;
+      }
+
+      .weekly-plan-isg-gate__list > li {
+        font-size: 0.88rem;
+      }
+    }
+
     .weekly-plan-lanes--single {
       padding: 0 12px 12px;
     }
@@ -52068,6 +52162,33 @@
           </div>
 
           <div id="weeklyPlanTasksPanel" class="weekly-plan-tasks-panel">
+            <div
+              id="weeklyPlanIsgGate"
+              class="weekly-plan-isg-gate"
+              hidden
+              role="region"
+              aria-label="Impossible Singular Goal：完成今日 Closed-List 后解锁 Life 与 Work"
+            >
+              <p class="weekly-plan-isg-gate__title">Impossible Singular Goal + Extreme Deadline = Wormhole</p>
+              <ol class="weekly-plan-isg-gate__list">
+                <li>
+                  <span class="weekly-plan-isg-gate__lead">It would be impossible, unless…?</span>
+                  —问自己这个「除非」是什么，然后去创造那些条件。
+                </li>
+                <li>
+                  <span class="weekly-plan-isg-gate__lead">Impossible Singular Goal</span>
+                  是一个设定得如此高远、清晰、强大的目标，以至于它消除了对所有其他目标的需要。一个正确的 ISG 如果实现了，其他所有目标都会自动随之解决。一个正确的单一目标会同时解决你试图完成的所有其他事情。
+                </li>
+                <li>
+                  阻碍我们实现目标的不是障碍，而是一条通向次要目标的清晰道路。
+                  <span class="weekly-plan-isg-gate__en">We are kept from our goal not by obstacles, but by a clear path to a lesser goal.</span>
+                </li>
+                <li>
+                  <span class="weekly-plan-isg-gate__lead">在清晰度上把自己「逼疯」！</span>
+                </li>
+              </ol>
+              <p class="weekly-plan-isg-gate__hint">完成今日 Closed-List 全部任务后，Life / Work 自动解锁（无需密码）。</p>
+            </div>
             <div class="weekly-plan-modern-head">
               <p
                 id="weeklyPlanSprintLoopHint"
@@ -90477,6 +90598,37 @@
       applyWeeklyPlanShellLayout();
     }
 
+    /** 今日 Closed-List 是否全部有效完成（空清单视为已解锁；未完成会流转到今天） */
+    function isTodayClosedListAllComplete() {
+      const todayKey = formatDateInputValue(new Date());
+      const items = getClosedListItemsVisibleForViewDate(todayKey);
+      if (!items.length) return true;
+      return items.every(isClosedListItemEffectivelyComplete);
+    }
+
+    /** Life/Work ISG 门禁：未完成今日 Closed-List 时显示文案页；完成后自动显示真实列表（无密码） */
+    function syncWeeklyPlanIsgGateUI() {
+      const shell = getWeeklyPlanShell();
+      const unlocked = isTodayClosedListAllComplete();
+      const showGate = (shell === "life" || shell === "work") && !unlocked;
+      const sec = document.getElementById("weeklyPlanSection");
+      if (sec) sec.classList.toggle("weekly-plan-shell-isg-locked", showGate);
+      const gate = document.getElementById("weeklyPlanIsgGate");
+      if (gate) gate.hidden = !showGate;
+      const lockHint = "完成今日 Closed-List 后解锁";
+      [weeklyPlanLaneLifeBtn, weeklyPlanLaneWorkBtn].forEach(function (btn) {
+        if (!btn) return;
+        btn.classList.toggle("weekly-plan-lane-seg--isg-locked", !unlocked);
+        if (!unlocked) {
+          btn.setAttribute("title", lockHint);
+          btn.setAttribute("aria-description", lockHint);
+        } else {
+          btn.removeAttribute("title");
+          btn.removeAttribute("aria-description");
+        }
+      });
+    }
+
     function applyWeeklyPlanShellLayout() {
       const shell = getWeeklyPlanShell();
       const cp = document.getElementById("weeklyPlanClosedPanel");
@@ -90492,6 +90644,7 @@
         sec.classList.toggle("weekly-plan-shell-closed", shell === "closed");
         sec.classList.toggle("weekly-plan-shell-reading", shell === "reading");
       }
+      syncWeeklyPlanIsgGateUI();
     }
 
     /** 桌面 ≥768px 才启用 Sprint 看板 */
