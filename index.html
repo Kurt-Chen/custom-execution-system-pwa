@@ -9762,6 +9762,19 @@
       flex: 1 1 auto;
       text-align: left;
       line-height: 1.3;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 2px;
+    }
+
+    .reading-plan-item-title-row {
+      min-width: 0;
+      line-height: 1.3;
+    }
+
+    .reading-plan-item-title-row .reading-plan-item-title-input {
+      width: 100%;
     }
 
     .reading-plan-item-title {
@@ -9792,6 +9805,40 @@
       font-weight: 500;
       color: #9ca3af;
       line-height: 1.3;
+    }
+
+    .reading-plan-item-problem {
+      display: block;
+      width: 100%;
+      margin-top: 2px;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1.35;
+      color: #047857;
+      word-break: break-word;
+    }
+
+    .reading-plan-item-problem--empty {
+      color: #9ca3af;
+      font-weight: 400;
+    }
+
+    .reading-plan-item-problem-input {
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 4px;
+      padding: 4px 8px;
+      border: 1px solid #a7f3d0;
+      border-radius: 8px;
+      background: #fff;
+      font-size: 12px;
+      font-weight: 500;
+      color: #065f46;
+    }
+
+    .reading-plan-item-problem-input::placeholder {
+      color: #9ca3af;
     }
 
     .reading-plan-item .reading-plan-item-toolbar .btn-delete {
@@ -10679,6 +10726,17 @@
       .reading-plan-item-author {
         font-size: 11px;
         margin-left: 4px;
+      }
+
+      .reading-plan-item-problem {
+        font-size: 11px;
+        margin-top: 3px;
+      }
+
+      .reading-plan-item-problem-input {
+        font-size: 12px;
+        padding: 5px 8px;
+        margin-top: 4px;
       }
 
       .reading-plan-item-toolbar {
@@ -74040,6 +74098,15 @@
       if (!String(out.title || "").trim() && loser.title) {
         out.title = String(loser.title || "").trim();
       }
+      const winProb = String(winner.targetProblem || "").trim();
+      const loseProb = String(loser.targetProblem || "").trim();
+      if (!winProb && loseProb) {
+        out.targetProblem = loseProb;
+      } else if (winProb) {
+        out.targetProblem = winProb;
+      } else if (loseProb) {
+        out.targetProblem = loseProb;
+      }
       if (winner.status !== "completed" && loser.status === "completed") {
         out.status = "completed";
         out.completedAt = Math.max(
@@ -100251,6 +100318,7 @@
             ? x.id
             : "rp-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
         title: title,
+        targetProblem: String(x.targetProblem || "").trim(),
         chapters: chapters,
         status: status,
         createdAt: createdAt,
@@ -100292,6 +100360,7 @@
       const book = {
         id: "rp-" + now.toString(36) + Math.random().toString(36).slice(2, 6),
         title: title.trim(),
+        targetProblem: "",
         chapters: [],
         status: st,
         createdAt: now
@@ -100360,6 +100429,19 @@
       const book = getReadingPlanBooks().find((b) => b.id === bookId);
       if (!book) return;
       book.title = t;
+      touchReadingPlanBookUpdatedAt(book);
+      saveState();
+      render();
+    }
+
+    /** 更新书名与「针对的问题」（编辑保存时一并写入） */
+    function updateReadingPlanBookTitleAndProblem(bookId, newTitle, newProblem) {
+      const t = String(newTitle || "").trim();
+      if (!t) return;
+      const book = getReadingPlanBooks().find((b) => b.id === bookId);
+      if (!book) return;
+      book.title = t;
+      book.targetProblem = String(newProblem || "").trim();
       touchReadingPlanBookUpdatedAt(book);
       saveState();
       render();
@@ -100586,26 +100668,43 @@
         toggleReadingPlanBookExpanded(book.id);
       });
 
-      const editBtn = mkToolBtn("btn-edit", ICON_BTN_EDIT_SVG, "修改书名");
-      const saveBtn = mkToolBtn("btn-save", ICON_BTN_SAVE_SVG, "保存书名");
+      const editBtn = mkToolBtn("btn-edit", ICON_BTN_EDIT_SVG, "修改书名与针对的问题");
+      const saveBtn = mkToolBtn("btn-save", ICON_BTN_SAVE_SVG, "保存书名与针对的问题");
       saveBtn.disabled = true;
       saveBtn.hidden = true;
 
       let editing = false;
       let titleInput = null;
+      let problemInput = null;
       let authorEl = titleBlockEl.querySelector(".reading-plan-item-author");
       const titleEl = titleBlockEl.querySelector(".reading-plan-item-title");
+      const problemEl = titleBlockEl.querySelector(".reading-plan-item-problem");
       const display = parseReadingPlanBookDisplay(book.title);
 
       function finishEdit(save) {
         if (!editing || !titleInput) return;
         const nextTitle = save ? String(titleInput.value || "").trim() : display.fullTitle;
-        if (save && nextTitle && nextTitle !== book.title) {
-          updateReadingPlanBookTitle(book.id, nextTitle);
+        const nextProblem = save
+          ? String((problemInput && problemInput.value) || "").trim()
+          : String(book.targetProblem || "").trim();
+        if (
+          save &&
+          nextTitle &&
+          (nextTitle !== book.title || nextProblem !== String(book.targetProblem || "").trim())
+        ) {
+          updateReadingPlanBookTitleAndProblem(book.id, nextTitle, nextProblem);
           return;
         }
         titleInput.replaceWith(titleEl);
         titleInput = null;
+        if (problemInput) {
+          if (problemEl) {
+            problemInput.replaceWith(problemEl);
+          } else {
+            problemInput.remove();
+          }
+          problemInput = null;
+        }
         editing = false;
         editBtn.hidden = false;
         saveBtn.hidden = true;
@@ -100617,6 +100716,9 @@
           if (authorEl) {
             authorEl.textContent = restored.authorSub ? "（" + restored.authorSub + "）" : "";
             authorEl.style.display = restored.authorSub ? "" : "none";
+          }
+          if (problemEl) {
+            syncReadingPlanProblemDisplay(problemEl, book.targetProblem);
           }
         }
       }
@@ -100632,12 +100734,25 @@
         titleInput.setAttribute("aria-label", "书名");
         titleEl.replaceWith(titleInput);
         if (authorEl) authorEl.hidden = true;
+
+        problemInput = document.createElement("input");
+        problemInput.type = "text";
+        problemInput.className = "reading-plan-item-problem-input done-filter";
+        problemInput.value = String(book.targetProblem || "");
+        problemInput.placeholder = "针对的问题…";
+        problemInput.setAttribute("aria-label", "针对的问题");
+        if (problemEl) {
+          problemEl.replaceWith(problemInput);
+        } else {
+          titleBlockEl.appendChild(problemInput);
+        }
+
         editBtn.hidden = true;
         saveBtn.hidden = false;
         saveBtn.disabled = false;
         titleInput.focus();
         titleInput.select();
-        titleInput.addEventListener("keydown", (event) => {
+        function onEditKeydown(event) {
           if (event.key === "Enter") {
             event.preventDefault();
             finishEdit(true);
@@ -100645,7 +100760,9 @@
             event.preventDefault();
             finishEdit(false);
           }
-        });
+        }
+        titleInput.addEventListener("keydown", onEditKeydown);
+        problemInput.addEventListener("keydown", onEditKeydown);
       });
 
       saveBtn.addEventListener("click", (ev) => {
@@ -100656,6 +100773,18 @@
       toolbarEl.appendChild(toggleBtn);
       toolbarEl.appendChild(editBtn);
       toolbarEl.appendChild(saveBtn);
+    }
+
+    /** 书卡片「针对的问题」展示文案 */
+    function syncReadingPlanProblemDisplay(el, problemText) {
+      if (!el) return;
+      const t = String(problemText || "").trim();
+      el.classList.toggle("reading-plan-item-problem--empty", !t);
+      if (t) {
+        el.textContent = "针对的问题：" + t;
+      } else {
+        el.textContent = "针对的问题：未填写";
+      }
     }
 
     function appendReadingPlanChapterTextEl(cLi, book, chapter) {
@@ -100745,17 +100874,26 @@
         const titleBlock = document.createElement("div");
         titleBlock.className = "reading-plan-item-title-block";
 
+        const titleRow = document.createElement("div");
+        titleRow.className = "reading-plan-item-title-row";
+
         const titleEl = document.createElement("span");
         titleEl.className = "reading-plan-item-title";
         titleEl.textContent = display.mainTitle;
-        titleBlock.appendChild(titleEl);
+        titleRow.appendChild(titleEl);
 
         if (display.authorSub) {
           const authorEl = document.createElement("span");
           authorEl.className = "reading-plan-item-author";
           authorEl.textContent = "（" + display.authorSub + "）";
-          titleBlock.appendChild(authorEl);
+          titleRow.appendChild(authorEl);
         }
+        titleBlock.appendChild(titleRow);
+
+        const problemEl = document.createElement("div");
+        problemEl.className = "reading-plan-item-problem";
+        syncReadingPlanProblemDisplay(problemEl, book.targetProblem);
+        titleBlock.appendChild(problemEl);
 
         const toolbar = document.createElement("div");
         toolbar.className = "reading-plan-item-toolbar";
