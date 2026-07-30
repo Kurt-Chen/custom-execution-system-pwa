@@ -61766,11 +61766,24 @@
                     <p class="submodule-note"><span class="habit-title-lang--desktop">问题=机会，企业家=问题学家。 倾听市场的"语言"：抱怨与不满。</span></p>
                   </div>
                   <div class="habit-en-actions">
+                    <div class="habit-en-minutes-row">
+                      <input
+                        id="habitEntrepreneurQuestionsInput"
+                        class="habit-en-wordcount-input habit-en-questions-input"
+                        type="number"
+                        min="1"
+                        max="20"
+                        step="1"
+                        inputmode="numeric"
+                        placeholder="问题数"
+                        aria-label="本轮记录的问题个数"
+                      />
+                    </div>
                     <div class="habit-en-punch-meta">
                     <span class="habit-en-today-note" aria-live="polite"></span>
                     <button type="button" class="habit-en-clear-today-btn" hidden>减一次</button>
                     </div>
-                    <button class="habit-check-btn habit-en-check-btn" type="button" aria-label="今日打卡"></button>
+                    <button class="habit-check-btn habit-en-check-btn" type="button" aria-label="累加打卡"></button>
                   </div>
                   <div class="habit-en-week-bar" aria-label="本周打卡"></div>
                 </section>
@@ -77213,6 +77226,7 @@
         Number(obj.minutes) || 0,
         Number(obj.experiments) || 0,
         Number(obj.eggs) || 0,
+        Number(obj.questions) || 0,
         Number(obj.yuan) || 0,
         Number(obj.times) || 0,
         obj === true ? 1 : 0
@@ -77303,7 +77317,7 @@
       const primary = scoreA >= scoreB ? a : b;
       const secondary = scoreA >= scoreB ? b : a;
       const out = Object.assign({}, secondary, primary);
-      ["wordCount", "minutes", "experiments", "eggs", "yuan", "times"].forEach(function (field) {
+      ["wordCount", "minutes", "experiments", "eggs", "questions", "yuan", "times"].forEach(function (field) {
         const av = Number(a[field]);
         const bv = Number(b[field]);
         if (Number.isFinite(av) || Number.isFinite(bv)) {
@@ -77323,6 +77337,10 @@
         } else if (Number.isFinite(out.eggs) || a.eggs != null || b.eggs != null) {
           valueKey = "eggs";
           maxBatch = 10;
+          maxDaily = 99;
+        } else if (Number.isFinite(out.questions) || a.questions != null || b.questions != null) {
+          valueKey = "questions";
+          maxBatch = 20;
           maxDaily = 99;
         } else if (Number.isFinite(out.yuan) || a.yuan != null || b.yuan != null) {
           valueKey = "yuan";
@@ -77357,12 +77375,14 @@
       const remark = rmA.length >= rmB.length ? rmA : rmB;
       if (remark) out.remark = remark;
       else delete out.remark;
-      if (out.wordCount != null || out.minutes != null || out.experiments != null || out.eggs != null || out.yuan != null) {
+      if (out.wordCount != null || out.minutes != null || out.experiments != null || out.eggs != null || out.questions != null || out.yuan != null) {
         let mergeOpts = { valueKey: "minutes", maxBatch: 999, maxDaily: 99999 };
         if (out.wordCount != null) {
           mergeOpts = { valueKey: "wordCount", maxBatch: 9999, maxDaily: 999999 };
         } else if (out.eggs != null) {
           mergeOpts = { valueKey: "eggs", maxBatch: 10, maxDaily: 99 };
+        } else if (out.questions != null) {
+          mergeOpts = { valueKey: "questions", maxBatch: 20, maxDaily: 99 };
         } else if (out.yuan != null) {
           mergeOpts = { valueKey: "yuan", maxBatch: 99999, maxDaily: 999999 };
         } else if (out.experiments != null) {
@@ -80865,9 +80885,46 @@
 
     const DAILY_EGGS_HABIT_KEY = "dailyEggs";
     const HABIT_DAILY_EGG_TARGET = 3;
+    const ENTREPRENEUR_DAILY_THREE_QUESTIONS_KEY = "entrepreneurDailyThreeQuestions";
+    const HABIT_DAILY_QUESTION_TARGET = 3;
 
     function isHabitEggsKey(habitKey) {
       return habitKey === DAILY_EGGS_HABIT_KEY;
+    }
+
+    /** Entrepreneur：每天记录三个问题 — 数值字段 questions，× 累计=问题总数 */
+    function isHabitQuestionsKey(habitKey) {
+      return habitKey === ENTREPRENEUR_DAILY_THREE_QUESTIONS_KEY;
+    }
+
+    function isHabitQuestionsChecked(v) {
+      if (v === true) {
+        return true;
+      }
+      if (!v || typeof v !== "object") {
+        return false;
+      }
+      if (Number.isFinite(v.questions) && v.questions > 0) {
+        return true;
+      }
+      return getSimpleHabitStampTimes(v) > 0;
+    }
+
+    function isHabitQuestionsDailyComplete(v) {
+      if (v === true) {
+        return true;
+      }
+      if (!v || typeof v !== "object") {
+        return false;
+      }
+      if (Number.isFinite(v.questions) && v.questions >= HABIT_DAILY_QUESTION_TARGET) {
+        return true;
+      }
+      /* 旧版无 questions 字段：有打卡次数即视为当日完成 */
+      if (!Number.isFinite(v.questions) && getSimpleHabitStampTimes(v) > 0) {
+        return true;
+      }
+      return false;
     }
 
     function isHabitEggsHabitChecked(v) {
@@ -81164,7 +81221,7 @@
       return sum;
     }
 
-    const HABIT_NUMERIC_LIFETIME_KEYS = ["exmindVocab", "miraaShadowing", "audibleMeditation", "zhanZhuang", "aiChat", DAILY_EGGS_HABIT_KEY, CITIC_DEBIT_SAVE_FIRST_100K_KEY];
+    const HABIT_NUMERIC_LIFETIME_KEYS = ["exmindVocab", "miraaShadowing", "audibleMeditation", "zhanZhuang", "aiChat", DAILY_EGGS_HABIT_KEY, ENTREPRENEUR_DAILY_THREE_QUESTIONS_KEY, CITIC_DEBIT_SAVE_FIRST_100K_KEY];
     const ENGLISH_HABIT_LIFETIME_KEYS = ["exmindVocab", "miraaShadowing", "audibleMeditation"];
     const HABIT_NUMERIC_MAX_STAMPS_PER_DAY = 80;
 
@@ -81174,6 +81231,9 @@
       }
       if (isHabitEggsKey(habitKey)) {
         return { valueKey: "eggs", maxBatch: 10, maxDaily: 99 };
+      }
+      if (isHabitQuestionsKey(habitKey)) {
+        return { valueKey: "questions", maxBatch: 20, maxDaily: 99 };
       }
       if (isHabitMinutesKey(habitKey)) {
         return { valueKey: "minutes", maxBatch: 999, maxDaily: 99999 };
@@ -81410,10 +81470,42 @@
       if (isHabitEggsKey(habitKey)) {
         return sumHabitNumericLifetimeByDay(habitKey);
       }
+      if (isHabitQuestionsKey(habitKey)) {
+        return sumHabitQuestionsLifetime(habitKey);
+      }
       if (isHabitOptionalRemarkKey(habitKey)) {
         return sumHabitOptionalRemarkLifetimeStamps(habitKey);
       }
       return sumSimpleHabitStampsLifetime(habitKey);
+    }
+
+    /** 三个问题：优先按 questions 字段加总；旧版布尔/次数打卡按次数计入问题数 */
+    function sumHabitQuestionsLifetime(habitKey) {
+      if (!isHabitQuestionsKey(habitKey)) {
+        return 0;
+      }
+      const dates = new Set();
+      collectHabitNumericDateKeys(habitKey).forEach(function (dk) {
+        dates.add(dk);
+      });
+      const hc = state.habitCheckins && typeof state.habitCheckins === "object" ? state.habitCheckins : {};
+      Object.keys(hc).forEach(function (dk) {
+        const day = hc[dk];
+        if (day && day[habitKey] != null && day[habitKey] !== false) {
+          dates.add(dk);
+        }
+      });
+      let sum = 0;
+      dates.forEach(function (dk) {
+        const numeric = getHabitNumericDayTotal(habitKey, dk);
+        if (numeric > 0) {
+          sum += numeric;
+          return;
+        }
+        const day = hc[dk];
+        sum += getSimpleHabitStampTimes(day ? day[habitKey] : null);
+      });
+      return Math.max(sum, sumHabitDoneBatchIncrementsLifetime(habitKey));
     }
 
     function getHabitCardTitleElementForLifetimeCount(card) {
@@ -81804,6 +81896,7 @@
       if (habitKey === "weightAndBodyFat") return isWeightBodyFatChecked(v);
       if (isHabitZhanZhuangKey(habitKey)) return isHabitDailyTimesComplete(habitKey, dateKey);
       if (isHabitEggsKey(habitKey)) return isHabitEggsDailyComplete(v);
+      if (isHabitQuestionsKey(habitKey)) return isHabitQuestionsDailyComplete(v);
       if (isHabitMinutesKey(habitKey)) return isHabitMinutesHabitChecked(v);
       if (isHabitWordCountKey(habitKey)) return isHabitWordCountChecked(v);
       if (isHabitSavingsKey(habitKey)) return isHabitSavingsChecked(v);
@@ -82029,7 +82122,7 @@
         rebuilt = rows.length === 0 ? false : true;
       } else if (habitKey === "dailyThreeWins") {
         rebuilt = countDailyWinEntriesForDate(dateStr) >= 3;
-      } else if (isHabitMinutesKey(habitKey) || isHabitWordCountKey(habitKey) || isHabitEggsKey(habitKey) || isHabitSavingsKey(habitKey)) {
+      } else if (isHabitMinutesKey(habitKey) || isHabitWordCountKey(habitKey) || isHabitEggsKey(habitKey) || isHabitQuestionsKey(habitKey) || isHabitSavingsKey(habitKey)) {
         const built = buildHabitNumericCheckinFromDoneRows(habitKey, dateStr);
         if (built) {
           rebuilt = built;
@@ -82081,6 +82174,7 @@
         (isHabitMinutesKey(habitKey) ||
           isHabitWordCountKey(habitKey) ||
           isHabitEggsKey(habitKey) ||
+          isHabitQuestionsKey(habitKey) ||
           isHabitSavingsKey(habitKey))
       ) {
         const opts = getHabitNumericSanitizeOpts(habitKey);
@@ -82217,6 +82311,28 @@
       });
     }
 
+    function syncHabitQuestionsToDone(habitKey, dateStr, batchQuestions, totalQuestions, stampTimes) {
+      const label = HABIT_LABELS[habitKey] || habitKey;
+      const tc = Number.isFinite(stampTimes) && stampTimes > 0 ? stampTimes : 0;
+      const batch = Number.isFinite(batchQuestions) && batchQuestions > 0 ? batchQuestions : 0;
+      const total = Number.isFinite(totalQuestions) && totalQuestions >= 0 ? totalQuestions : 0;
+      state.done.unshift({
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        text:
+          "【习惯】" +
+          label +
+          " 本次 +" +
+          String(batch) +
+          " 个问题 · 今日累计 " +
+          String(total) +
+          " 个 · 第 " +
+          String(tc) +
+          " 次打卡",
+        completedAt: habitDateToCompletedAt(dateStr),
+        habitMeta: { key: habitKey, date: dateStr, batchAmount: batch }
+      });
+    }
+
     function syncHabitSavingsToDone(habitKey, dateStr, batchYuan, totalYuan, stampTimes) {
       const label = HABIT_LABELS[habitKey] || habitKey;
       const tc = Number.isFinite(stampTimes) && stampTimes > 0 ? stampTimes : 0;
@@ -82291,6 +82407,7 @@
       if (isHabitMinutesKey(habitKey)) return;
       if (isHabitWordCountKey(habitKey)) return;
       if (isHabitEggsKey(habitKey)) return;
+      if (isHabitQuestionsKey(habitKey)) return;
       if (isHabitSavingsKey(habitKey)) return;
       if (isHabitExperimentKey(habitKey)) return;
       if (isHabitOptionalRemarkKey(habitKey)) return;
@@ -82531,7 +82648,7 @@
       Object.keys(hc).forEach(function (dateStr) {
         const day = hc[dateStr];
         if (!day || typeof day !== "object") return;
-        ["exmindVocab", "miraaShadowing", "audibleMeditation", "zhanZhuang", "aiChat", DAILY_EGGS_HABIT_KEY, CITIC_DEBIT_SAVE_FIRST_100K_KEY].forEach(function (habitKey) {
+        ["exmindVocab", "miraaShadowing", "audibleMeditation", "zhanZhuang", "aiChat", DAILY_EGGS_HABIT_KEY, ENTREPRENEUR_DAILY_THREE_QUESTIONS_KEY, CITIC_DEBIT_SAVE_FIRST_100K_KEY].forEach(function (habitKey) {
           if (!Object.prototype.hasOwnProperty.call(day, habitKey)) return;
           const fromDoneRows = computeHabitNumericDayTotalFromDoneRows(habitKey, dateStr);
           if (fromDoneRows > 0 && getHabitDoneRowsForDay(habitKey, dateStr).length > 0) {
@@ -82543,6 +82660,8 @@
             ? { valueKey: "wordCount", maxBatch: 9999, maxDaily: 999999 }
             : isHabitEggsKey(habitKey)
               ? { valueKey: "eggs", maxBatch: 10, maxDaily: 99 }
+            : isHabitQuestionsKey(habitKey)
+              ? { valueKey: "questions", maxBatch: 20, maxDaily: 99 }
             : isHabitSavingsKey(habitKey)
               ? { valueKey: "yuan", maxBatch: 99999, maxDaily: 999999 }
               : { valueKey: "minutes", maxBatch: 999, maxDaily: 99999 };
@@ -82864,6 +82983,52 @@
       render();
     }
 
+    function toggleHabitQuestionsCheckin(habitKey) {
+      const dateKey = formatDateInputValue(new Date());
+      if (!state.habitCheckins[dateKey]) {
+        state.habitCheckins[dateKey] = {};
+      }
+      const card = document.querySelector('#habitRoutineModule [data-habit-key="' + habitKey + '"]');
+      const input = card && card.querySelector(".habit-en-questions-input");
+      const raw = input && String(input.value).trim();
+      const add = parseInt(raw, 10);
+      if (!Number.isFinite(add) || add < 1 || add > 20) {
+        flashHabitNumericInputError(input, "请填 1–20 个问题");
+        return;
+      }
+      const current = state.habitCheckins[dateKey][habitKey];
+      let base = 0;
+      if (current && typeof current === "object" && Number.isFinite(current.questions) && current.questions > 0) {
+        base = current.questions;
+      } else if (current === true || getSimpleHabitStampTimes(current) > 0) {
+        /* 旧版次数打卡升级为问题数：按次数折算起步量 */
+        base = getSimpleHabitStampTimes(current) || (current === true ? 1 : 0);
+      }
+      const newTotal = base + add;
+      if (newTotal > 99) {
+        flashHabitNumericInputError(input, "累计过大，请先点「减一次」");
+        return;
+      }
+      const stampTimes = getHabitNumericStampTimes(current, "questions") + 1;
+      const prevBatches =
+        current && typeof current === "object" && Array.isArray(current.batches)
+          ? current.batches.slice()
+          : [];
+      prevBatches.push(add);
+      state.habitCheckins[dateKey][habitKey] = {
+        questions: newTotal,
+        times: stampTimes,
+        batches: prevBatches
+      };
+      syncHabitQuestionsToDone(habitKey, dateKey, add, newTotal, stampTimes);
+      if (input) {
+        clearHabitNumericInputError(input);
+        input.value = "";
+      }
+      saveStateAfterHabitCheckin();
+      render();
+    }
+
     function toggleHabitWordCountCheckin(habitKey) {
       const dateKey = formatDateInputValue(new Date());
       if (!state.habitCheckins[dateKey]) {
@@ -83090,6 +83255,7 @@
         !isHabitWordCountKey(habitKey) &&
         !isHabitMinutesKey(habitKey) &&
         !isHabitEggsKey(habitKey) &&
+        !isHabitQuestionsKey(habitKey) &&
         !isHabitExperimentKey(habitKey)
       ) {
         return;
@@ -83108,6 +83274,9 @@
       }
       if (isHabitEggsKey(habitKey)) {
         valueKey = "eggs";
+      }
+      if (isHabitQuestionsKey(habitKey)) {
+        valueKey = "questions";
       }
       if (isHabitExperimentKey(habitKey)) {
         valueKey = "experiments";
@@ -83165,7 +83334,13 @@
 
     function decrementHabitStampOnce(habitKey) {
       const todayKey = formatDateInputValue(new Date());
-      if (!isHabitCheckedOnDate(todayKey, habitKey)) {
+      const dayMap = state.habitCheckins[todayKey];
+      const curVal = dayMap ? dayMap[habitKey] : null;
+      const canDecrement =
+        isHabitCheckedOnDate(todayKey, habitKey) ||
+        (isHabitEggsKey(habitKey) && isHabitEggsHabitChecked(curVal)) ||
+        (isHabitQuestionsKey(habitKey) && isHabitQuestionsChecked(curVal));
+      if (!canDecrement) {
         return;
       }
 
@@ -83180,7 +83355,7 @@
         return;
       }
 
-      if (isHabitWordCountKey(habitKey) || isHabitMinutesKey(habitKey) || isHabitEggsKey(habitKey) || isHabitSavingsKey(habitKey) || isHabitExperimentKey(habitKey)) {
+      if (isHabitWordCountKey(habitKey) || isHabitMinutesKey(habitKey) || isHabitEggsKey(habitKey) || isHabitQuestionsKey(habitKey) || isHabitSavingsKey(habitKey) || isHabitExperimentKey(habitKey)) {
         decrementHabitNumericOnce(habitKey, todayKey);
         return;
       }
@@ -83256,6 +83431,10 @@
       }
       if (isHabitEggsKey(habitKey)) {
         toggleHabitEggsCheckin(habitKey);
+        return;
+      }
+      if (isHabitQuestionsKey(habitKey)) {
+        toggleHabitQuestionsCheckin(habitKey);
         return;
       }
       if (isHabitMinutesKey(habitKey)) {
@@ -108115,6 +108294,14 @@
             tip = dk + " · " + String(hv.eggs) + " 个 · " + String(tc) + " 次";
           }
         }
+        if (done && isHabitQuestionsKey(habitKey)) {
+          const dayRow = state.habitCheckins[dk];
+          const hv = dayRow && dayRow[habitKey];
+          if (hv && typeof hv === "object" && Number.isFinite(hv.questions) && hv.questions > 0) {
+            const tc = getHabitNumericStampTimes(hv, "questions");
+            tip = dk + " · " + String(hv.questions) + " 个问题 · " + String(tc) + " 次";
+          }
+        }
         if (done && isHabitOptionalRemarkKey(habitKey)) {
           const dayRow = state.habitCheckins[dk];
           const hv = dayRow && dayRow[habitKey];
@@ -108132,6 +108319,7 @@
           !isHabitSavingsKey(habitKey) &&
           !isHabitWordCountKey(habitKey) &&
           !isHabitEggsKey(habitKey) &&
+          !isHabitQuestionsKey(habitKey) &&
           !isHabitExperimentKey(habitKey) &&
           !isHabitOptionalRemarkKey(habitKey) &&
           habitKey !== "weightAndBodyFat" &&
@@ -108735,7 +108923,7 @@
       updateMeasureSegmentDesktopTabsLayout();
     }
 
-    const HABIT_NUMERIC_LIFETIME_REPAIR_VER = 7;
+    const HABIT_NUMERIC_LIFETIME_REPAIR_VER = 8;
     const HABIT_WEIGHT_LIFETIME_REPAIR_VER = 1;
     let habitNumericLifetimeRepairAppliedVer = 0;
     let habitWeightLifetimeRepairAppliedVer = 0;
@@ -108998,6 +109186,56 @@
             btnEl.removeAttribute("title");
             btnEl.classList.toggle("checked", eggsActive);
             return;
+          } else if (isHabitQuestionsKey(key)) {
+            const questionsInput = card.querySelector(".habit-en-questions-input");
+            const v = dayData[key];
+            const questionsActive = isHabitQuestionsChecked(v);
+            if (questionsInput) {
+              questionsInput.value = "";
+              questionsInput.disabled = false;
+            }
+            const clearBtn = card.querySelector(".habit-en-clear-today-btn");
+            if (clearBtn) {
+              clearBtn.hidden = !questionsActive;
+            }
+            const titleEl = getHabitCardTitleElementForLifetimeCount(card);
+            const questionTotal =
+              v && typeof v === "object" && Number.isFinite(v.questions) && v.questions > 0
+                ? v.questions
+                : getSimpleHabitStampTimes(v);
+            if (titleEl) {
+              titleEl.classList.toggle(
+                "habit-title--daily-times-pending",
+                questionTotal < HABIT_DAILY_QUESTION_TARGET
+              );
+              if (isHabitRoseTitlePendingKey(key)) {
+                titleEl.classList.toggle(
+                  "habit-title--rose-pending",
+                  questionTotal < HABIT_DAILY_QUESTION_TARGET
+                );
+              }
+            }
+            if (todayNote) {
+              if (questionsActive && v && typeof v === "object" && Number.isFinite(v.questions) && v.questions > 0) {
+                const tc = getHabitNumericStampTimes(v, "questions");
+                todayNote.textContent = isHabitRoutineCompactMobile()
+                  ? tc > 0
+                    ? String(tc)
+                    : ""
+                  : "共 " + String(v.questions) + " 个问题 · " + String(tc) + " 次";
+              } else if (questionsActive && (v === true || getSimpleHabitStampTimes(v) > 0)) {
+                todayNote.textContent = isHabitRoutineCompactMobile()
+                  ? ""
+                  : "共 " + String(getSimpleHabitStampTimes(v) || 1) + " 次（旧）";
+              } else {
+                todayNote.textContent = "";
+              }
+            }
+            btnEl.textContent = "";
+            btnEl.setAttribute("aria-label", "累加打卡");
+            btnEl.removeAttribute("title");
+            btnEl.classList.toggle("checked", questionsActive);
+            return;
           } else if (isHabitSavingsKey(key)) {
             const yuanInput = card.querySelector(".habit-en-yuan-input");
             const v = dayData[key];
@@ -109220,7 +109458,7 @@
             }
           }
           const clearBtnAll = card.querySelector(".habit-en-clear-today-btn");
-          if (clearBtnAll && !isHabitWordCountKey(key) && !isHabitMinutesKey(key) && !isHabitEggsKey(key) && !isHabitSavingsKey(key) && !isHabitExperimentKey(key) && !isScheduledLetterKey(key)) {
+          if (clearBtnAll && !isHabitWordCountKey(key) && !isHabitMinutesKey(key) && !isHabitEggsKey(key) && !isHabitQuestionsKey(key) && !isHabitSavingsKey(key) && !isHabitExperimentKey(key) && !isScheduledLetterKey(key)) {
             clearBtnAll.hidden = !checked;
           }
           btnEl.textContent = "";
@@ -109228,6 +109466,7 @@
             isHabitWordCountKey(key) ||
             isHabitMinutesKey(key) ||
             isHabitEggsKey(key) ||
+            isHabitQuestionsKey(key) ||
             isHabitSavingsKey(key) ||
             isHabitExperimentKey(key) ||
             isHabitOptionalRemarkKey(key)
@@ -110111,6 +110350,15 @@
           changed = true;
           return;
         }
+        if (isHabitQuestionsKey(habitKey) && v && typeof v === "object") {
+          const batches = Array.isArray(v.batches) ? v.batches : [];
+          const questions = Number(v.questions) || batches.reduce(function (a, b) { return a + b; }, 0);
+          const times = Number(v.times) || batches.length || 1;
+          const batch = batches.length ? batches[0] : questions;
+          syncHabitQuestionsToDone(habitKey, dateStr, batch, questions, times);
+          changed = true;
+          return;
+        }
         if (isHabitSavingsKey(habitKey) && v && typeof v === "object") {
           const batches = Array.isArray(v.batches) ? v.batches : [];
           const yuan = Number(v.yuan) || batches.reduce(function (a, b) { return a + b; }, 0);
@@ -110698,7 +110946,7 @@
           decrementHabitStampOnce(key);
         });
       }
-      card.querySelectorAll(".habit-en-minutes-input, .habit-en-wordcount-input, .habit-en-eggs-input, .habit-en-yuan-input").forEach(function (numInput) {
+      card.querySelectorAll(".habit-en-minutes-input, .habit-en-wordcount-input, .habit-en-eggs-input, .habit-en-questions-input, .habit-en-yuan-input").forEach(function (numInput) {
         if (numInput.dataset.habitNumericInputBound) return;
         numInput.dataset.habitNumericInputBound = "1";
         numInput.addEventListener("input", function () {
