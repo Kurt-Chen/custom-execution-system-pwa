@@ -31605,10 +31605,13 @@
       max-width: 100%;
       margin: 0 0 1px;
       padding: 0;
-      font-family: var(--font-sans-zh), system-ui, -apple-system, "Segoe UI", sans-serif;
+      /* 与「能动性＞智力」厚底同字族（serif 斜体），勿用 system-ui 无衬线 */
+      font-family: var(--font-sans-zh), Georgia, "Times New Roman", "Liberation Serif", Times, serif;
       font-size: 0.76em;
       font-weight: 800;
       font-style: normal;
+      font-synthesis: none;
+      letter-spacing: 0.01em;
       white-space: nowrap;
       color: inherit;
       background: none;
@@ -31661,14 +31664,22 @@
       color: #fff;
       font-family: inherit;
       font-style: italic;
+      font-weight: 800;
+      letter-spacing: 0.01em;
     }
 
-    /* 宽屏：三格均分（能动性＞智力 | Choosing Hard | 决策速度链），各格内居中 */
+    /* 宽屏：按内容占宽（字多占多），两端拉开；不三等分；字号 +1 */
     @media (min-width: 768px) {
+      #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead {
+        font-size: 16px;
+      }
+
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-money-inline {
         gap: 12px;
         line-height: 1.28;
         align-items: center;
+        width: max-content;
+        max-width: none;
       }
 
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-money-inline__line--lead {
@@ -31681,21 +31692,23 @@
 
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__green {
         justify-content: center;
+        max-width: none;
       }
 
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-attention-lead-summary {
-        justify-content: stretch;
-        gap: 0;
-        overflow: hidden;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px 18px;
+        overflow: visible;
       }
 
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-agency {
         display: flex;
-        flex: 1 1 0;
-        min-width: 0;
+        flex: 0 0 auto;
+        width: max-content;
         max-width: none;
-        overflow-x: hidden;
-        overflow-y: visible;
+        min-width: 0;
+        overflow: visible;
         padding-bottom: 5px;
         justify-content: center;
         align-items: center;
@@ -31703,11 +31716,11 @@
       }
 
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-left {
-        flex: 1 1 0;
-        min-width: 0;
+        flex: 0 0 auto;
+        width: max-content;
         max-width: none;
-        overflow-x: hidden;
-        overflow-y: visible;
+        min-width: 0;
+        overflow: visible;
         display: flex;
         justify-content: center;
         align-items: center;
@@ -31715,26 +31728,26 @@
       }
 
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-right {
-        flex: 1 1 0;
-        min-width: 0;
+        flex: 0 0 auto;
+        width: max-content;
         max-width: none;
+        min-width: 0;
         margin-left: 0;
-        overflow-x: hidden;
-        overflow-y: visible;
+        overflow: visible;
         text-align: center;
         align-items: center;
         justify-content: center;
       }
     }
 
-    /* 笔记本视口（768–1365px）：顶栏略收；下行再小一档并由 JS 适配 */
+    /* 笔记本视口（768–1365px）：顶栏略收（相对宽屏仍小一档，但整体已 +1）；整行不够宽时由 JS 统一缩字 */
     @media (min-width: 768px) and (max-width: 1365px) {
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead {
-        font-size: 14px;
+        font-size: 15px;
       }
 
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-attention-lead-summary {
-        gap: 0;
+        gap: 10px 14px;
       }
 
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-money-inline__line--lead {
@@ -31743,8 +31756,6 @@
 
       #habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead .habit-habits-attention-lead__summary-right {
         letter-spacing: 0;
-        max-width: none;
-        flex-basis: 0;
       }
     }
 
@@ -96466,7 +96477,7 @@
       fitSingleLineFontSize(summary, { baseSizePx: base, floorPx: floor });
     }
 
-    /** Habit 顶栏：能动性＞智力 / Choosing Hard / 决策速度厚底按各格宽度缩放（桌面三格居中；手机仅决策速度） */
+    /** Habit 顶栏：按内容占宽；整行超出时统一缩字（桌面三组；手机仅决策速度） */
     function fitHabitHabitsAttentionLeadSlogan() {
       const root = document.querySelector(
         "#habitRoutineModule #habitHabitsBundle .habit-habits-attention-lead"
@@ -96494,6 +96505,7 @@
       resetLine(agencyLead);
       resetLine(lead);
       resetLine(green);
+      root.style.fontSize = "";
       const rootPx = parseFloat(getComputedStyle(root).fontSize) || 14;
       function measureUnconstrainedWidth(el) {
         const prev = {
@@ -96519,27 +96531,53 @@
         el.style.whiteSpace = prev.whiteSpace;
         return w;
       }
-      function fitChipRow(el, host, originOpt) {
-        if (!el || !host || getComputedStyle(host).display === "none") return;
-        const avail = Math.max(0, host.clientWidth - 6);
+      const mq =
+        typeof window.matchMedia === "function" ? window.matchMedia("(max-width: 767px)") : null;
+      const isMobile = !!(mq && mq.matches);
+      if (isMobile) {
+        if (!green || !right || getComputedStyle(right).display === "none") return;
+        const avail = Math.max(0, right.clientWidth - 6);
         if (avail < 8) return;
-        let size = parseFloat(getComputedStyle(el).fontSize) || rootPx;
+        let size = parseFloat(getComputedStyle(green).fontSize) || rootPx;
         const floor = Math.max(7, size * 0.55);
-        let textW = measureUnconstrainedWidth(el);
+        let textW = measureUnconstrainedWidth(green);
         while (textW > avail + 0.5 && size > floor) {
           size -= 0.25;
-          el.style.fontSize = size + "px";
-          textW = measureUnconstrainedWidth(el);
+          green.style.fontSize = size + "px";
+          textW = measureUnconstrainedWidth(green);
         }
         if (textW > avail + 0.5 && avail > 0) {
-          const scale = Math.max(0.45, avail / textW);
-          el.style.transform = "scale(" + scale + ")";
-          el.style.transformOrigin = originOpt || "center center";
+          green.style.transform = "scale(" + Math.max(0.45, avail / textW) + ")";
+          green.style.transformOrigin = "center center";
         }
+        return;
       }
-      fitChipRow(agencyLead, agency, "center center");
-      fitChipRow(lead, left, "center center");
-      fitChipRow(green, right, "center center");
+      const pairs = [
+        [agencyLead, agency],
+        [lead, left],
+        [green, right]
+      ];
+      function measureRowTotal() {
+        let total = 0;
+        let visible = 0;
+        pairs.forEach(function (pair) {
+          const el = pair[0];
+          const host = pair[1];
+          if (!el || !host || getComputedStyle(host).display === "none") return;
+          total += measureUnconstrainedWidth(el);
+          visible += 1;
+        });
+        const gapPx = Math.max(0, visible - 1) * 18;
+        return total + gapPx;
+      }
+      const avail = Math.max(0, summary.clientWidth - 8);
+      if (avail < 8) return;
+      let size = rootPx;
+      const floor = Math.max(10, rootPx * 0.62);
+      while (measureRowTotal() > avail + 0.5 && size > floor) {
+        size -= 0.25;
+        root.style.fontSize = size + "px";
+      }
     }
 
     /** 手机：十二周年承诺/专注原则条连排铺满（一字空格、无分隔线） */
