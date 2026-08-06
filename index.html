@@ -74547,7 +74547,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260806b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260806c";
     /** 本机已确认跟上的云端 payload.updatedAt(ms，Firebase 服务端时间)。勿用「本机最后保存时间」比较，否则易误判新旧、拒绝合并 */
     const CLOUD_LAST_SEEN_UPDATED_AT_KEY = "todo-app-cloud-last-seen-updated-at-v1";
     /** 本机已合并的 pulse.updatedAt（今日打卡快通道，远小于整包 v2） */
@@ -74555,6 +74555,15 @@
     /** 上次成功拉取并合并 v2/done 历史的时间（避免每次打开都后台全量拉取） */
     const CLOUD_SYNC_LAST_HISTORY_MERGE_KEY = "todo-app-cloud-last-history-merge-v1";
     const CLOUD_SYNC_HISTORY_MERGE_MIN_INTERVAL_MS = 6 * 60 * 60 * 1000;
+    /** Delta Sync 水位：本机已追上的云端 payload.updatedAt（与 last-seen 同源语义，显式命名便于运维） */
+    const CLOUD_SYNC_CURSOR_KEY = "todo-app-cloud-sync-cursor-v1";
+    /** 最近一次成功同步（pulse/core/history/push）的本机墙钟时间，用于角标「已同步 · HH:mm」 */
+    const CLOUD_SYNC_LAST_SUCCESS_AT_KEY = "todo-app-cloud-last-success-at-v1";
+    /** 本机有未上传变更（离线/未连上时入队，恢复后自动 flush） */
+    const CLOUD_SYNC_PENDING_UPLOAD_KEY = "todo-app-cloud-pending-upload-v1";
+    /** 冲突日志（环形，最多 40 条；不进云，仅本机诊断） */
+    const CLOUD_SYNC_CONFLICT_LOG_KEY = "todo-app-cloud-conflict-log-v1";
+    const CLOUD_SYNC_CONFLICT_LOG_MAX = 40;
     /** My Done 手机端行高：{ padY, minHeight }，与 :root 中 --done-list-row-* 对应 */
     const DONE_LIST_ROW_STYLE_KEY = "todo-app-done-list-row-v1";
 
@@ -74640,6 +74649,130 @@
       try {
         localStorage.setItem(CLOUD_LAST_PULSE_SEEN_KEY, String(n));
       } catch (_e) {}
+    }
+
+    /** Delta Sync cursor：已合并到的云端 updatedAt */
+    function getCloudSyncCursor() {
+      try {
+        const fromKey = coerceCloudUpdatedAt(localStorage.getItem(CLOUD_SYNC_CURSOR_KEY));
+        if (fromKey > 0) return fromKey;
+        return getCloudLastSeenUpdatedAt();
+      } catch (_e) {
+        return getCloudLastSeenUpdatedAt();
+      }
+    }
+
+    function setCloudSyncCursor(ts) {
+      const n = coerceCloudUpdatedAt(ts);
+      if (!n) return;
+      try {
+        localStorage.setItem(CLOUD_SYNC_CURSOR_KEY, String(n));
+      } catch (_e) {}
+      setCloudLastSeenUpdatedAt(n);
+    }
+
+    function getCloudSyncLastSuccessAt() {
+      try {
+        return Number(localStorage.getItem(CLOUD_SYNC_LAST_SUCCESS_AT_KEY)) || 0;
+      } catch (_e) {
+        return 0;
+      }
+    }
+
+    function markCloudSyncSuccess(remoteUpdatedAtOpt) {
+      const now = Date.now();
+      try {
+        localStorage.setItem(CLOUD_SYNC_LAST_SUCCESS_AT_KEY, String(now));
+      } catch (_e) {}
+      const remoteAt = coerceCloudUpdatedAt(remoteUpdatedAtOpt);
+      if (remoteAt > 0) setCloudSyncCursor(remoteAt);
+      clearCloudSyncPendingUpload();
+    }
+
+    function formatCloudSyncClockLabel(ms) {
+      const n = Number(ms) || 0;
+      if (!n) return "";
+      const d = new Date(n);
+      if (!Number.isFinite(d.getTime())) return "";
+      const pad = function (x) {
+        return String(x).padStart(2, "0");
+      };
+      return pad(d.getHours()) + ":" + pad(d.getMinutes());
+    }
+
+    /** 角标「已同步」文案（含最后成功时间） */
+    function buildCloudSyncConnectedBadgeText() {
+      const clock = formatCloudSyncClockLabel(getCloudSyncLastSuccessAt());
+      return clock ? "已同步 · " + clock : "已同步 ✓";
+    }
+
+    function hasCloudSyncPendingUpload() {
+      try {
+        return localStorage.getItem(CLOUD_SYNC_PENDING_UPLOAD_KEY) === "1";
+      } catch (_e) {
+        return false;
+      }
+    }
+
+    function markCloudSyncPendingUpload() {
+      try {
+        localStorage.setItem(CLOUD_SYNC_PENDING_UPLOAD_KEY, "1");
+      } catch (_e) {}
+    }
+
+    function clearCloudSyncPendingUpload() {
+      try {
+        localStorage.removeItem(CLOUD_SYNC_PENDING_UPLOAD_KEY);
+      } catch (_e) {}
+    }
+
+    /** 冲突日志：同 id 两端均有实质变更且版本/时间不一致时记录 */
+    function appendCloudSyncConflictLog(entry) {
+      if (!entry || typeof entry !== "object") return;
+      let list = [];
+      try {
+        list = JSON.parse(localStorage.getItem(CLOUD_SYNC_CONFLICT_LOG_KEY) || "[]");
+      } catch (_e) {
+        list = [];
+      }
+      if (!Array.isArray(list)) list = [];
+      list.unshift({
+        at: Date.now(),
+        kind: String(entry.kind || "record"),
+        id: entry.id != null ? String(entry.id) : "",
+        picked: String(entry.picked || ""),
+        localTs: Number(entry.localTs) || 0,
+        remoteTs: Number(entry.remoteTs) || 0,
+        localVer: Number(entry.localVer) || 0,
+        remoteVer: Number(entry.remoteVer) || 0,
+        note: String(entry.note || "").slice(0, 120)
+      });
+      if (list.length > CLOUD_SYNC_CONFLICT_LOG_MAX) list = list.slice(0, CLOUD_SYNC_CONFLICT_LOG_MAX);
+      try {
+        localStorage.setItem(CLOUD_SYNC_CONFLICT_LOG_KEY, JSON.stringify(list));
+      } catch (_e) {}
+    }
+
+    window.getCloudSyncConflictLog = function getCloudSyncConflictLog() {
+      try {
+        const list = JSON.parse(localStorage.getItem(CLOUD_SYNC_CONFLICT_LOG_KEY) || "[]");
+        return Array.isArray(list) ? list : [];
+      } catch (_e) {
+        return [];
+      }
+    };
+
+    /**
+     * 实体版本戳：本地修改时写入 updatedAt + version，供跨端 LWW / 冲突诊断。
+     * 不强制改写旧数据；缺字段时从 1 起算。
+     */
+    function stampEntityRevision(item) {
+      if (!item || typeof item !== "object") return item;
+      const now = Date.now();
+      const prev = Number(item.version);
+      item.updatedAt = now;
+      item.version = (Number.isFinite(prev) && prev > 0 ? prev : 0) + 1;
+      return item;
     }
 
     /** Firebase 有时把数字存成字符串；若不解析，remoteAt 恒为 0，电脑端永远不会合并手机数据 */
@@ -75419,6 +75552,9 @@
             }
           }, 400);
         } else if (cloudSyncReady && cloudSyncRef && !cloudSyncSuppressPush) {
+          if (hasCloudSyncPendingUpload()) {
+            scheduleCloudSyncPush();
+          }
           const pendingHash = serializeStateForCloud();
           if (pendingHash && pendingHash !== cloudSyncLastHash) {
             scheduleCloudSyncPush();
@@ -75514,12 +75650,33 @@
     }
 
     function rememberCloudSyncRemotePayload(payload) {
-      if (!payload || !payload.state || !Array.isArray(payload.state.done)) return;
+      if (!payload || !payload.state) return;
       try {
+        const st = JSON.parse(JSON.stringify(payload.state));
+        /* core-only：未拉 v2/done 时勿把空 done 缓存成「云端 0 条」，否则会误触发历史全量或空覆盖守卫 */
+        if (payload.doneOmitted) {
+          let keepDone = null;
+          if (
+            cloudSyncCachedRemotePayload &&
+            cloudSyncCachedRemotePayload.state &&
+            Array.isArray(cloudSyncCachedRemotePayload.state.done) &&
+            cloudSyncCachedRemotePayload.state.done.length
+          ) {
+            keepDone = cloudSyncCachedRemotePayload.state.done;
+          } else if (Array.isArray(state.done)) {
+            keepDone = state.done;
+          } else {
+            keepDone = [];
+          }
+          st.done = JSON.parse(JSON.stringify(keepDone));
+        } else if (!Array.isArray(st.done)) {
+          return;
+        }
         cloudSyncCachedRemotePayload = {
-          state: JSON.parse(JSON.stringify(payload.state)),
+          state: st,
           updatedAt: coerceCloudUpdatedAt(payload.updatedAt),
-          updatedBy: payload.updatedBy
+          updatedBy: payload.updatedBy,
+          doneOmitted: Boolean(payload.doneOmitted)
         };
         cloudSyncCacheUpdatedAt = Date.now();
       } catch (_e) {}
@@ -75572,6 +75729,7 @@
     /**
      * 分路径读取房间（避免 rooms/{id} 根节点 .get() 拉下 legacy state + v2/done 重复体积导致 25s 超时）。
      * 有 v2/meta 时仍可读 legacy（includeLegacyState）：曾有「全量只写 state、不更新 core」窗口，需按 updatedAt 取新。
+     * includeDone:false 时不拉 v2/done（core-only Delta）；返回 doneFetched 供解析层区分「未拉取」与「云端为空」。
      */
     async function fetchCloudSyncRoomDataPartial(opts) {
       if (!cloudSyncRoomRef) {
@@ -75596,6 +75754,7 @@
       let legacyState = null;
       let v2core = null;
       let v2done = null;
+      let doneFetched = false;
 
       const reads = [];
       if (meta) {
@@ -75605,6 +75764,7 @@
           })
         );
         if (includeDone) {
+          doneFetched = true;
           reads.push(
             readCloudSyncRoomChildValue("v2/done").then(function (v) {
               v2done = v;
@@ -75626,7 +75786,14 @@
       return {
         pulse: pulse,
         state: legacyState,
-        v2: meta ? { meta: meta, core: v2core, done: v2done || {} } : null
+        v2: meta
+          ? {
+              meta: meta,
+              core: v2core,
+              done: doneFetched ? v2done || {} : null,
+              doneFetched: doneFetched
+            }
+          : null
       };
     }
 
@@ -75644,13 +75811,12 @@
       } catch (_e) {}
     }
 
-    /** 后台拉 v2/done：本机 Done 为空、云端 meta 较新、或缓存快照条数多于本机时触发（避免反复全量拉取卡死 UI） */
+    /** 后台拉 v2/done：本机 Done 为空、从未合并过、超 6h 节流窗、或快照条数/签名明显落后时才触发（避免每次打开全量历史） */
     function cloudSyncNeedsBackgroundHistoryMerge(metaAt) {
       const localDone = countDoneRecordsInState(state);
-      const lastSeen = getCloudLastSeenUpdatedAt();
-      const meta = Number(metaAt) || 0;
       if (localDone === 0) return true;
-      if (meta > lastSeen) return true;
+      const lastMerge = getCloudSyncLastHistoryMergeAt();
+      if (lastMerge === 0) return true;
       const cachedRemote = getCachedRemoteDoneCount();
       if (cachedRemote > localDone) return true;
       if (getCachedRemoteReadingPlanCount() > countReadingPlanBooksInState(state)) return true;
@@ -75665,7 +75831,86 @@
       ) {
         return true;
       }
+      const meta = Number(metaAt) || 0;
+      const cursor = getCloudSyncCursor();
+      /* meta 较新：优先走 core Delta，不必每次都拉整包 done；仅当超过节流间隔才补历史 */
+      if (meta > cursor && Date.now() - lastMerge >= CLOUD_SYNC_HISTORY_MERGE_MIN_INTERVAL_MS) {
+        return true;
+      }
       return false;
+    }
+
+    /** 云端 meta 新于 cursor：需要 core/pulse Delta（不含 v2/done） */
+    function cloudSyncNeedsBackgroundCoreDelta(metaAt) {
+      const meta = coerceCloudUpdatedAt(metaAt);
+      if (!meta) return false;
+      return meta > getCloudSyncCursor();
+    }
+
+    let cloudSyncBackgroundCoreInFlight = false;
+
+    /** 后台 core Delta：只拉 pulse/meta/core（及必要时 legacy），不拉 v2/done */
+    async function runCloudSyncBackgroundCoreDelta() {
+      if (
+        !cloudSyncReady ||
+        !cloudSyncRoomRef ||
+        cloudSyncBackgroundCoreInFlight ||
+        cloudSyncBackgroundHistoryInFlight ||
+        cloudSyncRemoteFullMergeInFlight
+      ) {
+        return;
+      }
+      cloudSyncBackgroundCoreInFlight = true;
+      cloudSyncApplyingRemote = true;
+      const hadError = Boolean(cloudSyncLastErrorMsg);
+      if (!hadError) {
+        setCloudSyncStatus("同步中...", "status-syncing");
+      }
+      try {
+        const roomData = await fetchCloudSyncRoomDataPartial({
+          includeDone: false,
+          includeLegacyState: !cloudSyncRoomHasV2Meta
+        });
+        if (roomData && roomData.pulse) {
+          applyCloudSyncPulseFromRoom(roomData.pulse);
+        }
+        const payload = resolveCloudPayloadFromRoomData(roomData);
+        if (!payload || !payload.state) {
+          restoreCloudSyncConnectedBadgeUnlessError();
+          return;
+        }
+        rememberCloudSyncRemotePayload(payload);
+        const ua = coerceCloudUpdatedAt(payload.updatedAt);
+        if (payload.updatedBy === cloudSyncClientId) {
+          if (ua > 0) setCloudSyncCursor(ua);
+          markCloudSyncSuccess(ua);
+          restoreCloudSyncConnectedBadgeUnlessError();
+          return;
+        }
+        materializePayloadDoneForMerge(payload);
+        absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
+        if (ua > 0) setCloudSyncCursor(ua);
+        markCloudSyncSuccess(ua);
+        cloudSyncLastErrorMsg = "";
+        scheduleCloudSyncRenderDebounced();
+        restoreCloudSyncConnectedBadgeUnlessError();
+      } catch (err) {
+        noteCloudSyncHistoryMergeFailure(err, "core Delta");
+        if (!shouldTreatCloudMergeReadAsNonFatal(err) && !hadError) {
+          setCloudSyncError(err, "读取或合并云端 core 失败");
+        }
+      } finally {
+        cloudSyncApplyingRemote = false;
+        cloudSyncBackgroundCoreInFlight = false;
+        restoreCloudSyncConnectedBadgeUnlessError();
+      }
+    }
+
+    function scheduleCloudSyncBackgroundCoreDelta() {
+      if (cloudSyncBackgroundCoreInFlight || cloudSyncBackgroundHistoryInFlight) return;
+      window.setTimeout(function () {
+        void runCloudSyncBackgroundCoreDelta();
+      }, 120);
     }
 
     /** 首次连上云后补拉一次 Done 历史（轻量初始化不含 v2/done，避免平板累计偏少） */
@@ -75696,13 +75941,14 @@
         }
         const payload = resolveCloudPayloadFromRoomData(roomData);
         rememberCloudSyncRemotePayload(payload);
-        if (payload && payload.state && Array.isArray(payload.state.done)) {
+        if (payload && payload.state && Array.isArray(payload.state.done) && !payload.doneOmitted) {
           const remoteAt = coerceCloudUpdatedAt(payload.updatedAt);
           absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
           if (remoteAt > 0) {
-            setCloudLastSeenUpdatedAt(remoteAt);
+            setCloudSyncCursor(remoteAt);
           }
           markCloudSyncHistoryMergeRan();
+          markCloudSyncSuccess(remoteAt);
           cloudSyncHistoryMergeRetryCount = 0;
           scheduleCloudSyncRenderDebounced();
         }
@@ -75866,6 +76112,7 @@
 
     /**
      * 从房间根节点解析云端 payload：v2（分片 done）优先于 legacy 单节点 state。
+     * doneFetched=false / done=null：core-only Delta，标记 doneOmitted，合并时注入本机 done，禁止误判「云端 Done 为空」。
      */
     function resolveCloudPayloadFromRoomData(roomData) {
       if (!roomData || typeof roomData !== "object") return null;
@@ -75891,17 +76138,25 @@
       if (v2 && v2.core && typeof v2.core === "object" && v2.meta) {
         try {
           const core = JSON.parse(JSON.stringify(v2.core));
-          const doneMap = v2.done && typeof v2.done === "object" ? v2.done : {};
-          const done = [];
-          Object.keys(doneMap).forEach(function (k) {
-            const item = doneMap[k];
-            if (item && typeof item === "object") done.push(item);
-          });
-          core.done = done;
+          const doneFetched = v2.doneFetched === true;
+          let doneOmitted = false;
+          if (doneFetched) {
+            const doneMap = v2.done && typeof v2.done === "object" ? v2.done : {};
+            const done = [];
+            Object.keys(doneMap).forEach(function (k) {
+              const item = doneMap[k];
+              if (item && typeof item === "object") done.push(item);
+            });
+            core.done = done;
+          } else {
+            doneOmitted = true;
+            core.done = [];
+          }
           v2Payload = {
             state: core,
             updatedAt: v2.meta.updatedAt,
-            updatedBy: v2.meta.updatedBy
+            updatedBy: v2.meta.updatedBy,
+            doneOmitted: doneOmitted
           };
         } catch (_assembleErr) {
           v2Payload = null;
@@ -75943,7 +76198,8 @@
         other.state &&
         Array.isArray(other.state.done) &&
         other.state.done.length &&
-        typeof mergeDoneArraysForSync === "function"
+        typeof mergeDoneArraysForSync === "function" &&
+        !other.doneOmitted
       ) {
         try {
           chosen.state.done = mergeDoneArraysForSync(
@@ -75951,9 +76207,30 @@
             other.state.done,
             false
           );
+          chosen.doneOmitted = false;
         } catch (_doneEnrich) {}
       }
+      /* core-only 且另一路也无可用 done：保持 doneOmitted，由 absorb 注入本机 done */
+      if (chosen && chosen.doneOmitted && other && other.doneOmitted !== false) {
+        if (!(other && other.state && Array.isArray(other.state.done) && other.state.done.length)) {
+          chosen.doneOmitted = true;
+        }
+      }
       return chosen;
+    }
+
+    /** 合并前：core-only payload 注入本机 done，避免空数组触发「云端 Done 为空」错误路径 */
+    function materializePayloadDoneForMerge(payload) {
+      if (!payload || !payload.state) return payload;
+      if (!payload.doneOmitted) return payload;
+      try {
+        payload.state.done = Array.isArray(state.done)
+          ? JSON.parse(JSON.stringify(state.done))
+          : [];
+      } catch (_e) {
+        payload.state.done = Array.isArray(state.done) ? state.done.slice() : [];
+      }
+      return payload;
     }
 
     function estimateUtf8JsonBytes(value) {
@@ -75993,7 +76270,7 @@
       setCloudSyncHashFromCurrentState();
       cloudSyncConsecutivePushFailures = 0;
       cloudSyncPushBackoffUntil = 0;
-      setCloudSyncStatus("已连接 ✓", "status-connected");
+      setCloudSyncStatus(buildCloudSyncConnectedBadgeText(), "status-connected");
     }
 
     function cloudSyncOversizeUserMessage(localDone) {
@@ -77644,6 +77921,7 @@
         cloudSyncApplyingRemote ||
         cloudSyncRemoteFullMergeInFlight ||
         cloudSyncBackgroundHistoryInFlight ||
+        cloudSyncBackgroundCoreInFlight ||
         cloudSyncPushing
       ) {
         return;
@@ -77661,7 +77939,8 @@
         !cloudSyncRoomRef ||
         cloudSyncApplyingRemote ||
         cloudSyncRemoteFullMergeInFlight ||
-        cloudSyncBackgroundHistoryInFlight
+        cloudSyncBackgroundHistoryInFlight ||
+        cloudSyncBackgroundCoreInFlight
       ) {
         return;
       }
@@ -77674,11 +77953,12 @@
         } catch (_metaErr) {
           meta = null;
         }
+        let metaAt = 0;
         if (meta) {
           cloudSyncRoomHasV2Meta = true;
-          const metaAt = coerceCloudUpdatedAt(meta.updatedAt);
+          metaAt = coerceCloudUpdatedAt(meta.updatedAt);
           if (meta.updatedBy === cloudSyncClientId) {
-            if (metaAt > 0) setCloudLastSeenUpdatedAt(metaAt);
+            if (metaAt > 0) setCloudSyncCursor(metaAt);
             return;
           }
           /* 本机十二周年周任务为空时勿跳过：可能仅 legacy state 有新任务、v2/meta 未动 */
@@ -77686,7 +77966,7 @@
           if (
             !localAnnEmpty &&
             metaAt > 0 &&
-            metaAt <= getCloudLastSeenUpdatedAt() &&
+            metaAt <= getCloudSyncCursor() &&
             cloudSyncCachedRemotePayload &&
             cloudSyncCachedRemotePayload.state &&
             getCachedRemoteDoneCount() <= countDoneRecordsInState(state) &&
@@ -77697,10 +77977,11 @@
             return;
           }
         }
-        setCloudSyncStatus("同步中...", "status-syncing");
+        const needDoneHistory = cloudSyncNeedsBackgroundHistoryMerge(metaAt);
+        setCloudSyncStatus(needDoneHistory ? "同步历史…" : "同步中...", "status-syncing");
         const roomVal = await fetchCloudSyncRoomDataPartial({
-          includeDone: true,
-          includeLegacyState: true
+          includeDone: needDoneHistory,
+          includeLegacyState: needDoneHistory || !cloudSyncRoomHasV2Meta
         });
         if (roomVal && roomVal.pulse) {
           applyCloudSyncPulseFromRoom(roomVal.pulse);
@@ -77710,12 +77991,17 @@
         rememberCloudSyncRemotePayload(payload);
         const ua = coerceCloudUpdatedAt(payload.updatedAt);
         if (payload.updatedBy === cloudSyncClientId) {
-          if (ua > 0) setCloudLastSeenUpdatedAt(ua);
+          if (ua > 0) setCloudSyncCursor(ua);
+          markCloudSyncSuccess(ua);
           return;
         }
+        materializePayloadDoneForMerge(payload);
         absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
-        if (ua > 0) setCloudLastSeenUpdatedAt(ua);
-        markCloudSyncHistoryMergeRan();
+        if (ua > 0) setCloudSyncCursor(ua);
+        if (needDoneHistory && !payload.doneOmitted) {
+          markCloudSyncHistoryMergeRan();
+        }
+        markCloudSyncSuccess(ua);
         cloudSyncHistoryMergeRetryCount = 0;
         scheduleCloudSyncRenderDebounced();
         cloudSyncLastErrorMsg = "";
@@ -77745,7 +78031,8 @@
             cloudSyncLastErrorMsg = "";
           }
           if (!cloudSyncLastErrorMsg) {
-            setCloudSyncStatus("已连接 ✓", "status-connected");
+            markCloudSyncSuccess(coerceCloudUpdatedAt(pulseNode && pulseNode.updatedAt));
+            restoreCloudSyncConnectedBadgeUnlessError();
           }
         }
       });
@@ -77896,7 +78183,7 @@
 
     function restoreCloudSyncConnectedBadgeUnlessError() {
       if (!cloudSyncLastErrorMsg) {
-        setCloudSyncStatus("已连接 ✓", "status-connected");
+        setCloudSyncStatus(buildCloudSyncConnectedBadgeText(), "status-connected");
       }
     }
 
@@ -78269,6 +78556,15 @@
           CLOUD_SYNC_DONE_UPLOAD_WINDOW_DAYS +
           " 天，更早仍在云端。\n「从云端拉取最新」与本机并集合并（保留本机今日完成与周任务），不再整包覆盖。";
       } catch (_uploadEstErr) {}
+      const cursorAt = getCloudSyncCursor();
+      const lastOk = getCloudSyncLastSuccessAt();
+      const lastHist = getCloudSyncLastHistoryMergeAt();
+      const syncDiag =
+        "\n同步水位 cursor: " +
+        (cursorAt || 0) +
+        (lastOk ? "；上次成功: " + formatCloudSyncClockLabel(lastOk) : "") +
+        (lastHist ? "；上次历史合并: " + formatCloudSyncClockLabel(lastHist) : "") +
+        (hasCloudSyncPendingUpload() ? "；有待上传队列" : "");
       cloudSyncPanelMeta.textContent =
         statusLabel +
         "\n当前 roomId: " +
@@ -78278,6 +78574,7 @@
         " 条；云端快照 Done: " +
         remoteDoneN +
         " 条" +
+        syncDiag +
         uploadHint +
         errorLabel;
       cloudSyncPanelOverlay.classList.remove("hidden");
@@ -78525,7 +78822,12 @@
       return best;
     }
 
-    /** 按 id 合并两端记录：并集；同 id 取时间戳较大者，平局取本地 */
+    function recordVersionForSync(item) {
+      const v = Number(item && item.version);
+      return Number.isFinite(v) && v > 0 ? v : 0;
+    }
+
+    /** 按 id 合并两端记录：并集；同 id 取时间戳较大者，平局比 version，再平局取本地 */
     function mergeIdRecordArraysPreferLocalOnTie(localArr, remoteArr) {
       const loc = Array.isArray(localArr) ? localArr : [];
       const rem = Array.isArray(remoteArr) ? remoteArr : [];
@@ -78534,15 +78836,28 @@
         if (!item || typeof item !== "object" || item.id == null) return;
         const id = String(item.id);
         const ts = recordTieTimestampForSync(item);
+        const ver = recordVersionForSync(item);
         const cur = idx.get(id);
         if (!cur) {
-          idx.set(id, { item, ts, preferLocalOnTie });
+          idx.set(id, { item, ts, ver, preferLocalOnTie });
           return;
         }
-        if (ts > cur.ts) {
-          idx.set(id, { item, ts, preferLocalOnTie });
-        } else if (ts === cur.ts && preferLocalOnTie) {
-          idx.set(id, { item, ts, preferLocalOnTie: true });
+        if (ts > cur.ts || (ts === cur.ts && ver > cur.ver)) {
+          if (cur.item && item && ts === cur.ts && ver !== cur.ver) {
+            appendCloudSyncConflictLog({
+              kind: "id-record",
+              id: id,
+              picked: preferLocalOnTie ? "incoming-local-side" : "incoming-remote-side",
+              localTs: preferLocalOnTie ? ts : cur.ts,
+              remoteTs: preferLocalOnTie ? cur.ts : ts,
+              localVer: preferLocalOnTie ? ver : cur.ver,
+              remoteVer: preferLocalOnTie ? cur.ver : ver,
+              note: "version/tie LWW"
+            });
+          }
+          idx.set(id, { item, ts, ver, preferLocalOnTie });
+        } else if (ts === cur.ts && ver === cur.ver && preferLocalOnTie) {
+          idx.set(id, { item, ts, ver, preferLocalOnTie: true });
         }
       }
       rem.forEach((x) => ingest(x, false));
@@ -81780,7 +82095,11 @@
     }
 
     function scheduleCloudSyncPush() {
-      if (!cloudSyncReady || cloudSyncApplyingRemote || cloudSyncSuppressPush || !cloudSyncRef) return;
+      if (cloudSyncSuppressPush) return;
+      if (!cloudSyncReady || cloudSyncApplyingRemote || !cloudSyncRef) {
+        if (getCloudSyncConfig()) markCloudSyncPendingUpload();
+        return;
+      }
       const now = Date.now();
       const delay = Math.max(450, cloudSyncPushBackoffUntil > now ? cloudSyncPushBackoffUntil - now : 0);
       if (cloudSyncPushTimer) clearTimeout(cloudSyncPushTimer);
@@ -81854,7 +82173,8 @@
             }
           }
           if (!nextHash || nextHash === cloudSyncLastHash) {
-            setCloudSyncStatus("已连接 ✓", "status-connected");
+            markCloudSyncSuccess();
+          restoreCloudSyncConnectedBadgeUnlessError();
             return pushCloudSyncPulseToRoom(serverTs);
           }
           const uploadState = compactStateForCloudUpload(state);
@@ -81873,7 +82193,8 @@
           cloudSyncLastErrorMsg = "";
           cloudSyncConsecutivePushFailures = 0;
           cloudSyncPushBackoffUntil = 0;
-          setCloudSyncStatus("已连接 ✓", "status-connected");
+          markCloudSyncSuccess();
+          restoreCloudSyncConnectedBadgeUnlessError();
         })
         .catch((err) => {
           console.warn("云同步失败:", err);
@@ -81887,7 +82208,8 @@
                   cloudSyncLastErrorMsg = "";
                   cloudSyncConsecutivePushFailures = 0;
                   cloudSyncPushBackoffUntil = 0;
-                  setCloudSyncStatus("已连接 ✓", "status-connected");
+                  markCloudSyncSuccess();
+          restoreCloudSyncConnectedBadgeUnlessError();
                 })
                 .catch(function (v2Err) {
                   console.warn("云同步分片上传失败:", v2Err);
@@ -82124,9 +82446,14 @@
      * 本机 Done 为空但云端有记录时：先合并；仍为空则整包拉取，避免平板只连上却看不到电脑数据。
      */
     function absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, opts) {
-      if (!payload || !payload.state || !Array.isArray(payload.state.done)) return false;
+      if (!payload || !payload.state) return false;
+      materializePayloadDoneForMerge(payload);
+      if (!Array.isArray(payload.state.done)) return false;
       const remoteLen = payload.state.done.length;
       const localLen = countDoneRecordsInState(state);
+      if (payload.doneOmitted) {
+        return applyCloudPayloadWithMerge(payload, opts);
+      }
       if (remoteLen === 0) return applyCloudPayloadWithMerge(payload, opts);
       if (localLen === 0) {
         const mergedOk = applyCloudPayloadWithMerge(payload, opts);
@@ -82141,7 +82468,9 @@
      * 合并云端 payload：禁止用「空远端 Done」覆盖本机；force 时整包覆盖（拉取最新）。
      */
     function applyCloudPayloadWithMerge(payload, opts) {
-      if (!payload || !payload.state || !Array.isArray(payload.state.done)) return false;
+      if (!payload || !payload.state) return false;
+      materializePayloadDoneForMerge(payload);
+      if (!Array.isArray(payload.state.done)) return false;
       const force = Boolean(opts && opts.force);
       if (force) {
         /* 即便调用方要求整包覆盖，也先过「少不覆盖多」守卫 */
@@ -82150,7 +82479,8 @@
       }
       const localLen = Array.isArray(state.done) ? state.done.length : 0;
       const remoteLen = payload.state.done.length;
-      if (remoteLen === 0 && localLen > 0) {
+      /* core-only 已注入本机 done，不会误报空云端 */
+      if (!payload.doneOmitted && remoteLen === 0 && localLen > 0) {
         cloudSyncLastErrorMsg =
           "云端 Done 为空，已保留本机记录。请检查网络/代理后点角标重试同步，或在电脑端确认已成功上传。";
         setCloudSyncStatus("同步错误", "status-error");
@@ -82312,7 +82642,8 @@
         rememberCloudSyncRemotePayload(payload);
         if (!payload || !payload.state) {
           cloudSyncLastErrorMsg = "";
-          setCloudSyncStatus("已连接 ✓", "status-connected");
+          markCloudSyncSuccess();
+          restoreCloudSyncConnectedBadgeUnlessError();
           applyCloudSyncMobileOfflineUi();
           window.alert("云端暂无数据，或尚未有人写入过该房间。");
           return;
@@ -82349,7 +82680,8 @@
           }
         }
         cloudSyncLastErrorMsg = "";
-        setCloudSyncStatus("已连接 ✓", "status-connected");
+        markCloudSyncSuccess();
+          restoreCloudSyncConnectedBadgeUnlessError();
         applyCloudSyncMobileOfflineUi();
         if (applied || recoveredFromBackup) {
           window.alert(
@@ -82436,7 +82768,7 @@
         detachCloudSyncListeners();
         cloudSyncRoomRef = firebase.database().ref("rooms/" + cloudSyncRoomId);
         cloudSyncRef = cloudSyncRoomRef.child("state");
-        /* 分路径读 pulse/meta/core，Done 历史后台拉取，避免整房间 ~24MB 在 25s 内超时并卡 UI */
+        /* 分路径读 pulse/meta/core；有 v2 时丢弃本次 legacy 大包（避免轻量路径仍解析整包 done）；Done 历史按需后台拉 */
         let initMetaAt = 0;
         let initRoomLight = null;
         try {
@@ -82444,6 +82776,12 @@
             includeDone: false,
             includeLegacyState: true
           });
+          if (initRoomLight && initRoomLight.v2 && initRoomLight.v2.meta) {
+            cloudSyncRoomHasV2Meta = true;
+            initMetaAt = coerceCloudUpdatedAt(initRoomLight.v2.meta.updatedAt);
+            /* 保留 v2 core/pulse；不把 legacy 并进 resolve，防止未拉 v2/done 时仍吃进 legacy 全量 done */
+            initRoomLight.state = null;
+          }
         } catch (lightErr) {
           console.warn("云同步轻量初始化读取失败，将后台重试历史:", lightErr);
         }
@@ -82452,13 +82790,14 @@
         }
         if (initRoomLight && initRoomLight.v2 && initRoomLight.v2.meta) {
           cloudSyncRoomHasV2Meta = true;
-          initMetaAt = coerceCloudUpdatedAt(initRoomLight.v2.meta.updatedAt);
+          initMetaAt = coerceCloudUpdatedAt(initRoomLight.v2.meta.updatedAt) || initMetaAt;
         }
         const initPayloadLight = initRoomLight ? resolveCloudPayloadFromRoomData(initRoomLight) : null;
         if (initPayloadLight && initPayloadLight.state) {
           rememberCloudSyncRemotePayload(initPayloadLight);
           cloudSyncSuppressPush = true;
           try {
+            materializePayloadDoneForMerge(initPayloadLight);
             const mergedReading = mergeReadingPlanFromRemoteSnapshot(initPayloadLight.state);
             const mergedAnniversary = mergeAnniversaryModulesFromRemoteSnapshot(initPayloadLight.state);
             if (mergedReading || mergedAnniversary) {
@@ -82471,10 +82810,18 @@
         }
         setCloudSyncHashFromCurrentState();
         cloudSyncReady = true;
+        if (initMetaAt > 0 && initMetaAt <= getCloudSyncCursor()) {
+          markCloudSyncSuccess(initMetaAt);
+        } else if (!cloudSyncLastErrorMsg) {
+          markCloudSyncSuccess(getCloudSyncCursor() || undefined);
+        }
         if (!cloudSyncLastErrorMsg) {
-          setCloudSyncStatus("已连接 ✓", "status-connected");
+          restoreCloudSyncConnectedBadgeUnlessError();
         }
         attachCloudSyncListeners();
+        if (hasCloudSyncPendingUpload()) {
+          scheduleCloudSyncPush();
+        }
         window.setTimeout(() => {
           if (cloudSyncReady && cloudSyncRef) {
             pushCloudSyncPulseOnly();
@@ -82492,8 +82839,11 @@
             ensureAnniversaryWeeksFromCloudIfNeeded();
           }
         }, 900);
+        /* Phase 1：历史 6h 节流；否则仅 core Delta */
         if (cloudSyncNeedsBackgroundHistoryMerge(initMetaAt)) {
           scheduleCloudSyncBackgroundHistoryMerge();
+        } else if (cloudSyncNeedsBackgroundCoreDelta(initMetaAt)) {
+          scheduleCloudSyncBackgroundCoreDelta();
         } else {
           scheduleCloudSyncInitialHistoryMergeIfNeeded();
         }
@@ -82535,6 +82885,10 @@
         habitCheckinDates: Object.keys(state.habitCheckins || {}).length,
         cloudSyncReady: cloudSyncReady,
         cloudSyncError: cloudSyncLastErrorMsg || null,
+        cloudSyncCursor: getCloudSyncCursor(),
+        cloudSyncLastSuccessAt: getCloudSyncLastSuccessAt(),
+        cloudSyncPendingUpload: hasCloudSyncPendingUpload(),
+        cloudSyncLastHistoryMergeAt: getCloudSyncLastHistoryMergeAt(),
         cloudRemoteDoneCached: getCachedRemoteDoneCount(),
         cloudSyncRoom: cloudSyncRoomId || localStorage.getItem(CLOUD_SYNC_ROOM_KEY) || "",
         hasEmergencyBackup: Boolean(localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY))
@@ -82567,6 +82921,10 @@
       try {
         localStorage.removeItem(CLOUD_LAST_SEEN_UPDATED_AT_KEY);
         localStorage.removeItem(CLOUD_LAST_PULSE_SEEN_KEY);
+        localStorage.removeItem(CLOUD_SYNC_LAST_HISTORY_MERGE_KEY);
+        localStorage.removeItem(CLOUD_SYNC_CURSOR_KEY);
+        localStorage.removeItem(CLOUD_SYNC_LAST_SUCCESS_AT_KEY);
+        localStorage.removeItem(CLOUD_SYNC_PENDING_UPLOAD_KEY);
       } catch (_e) {}
       window.location.reload();
     };
@@ -110686,6 +111044,29 @@
       } catch (measureTabsErr) {
         console.warn("[AMB] initMeasureSegmentDesktopTabs 失败:", measureTabsErr);
       }
+      try { renderAgeGoalsCountdown(); } catch (e) { console.warn("[My Goals] renderAgeGoalsCountdown 失败:", e); }
+      try { renderMoneyGoalsCountdown(); } catch (e) { console.warn("[My Goals] renderMoneyGoalsCountdown 失败:", e); }
+      try {
+        if (typeof ensureMyGoalsCountdownFlashTicker === "function") ensureMyGoalsCountdownFlashTicker();
+      } catch (e) { console.warn("[My Goals] countdown flash 失败:", e); }
+      try { renderDailyReminder(); } catch (e) { console.warn("[每日提醒] 失败:", e); }
+      try { renderWeeklyPlanUI(); } catch (e) { console.warn("[周计划] 失败:", e); }
+      try { renderKineticCountdowns(); } catch (e) { console.warn("[Kinetic倒计时] 失败:", e); }
+      try { refreshAllForgeTodayTaskRowsFromDone(); } catch (e) { console.warn("[Forge] 刷新今日行失败:", e); }
+      try { renderForgeTodaysForgeList(); } catch (e) { console.warn("[Forge] 今日打卡列表渲染失败:", e); }
+      /* Phase 1：首屏只刷核心（今日/目标/习惯）；重模块 idle 后再刷 */
+      if (isBootFirstRenderPass) {
+        isBootFirstRenderPass = false;
+        scheduleRenderHeavyModulesDeferred();
+      } else {
+        renderHeavyModules();
+      }
+      syncExtremeDeadlineChipsInDocument();
+      requestAnimationFrame(fitResponsiveSingleLineSlogans);
+    }
+
+    /** 首屏延后的重模块：历史面板 / 十二周年 / Rule100 / 回收站等 */
+    function renderHeavyModules() {
       try {
         renderRuleOf100();
       } catch (rule100Err) {
@@ -110697,14 +111078,6 @@
         console.warn("[人生进度表] renderLife4000Weeks 失败:", life4000Err);
       }
       try { renderProjectTasks(); } catch (e) { console.warn("[项目] renderProjectTasks 失败:", e); }
-      try { renderAgeGoalsCountdown(); } catch (e) { console.warn("[My Goals] renderAgeGoalsCountdown 失败:", e); }
-      try { renderMoneyGoalsCountdown(); } catch (e) { console.warn("[My Goals] renderMoneyGoalsCountdown 失败:", e); }
-      try {
-        if (typeof ensureMyGoalsCountdownFlashTicker === "function") ensureMyGoalsCountdownFlashTicker();
-      } catch (e) { console.warn("[My Goals] countdown flash 失败:", e); }
-      try { renderDailyReminder(); } catch (e) { console.warn("[每日提醒] 失败:", e); }
-      try { renderWeeklyPlanUI(); } catch (e) { console.warn("[周计划] 失败:", e); }
-      try { renderKineticCountdowns(); } catch (e) { console.warn("[Kinetic倒计时] 失败:", e); }
       try { renderTrash(); } catch (e) { console.warn("[回收站] 失败:", e); }
       try {
         ensureAnniversaryTwArchivePass();
@@ -110740,12 +111113,33 @@
           : "";
         if (kid) activateKineticTab(kid);
       }
-      try { refreshAllForgeTodayTaskRowsFromDone(); } catch (e) { console.warn("[Forge] 刷新今日行失败:", e); }
-      try { renderForgeTodaysForgeList(); } catch (e) { console.warn("[Forge] 今日打卡列表渲染失败:", e); }
       renderForgeDailyMinRows();
       renderForgeWeeklyMinRows();
-      syncExtremeDeadlineChipsInDocument();
-      requestAnimationFrame(fitResponsiveSingleLineSlogans);
+    }
+
+    let isBootFirstRenderPass = true;
+    let renderHeavyIdleHandle = null;
+
+    function scheduleRenderHeavyModulesDeferred() {
+      const run = function () {
+        renderHeavyIdleHandle = null;
+        try {
+          renderHeavyModules();
+        } catch (heavyErr) {
+          console.warn("[首屏] 延迟重模块 render 失败:", heavyErr);
+        }
+      };
+      if (renderHeavyIdleHandle != null && typeof cancelIdleCallback === "function") {
+        try {
+          cancelIdleCallback(renderHeavyIdleHandle);
+        } catch (_c) {}
+        renderHeavyIdleHandle = null;
+      }
+      if (typeof requestIdleCallback === "function") {
+        renderHeavyIdleHandle = requestIdleCallback(run, { timeout: 1500 });
+      } else {
+        window.setTimeout(run, 0);
+      }
     }
 
     function formatFuelDateLineCN(dateStr) {
@@ -112708,7 +113102,7 @@
     weeklyPlanViewSprintStartKey = getCurrentWeeklyPlanSprintStartKey();
     setWeeklyPlanViewSprintStart(weeklyPlanViewSprintStartKey);
 
-    /** 版本角标与云同步须先于 render：render 抛错时仍应显示版本并尝试连 Firebase */
+    /** 版本角标与云同步须先于 render：render 抛错时仍应显示版本；云同步延后到首屏绘制之后 */
     function bootstrapAppInfrastructure() {
       try {
         initAppVersionBadge();
@@ -112718,10 +113112,31 @@
           setAppVersionText(String(APP_CACHE_NAME_FOR_BADGE || "").replace(/^exec-system-pwa-/, "") || "unknown");
         } catch (_setVerErr) {}
       }
-      try {
-        void initCloudSync();
-      } catch (bootstrapSyncErr) {
-        console.warn("initCloudSync 失败:", bootstrapSyncErr);
+      /* Phase 1：不在此启动云同步，避免与首次 render 抢主线程；见 scheduleDeferredCloudSyncBoot */
+    }
+
+    /** 首屏绘制后再连 Firebase（双 rAF + idle），保证本地可操作优先 */
+    function scheduleDeferredCloudSyncBoot() {
+      const start = function () {
+        try {
+          void initCloudSync();
+        } catch (bootstrapSyncErr) {
+          console.warn("initCloudSync 失败:", bootstrapSyncErr);
+        }
+      };
+      const afterPaint = function () {
+        if (typeof requestIdleCallback === "function") {
+          requestIdleCallback(start, { timeout: 900 });
+        } else {
+          window.setTimeout(start, 60);
+        }
+      };
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(afterPaint);
+        });
+      } else {
+        window.setTimeout(afterPaint, 0);
       }
     }
 
@@ -112749,6 +113164,14 @@
         render();
       } catch (firstRenderErr) {
         console.error("首次 render 失败:", firstRenderErr);
+      }
+      try {
+        scheduleDeferredCloudSyncBoot();
+      } catch (deferredSyncErr) {
+        console.warn("延迟云同步调度失败:", deferredSyncErr);
+        try {
+          void initCloudSync();
+        } catch (_e) {}
       }
     })();
 
