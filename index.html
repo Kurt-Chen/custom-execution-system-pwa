@@ -2110,7 +2110,7 @@
       line-height: 1;
     }
 
-    /* 下半区刻度：左冲刺 / 中 DON'T THINK→Start→Finish / 右解锁 */
+    /* 下半区刻度：左冲刺 / 中 DON'T THINK ➫ Start ➫ Finish ➫ Sleep / 右解锁 */
     .done-sleep-countdown__bounds {
       flex: 0 0 var(--dsc-bot-h);
       display: flex;
@@ -6919,6 +6919,21 @@
       font-weight: inherit;
     }
 
+    /* 每天三赢 / 清空油箱：当日未完成时分区 Tab 玫红字（完成则去掉 class，恢复默认色相） */
+    #habitBasicGroup #habitMeasureTabStrip .habit-measure-tab.habit-measure-tab--incomplete .habit-measure-tab__name,
+    #habitBasicGroup #habitMeasureTabStrip .habit-measure-tab.habit-measure-tab--incomplete.is-active .habit-measure-tab__name {
+      color: #e11d48 !important;
+      -webkit-text-fill-color: #e11d48;
+      font-weight: 800;
+    }
+
+    /* Habit 主 Tab「始终向后衡量」：每天三赢或清空油箱任一未完成时玫红 */
+    #habitRoutineModule #moduleSubTabBtn-habit-group-measure.is-incomplete,
+    #habitRoutineModule #moduleSubTabBtn-habit-group-measure.is-incomplete[aria-selected="true"] {
+      color: #e11d48 !important;
+      -webkit-text-fill-color: #e11d48 !important;
+    }
+
     #habitBasicGroup .habit-backward-subfold-title.habit-backward-title-due-today {
       color: #dc2626 !important;
       font-weight: 800;
@@ -7280,6 +7295,13 @@
       #habitBasicGroup #habitMeasureTabStrip .habit-measure-tab.habit-measure-tab--due-today.is-active .habit-measure-tab__name {
         color: inherit !important;
         font-weight: inherit;
+      }
+
+      /* 手机：当日未完成玫红优先于选中色相 */
+      #habitBasicGroup #habitMeasureTabStrip .habit-measure-tab.habit-measure-tab--incomplete .habit-measure-tab__name,
+      #habitBasicGroup #habitMeasureTabStrip .habit-measure-tab.habit-measure-tab--incomplete.is-active .habit-measure-tab__name {
+        color: #e11d48 !important;
+        -webkit-text-fill-color: #e11d48;
       }
     }
 
@@ -52797,10 +52819,34 @@
       margin-bottom: 12px;
     }
 
+    .fuel-v2-title-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px 8px;
+    }
+
     .fuel-v2-title {
       font-size: 16px;
       font-weight: 700;
       color: #0f172a;
+    }
+
+    /* 清空油箱：终身打卡次数（有 1～10 分的天数，按日去重） */
+    .fuel-v2-checkin-count {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px 2px 7px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.2;
+      white-space: nowrap;
+      flex-shrink: 0;
+      color: #047857;
+      background: #ecfdf5;
+      border: 1px solid rgba(16, 185, 129, 0.28);
     }
 
     .fuel-v2-date-line {
@@ -63686,7 +63732,10 @@
               <div class="fuel-v2-main-card">
                 <div class="fuel-v2-main-head">
                   <div class="fuel-v2-main-titles">
-                    <div class="fuel-v2-title">今天的努力程度</div>
+                    <div class="fuel-v2-title-row">
+                      <div class="fuel-v2-title">今天的努力程度</div>
+                      <span id="fuelCheckinCount" class="fuel-v2-checkin-count" aria-label="打卡次数">打卡 ×0</span>
+                    </div>
                     <div id="fuelDateLine" class="fuel-v2-date-line" aria-live="polite"></div>
                   </div>
                   <div class="fuel-v2-score-block">
@@ -76905,7 +76954,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260812b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260812c";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -97289,7 +97338,7 @@
         return mark;
       }
 
-      /* 底栏：左 16:00 冲刺 | 中 DON'T THINK→Start→Finish | 右 22:00 解锁 */
+      /* 底栏：左 16:00 冲刺 | 中 DON'T THINK ➫ Start ➫ Finish ➫ Sleep | 右 22:00 解锁 */
       bounds.appendChild(makeMark("start", { icBefore: "🔥", time: "16:00", label: "冲刺" }));
 
       const motto = document.createElement("div");
@@ -113559,6 +113608,51 @@
       if (tt) {
         tt.classList.toggle("habit-backward-title-due-today", thinkDue);
       }
+
+      if (typeof syncHabitMeasureDailyIncompleteAlerts === "function") {
+        syncHabitMeasureDailyIncompleteAlerts();
+      }
+    }
+
+    /** 每天三赢：当日有意义条目 ≥ 3 视为完成 */
+    function isTodayDailyWinComplete(dateStrOpt) {
+      const dk = dateStrOpt || formatDateInputValue(new Date());
+      return countDailyWinEntriesForDate(dk) >= 3;
+    }
+
+    /** 清空油箱：当日有 1～10 分视为完成 */
+    function isTodayFuelComplete(dateStrOpt) {
+      const dk = dateStrOpt || formatDateInputValue(new Date());
+      const list = Array.isArray(state.fuelScores) ? state.fuelScores : [];
+      for (let i = 0; i < list.length; i += 1) {
+        const item = list[i];
+        if (!item || item.date !== dk) continue;
+        const s = Number(item.score);
+        if (s >= 1 && s <= 10) return true;
+      }
+      return false;
+    }
+
+    /**
+     * 红框三项未完成玫红：主 Tab「始终向后衡量」+ 子 Tab「每天三赢」「清空油箱」
+     * 完成则去掉 class，恢复默认色。
+     */
+    function syncHabitMeasureDailyIncompleteAlerts() {
+      const todayKey = formatDateInputValue(new Date());
+      const winOk = isTodayDailyWinComplete(todayKey);
+      const fuelOk = isTodayFuelComplete(todayKey);
+      const tabWin = document.getElementById("habitMeasureTabBtnDailyWin");
+      const tabFuel = document.getElementById("habitMeasureTabBtnFuel");
+      const mainTab = document.getElementById("moduleSubTabBtn-habit-group-measure");
+      if (tabWin) {
+        tabWin.classList.toggle("habit-measure-tab--incomplete", !winOk);
+      }
+      if (tabFuel) {
+        tabFuel.classList.toggle("habit-measure-tab--incomplete", !fuelOk);
+      }
+      if (mainTab) {
+        mainTab.classList.toggle("is-incomplete", !winOk || !fuelOk);
+      }
     }
 
     function renderBackwardMeasure(opt) {
@@ -114036,6 +114130,11 @@
         renderFuelScore();
       } catch (fuelErr) {
         console.warn("[油箱] 渲染失败:", fuelErr);
+        try {
+          syncHabitMeasureIncompleteTabStyles();
+        } catch (syncIncErr) {
+          console.warn("[AMB] 未完成 Tab 染色失败:", syncIncErr);
+        }
       }
       try {
         initHabitCategoryDesktopTabs();
@@ -114269,6 +114368,23 @@
 
     }
 
+    /** 清空油箱终身打卡次数：有 1～10 分的日期数（按日去重） */
+    function countFuelCheckinDays() {
+      const list = Array.isArray(state.fuelScores) ? state.fuelScores : [];
+      const seen = Object.create(null);
+      let n = 0;
+      list.forEach(function (item) {
+        if (!item || !item.date) return;
+        const s = Number(item.score);
+        if (!(s >= 1 && s <= 10)) return;
+        const dk = String(item.date);
+        if (seen[dk]) return;
+        seen[dk] = true;
+        n += 1;
+      });
+      return n;
+    }
+
     function renderFuelScore() {
       if (!selectedFuelDate) {
         selectedFuelDate = formatDateInputValue(new Date());
@@ -114277,6 +114393,12 @@
       const fuelDateLine = document.getElementById("fuelDateLine");
       if (fuelDateLine) {
         fuelDateLine.textContent = formatFuelDateLineCN(selectedFuelDate);
+      }
+
+      const checkinEl = document.getElementById("fuelCheckinCount");
+      if (checkinEl) {
+        const n = countFuelCheckinDays();
+        checkinEl.textContent = "打卡 ×" + String(n);
       }
 
       const item = state.fuelScores.find((x) => x.date === selectedFuelDate);
@@ -114289,6 +114411,9 @@
       }
 
       updateFuelEffortBarDom();
+      if (typeof syncHabitMeasureDailyIncompleteAlerts === "function") {
+        syncHabitMeasureDailyIncompleteAlerts();
+      }
     }
 
     function getHabitEnWeekMonday(date) {
@@ -118032,6 +118157,11 @@
 
     initKineticExecutionTabs();
     initNonKineticModuleTabs();
+    try {
+      syncHabitMeasureIncompleteTabStyles();
+    } catch (habitMeasureIncErr) {
+      console.warn("[AMB] 启动时未完成 Tab 染色失败:", habitMeasureIncErr);
+    }
     /* 子 Tab 在首次 render 之后才挂上；再刷一次习惯分类激活态与 4000 周格阵，避免仅 Tab 条可见、列表/格阵空白 */
     try {
       if (typeof initHabitCategoryDesktopTabs === "function") initHabitCategoryDesktopTabs();
