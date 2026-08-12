@@ -104509,6 +104509,7 @@
       render();
     }
 
+    /** 十二周年任务/子任务/周目标操作区：无编辑·保存按钮，标题直接改，失焦或回车落盘 */
     function appendAnniversaryManualActionsWrap(containerEl, opts) {
       opts = opts || {};
       const textInput = opts.textInput;
@@ -104541,11 +104542,8 @@
       }
 
       let valueBeforeEdit = String(textInput.value || "");
-      textInput.readOnly = true;
+      textInput.readOnly = false;
 
-      const editBtn = mkIconBtn("btn-edit", ICON_BTN_EDIT_SVG, "编辑");
-      const saveBtn = mkIconBtn("btn-save", ICON_BTN_SAVE_SVG, "保存");
-      saveBtn.disabled = true;
       const closedBtn = document.createElement("button");
       closedBtn.type = "button";
       closedBtn.className = "weekly-plan-promote-closed-btn";
@@ -104558,83 +104556,30 @@
       );
       const delBtn = mkIconBtn("btn-delete", ICON_BTN_DELETE_SVG, "删除");
 
-      function syncSaveDisabled() {
-        const editing = !textInput.readOnly;
-        const trimmed = String(textInput.value || "").trim();
-        saveBtn.disabled = !editing || (!allowEmptySave && !trimmed);
-      }
-
       function collapseWrap() {
         wrap.classList.remove("is-expanded");
         moreBtn.setAttribute("aria-expanded", "false");
       }
 
-      function enterEdit() {
-        if (!textInput.readOnly) {
-          return;
-        }
-        valueBeforeEdit = textInput.value;
-        textInput.readOnly = false;
-        textInput.focus();
-        const caretAt = textInput.value.length;
-        textInput.setSelectionRange(caretAt, caretAt);
-        editBtn.setAttribute("aria-label", "取消");
-        syncSaveDisabled();
-      }
-
-      function exitEdit(revert) {
-        if (textInput.readOnly) {
-          return;
-        }
-        if (revert) {
-          textInput.value = valueBeforeEdit;
-        }
-        textInput.readOnly = true;
-        editBtn.setAttribute("aria-label", "编辑");
-        saveBtn.disabled = true;
-        collapseWrap();
-      }
-
-      editBtn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        if (!textInput.readOnly) {
-          exitEdit(true);
-        } else {
-          enterEdit();
-        }
-      });
-
-      function commitAnniversaryTitleSave(ev) {
-        if (ev) ev.stopPropagation();
+      function commitAnniversaryTitleSave() {
         const v = String(textInput.value || "").trim();
-        if (textInput.readOnly) {
-          return;
-        }
         if (!allowEmptySave && !v) {
+          textInput.value = valueBeforeEdit;
           return;
         }
+        textInput.value = v;
+        if (v === valueBeforeEdit) {
+          return;
+        }
+        valueBeforeEdit = v;
         if (typeof onSave === "function") {
           onSave(v);
         }
-        valueBeforeEdit = v;
-        textInput.value = v;
-        exitEdit(false);
       }
 
-      saveBtn.addEventListener(
-        "pointerdown",
-        (ev) => {
-          if (saveBtn.disabled || textInput.readOnly) return;
-          if (!allowEmptySave && !String(textInput.value || "").trim()) return;
-          commitAnniversaryTitleSave(ev);
-        },
-        true
-      );
-      saveBtn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        if (saveBtn.disabled) return;
-        commitAnniversaryTitleSave(ev);
-      });
+      function revertAnniversaryTitleEdit() {
+        textInput.value = valueBeforeEdit;
+      }
 
       closedBtn.addEventListener("click", (ev) => {
         ev.stopPropagation();
@@ -104650,37 +104595,32 @@
         collapseWrap();
       });
 
-      textInput.addEventListener("input", syncSaveDisabled);
+      textInput.addEventListener("focus", () => {
+        valueBeforeEdit = String(textInput.value || "");
+      });
       textInput.addEventListener("keydown", (ev) => {
-        if (textInput.readOnly) {
-          return;
-        }
         if (ev.key === "Enter") {
           ev.preventDefault();
-          saveBtn.click();
+          commitAnniversaryTitleSave();
+          textInput.blur();
         } else if (ev.key === "Escape") {
           ev.preventDefault();
-          exitEdit(true);
+          revertAnniversaryTitleEdit();
+          textInput.blur();
         }
       });
       textInput.addEventListener("blur", (ev) => {
-        if (textInput.readOnly) {
-          return;
-        }
         const rt = ev.relatedTarget;
         if (rt && typeof rt.closest === "function" && wrap.contains(rt)) {
           return;
         }
         window.requestAnimationFrame(() => {
           window.setTimeout(() => {
-            if (textInput.readOnly) {
-              return;
-            }
             const ae = document.activeElement;
             if (ae && wrap.contains(ae)) {
               return;
             }
-            exitEdit(true);
+            commitAnniversaryTitleSave();
           }, 0);
         });
       });
@@ -104727,8 +104667,6 @@
         wrap.appendChild(dlControls);
       }
 
-      iconGroup.appendChild(editBtn);
-      iconGroup.appendChild(saveBtn);
       if (dlAddMenuBtn) {
         iconGroup.appendChild(dlAddMenuBtn);
       }
