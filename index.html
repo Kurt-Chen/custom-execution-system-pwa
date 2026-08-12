@@ -2064,11 +2064,18 @@
       box-shadow: 0 1px 4px rgba(190, 18, 60, 0.14);
     }
 
-    .done-sleep-countdown__pending.is-unlocked {
+    /* 任务清零 / Sleep Unlocked：胶囊字色红→绿（双选择器防媒体查询覆盖） */
+    .done-sleep-countdown__pending.is-unlocked,
+    .done-sleep-countdown--unlocked .done-sleep-countdown__pending {
       border-color: #6ee7b7;
       background: rgba(236, 253, 245, 0.98);
-      color: #047857;
-      box-shadow: 0 1px 4px rgba(4, 120, 87, 0.12);
+      color: #16a34a;
+      box-shadow: 0 1px 4px rgba(22, 163, 74, 0.16);
+    }
+
+    .done-sleep-countdown__pending.is-unlocked .done-sleep-countdown__pending-text,
+    .done-sleep-countdown--unlocked .done-sleep-countdown__pending-text {
+      color: #16a34a;
     }
 
     .done-sleep-countdown__pending-icon {
@@ -2230,6 +2237,14 @@
       --dsc-motto-face: linear-gradient(180deg, #f0fdf4 0%, #dcfce7 42%, #bbf7d0 78%, #86efac 100%);
     }
 
+    /* Sleep：同 Finish 软面厚底胶囊，冷蓝夜色以区分完成绿 */
+    .done-sleep-countdown__motto-part--sleep {
+      --dsc-motto-ink: #1e3a8a;
+      --dsc-motto-edge: #2563eb;
+      --dsc-motto-edge-soft: rgba(37, 99, 235, 0.28);
+      --dsc-motto-face: linear-gradient(180deg, #eff6ff 0%, #dbeafe 42%, #bfdbfe 78%, #93c5fd 100%);
+    }
+
     .done-sleep-countdown__mark-line {
       display: inline-flex;
       align-items: center;
@@ -2350,6 +2365,17 @@
         box-shadow: 0 1px 3px rgba(190, 18, 60, 0.1);
       }
 
+      .done-sleep-countdown__pending.is-unlocked,
+      .done-sleep-countdown--unlocked .done-sleep-countdown__pending {
+        color: #16a34a;
+        box-shadow: 0 1px 3px rgba(22, 163, 74, 0.14);
+      }
+
+      .done-sleep-countdown__pending.is-unlocked .done-sleep-countdown__pending-text,
+      .done-sleep-countdown--unlocked .done-sleep-countdown__pending-text {
+        color: #16a34a;
+      }
+
       .done-sleep-countdown__pending-icon {
         font-size: 10px;
       }
@@ -2426,6 +2452,16 @@
         padding: 4px 12px;
         gap: 4px;
         line-height: 1.1;
+      }
+
+      .done-sleep-countdown__pending.is-unlocked,
+      .done-sleep-countdown--unlocked .done-sleep-countdown__pending {
+        color: #16a34a;
+      }
+
+      .done-sleep-countdown__pending.is-unlocked .done-sleep-countdown__pending-text,
+      .done-sleep-countdown--unlocked .done-sleep-countdown__pending-text {
+        color: #16a34a;
       }
 
       .done-sleep-countdown__pending-icon {
@@ -76869,7 +76905,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260811a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260812b";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -97054,7 +97090,7 @@
       if (stage === "unlocked") {
         return {
           statusIcon: "🔓",
-          statusText: mobile ? "Unlocked" : "Sleep Unlocked · Mission Complete"
+          statusText: mobile ? "Unlocked" : "Sleep Unlocked"
         };
       }
       const lockLabel = mobile ? "未解锁" : "睡眠未解锁";
@@ -97118,8 +97154,11 @@
       const remainMin = Math.max(0, SLEEP_COUNTDOWN_END_MIN - nowMin);
       const pct = span <= 0 ? 0 : Math.min(1, Math.max(0, elapsedMin / span));
       const phase = remainMin <= SLEEP_COUNTDOWN_WARN_REMAIN_MIN ? "warn" : "active";
+      /* 当日 Closed List 已清零 → 立即 Sleep Unlocked（不必等到 22:00） */
       let stage = "open";
-      if (nowMin >= SLEEP_COUNTDOWN_SHUTDOWN_LOOP_MIN) {
+      if (unfinished <= 0) {
+        stage = "unlocked";
+      } else if (nowMin >= SLEEP_COUNTDOWN_SHUTDOWN_LOOP_MIN) {
         stage = "shutdownLoop";
       } else if (remainMin <= SLEEP_COUNTDOWN_FINAL_PUSH_REMAIN_MIN) {
         stage = "finalPush";
@@ -97140,20 +97179,21 @@
     function ensureDoneSleepCountdownBarDom(host) {
       if (!host) return host;
       if (
-        host.dataset.sleepCountdownBuilt === "6" &&
+        host.dataset.sleepCountdownBuilt === "7" &&
         host.querySelector(".done-sleep-countdown__fill") &&
         host.querySelectorAll(".done-sleep-countdown__tick").length >= 5 &&
         host.firstElementChild &&
         host.firstElementChild.classList.contains("done-sleep-countdown__bar") &&
         host.querySelector(".done-sleep-countdown__mark--start") &&
         host.querySelector(".done-sleep-countdown__motto") &&
+        host.querySelector(".done-sleep-countdown__motto-part--sleep") &&
         host.querySelector(".done-sleep-countdown__mark--end") &&
         !host.querySelector(".done-sleep-countdown__mark--push") &&
         host.querySelector(".done-sleep-countdown__pending-text")
       ) {
         return host;
       }
-      host.dataset.sleepCountdownBuilt = "6";
+      host.dataset.sleepCountdownBuilt = "7";
       host.replaceChildren();
 
       const bar = document.createElement("div");
@@ -97268,7 +97308,7 @@
         const a = document.createElement("span");
         a.className = "done-sleep-countdown__motto-arrow";
         a.setAttribute("aria-hidden", "true");
-        a.textContent = "→";
+        a.textContent = "➫";
         return a;
       }
       motto.appendChild(makeMottoPart("think", "DON'T THINK"));
@@ -97276,11 +97316,13 @@
       motto.appendChild(makeMottoPart("start", "Start"));
       motto.appendChild(makeMottoArrow());
       motto.appendChild(makeMottoPart("finish", "Finish"));
+      motto.appendChild(makeMottoArrow());
+      motto.appendChild(makeMottoPart("sleep", "Sleep"));
       bounds.appendChild(motto);
 
       bounds.appendChild(makeMark("end", { time: "22:00", label: "解锁", icAfter: "🔓" }));
 
-      /* 上半：进度条（已过 / Sleep Pending / 仅剩）；下半：刻度与 DON'T THINK */
+      /* 上半：进度条（已过 / Sleep Pending / 仅剩）；下半：DON'T THINK ➫ Start ➫ Finish ➫ Sleep */
       host.appendChild(bar);
       host.appendChild(bounds);
       return host;
@@ -97322,8 +97364,9 @@
         host.classList.add("done-sleep-countdown--stage-open");
       }
 
+      /* phase=pending/unlocked 仅表示已过 22:00；提前清零任务时 stage=unlocked 但仍走时间进度 */
       const ended = snap.phase === "pending" || snap.phase === "unlocked";
-      const pct = ended || snap.stage === "unlocked" ? 1 : Math.min(1, Math.max(0, snap.pct));
+      const pct = ended ? 1 : Math.min(1, Math.max(0, snap.pct));
       if (fill) fill.style.width = Math.round(pct * 100) + "%";
 
       if (elapsed) elapsed.classList.toggle("is-on-track", pct < 0.18);
@@ -97336,7 +97379,7 @@
       if (pendingIc) pendingIc.textContent = unlocked ? "🔓" : "🔒";
       if (pendingText) {
         if (unlocked) {
-          pendingText.textContent = mobile ? "Unlocked" : "Sleep Unlocked · Mission Complete";
+          pendingText.textContent = mobile ? "Unlocked" : "Sleep Unlocked";
         } else {
           const n = Math.max(0, Math.floor(Number(snap.unfinished) || 0));
           pendingText.textContent = mobile
