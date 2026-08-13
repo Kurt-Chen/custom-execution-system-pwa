@@ -23516,6 +23516,74 @@
         font-style: normal;
       }
 
+      /* 冲刺中栏：钟点提醒 RTL 跑马灯（每 5 分钟换一条；慢速可读；字重常规） */
+      :is(ul.app-done-time-timeline, #weeklyPlanSprintStrip)
+        .done-time-block-sprint-urgency.done-time-block-sprint-urgency--reminder-marquee {
+        padding: 0 48px;
+        overflow: hidden;
+        color: #b45309;
+        font-weight: 400;
+        font-style: normal;
+      }
+
+      :is(ul.app-done-time-timeline, #weeklyPlanSprintStrip) .done-sprint-reminder-marquee {
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        overflow: hidden;
+        mask-image: linear-gradient(
+          90deg,
+          transparent 0,
+          #000 12px,
+          #000 calc(100% - 12px),
+          transparent 100%
+        );
+        -webkit-mask-image: linear-gradient(
+          90deg,
+          transparent 0,
+          #000 12px,
+          #000 calc(100% - 12px),
+          transparent 100%
+        );
+      }
+
+      :is(ul.app-done-time-timeline, #weeklyPlanSprintStrip) .done-sprint-reminder-marquee__track {
+        display: inline-block;
+        white-space: nowrap;
+        font-weight: 400;
+        font-size: 11px;
+        line-height: 1.2;
+        color: #b45309;
+        padding-left: 100%;
+        will-change: transform;
+      }
+
+      :is(ul.app-done-time-timeline, #weeklyPlanSprintStrip)
+        .done-sprint-reminder-marquee__track.is-running {
+        animation: done-sprint-reminder-marquee-rtl var(--marquee-duration, 48s) linear infinite;
+      }
+
+      @keyframes done-sprint-reminder-marquee-rtl {
+        from {
+          transform: translateX(0);
+        }
+        to {
+          transform: translateX(-100%);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        :is(ul.app-done-time-timeline, #weeklyPlanSprintStrip)
+          .done-sprint-reminder-marquee__track {
+          padding-left: 0;
+          max-width: 100%;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          animation: none !important;
+          transform: none !important;
+        }
+      }
+
       :is(ul.app-done-time-timeline, #weeklyPlanSprintStrip) .done-time-block-sprint-urgency-txt--wide {
         display: none;
       }
@@ -77033,7 +77101,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260813d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260813f";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -96824,12 +96892,299 @@
     let doneTimeBlockSprintTickerId = null;
     let doneTodayVisibilityDigest = null;
 
+    /** 冲刺中栏提醒跑马灯：5 分钟换一条，洗牌队列保证一轮内全部轮到 */
+    const SPRINT_REMINDER_MARQUEE_INTERVAL_MS = 5 * 60 * 1000;
+    let sprintReminderMarqueeState = {
+      blockKey: "",
+      queue: [],
+      currentId: "",
+      currentText: "",
+      nextAt: 0
+    };
+
+    function shuffleSprintReminderIds(ids) {
+      const a = ids.slice();
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const tmp = a[i];
+        a[i] = a[j];
+        a[j] = tmp;
+      }
+      return a;
+    }
+
+    function isSprintDaytimeBlock(block) {
+      return Boolean(block && (block.key === "morning" || block.key === "day"));
+    }
+
+    /** 睡眠倒计时窗口 16:00–22:00（含 22:00 睡觉仪式条） */
+    function isSleepWindowMinute(min) {
+      const start =
+        typeof SLEEP_COUNTDOWN_START_MIN === "number" ? SLEEP_COUNTDOWN_START_MIN : 16 * 60;
+      const end = typeof SLEEP_COUNTDOWN_END_MIN === "number" ? SLEEP_COUNTDOWN_END_MIN : 22 * 60;
+      return Number(min) >= start && Number(min) <= end;
+    }
+
+    function timeReflectionLineTextFromSlot(slot) {
+      if (!slot) return "";
+      const title = String(slot.title || "").trim();
+      const bodyTrim = String(slot.body || "").trim();
+      if (!title && !bodyTrim) return "";
+      return bodyTrim ? title + " — " + bodyTrim : title;
+    }
+
+    /**
+     * 白天冲刺：并入睡觉时间（16:00–22:00）相关钟点提醒。
+     * 含 TIME_REFLECTION 晚间条、二十周年 20:15、年岁目标 21:15；未到点也用槽位文案预播。
+     */
+    function appendSleepWindowRemindersToMarqueePool(out, seen, todayKey) {
+      function pushItem(id, text) {
+        const tid = String(id || "");
+        const t = String(text || "").trim();
+        if (!tid || !t || seen[tid]) return;
+        seen[tid] = true;
+        out.push({ id: tid, text: t });
+      }
+
+      function textFromDoneOrFallback(id, fallbackText) {
+        if (Array.isArray(state.done)) {
+          for (let i = 0; i < state.done.length; i++) {
+            const task = state.done[i];
+            if (task && String(task.id || "") === id) {
+              const existing = String(task.text || "").trim();
+              if (existing) return existing;
+              break;
+            }
+          }
+        }
+        return String(fallbackText || "").trim();
+      }
+
+      if (typeof TIME_REFLECTION_SLOTS !== "undefined" && Array.isArray(TIME_REFLECTION_SLOTS)) {
+        for (let i = 0; i < TIME_REFLECTION_SLOTS.length; i++) {
+          const slot = TIME_REFLECTION_SLOTS[i];
+          if (!slot) continue;
+          const min = Number(slot.h) * 60 + Number(slot.m);
+          if (!isSleepWindowMinute(min)) continue;
+          const id = "timeReflection:" + todayKey + ":" + slot.slotKey;
+          pushItem(id, textFromDoneOrFallback(id, timeReflectionLineTextFromSlot(slot)));
+        }
+      }
+
+      if (
+        typeof ANNIVERSARY_TW020_DONE_PROMPT_SLOTS !== "undefined" &&
+        Array.isArray(ANNIVERSARY_TW020_DONE_PROMPT_SLOTS)
+      ) {
+        for (let i = 0; i < ANNIVERSARY_TW020_DONE_PROMPT_SLOTS.length; i++) {
+          const slot = ANNIVERSARY_TW020_DONE_PROMPT_SLOTS[i];
+          if (!slot) continue;
+          const min = Number(slot.h) * 60 + Number(slot.m);
+          if (!isSleepWindowMinute(min)) continue;
+          const id = "timeReflection:" + todayKey + ":" + slot.slotKey;
+          const fallback =
+            typeof buildAnniversaryTw020DonePromptText === "function"
+              ? buildAnniversaryTw020DonePromptText()
+              : "";
+          pushItem(id, textFromDoneOrFallback(id, fallback));
+        }
+      }
+
+      if (
+        typeof AGE_GOAL_MILESTONE_PROMPT_SLOTS !== "undefined" &&
+        Array.isArray(AGE_GOAL_MILESTONE_PROMPT_SLOTS)
+      ) {
+        let ageFallback = "";
+        if (typeof getActiveAgeGoalMilestoneForDonePrompt === "function") {
+          const milestone = getActiveAgeGoalMilestoneForDonePrompt();
+          if (
+            milestone &&
+            typeof buildAgeGoalMilestoneDonePromptText === "function"
+          ) {
+            ageFallback = buildAgeGoalMilestoneDonePromptText(milestone);
+          }
+        }
+        for (let i = 0; i < AGE_GOAL_MILESTONE_PROMPT_SLOTS.length; i++) {
+          const slot = AGE_GOAL_MILESTONE_PROMPT_SLOTS[i];
+          if (!slot) continue;
+          const min = Number(slot.h) * 60 + Number(slot.m);
+          if (!isSleepWindowMinute(min)) continue;
+          const id = "timeReflection:" + todayKey + ":" + slot.slotKey;
+          pushItem(id, textFromDoneOrFallback(id, ageFallback));
+        }
+      }
+    }
+
+    /** 当前冲刺时段内钟点提醒；白天另并入睡觉时间（16:00–22:00）相关条 */
+    function collectSprintReminderMarqueeItems(block) {
+      if (!block || typeof block.startMin !== "number" || typeof block.endMin !== "number") {
+        return [];
+      }
+      if (!Array.isArray(state.done)) return [];
+      const todayKey = formatDateInputValue(new Date());
+      const out = [];
+      const seen = {};
+      for (let i = 0; i < state.done.length; i++) {
+        const task = state.done[i];
+        if (!task || task.kind !== "timeReflection") continue;
+        const text = String(task.text || "").trim();
+        if (!text) continue;
+        const ts = Number(task.completedAt || task.createdAt || 0);
+        if (!Number.isFinite(ts) || ts <= 0) continue;
+        const d = new Date(ts);
+        if (formatDateInputValue(d) !== todayKey) continue;
+        const min = d.getHours() * 60 + d.getMinutes();
+        if (min < block.startMin || min >= block.endMin) continue;
+        const id = String(task.id || "");
+        if (!id || seen[id]) continue;
+        seen[id] = true;
+        out.push({ id: id, text: text });
+      }
+      if (isSprintDaytimeBlock(block)) {
+        appendSleepWindowRemindersToMarqueePool(out, seen, todayKey);
+      }
+      out.sort(function (a, b) {
+        return String(a.id).localeCompare(String(b.id));
+      });
+      return out;
+    }
+
+    function refillSprintReminderMarqueeQueue(pool) {
+      sprintReminderMarqueeState.queue = shuffleSprintReminderIds(
+        pool.map(function (p) {
+          return p.id;
+        })
+      );
+    }
+
+    function pickNextSprintReminderMarqueeItem(pool) {
+      if (!pool.length) return null;
+      const byId = {};
+      for (let i = 0; i < pool.length; i++) {
+        byId[pool[i].id] = pool[i];
+      }
+      sprintReminderMarqueeState.queue = sprintReminderMarqueeState.queue.filter(function (id) {
+        return Boolean(byId[id]);
+      });
+      if (!sprintReminderMarqueeState.queue.length) {
+        refillSprintReminderMarqueeQueue(pool);
+      }
+      if (!sprintReminderMarqueeState.queue.length) return null;
+      const nextId = sprintReminderMarqueeState.queue.shift();
+      return byId[nextId] || null;
+    }
+
+    function renderSprintReminderMarqueeInto(hostEl, item) {
+      if (!hostEl || !item) return;
+      hostEl.textContent = "";
+      hostEl.classList.add("done-time-block-sprint-urgency--reminder-marquee");
+      hostEl.removeAttribute("aria-hidden");
+      hostEl.setAttribute("aria-live", "polite");
+      hostEl.setAttribute("aria-label", item.text);
+      const viewport = document.createElement("span");
+      viewport.className = "done-sprint-reminder-marquee";
+      const track = document.createElement("span");
+      track.className = "done-sprint-reminder-marquee__track";
+      track.textContent = item.text;
+      /* 慢速可读：约 0.8s/字，下限 32s，上限 180s */
+      const durationSec = Math.max(32, Math.min(180, Math.round(item.text.length * 0.8)));
+      track.style.setProperty("--marquee-duration", String(durationSec) + "s");
+      viewport.appendChild(track);
+      hostEl.appendChild(viewport);
+      const reduceMotion =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (!reduceMotion) {
+        void track.offsetWidth;
+        track.classList.add("is-running");
+      }
+    }
+
+    /** 冲刺进行中：中栏每 5 分钟轮播本时段钟点提醒（白天另含睡觉时段）；无提醒时不改原中栏 */
+    function syncSprintReminderMarquee() {
+      const block =
+        typeof getActiveDoneTimeBlock === "function" ? getActiveDoneTimeBlock() : null;
+      const hosts = document.querySelectorAll(
+        "#doneList li.done-time-block--sprint-current .done-time-block-sprint-urgency, #weeklyPlanSprintStrip.done-time-block--sprint-current .done-time-block-sprint-urgency"
+      );
+      if (!block || !hosts.length) {
+        sprintReminderMarqueeState.blockKey = "";
+        sprintReminderMarqueeState.queue = [];
+        sprintReminderMarqueeState.currentId = "";
+        sprintReminderMarqueeState.currentText = "";
+        sprintReminderMarqueeState.nextAt = 0;
+        return;
+      }
+      const pool = collectSprintReminderMarqueeItems(block);
+      if (!pool.length) {
+        sprintReminderMarqueeState.blockKey = "";
+        sprintReminderMarqueeState.queue = [];
+        sprintReminderMarqueeState.currentId = "";
+        sprintReminderMarqueeState.currentText = "";
+        sprintReminderMarqueeState.nextAt = 0;
+        return;
+      }
+      const now = Date.now();
+      if (sprintReminderMarqueeState.blockKey !== block.key) {
+        sprintReminderMarqueeState.blockKey = block.key;
+        refillSprintReminderMarqueeQueue(pool);
+        sprintReminderMarqueeState.currentId = "";
+        sprintReminderMarqueeState.currentText = "";
+        sprintReminderMarqueeState.nextAt = now;
+      }
+      let item = null;
+      const needAdvance =
+        !sprintReminderMarqueeState.currentId || now >= sprintReminderMarqueeState.nextAt;
+      if (needAdvance) {
+        item = pickNextSprintReminderMarqueeItem(pool);
+        if (item) {
+          sprintReminderMarqueeState.currentId = item.id;
+          sprintReminderMarqueeState.currentText = item.text;
+          sprintReminderMarqueeState.nextAt = now + SPRINT_REMINDER_MARQUEE_INTERVAL_MS;
+        }
+      } else {
+        for (let i = 0; i < pool.length; i++) {
+          if (pool[i].id === sprintReminderMarqueeState.currentId) {
+            item = pool[i];
+            break;
+          }
+        }
+        if (!item) {
+          item = pickNextSprintReminderMarqueeItem(pool);
+          if (item) {
+            sprintReminderMarqueeState.currentId = item.id;
+            sprintReminderMarqueeState.currentText = item.text;
+            sprintReminderMarqueeState.nextAt = now + SPRINT_REMINDER_MARQUEE_INTERVAL_MS;
+          }
+        } else if (item.text !== sprintReminderMarqueeState.currentText) {
+          sprintReminderMarqueeState.currentText = item.text;
+        }
+      }
+      if (!item) return;
+      for (let h = 0; h < hosts.length; h++) {
+        const host = hosts[h];
+        const track = host.querySelector(".done-sprint-reminder-marquee__track");
+        if (
+          track &&
+          host.classList.contains("done-time-block-sprint-urgency--reminder-marquee") &&
+          track.textContent === item.text
+        ) {
+          continue;
+        }
+        renderSprintReminderMarqueeInto(host, item);
+      }
+    }
+
     function stopDoneTimeBlockSprintTicker() {
       if (doneTimeBlockSprintTickerId) {
         clearInterval(doneTimeBlockSprintTickerId);
         doneTimeBlockSprintTickerId = null;
       }
       doneTodayVisibilityDigest = null;
+      sprintReminderMarqueeState.blockKey = "";
+      sprintReminderMarqueeState.queue = [];
+      sprintReminderMarqueeState.currentId = "";
+      sprintReminderMarqueeState.currentText = "";
+      sprintReminderMarqueeState.nextAt = 0;
     }
 
     function fillDoneSprintMetaLine(lineEl, prefix, valueText) {
@@ -97157,6 +97512,9 @@
       host.appendChild(top);
       host.appendChild(prog);
       updateDoneTimeBlockSprintProgressDom(host);
+      if (typeof syncSprintReminderMarquee === "function") {
+        syncSprintReminderMarquee();
+      }
     }
 
     function tickDoneTimeBlockSprint() {
@@ -97166,6 +97524,9 @@
       /* 睡眠倒计时与 Done 选日无关，须在冲刺 early-return 前刷新 */
       if (typeof updateDoneSleepCountdownBarDom === "function") {
         updateDoneSleepCountdownBarDom();
+      }
+      if (typeof syncSprintReminderMarquee === "function") {
+        syncSprintReminderMarquee();
       }
       const todayKey = formatDateInputValue(new Date());
       const ul = document.getElementById("doneList");
@@ -97729,6 +98090,9 @@
       }
 
       updateDoneTimeBlockSprintProgressDom(blockLi);
+      if (typeof syncSprintReminderMarquee === "function") {
+        syncSprintReminderMarquee();
+      }
     }
 
     /** 当日固定钟点的反思提示（到点后写入 state.done，不计入「真实产出」统计） */
