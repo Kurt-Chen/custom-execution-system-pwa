@@ -23516,17 +23516,38 @@
         font-style: normal;
       }
 
-      /* 冲刺中栏：钟点提醒 RTL 跑马灯（每 5 分钟换一条；慢速可读；字重常规） */
-      :is(ul.app-done-time-timeline, #weeklyPlanSprintStrip)
-        .done-time-block-sprint-urgency.done-time-block-sprint-urgency--reminder-marquee {
-        padding: 0 48px;
-        overflow: hidden;
-        color: #b45309;
-        font-weight: 400;
-        font-style: normal;
+      /* Done List 冲刺上半区跑马灯：字体对齐提醒胶囊；仅播一次；周计划不参与 */
+      #doneList.done-time-block-list
+        li.done-time-block--sprint-current
+        .done-time-block-sprint-insert--top {
+        position: relative;
       }
 
-      :is(ul.app-done-time-timeline, #weeklyPlanSprintStrip) .done-sprint-reminder-marquee {
+      #doneList.done-time-block-list
+        li.done-time-block--sprint-current
+        .done-time-block-sprint-insert--top.is-reminder-marquee-playing
+        > :not(.done-sprint-reminder-marquee-overlay) {
+        visibility: hidden;
+      }
+
+      #doneList.done-time-block-list
+        li.done-time-block--sprint-current
+        .done-sprint-reminder-marquee-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 6;
+        display: flex;
+        align-items: center;
+        box-sizing: border-box;
+        padding: 0 12px;
+        background: #fffbf5;
+        border-radius: inherit;
+        overflow: hidden;
+      }
+
+      #doneList.done-time-block-list
+        li.done-time-block--sprint-current
+        .done-sprint-reminder-marquee {
         display: block;
         width: 100%;
         max-width: 100%;
@@ -23534,33 +23555,39 @@
         mask-image: linear-gradient(
           90deg,
           transparent 0,
-          #000 12px,
-          #000 calc(100% - 12px),
+          #000 10px,
+          #000 calc(100% - 10px),
           transparent 100%
         );
         -webkit-mask-image: linear-gradient(
           90deg,
           transparent 0,
-          #000 12px,
-          #000 calc(100% - 12px),
+          #000 10px,
+          #000 calc(100% - 10px),
           transparent 100%
         );
       }
 
-      :is(ul.app-done-time-timeline, #weeklyPlanSprintStrip) .done-sprint-reminder-marquee__track {
+      #doneList.done-time-block-list
+        li.done-time-block--sprint-current
+        .done-sprint-reminder-marquee__track {
         display: inline-block;
         white-space: nowrap;
-        font-weight: 400;
-        font-size: 11px;
-        line-height: 1.2;
-        color: #b45309;
+        font-family: var(--font-sans-zh), system-ui, -apple-system, "Segoe UI", sans-serif;
+        font-size: var(--done-list-task-font-size, 14px);
+        font-weight: 600;
+        font-style: normal;
+        line-height: 1.35;
+        color: #0f766e;
+        letter-spacing: 0;
         padding-left: 100%;
         will-change: transform;
       }
 
-      :is(ul.app-done-time-timeline, #weeklyPlanSprintStrip)
+      #doneList.done-time-block-list
+        li.done-time-block--sprint-current
         .done-sprint-reminder-marquee__track.is-running {
-        animation: done-sprint-reminder-marquee-rtl var(--marquee-duration, 48s) linear infinite;
+        animation: done-sprint-reminder-marquee-rtl var(--marquee-duration, 48s) linear 1 forwards;
       }
 
       @keyframes done-sprint-reminder-marquee-rtl {
@@ -23573,7 +23600,8 @@
       }
 
       @media (prefers-reduced-motion: reduce) {
-        :is(ul.app-done-time-timeline, #weeklyPlanSprintStrip)
+        #doneList.done-time-block-list
+          li.done-time-block--sprint-current
           .done-sprint-reminder-marquee__track {
           padding-left: 0;
           max-width: 100%;
@@ -77101,7 +77129,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260813f";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260813g";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -96892,15 +96920,75 @@
     let doneTimeBlockSprintTickerId = null;
     let doneTodayVisibilityDigest = null;
 
-    /** 冲刺中栏提醒跑马灯：5 分钟换一条，洗牌队列保证一轮内全部轮到 */
+    /** 冲刺上半区提醒跑马灯：播完恢复 → 再隔 5 分钟播下一条；洗牌队列一轮内全部轮到 */
     const SPRINT_REMINDER_MARQUEE_INTERVAL_MS = 5 * 60 * 1000;
     let sprintReminderMarqueeState = {
       blockKey: "",
       queue: [],
+      phase: "idle",
       currentId: "",
       currentText: "",
-      nextAt: 0
+      nextAt: 0,
+      playToken: 0
     };
+
+    function querySprintReminderMarqueeTopHosts() {
+      /* 仅 Done List 冲刺条；周计划冲刺条不参与，避免盖掉双胶囊 */
+      return document.querySelectorAll(
+        "#doneList li.done-time-block--sprint-current .done-time-block-sprint-insert--top"
+      );
+    }
+
+    /** 若周计划冲刺中栏曾被跑马灯清空，强制重建以恢复 Do Hard Things 双胶囊 */
+    function restoreWeeklyPlanSprintUrgencyCapsulesIfNeeded() {
+      const strip = document.getElementById("weeklyPlanSprintStrip");
+      if (!strip || strip.hidden) return;
+      const urgency = strip.querySelector(".done-time-block-sprint-urgency");
+      if (!urgency) return;
+      const stolen =
+        urgency.classList.contains("done-time-block-sprint-urgency--reminder-marquee") ||
+        urgency.querySelector(".done-sprint-reminder-marquee") ||
+        !urgency.querySelector(".weekly-plan-sprint-hard");
+      if (!stolen) return;
+      strip.removeAttribute("data-sprint-block-key");
+      if (typeof syncWeeklyPlanSprintStrip === "function") {
+        syncWeeklyPlanSprintStrip();
+      }
+    }
+
+    function clearSprintReminderMarqueeOverlay(topEl) {
+      if (!topEl) return;
+      topEl.classList.remove("is-reminder-marquee-playing");
+      const overlay = topEl.querySelector(":scope > .done-sprint-reminder-marquee-overlay");
+      if (overlay) overlay.remove();
+    }
+
+    function clearAllSprintReminderMarqueeOverlays() {
+      document
+        .querySelectorAll(
+          ".done-time-block-sprint-insert--top.is-reminder-marquee-playing, .done-sprint-reminder-marquee-overlay"
+        )
+        .forEach(function (el) {
+          if (el.classList.contains("done-sprint-reminder-marquee-overlay")) {
+            const top = el.parentElement;
+            if (top) clearSprintReminderMarqueeOverlay(top);
+            else el.remove();
+            return;
+          }
+          clearSprintReminderMarqueeOverlay(el);
+        });
+    }
+
+    function resetSprintReminderMarqueeState() {
+      sprintReminderMarqueeState.blockKey = "";
+      sprintReminderMarqueeState.queue = [];
+      sprintReminderMarqueeState.phase = "idle";
+      sprintReminderMarqueeState.currentId = "";
+      sprintReminderMarqueeState.currentText = "";
+      sprintReminderMarqueeState.nextAt = 0;
+      sprintReminderMarqueeState.playToken += 1;
+      clearAllSprintReminderMarqueeOverlays();
+    }
 
     function shuffleSprintReminderIds(ids) {
       const a = ids.slice();
@@ -97073,105 +97161,128 @@
       return byId[nextId] || null;
     }
 
-    function renderSprintReminderMarqueeInto(hostEl, item) {
-      if (!hostEl || !item) return;
-      hostEl.textContent = "";
-      hostEl.classList.add("done-time-block-sprint-urgency--reminder-marquee");
-      hostEl.removeAttribute("aria-hidden");
-      hostEl.setAttribute("aria-live", "polite");
-      hostEl.setAttribute("aria-label", item.text);
+    /** 上半区全覆盖播一条：只滚一次 → 恢复 → 再等 5 分钟播下一条（仅 Done List） */
+    function playSprintReminderMarqueeOnTop(topEl, item, playToken) {
+      if (!topEl || !item) return;
+      clearSprintReminderMarqueeOverlay(topEl);
+      topEl.classList.add("is-reminder-marquee-playing");
+      const overlay = document.createElement("div");
+      overlay.className = "done-sprint-reminder-marquee-overlay";
+      overlay.setAttribute("aria-live", "polite");
+      overlay.setAttribute("aria-label", item.text);
       const viewport = document.createElement("span");
       viewport.className = "done-sprint-reminder-marquee";
       const track = document.createElement("span");
       track.className = "done-sprint-reminder-marquee__track";
       track.textContent = item.text;
-      /* 慢速可读：约 0.8s/字，下限 32s，上限 180s */
       const durationSec = Math.max(32, Math.min(180, Math.round(item.text.length * 0.8)));
       track.style.setProperty("--marquee-duration", String(durationSec) + "s");
       viewport.appendChild(track);
-      hostEl.appendChild(viewport);
+      overlay.appendChild(viewport);
+      topEl.appendChild(overlay);
+
+      let finished = false;
+      const finishPlay = function () {
+        if (finished) return;
+        if (playToken !== sprintReminderMarqueeState.playToken) return;
+        if (sprintReminderMarqueeState.phase !== "playing") return;
+        if (sprintReminderMarqueeState.currentId !== item.id) return;
+        finished = true;
+        clearAllSprintReminderMarqueeOverlays();
+        sprintReminderMarqueeState.phase = "idle";
+        sprintReminderMarqueeState.currentId = "";
+        sprintReminderMarqueeState.currentText = "";
+        sprintReminderMarqueeState.nextAt = Date.now() + SPRINT_REMINDER_MARQUEE_INTERVAL_MS;
+      };
+
       const reduceMotion =
         typeof window.matchMedia === "function" &&
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      if (!reduceMotion) {
-        void track.offsetWidth;
-        track.classList.add("is-running");
+      if (reduceMotion) {
+        window.setTimeout(finishPlay, Math.min(12000, durationSec * 1000));
+        return;
+      }
+      void track.offsetWidth;
+      track.classList.add("is-running");
+      track.addEventListener("animationend", function onEnd(ev) {
+        if (ev.target !== track) return;
+        track.removeEventListener("animationend", onEnd);
+        finishPlay();
+      });
+      window.setTimeout(finishPlay, durationSec * 1000 + 800);
+    }
+
+    function startSprintReminderMarqueePlay(item) {
+      if (!item) return;
+      const tops = querySprintReminderMarqueeTopHosts();
+      if (!tops.length) return;
+      sprintReminderMarqueeState.phase = "playing";
+      sprintReminderMarqueeState.currentId = item.id;
+      sprintReminderMarqueeState.currentText = item.text;
+      sprintReminderMarqueeState.playToken += 1;
+      const token = sprintReminderMarqueeState.playToken;
+      for (let i = 0; i < tops.length; i++) {
+        playSprintReminderMarqueeOnTop(tops[i], item, token);
       }
     }
 
-    /** 冲刺进行中：中栏每 5 分钟轮播本时段钟点提醒（白天另含睡觉时段）；无提醒时不改原中栏 */
+    /** 仅 Done List 冲刺上半区；字体同提醒胶囊；周计划双胶囊不碰 */
     function syncSprintReminderMarquee() {
+      restoreWeeklyPlanSprintUrgencyCapsulesIfNeeded();
       const block =
         typeof getActiveDoneTimeBlock === "function" ? getActiveDoneTimeBlock() : null;
-      const hosts = document.querySelectorAll(
-        "#doneList li.done-time-block--sprint-current .done-time-block-sprint-urgency, #weeklyPlanSprintStrip.done-time-block--sprint-current .done-time-block-sprint-urgency"
-      );
-      if (!block || !hosts.length) {
-        sprintReminderMarqueeState.blockKey = "";
-        sprintReminderMarqueeState.queue = [];
-        sprintReminderMarqueeState.currentId = "";
-        sprintReminderMarqueeState.currentText = "";
-        sprintReminderMarqueeState.nextAt = 0;
+      const tops = querySprintReminderMarqueeTopHosts();
+      if (!block || !tops.length) {
+        resetSprintReminderMarqueeState();
         return;
       }
       const pool = collectSprintReminderMarqueeItems(block);
       if (!pool.length) {
-        sprintReminderMarqueeState.blockKey = "";
-        sprintReminderMarqueeState.queue = [];
-        sprintReminderMarqueeState.currentId = "";
-        sprintReminderMarqueeState.currentText = "";
-        sprintReminderMarqueeState.nextAt = 0;
+        resetSprintReminderMarqueeState();
         return;
       }
       const now = Date.now();
       if (sprintReminderMarqueeState.blockKey !== block.key) {
         sprintReminderMarqueeState.blockKey = block.key;
         refillSprintReminderMarqueeQueue(pool);
+        sprintReminderMarqueeState.phase = "idle";
         sprintReminderMarqueeState.currentId = "";
         sprintReminderMarqueeState.currentText = "";
         sprintReminderMarqueeState.nextAt = now;
+        clearAllSprintReminderMarqueeOverlays();
       }
-      let item = null;
-      const needAdvance =
-        !sprintReminderMarqueeState.currentId || now >= sprintReminderMarqueeState.nextAt;
-      if (needAdvance) {
-        item = pickNextSprintReminderMarqueeItem(pool);
-        if (item) {
-          sprintReminderMarqueeState.currentId = item.id;
-          sprintReminderMarqueeState.currentText = item.text;
-          sprintReminderMarqueeState.nextAt = now + SPRINT_REMINDER_MARQUEE_INTERVAL_MS;
-        }
-      } else {
+
+      if (sprintReminderMarqueeState.phase === "playing") {
+        let playingItem = null;
         for (let i = 0; i < pool.length; i++) {
           if (pool[i].id === sprintReminderMarqueeState.currentId) {
-            item = pool[i];
+            playingItem = pool[i];
             break;
           }
         }
-        if (!item) {
-          item = pickNextSprintReminderMarqueeItem(pool);
-          if (item) {
-            sprintReminderMarqueeState.currentId = item.id;
-            sprintReminderMarqueeState.currentText = item.text;
-            sprintReminderMarqueeState.nextAt = now + SPRINT_REMINDER_MARQUEE_INTERVAL_MS;
-          }
-        } else if (item.text !== sprintReminderMarqueeState.currentText) {
-          sprintReminderMarqueeState.currentText = item.text;
+        if (!playingItem) {
+          resetSprintReminderMarqueeState();
+          sprintReminderMarqueeState.blockKey = block.key;
+          refillSprintReminderMarqueeQueue(pool);
+          sprintReminderMarqueeState.nextAt = now;
+          return;
         }
+        sprintReminderMarqueeState.currentText = playingItem.text;
+        for (let h = 0; h < tops.length; h++) {
+          const top = tops[h];
+          const track = top.querySelector(
+            ":scope > .done-sprint-reminder-marquee-overlay .done-sprint-reminder-marquee__track"
+          );
+          if (track && track.textContent === playingItem.text) continue;
+          playSprintReminderMarqueeOnTop(top, playingItem, sprintReminderMarqueeState.playToken);
+        }
+        return;
       }
+
+      if (now < sprintReminderMarqueeState.nextAt) return;
+      const item = pickNextSprintReminderMarqueeItem(pool);
       if (!item) return;
-      for (let h = 0; h < hosts.length; h++) {
-        const host = hosts[h];
-        const track = host.querySelector(".done-sprint-reminder-marquee__track");
-        if (
-          track &&
-          host.classList.contains("done-time-block-sprint-urgency--reminder-marquee") &&
-          track.textContent === item.text
-        ) {
-          continue;
-        }
-        renderSprintReminderMarqueeInto(host, item);
-      }
+      startSprintReminderMarqueePlay(item);
     }
 
     function stopDoneTimeBlockSprintTicker() {
@@ -97180,11 +97291,7 @@
         doneTimeBlockSprintTickerId = null;
       }
       doneTodayVisibilityDigest = null;
-      sprintReminderMarqueeState.blockKey = "";
-      sprintReminderMarqueeState.queue = [];
-      sprintReminderMarqueeState.currentId = "";
-      sprintReminderMarqueeState.currentText = "";
-      sprintReminderMarqueeState.nextAt = 0;
+      resetSprintReminderMarqueeState();
     }
 
     function fillDoneSprintMetaLine(lineEl, prefix, valueText) {
