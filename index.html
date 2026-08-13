@@ -13192,7 +13192,7 @@
         border-radius: 999px !important;
         box-sizing: border-box;
         font-size: 10px !important;
-        font-weight: 800;
+        font-weight: 400;
         font-style: italic;
         letter-spacing: 0.01em;
         line-height: 1.05 !important;
@@ -13229,7 +13229,7 @@
         .weekly-plan-sprint-hard__chip-text {
         font-family: inherit;
         font-style: normal !important;
-        font-weight: 700;
+        font-weight: 400;
         white-space: nowrap !important;
       }
     }
@@ -13258,7 +13258,7 @@
       border-radius: 999px;
       box-sizing: border-box;
       font-size: 11px;
-      font-weight: 800;
+      font-weight: 400;
       font-style: italic;
       letter-spacing: 0.01em;
       line-height: 1.1;
@@ -13279,7 +13279,7 @@
       line-height: 1.1;
       font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
       font-style: italic;
-      font-weight: 800;
+      font-weight: 400;
       letter-spacing: 0.01em;
     }
 
@@ -77033,7 +77033,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260813b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260813d";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -107407,9 +107407,26 @@
       return -1;
     }
 
+    /** Done 提醒文案：跟随当前十二周年周期（#20/#21/…）自动更新号数与目标 */
+    function buildAnniversaryTwDonePromptDisplayName(moduleKey) {
+      const key = String(moduleKey || "tw020");
+      const num = anniversaryTwNumberFromModuleKey(key) || 20;
+      if (key === "tw020") {
+        return ANNIVERSARY_TW020_FULL_NAME;
+      }
+      const mod = getAnniversaryTwStateModule(key);
+      const goal =
+        mod && typeof mod.twelveWeekGoal === "string" ? String(mod.twelveWeekGoal).trim() : "";
+      return goal ? "十二周年#" + num + "：" + goal : "十二周年#" + num;
+    }
+
     function buildAnniversaryTw020DonePromptText() {
-      const name = ANNIVERSARY_TW020_FULL_NAME;
-      const deadlineMs = getTw020Week12DeadlineMs();
+      const moduleKey = getCurrentAnniversaryModuleForDate(new Date()) || "tw020";
+      const name = buildAnniversaryTwDonePromptDisplayName(moduleKey);
+      const deadlineMs = getAnniversaryTwWeek12DeadlineMsForModule(moduleKey);
+      if (deadlineMs == null) {
+        return "";
+      }
       const dayDiff = kineticCalendarDaysFromToday(deadlineMs);
       let countdownPart = "";
       if (dayDiff > 0) {
@@ -107419,15 +107436,22 @@
       } else {
         countdownPart = "第12周截止已过 " + String(-dayDiff) + " 天";
       }
-      const wk = getTw020WeekIndexForToday();
+      const wk = getAnniversaryTwWeekIndexForModule(moduleKey);
+      const week1Start = anniversaryTwWeekStartSundayForModule(moduleKey, 1);
+      const week13End = anniversaryTwWeekEndSaturdayForModule(moduleKey, 13);
       let weekPart = "";
       if (wk >= 1 && wk <= 13) {
         weekPart = "当前第 " + wk + " 周";
       } else if (wk === 0) {
-        weekPart = "当前尚未进入本周期（首周自 2026-04-12 起）";
+        weekPart =
+          "当前尚未进入本周期（首周自 " +
+          (week1Start ? formatIsoDate(week1Start) : "—") +
+          " 起）";
       } else if (wk === 14) {
         weekPart =
-          "本十三周周期已结束（第13周最后一日为 " + formatIsoDate(tw020WeekEndSaturday(13)) + "）";
+          "本十三周周期已结束（第13周最后一日为 " +
+          (week13End ? formatIsoDate(week13End) : "—") +
+          "）";
       } else {
         weekPart = "（周次计算异常）";
       }
