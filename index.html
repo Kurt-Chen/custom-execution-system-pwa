@@ -77129,7 +77129,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260813j";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260813m";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -96924,7 +96924,7 @@
     const SPRINT_REMINDER_MARQUEE_SLOT_STORAGE_KEY = "sprint-reminder-marquee-last-slot-v1";
     let sprintReminderMarqueeSyncing = false;
     let sprintReminderMarqueeState = {
-      blockKey: "",
+      poolDayKey: "",
       queue: [],
       phase: "idle",
       currentId: "",
@@ -97028,7 +97028,7 @@
 
     function resetSprintReminderMarqueeState() {
       clearSprintReminderMarqueeFinishTimer();
-      sprintReminderMarqueeState.blockKey = "";
+      sprintReminderMarqueeState.poolDayKey = "";
       sprintReminderMarqueeState.queue = [];
       sprintReminderMarqueeState.phase = "idle";
       sprintReminderMarqueeState.currentId = "";
@@ -97050,18 +97050,6 @@
       return a;
     }
 
-    function isSprintDaytimeBlock(block) {
-      return Boolean(block && (block.key === "morning" || block.key === "day"));
-    }
-
-    /** 睡眠倒计时窗口 16:00–22:00（含 22:00 睡觉仪式条） */
-    function isSleepWindowMinute(min) {
-      const start =
-        typeof SLEEP_COUNTDOWN_START_MIN === "number" ? SLEEP_COUNTDOWN_START_MIN : 16 * 60;
-      const end = typeof SLEEP_COUNTDOWN_END_MIN === "number" ? SLEEP_COUNTDOWN_END_MIN : 22 * 60;
-      return Number(min) >= start && Number(min) <= end;
-    }
-
     function timeReflectionLineTextFromSlot(slot) {
       if (!slot) return "";
       const title = String(slot.title || "").trim();
@@ -97071,10 +97059,10 @@
     }
 
     /**
-     * 白天冲刺：并入睡觉时间（16:00–22:00）相关钟点提醒。
-     * 含 TIME_REFLECTION 晚间条、二十周年 20:15、年岁目标 21:15；未到点也用槽位文案预播。
+     * 并入全部钟点提醒槽位（不限冲刺区间）：TIME_REFLECTION + 十二周年 + 年岁目标。
+     * 已有 Done 文案优先，否则用槽位默认文案，确保未到点也能进洗牌队列。
      */
-    function appendSleepWindowRemindersToMarqueePool(out, seen, todayKey) {
+    function appendAllClockReminderSlotsToMarqueePool(out, seen, todayKey) {
       function pushItem(id, text) {
         const tid = String(id || "");
         const t = String(text || "").trim();
@@ -97101,8 +97089,6 @@
         for (let i = 0; i < TIME_REFLECTION_SLOTS.length; i++) {
           const slot = TIME_REFLECTION_SLOTS[i];
           if (!slot) continue;
-          const min = Number(slot.h) * 60 + Number(slot.m);
-          if (!isSleepWindowMinute(min)) continue;
           const id = "timeReflection:" + todayKey + ":" + slot.slotKey;
           pushItem(id, textFromDoneOrFallback(id, timeReflectionLineTextFromSlot(slot)));
         }
@@ -97115,8 +97101,6 @@
         for (let i = 0; i < ANNIVERSARY_TW020_DONE_PROMPT_SLOTS.length; i++) {
           const slot = ANNIVERSARY_TW020_DONE_PROMPT_SLOTS[i];
           if (!slot) continue;
-          const min = Number(slot.h) * 60 + Number(slot.m);
-          if (!isSleepWindowMinute(min)) continue;
           const id = "timeReflection:" + todayKey + ":" + slot.slotKey;
           const fallback =
             typeof buildAnniversaryTw020DonePromptText === "function"
@@ -97143,42 +97127,84 @@
         for (let i = 0; i < AGE_GOAL_MILESTONE_PROMPT_SLOTS.length; i++) {
           const slot = AGE_GOAL_MILESTONE_PROMPT_SLOTS[i];
           if (!slot) continue;
-          const min = Number(slot.h) * 60 + Number(slot.m);
-          if (!isSleepWindowMinute(min)) continue;
           const id = "timeReflection:" + todayKey + ":" + slot.slotKey;
           pushItem(id, textFromDoneOrFallback(id, ageFallback));
         }
       }
     }
 
-    /** 当前冲刺时段内钟点提醒；白天另并入睡觉时间（16:00–22:00）相关条 */
-    function collectSprintReminderMarqueeItems(block) {
-      if (!block || typeof block.startMin !== "number" || typeof block.endMin !== "number") {
-        return [];
+    function normalizeSprintReminderMarqueePlainText(raw) {
+      return String(raw || "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    /**
+     * 人生使命 + 价值观并入跑马灯：每条使命单独一条；每条价值观中英文放一起。
+     * 价值观英文去掉包裹括号，与模块展示习惯一致。
+     */
+    function appendPurposeMissionAndValuesToMarqueePool(out, seen) {
+      function pushItem(id, text) {
+        const tid = String(id || "");
+        const t = normalizeSprintReminderMarqueePlainText(text);
+        if (!tid || !t || seen[tid]) return;
+        seen[tid] = true;
+        out.push({ id: tid, text: t });
       }
-      if (!Array.isArray(state.done)) return [];
+
+      const missionSec = document.getElementById("purposeMissionSection");
+      if (missionSec) {
+        const nodes = missionSec.querySelectorAll(".mission-list .mission-item-body__text");
+        for (let i = 0; i < nodes.length; i++) {
+          const clone = nodes[i].cloneNode(true);
+          clone.querySelectorAll(".mission-num").forEach(function (n) {
+            n.remove();
+          });
+          const body = normalizeSprintReminderMarqueePlainText(clone.textContent);
+          if (!body) continue;
+          pushItem("purposeMission:" + (i + 1), "【人生使命】" + body);
+        }
+      }
+
+      const valuesSec = document.getElementById("purposeValuesSection");
+      if (valuesSec) {
+        const items = valuesSec.querySelectorAll(".mission-list > li");
+        for (let i = 0; i < items.length; i++) {
+          const zhEl = items[i].querySelector(".values-zh");
+          const enEl = items[i].querySelector(".mission-en");
+          const zh = zhEl ? normalizeSprintReminderMarqueePlainText(zhEl.textContent) : "";
+          let en = enEl ? normalizeSprintReminderMarqueePlainText(enEl.textContent) : "";
+          en = en.replace(/^[（(]+/, "").replace(/[）)]+$/, "");
+          const body = zh && en ? zh + " — " + en : zh || en;
+          if (!body) continue;
+          pushItem("purposeValue:" + (i + 1), "【价值观】" + body);
+        }
+      }
+    }
+
+    /** 全部钟点提醒 + 人生使命/价值观混播；洗牌一轮内尽量都轮到 */
+    function collectSprintReminderMarqueeItems() {
       const todayKey = formatDateInputValue(new Date());
       const out = [];
       const seen = {};
-      for (let i = 0; i < state.done.length; i++) {
-        const task = state.done[i];
-        if (!task || task.kind !== "timeReflection") continue;
-        const text = String(task.text || "").trim();
-        if (!text) continue;
-        const ts = Number(task.completedAt || task.createdAt || 0);
-        if (!Number.isFinite(ts) || ts <= 0) continue;
-        const d = new Date(ts);
-        if (formatDateInputValue(d) !== todayKey) continue;
-        const min = d.getHours() * 60 + d.getMinutes();
-        if (min < block.startMin || min >= block.endMin) continue;
-        const id = String(task.id || "");
-        if (!id || seen[id]) continue;
-        seen[id] = true;
-        out.push({ id: id, text: text });
+      if (Array.isArray(state.done)) {
+        for (let i = 0; i < state.done.length; i++) {
+          const task = state.done[i];
+          if (!task || task.kind !== "timeReflection") continue;
+          const text = String(task.text || "").trim();
+          if (!text) continue;
+          const ts = Number(task.completedAt || task.createdAt || 0);
+          if (!Number.isFinite(ts) || ts <= 0) continue;
+          const d = new Date(ts);
+          if (formatDateInputValue(d) !== todayKey) continue;
+          const id = String(task.id || "");
+          if (!id || seen[id]) continue;
+          seen[id] = true;
+          out.push({ id: id, text: text });
+        }
       }
-      if (isSprintDaytimeBlock(block)) {
-        appendSleepWindowRemindersToMarqueePool(out, seen, todayKey);
-      }
+      appendAllClockReminderSlotsToMarqueePool(out, seen, todayKey);
+      appendPurposeMissionAndValuesToMarqueePool(out, seen);
       out.sort(function (a, b) {
         return String(a.id).localeCompare(String(b.id));
       });
@@ -97402,7 +97428,7 @@
         if (!block || !tops.length) {
           return;
         }
-        const pool = collectSprintReminderMarqueeItems(block);
+        const pool = collectSprintReminderMarqueeItems();
         if (!pool.length) {
           if (sprintReminderMarqueeState.phase === "playing") {
             finishSprintReminderMarqueePlay(sprintReminderMarqueeState.playToken);
@@ -97410,17 +97436,18 @@
           return;
         }
         const now = Date.now();
-        if (sprintReminderMarqueeState.blockKey !== block.key) {
+        const dayKey = formatDateInputValue(new Date());
+        if (sprintReminderMarqueeState.poolDayKey !== dayKey) {
           clearSprintReminderMarqueeFinishTimer();
           restoreDoneSprintStripLayoutAfterMarquee();
-          sprintReminderMarqueeState.blockKey = block.key;
+          sprintReminderMarqueeState.poolDayKey = dayKey;
           refillSprintReminderMarqueeQueue(pool);
           sprintReminderMarqueeState.phase = "idle";
           sprintReminderMarqueeState.currentId = "";
           sprintReminderMarqueeState.currentText = "";
           sprintReminderMarqueeState.playEndsAt = 0;
           sprintReminderMarqueeState.playToken += 1;
-          /* 换时段不立即播，等到下一个时钟准点 */
+          /* 换日重洗牌；仍等时钟准点再播，刷新不连播 */
         }
 
         if (sprintReminderMarqueeState.phase === "playing") {
