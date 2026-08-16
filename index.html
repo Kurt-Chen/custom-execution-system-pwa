@@ -67785,7 +67785,7 @@
       <div class="module-content">
         <div class="module-sub-panel">
           <div class="forge-module-sub-root">
-                      <section id="forgePanelToday" class="collapsed" aria-labelledby="forgeTodayHeading">
+                      <section id="forgePanelToday" class="collapsed module-tab-panel" aria-labelledby="forgeTodayHeading">
             <h2 id="forgeTodayHeading" class="section-title" style="margin: 0 0 12px;">今日训练</h2>
             <div class="forge-today-inner-wrap">
             <div id="moduleSubTabPanel-forge-today-forge" class="forge-today-sub-panel" role="tabpanel" aria-labelledby="moduleSubTabBtn-forge-today-forge">
@@ -69068,7 +69068,7 @@
                 </details>
                 <details class="forge-kb-art-details" data-forge-kb-art="farmerCarry">
                   <summary class="forge-kb-art-summary">
-                    <span class="forge-kb-art-summary-title">壶铃农夫行走<em class="forge-kb-art-summary-en">Farmer’s Carry / Suitcase Carry</em></span>
+                    <span class="forge-kb-art-summary-title">壶铃农夫行走<em class="forge-kb-art-summary-en">Farmer's Carry / Suitcase Carry</em></span>
                     <div class="forge-kb-summary-actions">
                       <label class="forge-kb-weight-select-wrap">
                         <span class="forge-kb-weight-select-label">在练</span>
@@ -69084,7 +69084,7 @@
                   <div class="forge-task-card-top">
                     <div class="forge-task-card-icon forge-task-card-icon--body" role="button" tabindex="0" title="打卡"><span class="forge-task-card-check-label" aria-hidden="true"></span></div>
                     <div class="forge-task-card-title-wrap">
-                      <span class="forge-task-text">壶铃农夫行走·16 <em>Farmer’s Carry / Suitcase Carry</em></span>
+                      <span class="forge-task-text">壶铃农夫行走·16 <em>Farmer's Carry / Suitcase Carry</em></span>
                     </div>
                     <div class="forge-task-card-right forge-kb-result-cell">
                       <div class="forge-kb-result-main">
@@ -69103,7 +69103,7 @@
                   <div class="forge-task-card-top">
                     <div class="forge-task-card-icon forge-task-card-icon--body" role="button" tabindex="0" title="打卡"><span class="forge-task-card-check-label" aria-hidden="true"></span></div>
                     <div class="forge-task-card-title-wrap">
-                      <span class="forge-task-text">壶铃农夫行走·24 <em>Farmer’s Carry / Suitcase Carry</em></span>
+                      <span class="forge-task-text">壶铃农夫行走·24 <em>Farmer's Carry / Suitcase Carry</em></span>
                     </div>
                     <div class="forge-task-card-right forge-kb-result-cell">
                       <div class="forge-kb-result-main">
@@ -78076,7 +78076,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260816e";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260816f";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -95006,6 +95006,46 @@
             changed = true;
           }
         });
+      }
+      return changed;
+    }
+
+    /** Forge Body：壶铃绕颈已改名为壶铃绕头，迁移打卡键与周最低标签 */
+    function migrateForgeKbHaloNeckToHeadIfNeeded() {
+      if (migrateForgeKbHaloNeckToHeadIfNeeded._done) return false;
+      migrateForgeKbHaloNeckToHeadIfNeeded._done = true;
+      function rewriteHaloLabel(raw) {
+        const s = String(raw || "");
+        if (s.indexOf("绕颈") === -1) return "";
+        return s.replace(/绕颈/g, "绕头");
+      }
+      let changed = false;
+      if (state.done && Array.isArray(state.done)) {
+        state.done.forEach(function (task) {
+          if (!task || !task.forgeBodyMeta) return;
+          const rk = task.forgeBodyMeta.rowKey != null ? String(task.forgeBodyMeta.rowKey) : "";
+          const next = rewriteHaloLabel(rk);
+          if (next && next !== rk) {
+            task.forgeBodyMeta.rowKey = next;
+            changed = true;
+          }
+        });
+      }
+      function rewriteMinList(list) {
+        if (!Array.isArray(list)) return;
+        list.forEach(function (r) {
+          if (!r || r.realm !== "body") return;
+          const lb = String(r.label || "");
+          const next = rewriteHaloLabel(lb);
+          if (next && next !== lb) {
+            r.label = next;
+            changed = true;
+          }
+        });
+      }
+      if (state.forge) {
+        rewriteMinList(state.forge.weeklyMinimums);
+        rewriteMinList(state.forge.dailyMinimums);
       }
       return changed;
     }
@@ -120115,6 +120155,7 @@
     function forgeWpCanonicalPrimaryTaskKey(name) {
       let s = forgeWpNormalizeTaskKey(forgeWpSanitizeRowKeyHint(String(name || "")));
       if (!s) return "";
+      s = s.replace(/绕颈/g, "绕头");
       s = s.replace(/[×x]\d+(?:\.\d+)?/gi, "");
       const m = s.match(/^((?:[\u4e00-\u9fff]|[\d·])+)/);
       if (m && m[1]) {
@@ -120280,6 +120321,7 @@
       if (s === "reps" || s === "rep" || /个|次|下/.test(s)) return "reps";
       if (/km|公里/.test(s)) return "km";
       if (s === "sec" || /秒/.test(s)) return "sec";
+      if (s === "米" || s === "m" || s === "metre" || s === "meter") return "米";
       return s.replace(/\s+/g, "");
     }
 
@@ -121981,26 +122023,7 @@
       const forgePanelBody = document.getElementById("forgePanelBody");
       const forgePanelRedPill = document.getElementById("forgePanelRedPill");
       const forgePanelSpt = document.getElementById("forgePanelSpt");
-      bindForgeSubCardCollapse();
-      bindForgeMindCategoryTabs();
-      bindForgeBodyCategoryTabs();
-      syncForgeKbWeightUi();
-      bindForgeKbStandardsSelects();
-      syncForgeCcProgressUi();
-      bindForgeCcProgressSelects();
-      if (forgeModule) captureForgeTaskValIdleDisplays(forgeModule);
-      forgeModule.querySelectorAll("#forgeMindCardBody .forge-task-title-note").forEach(function (el) {
-        el.remove();
-      });
-      refreshAllForgeTodayTaskRowsFromDone();
-      ensureForgeWeeklyMinimumsState();
-      ensureForgeDailyMinimumsState();
-      bindForgeWeeklyMinTabs();
-      bindForgeDailyMinTabs();
-      bindForgeWeeklyMinAddButton();
-      renderForgeDailyMinRows();
-      renderForgeWeeklyMinRows();
-      renderForgeTodaysForgeList();
+      /** 先挂 Tab，避免训练卡初始化抛错时 section.collapsed 把今日训练挖成空白 */
       initModuleSubTabs(
         forgeModule,
         [
@@ -122025,6 +122048,30 @@
         "Forge 标签",
         { tabVariant: "forge-capsule" }
       );
+      try {
+      bindForgeSubCardCollapse();
+      bindForgeMindCategoryTabs();
+      bindForgeBodyCategoryTabs();
+      syncForgeKbWeightUi();
+      bindForgeKbStandardsSelects();
+      syncForgeCcProgressUi();
+      bindForgeCcProgressSelects();
+      if (forgeModule) captureForgeTaskValIdleDisplays(forgeModule);
+      forgeModule.querySelectorAll("#forgeMindCardBody .forge-task-title-note").forEach(function (el) {
+        el.remove();
+      });
+      refreshAllForgeTodayTaskRowsFromDone();
+      ensureForgeWeeklyMinimumsState();
+      ensureForgeDailyMinimumsState();
+      bindForgeWeeklyMinTabs();
+      bindForgeDailyMinTabs();
+      bindForgeWeeklyMinAddButton();
+      renderForgeDailyMinRows();
+      renderForgeWeeklyMinRows();
+      renderForgeTodaysForgeList();
+      } catch (forgeHydrateErr) {
+        console.warn("[Forge] 训练卡/最低标准初始化失败:", forgeHydrateErr);
+      }
       const forgeTodayForgePanel = document.getElementById("moduleSubTabPanel-forge-today-forge");
       const forgeTodayDailyStandardsPanel = document.getElementById("moduleSubTabPanel-forge-today-daily-standards");
       const forgeTodayStandardsPanel = document.getElementById("moduleSubTabPanel-forge-today-standards");
