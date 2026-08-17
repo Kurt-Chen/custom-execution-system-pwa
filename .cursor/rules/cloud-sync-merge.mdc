@@ -22,10 +22,21 @@ alwaysApply: false
 5. **合并后回写**：本机合并后若仍多于云端，立即 `pushCloudSyncPulseOnly()` + `scheduleCloudSyncFullPushDeferred()`，避免他端再次拉丢。
 6. **紧急备份只增不减**：`STATE_EMERGENCY_BACKUP_KEY` 的写入在 `nextDone < prevDone` 时跳过；拉取后用 `mergeMissingRecordsFromEmergencyBackup()` 并回缺失记录，不整包回滚。
 
+## 非阻塞 / local-first（启动与 UI）
+
+**同步绝不能阻塞 App 启动和 UI。** 合并规则不变；改的是调度。
+
+1. 启动唯一数据源是 IndexedDB：先 `loadState()` + `render()`，Firebase 在首屏之后 `scheduleDeferredCloudSyncBoot`。
+2. Firebase 走后台 `runCloudSyncTransaction`（Pull → Merge → Batch Push）；禁止在首屏 / `saveState` 路径 `await` 同步事务。
+3. 本地写入后立即刷新 UI，记录 `dirty`（`CLOUD_SYNC_PENDING_UPLOAD_KEY`）；Push 防抖 `CLOUD_SYNC_PUSH_DEBOUNCE_MS`（2s），只延迟后台上传。
+4. 日常启动只做增量（`updatedAt` / `lastSyncAt` / cursor）；**Full Pull 仅首次安装或 `lastSyncAt` 缺失**。手动「从云端拉取最新」仍可拉全量。
+5. 5 分钟定时器是**安全网 Pull**，不是唯一 Push 触发；本地改动 2s 后即可 pulse，durable 约 20s 空闲写入。
+6. `cloudSyncMachineStatus`：`idle` | `syncing` | `synced` | `error`，只更新角标，不锁操作。
+
 ## 关键函数（index.html）
 
 - 守卫：`countBusinessRecordsInState`、`guardAgainstFewerRecordsOverwrite`
-- 拉取：`pullLatestStateFromCloud`（`force:false` 并集）
+- 拉取：`pullLatestStateFromCloud`（`force:false` 并集）；日常增量走 `runCloudSyncTransaction`
 - 覆盖/合并：`applyRemoteState`、`applyCloudPayloadWithMerge`、`applyMergedCloudStateInMemory`、`mergeLocalStateWithRemotePayloadBeforePush`
 - 空本机吸收：`absorbCloudPayloadPreferringRemoteWhenLocalEmpty`
 - 备份：`mergeMissingRecordsFromEmergencyBackup`、`tryRestoreStateFromEmergencyBackup`
