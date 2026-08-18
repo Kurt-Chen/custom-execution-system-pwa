@@ -79035,7 +79035,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260818e";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260818f";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -89936,10 +89936,15 @@
           if (clock) text += " · " + clock;
         }
       }
+      const todayKey = formatDateInputValue(new Date());
+      const completedAt =
+        isHabitWeekClockKey(habitKey) && dateStr === todayKey
+          ? Date.now()
+          : habitDateToCompletedAt(dateStr);
       state.done.unshift({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text,
-        completedAt: Date.now(),
+        completedAt: completedAt,
         habitMeta: meta
       });
     }
@@ -90035,7 +90040,11 @@
       day.dailyThreeWins = should;
 
       if (should && !hadEntry && !suppressed) {
-        syncHabitToDone("dailyThreeWins", dateStr);
+        const todayKey = formatDateInputValue(new Date());
+        /* 只在「今天刚写满 3 条」时自动入 Done；历史日补记走 stampDailyThreeWinsToDone，避免 Date.now 错落到今日时间线 */
+        if (dateStr === todayKey) {
+          syncHabitToDone("dailyThreeWins", dateStr);
+        }
       } else if (!should && hadEntry) {
         removeHabitFromDone("dailyThreeWins", dateStr);
         delete day.dailyThreeWinsDoneSuppressed;
@@ -117405,6 +117414,7 @@
         });
       }
       let doneHygieneChanged = refreshAllDailyWinCheckins();
+      if (repairDoneListCompletedAtFromHabitMeta()) doneHygieneChanged = true;
       if (refreshLife4000DoneEntryTexts()) doneHygieneChanged = true;
       if (dedupeClosedListWeeklyPlanMirrorsInState()) doneHygieneChanged = true;
       if (pruneRedundantDoneEntriesInState()) doneHygieneChanged = true;
