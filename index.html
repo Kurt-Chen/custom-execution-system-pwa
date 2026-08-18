@@ -95709,7 +95709,41 @@
       });
     }
 
-    /** Mind 三张练习参考表：点击缩略图进入可滚动灯箱 */
+    /** Mind 三张练习参考表：点击缩略图进入可滚动/缩放灯箱 */
+    let forgeMindRefLbScale = 1;
+    const FORGE_MIND_REF_LB_MIN = 0.5;
+    const FORGE_MIND_REF_LB_MAX = 4;
+
+    function clampForgeMindRefLbScale(v) {
+      return Math.min(FORGE_MIND_REF_LB_MAX, Math.max(FORGE_MIND_REF_LB_MIN, Number(v) || 1));
+    }
+
+    /** 起步宽度保证表内汉字可读：手机约 1400px，触控板约 1280px，桌面贴近原图像素 */
+    function forgeMindRefLbReadableScale(naturalW) {
+      const vw = Math.max(document.documentElement.clientWidth || 360, window.innerWidth || 360);
+      const isPhone = window.matchMedia("(max-width: 767px)").matches;
+      const isCoarse = window.matchMedia("(pointer: coarse)").matches;
+      const nw = naturalW || 1200;
+      const target = isPhone ? 1400 : isCoarse ? 1280 : Math.max(nw, Math.round(vw * 0.92));
+      return clampForgeMindRefLbScale(target / nw);
+    }
+
+    function applyForgeMindRefLbScale() {
+      const root = document.getElementById("forgeMindRefLightbox");
+      if (!root) return;
+      const img = root.querySelector(".forge-mind-ref-lb-img");
+      if (!img) return;
+      const nw = img.naturalWidth || 1200;
+      img.style.width = Math.round(nw * forgeMindRefLbScale) + "px";
+      img.style.maxWidth = "none";
+      img.style.height = "auto";
+    }
+
+    function bumpForgeMindRefLbScale(factor) {
+      forgeMindRefLbScale = clampForgeMindRefLbScale(forgeMindRefLbScale * factor);
+      applyForgeMindRefLbScale();
+    }
+
     function ensureForgeMindRefLightbox() {
       let root = document.getElementById("forgeMindRefLightbox");
       if (root) return root;
@@ -95727,10 +95761,22 @@
       title.className = "forge-mind-ref-lb-title";
       const actions = document.createElement("div");
       actions.className = "forge-mind-ref-lb-actions";
+      const zoomOutBtn = document.createElement("button");
+      zoomOutBtn.type = "button";
+      zoomOutBtn.className = "forge-mind-ref-lb-zoom-out";
+      zoomOutBtn.setAttribute("aria-label", "缩小参考表");
+      zoomOutBtn.textContent = "缩小";
+      const zoomInBtn = document.createElement("button");
+      zoomInBtn.type = "button";
+      zoomInBtn.className = "forge-mind-ref-lb-zoom-in";
+      zoomInBtn.setAttribute("aria-label", "放大参考表");
+      zoomInBtn.textContent = "放大";
       const closeBtn = document.createElement("button");
       closeBtn.type = "button";
       closeBtn.className = "forge-mind-ref-lb-close";
       closeBtn.textContent = "关闭";
+      actions.appendChild(zoomOutBtn);
+      actions.appendChild(zoomInBtn);
       actions.appendChild(closeBtn);
       toolbar.appendChild(title);
       toolbar.appendChild(actions);
@@ -95740,6 +95786,7 @@
       const img = document.createElement("img");
       img.className = "forge-mind-ref-lb-img";
       img.alt = "";
+      img.decoding = "async";
       scroll.appendChild(img);
 
       root.appendChild(toolbar);
@@ -95754,6 +95801,13 @@
       root.classList.remove("is-open");
       root.setAttribute("hidden", "");
       document.body.style.overflow = "";
+      const img = root.querySelector(".forge-mind-ref-lb-img");
+      if (img) {
+        img.removeAttribute("src");
+        img.alt = "";
+        img.style.width = "";
+      }
+      forgeMindRefLbScale = 1;
     }
 
     function openForgeMindRefLightbox(src, alt) {
@@ -95764,9 +95818,16 @@
       const img = root.querySelector(".forge-mind-ref-lb-img");
       const label = String(alt || "").trim() || "练习参考表";
       if (title) title.textContent = label;
+      function fitWhenReady() {
+        if (!img || !img.naturalWidth) return;
+        forgeMindRefLbScale = forgeMindRefLbReadableScale(img.naturalWidth);
+        applyForgeMindRefLbScale();
+      }
       if (img) {
-        img.src = url;
+        img.onload = fitWhenReady;
         img.alt = label;
+        img.src = url;
+        if (img.complete) fitWhenReady();
       }
       root.removeAttribute("hidden");
       root.classList.add("is-open");
@@ -95775,18 +95836,77 @@
       if (closeBtn) closeBtn.focus();
     }
 
+    function bindForgeMindRefLightboxGestures(root) {
+      const scroll = root.querySelector(".forge-mind-ref-lb-scroll");
+      if (!scroll || scroll.dataset.forgeMindRefLbGest === "1") return;
+      scroll.dataset.forgeMindRefLbGest = "1";
+      let pinch0 = 0;
+      let scale0 = 1;
+      function pinchDist(t0, t1) {
+        return Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+      }
+      scroll.addEventListener(
+        "touchstart",
+        function (e) {
+          if (e.touches.length === 2) {
+            pinch0 = pinchDist(e.touches[0], e.touches[1]);
+            scale0 = forgeMindRefLbScale;
+          }
+        },
+        { passive: true }
+      );
+      scroll.addEventListener(
+        "touchmove",
+        function (e) {
+          if (e.touches.length !== 2 || pinch0 <= 0) return;
+          e.preventDefault();
+          const d = pinchDist(e.touches[0], e.touches[1]);
+          forgeMindRefLbScale = clampForgeMindRefLbScale(scale0 * (d / pinch0));
+          applyForgeMindRefLbScale();
+        },
+        { passive: false }
+      );
+      scroll.addEventListener("touchend", function (e) {
+        if (e.touches.length < 2) pinch0 = 0;
+      });
+      scroll.addEventListener(
+        "wheel",
+        function (e) {
+          if (!e.ctrlKey && !e.metaKey) return;
+          e.preventDefault();
+          bumpForgeMindRefLbScale(e.deltaY < 0 ? 1.12 : 0.9);
+        },
+        { passive: false }
+      );
+      const img = root.querySelector(".forge-mind-ref-lb-img");
+      if (img) {
+        img.addEventListener("dblclick", function (e) {
+          e.preventDefault();
+          bumpForgeMindRefLbScale(forgeMindRefLbScale >= 2 ? 0.5 : 1.4);
+        });
+      }
+    }
+
     function bindForgeMindRefLightbox() {
       if (document.body.dataset.forgeMindRefLbBound === "1") return;
       document.body.dataset.forgeMindRefLbBound = "1";
-      ensureForgeMindRefLightbox();
+      const root = ensureForgeMindRefLightbox();
+      bindForgeMindRefLightboxGestures(root);
       document.addEventListener("click", function (ev) {
-        const closeBtn = ev.target.closest("#forgeMindRefLightbox .forge-mind-ref-lb-close");
-        if (closeBtn) {
+        if (ev.target.closest("#forgeMindRefLightbox .forge-mind-ref-lb-close")) {
           closeForgeMindRefLightbox();
           return;
         }
-        const root = document.getElementById("forgeMindRefLightbox");
-        if (root && root.classList.contains("is-open") && ev.target === root) {
+        if (ev.target.closest("#forgeMindRefLightbox .forge-mind-ref-lb-zoom-in")) {
+          bumpForgeMindRefLbScale(1.25);
+          return;
+        }
+        if (ev.target.closest("#forgeMindRefLightbox .forge-mind-ref-lb-zoom-out")) {
+          bumpForgeMindRefLbScale(0.8);
+          return;
+        }
+        const lb = document.getElementById("forgeMindRefLightbox");
+        if (lb && lb.classList.contains("is-open") && ev.target === lb) {
           closeForgeMindRefLightbox();
           return;
         }
@@ -95795,12 +95915,15 @@
         const img = openBtn.querySelector("img");
         if (!img) return;
         ev.preventDefault();
-        openForgeMindRefLightbox(img.getAttribute("src"), img.getAttribute("alt") || openBtn.getAttribute("aria-label") || "");
+        openForgeMindRefLightbox(
+          img.currentSrc || img.getAttribute("src") || img.src,
+          img.getAttribute("alt") || openBtn.getAttribute("aria-label") || ""
+        );
       });
       document.addEventListener("keydown", function (ev) {
         if (ev.key !== "Escape") return;
-        const root = document.getElementById("forgeMindRefLightbox");
-        if (root && root.classList.contains("is-open")) closeForgeMindRefLightbox();
+        const lb = document.getElementById("forgeMindRefLightbox");
+        if (lb && lb.classList.contains("is-open")) closeForgeMindRefLightbox();
       });
     }
 
