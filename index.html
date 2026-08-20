@@ -19190,6 +19190,112 @@
       background: linear-gradient(90deg, #4ade80, #16a34a);
     }
 
+    /* Forge 练习卡周进度条：对齐习惯 7 格；左累计右次数，无减一次 */
+    #forgeModule .forge-task-week-bar {
+      margin-top: 6px;
+      width: 100%;
+    }
+
+    #forgeModule .forge-task-card--body .forge-task-week-bar {
+      margin-top: 4px;
+    }
+
+    #forgeModule .forge-cc-art-steps .forge-task-week-bar {
+      margin-top: 3px;
+    }
+
+    #forgeModule .forge-task-week-row {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 2px;
+      width: 100%;
+    }
+
+    #forgeModule .forge-task-week-cell {
+      min-height: 20px;
+      height: 20px;
+      border-radius: 3px;
+      background: #e5e7eb;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      font-weight: 700;
+      color: #94a3b8;
+      overflow: hidden;
+      box-sizing: border-box;
+    }
+
+    #forgeModule .forge-task-week-cell--done {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    #forgeModule .forge-task-week-cell--today:not(.forge-task-week-cell--done) {
+      background: #bbf7d0;
+      color: #14532d;
+    }
+
+    #forgeModule .forge-task-week-cell--today.forge-task-week-cell--done {
+      background: #22c55e;
+      color: #ffffff;
+    }
+
+    #forgeModule .forge-task-week-cell--split {
+      flex-direction: row;
+      flex-wrap: nowrap;
+      justify-content: stretch;
+      align-items: stretch;
+      padding: 0;
+    }
+
+    #forgeModule .forge-task-week-cell-amt,
+    #forgeModule .forge-task-week-cell-count {
+      flex: 1 1 50%;
+      width: 50%;
+      max-width: 50%;
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      box-sizing: border-box;
+      font-size: 8px;
+      font-weight: 800;
+      line-height: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: inherit;
+      letter-spacing: -0.03em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    @media (max-width: 767px) {
+      #forgeModule .forge-task-week-bar {
+        margin-top: 6px;
+      }
+
+      #forgeModule .forge-task-week-cell {
+        min-height: 24px;
+        height: 24px;
+        font-size: 10px;
+      }
+
+      #forgeModule .forge-task-week-cell--compact {
+        font-size: 9px;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        letter-spacing: 0;
+      }
+
+      #forgeModule .forge-task-week-cell-amt,
+      #forgeModule .forge-task-week-cell-count {
+        font-size: 9px;
+      }
+    }
+
     /* Body 训练卡片（绿系：壶铃 / 囚徒 / Body·Calisthenics（含慢跑·冲刺） / Red-Pill / SPT） */
     #forgeModule .forge-task-row.forge-task-card--body {
       border-color: #bbf7d0;
@@ -98164,6 +98270,154 @@
       if (ccArt) syncForgeCcArtDetailsDailyMinShortfall(ccArt);
     }
 
+    /** 周条所在周：与顶栏所选日同一周（无则日历今天），周一为周首 */
+    function getForgeWeekMondayForView() {
+      const viewKey = selectedDoneDate || formatDateInputValue(new Date());
+      const noon = parseDateInputToLocalNoon(viewKey);
+      return getHabitEnWeekMonday(noon || new Date());
+    }
+
+    /** 周格累计半区：数值+打卡单位，无空格（15min / 50Reps） */
+    function formatForgeTaskWeekAmtLabel(sum, unitRaw) {
+      const n = forgeWpFormatProgressNum(sum);
+      if (!n || n === "—") return "";
+      const nu = forgeWpNormalizeUnit(unitRaw);
+      let u = "";
+      if (nu === "min") u = "min";
+      else if (nu === "reps") u = "Reps";
+      else if (nu === "km") u = "km";
+      else if (nu === "set") u = "Set";
+      else if (nu === "sec") u = "sec";
+      else if (nu === "米") u = "米";
+      else if (String(unitRaw || "").trim()) u = String(unitRaw).trim().replace(/\s+/g, "");
+      return u ? n + u : n;
+    }
+
+    /** 从本日 map 合并与行键匹配的累计与次数（壶铃无重量旧键可并入 ·16/·24） */
+    function lookupForgeWeekCellStats(dayMap, rowKey, preferCanonical) {
+      if (!dayMap || !rowKey) return null;
+      let sum = 0;
+      let count = 0;
+      let unit = "";
+      Object.keys(dayMap).forEach(function (k) {
+        if (!forgeNormalizedKeysMatch(k, rowKey, preferCanonical)) return;
+        const e = dayMap[k];
+        if (!e) return;
+        if (typeof e.sum === "number" && !Number.isNaN(e.sum)) sum += e.sum;
+        if (typeof e.count === "number" && !Number.isNaN(e.count)) count += e.count;
+        if (!unit && e.unit) unit = String(e.unit).trim();
+      });
+      if (count <= 0 && !(sum > 0)) return null;
+      return { sum: sum, unit: unit, count: count };
+    }
+
+    /** 一遍扫 Done，建本周每日动作 { sum, unit, count }；次数规则与 countForgeCheckinsForRowKey 一致 */
+    function buildForgeWeekCheckinIndex(weekMonday) {
+      const idx = Object.create(null);
+      const inWeek = Object.create(null);
+      if (!weekMonday) return idx;
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(weekMonday.getFullYear(), weekMonday.getMonth(), weekMonday.getDate() + i);
+        const dk = formatDateInputValue(d);
+        inWeek[dk] = true;
+        idx[dk] = Object.create(null);
+      }
+      if (!state.done || !Array.isArray(state.done)) return idx;
+      state.done.forEach(function (task) {
+        const meta = task.forgeMindMeta || task.forgeBodyMeta;
+        if (!meta || !inWeek[meta.dateKey]) return;
+        const isMind = !!task.forgeMindMeta;
+        const key = isMind ? forgeMindDoneAggregateKey(task) : forgeBodyDoneAggregateKey(task);
+        if (!key) return;
+        const dayMap = idx[meta.dateKey];
+        const info = getForgeDoneLineInfo(task);
+        let labelHint = "";
+        if (info && info.stripped) {
+          const ld = info.stripped.lastIndexOf(" · ");
+          labelHint = ld >= 0 ? info.stripped.slice(0, ld).trim() : info.stripped.trim();
+        }
+        accumulateForgeDoneCheckinIntoMap(dayMap, task, isMind, key, labelHint);
+        if (!dayMap[key]) {
+          dayMap[key] = { sum: 0, unit: "", count: 0 };
+        }
+        if (typeof dayMap[key].count !== "number" || Number.isNaN(dayMap[key].count)) {
+          dayMap[key].count = 0;
+        }
+        dayMap[key].count += isMind ? forgeMindCheckinCountFromMeta(meta) : 1;
+      });
+      return idx;
+    }
+
+    function ensureForgeTaskWeekBarEl(row) {
+      if (!row || !row.classList || !row.classList.contains("forge-task-card")) return null;
+      let bar = row.querySelector(".forge-task-week-bar");
+      if (bar) return bar;
+      bar = document.createElement("div");
+      bar.className = "forge-task-week-bar";
+      bar.setAttribute("aria-label", "本周练习");
+      const cardBar = row.querySelector(".forge-task-card-bar");
+      if (cardBar) cardBar.insertAdjacentElement("afterend", bar);
+      else row.appendChild(bar);
+      return bar;
+    }
+
+    /** 练习卡底部 7 格：左半当天累计（打卡单位），右半打卡次数；无减一次 */
+    function renderForgeTaskWeekBar(row, rowKey, preferCanonical, fallbackUnit) {
+      const container = ensureForgeTaskWeekBarEl(row);
+      if (!container) return;
+      container.innerHTML = "";
+      if (!rowKey) return;
+      const weekMonday = getForgeWeekMondayForView();
+      const calToday = formatDateInputValue(new Date());
+      const idx = forgeWeekCheckinIndex || buildForgeWeekCheckinIndex(weekMonday);
+      if (!forgeWeekCheckinIndex) forgeWeekCheckinIndex = idx;
+      const weekRow = document.createElement("div");
+      weekRow.className = "forge-task-week-row";
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(weekMonday.getFullYear(), weekMonday.getMonth(), weekMonday.getDate() + i);
+        const dk = formatDateInputValue(d);
+        const cell = document.createElement("div");
+        cell.className = "forge-task-week-cell";
+        const isCalToday = dk === calToday;
+        const stats = lookupForgeWeekCellStats(idx && idx[dk], rowKey, preferCanonical);
+        const hasData = !!(stats && (stats.count > 0 || stats.sum > 0));
+        if (isCalToday) cell.classList.add("forge-task-week-cell--today");
+        if (hasData) cell.classList.add("forge-task-week-cell--done");
+        let tip = dk;
+        if (hasData) {
+          const unit = (stats.unit && String(stats.unit).trim()) || fallbackUnit || "";
+          const amt = stats.sum > 0 ? formatForgeTaskWeekAmtLabel(stats.sum, unit) : "";
+          const cnt = stats.count > 0 ? String(stats.count) + "次" : "";
+          const amtNum = stats.sum > 0 ? forgeWpFormatProgressNum(stats.sum) : "—";
+          const cntNum = stats.count > 0 ? String(stats.count) : "—";
+          if (isHabitRoutineCompactMobile()) {
+            /* 手机：窄格只显示「累计  次数」，单位与「次」放进 title */
+            cell.classList.add("forge-task-week-cell--compact");
+            cell.textContent = amtNum + "  " + cntNum;
+          } else {
+            cell.classList.add("forge-task-week-cell--split");
+            const amtEl = document.createElement("span");
+            amtEl.className = "forge-task-week-cell-amt";
+            amtEl.textContent = amt || "—";
+            const cntEl = document.createElement("span");
+            cntEl.className = "forge-task-week-cell-count";
+            cntEl.textContent = cnt || "—";
+            cell.appendChild(amtEl);
+            cell.appendChild(cntEl);
+          }
+          tip = dk + " · " + (amt || "—") + " · " + (cnt || "0次");
+        } else if (isCalToday) {
+          cell.textContent = "今";
+          tip = dk + " 未打卡";
+        } else {
+          tip = dk + " 未打卡";
+        }
+        cell.title = tip;
+        weekRow.appendChild(cell);
+      }
+      container.appendChild(weekRow);
+    }
+
     function syncForgeTaskRowValFromDoneAggregates(row, dateKey) {
       if (!row || !dateKey) return;
       const valEl = row.querySelector(".forge-task-val");
@@ -98276,6 +98530,13 @@
           track.classList.add("forge-task-card-track--partial");
         }
       }
+      const preferCanonical = realmForKey === "body" || realmForKey === "spt";
+      const fallbackUnit =
+        (agg && agg.unit && String(agg.unit).trim()) ||
+        forgeUnitSuffixFromIdleForDisplay(idle) ||
+        inferForgeWpGoalUnit(beforeSlash) ||
+        "";
+      renderForgeTaskWeekBar(row, key, preferCanonical, fallbackUnit);
       syncForgeTaskWeekMinProgressUi(row);
     }
 
@@ -98376,6 +98637,8 @@
     }
 
     let forgeLifetimeAggCache = null;
+    /** 当前刷新周期内：本周一～周日 dateKey → 动作键 → { sum, unit, count }；refresh 结束清空 */
+    let forgeWeekCheckinIndex = null;
 
     /** Forge Body：站桩已改名为棒铃练习，迁移打卡键与周最低标签 */
     function migrateForgeZhanZhuangToClubbellIfNeeded() {
@@ -98526,6 +98789,7 @@
           body: aggregateForgeCheckinsLifetimeForNormalizedLabel("body"),
           spt: aggregateForgeCheckinsLifetimeForNormalizedLabel("spt")
         };
+        forgeWeekCheckinIndex = buildForgeWeekCheckinIndex(getForgeWeekMondayForView());
         mod.querySelectorAll(".forge-task-row").forEach(function (row) {
           syncForgeTaskRowValFromDoneAggregates(row, dateKey);
         });
