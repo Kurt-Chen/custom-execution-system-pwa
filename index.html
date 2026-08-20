@@ -36644,6 +36644,7 @@
       #habitRoutineModule .habit-en-row:not(.habit-health-weight-row):not(.habit-en-row--long-title) .habit-title-lifetime-num,
       #habitRoutineModule .habit-en-row:not(.habit-health-weight-row):not(.habit-en-row--long-title) .habit-title-daily-min,
       #habitRoutineModule .habit-en-row:not(.habit-health-weight-row):not(.habit-en-row--long-title) .habit-title-lifetime-minutes,
+      #habitRoutineModule .habit-en-row:not(.habit-health-weight-row):not(.habit-en-row--long-title) .habit-en-title-capsule--daily-30min,
       #habitRoutineModule .habit-en-row:not(.habit-health-weight-row):not(.habit-en-row--long-title) .habit-en-experiment-lifetime-ratio {
         order: 1 !important;
         flex: 0 0 auto;
@@ -36674,7 +36675,8 @@
 
       #habitRoutineModule .habit-en-row.habit-en-row--long-title .habit-title-lifetime-num,
       #habitRoutineModule .habit-en-row.habit-en-row--long-title .habit-title-daily-min,
-      #habitRoutineModule .habit-en-row.habit-en-row--long-title .habit-title-lifetime-minutes {
+      #habitRoutineModule .habit-en-row.habit-en-row--long-title .habit-title-lifetime-minutes,
+      #habitRoutineModule .habit-en-row.habit-en-row--long-title .habit-en-title-capsule--daily-30min {
         order: 2 !important;
       }
     }
@@ -67475,12 +67477,12 @@
                         id="habitDrinkWaterMlInput"
                         class="habit-en-wordcount-input habit-en-water-input"
                         type="number"
-                        min="1"
-                        max="2000"
-                        step="1"
-                        inputmode="numeric"
-                        placeholder="毫升"
-                        aria-label="本次喝水量（毫升，含茶与咖啡）"
+                        min="0.05"
+                        max="2"
+                        step="0.05"
+                        inputmode="decimal"
+                        placeholder="升"
+                        aria-label="本次喝水量（升，含茶与咖啡）"
                       />
                     </div>
                     <div class="habit-en-punch-meta">
@@ -67537,7 +67539,7 @@
                     />
                   </div>
                   <div class="habit-en-body">
-                    <h3 class="submodule-title">站桩<span class="habit-en-title-capsule habit-en-title-capsule--lead habit-en-title-capsule--knee-cue" aria-label="膝盖不超过脚尖">膝盖不超过脚尖</span><span class="habit-en-title-capsule habit-en-title-capsule--after-lifetime habit-en-title-capsule--eye-clear" aria-label="眼睛清亮">眼睛清亮</span><span class="habit-en-title-capsule habit-en-title-capsule--after-lifetime habit-en-title-capsule--daily-30min" aria-label="今日累计 / 30分钟">0/30min</span></h3>
+                    <h3 class="submodule-title">站桩<span class="habit-en-title-capsule habit-en-title-capsule--lead habit-en-title-capsule--knee-cue" aria-label="膝盖不超过脚尖">膝盖不超过脚尖</span><span class="habit-en-title-capsule habit-en-title-capsule--after-lifetime habit-en-title-capsule--eye-clear" aria-label="眼睛清亮">眼睛清亮</span><span class="habit-en-title-capsule habit-en-title-capsule--daily-30min" aria-label="今日累计 / 30分钟">0/30min</span></h3>
                     <div class="habit-en-remark-disclosure">
                       <button type="button" class="habit-en-remark-toggle" aria-expanded="false">备注</button>
                       <div class="habit-en-remark-panel" hidden>
@@ -80477,7 +80479,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260820g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260820h";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -89976,6 +89978,16 @@
       return String(Math.floor(n)) + "次";
     }
 
+    /** 周格当天累计：鸡蛋 / 三个问题用「N个」，其余「N次」 */
+    function formatHabitWeekBarPunchCountLabel(habitKey, dateKey) {
+      if (isHabitEggsKey(habitKey) || isHabitQuestionsKey(habitKey)) {
+        const n = getHabitNumericDayTotal(habitKey, dateKey);
+        if (!Number.isFinite(n) || n <= 0) return "";
+        return String(Math.floor(n)) + "个";
+      }
+      return formatHabitWeekBarTimesLabel(getHabitCheckinTimesForDate(habitKey, dateKey));
+    }
+
     /** 周格统计胶囊当前值；无日目标则 0（不把打卡次数当周格内容） */
     function getHabitWeekBarStatAmount(habitKey, dateKey) {
       if (!habitKey || !dateKey) return 0;
@@ -90048,6 +90060,15 @@
       const cur = Number(getHabitNumericDayTotal(habitKey, dk)) || 0;
       const target = getHabitDailyMinTarget(habitKey) || (isHabitZhanZhuangKey(habitKey) ? 30 : 0);
       cap.classList.toggle("habit-en-title-capsule--daily-stat-complete", target > 0 && cur >= target);
+      const titleEl = getHabitCardTitleElementForLifetimeCount(card);
+      if (!titleEl) return;
+      placeHabitTitleAfterLifetimeCapsules(titleEl);
+      const minEl = titleEl.querySelector(":scope > .habit-title-lifetime-minutes");
+      const lifeEl = titleEl.querySelector(":scope > .habit-title-lifetime-num");
+      const after = minEl || lifeEl;
+      if (after && cap.previousElementSibling !== after) {
+        after.insertAdjacentElement("afterend", cap);
+      }
     }
 
     /** 某日该习惯的打卡次数（周格过去格只显示次数，不放减一次） */
@@ -90636,7 +90657,8 @@
       }
       const lifeEl = titleEl.querySelector(":scope > .habit-title-lifetime-num");
       const dailyMin = titleEl.querySelector(":scope > .habit-title-daily-min");
-      let insertAfter = dailyMin || lifeEl || null;
+      const minEl = titleEl.querySelector(":scope > .habit-title-lifetime-minutes");
+      let insertAfter = minEl || dailyMin || lifeEl || null;
       capsules.forEach(function (cap) {
         if (insertAfter) {
           if (cap.previousElementSibling !== insertAfter) {
@@ -92116,7 +92138,16 @@
       if (isHabitSavingsKey(habitKey)) return { label: "金额（元）", placeholder: "例如 100", max: 99999 };
       if (isHabitWordCountKey(habitKey)) return { label: "个数", placeholder: "例如 20", max: 9999 };
       if (isHabitEggsKey(habitKey)) return { label: "个数", placeholder: "例如 3", max: 10 };
-      if (isHabitWaterKey(habitKey)) return { label: "水量（毫升）", placeholder: "例如 250", max: 2000 };
+      if (isHabitWaterKey(habitKey)) {
+        return {
+          label: "水量（升）",
+          placeholder: "例如 0.25",
+          min: 0.05,
+          max: 2,
+          step: "0.05",
+          inputMode: "decimal"
+        };
+      }
       if (isHabitQuestionsKey(habitKey)) return { label: "问题个数", placeholder: "例如 3", max: 20 };
       return { label: "数量", placeholder: "请输入", max: 999 };
     }
@@ -92403,9 +92434,10 @@
       const card = document.querySelector('#habitRoutineModule [data-habit-key="' + habitKey + '"]');
       const input = getHabitNumericInputEl(card, habitKey);
       const raw = input && String(input.value).trim();
-      const add = parseInt(raw, 10);
+      const liters = parseFloat(String(raw || "").replace(",", "."));
+      const add = Number.isFinite(liters) ? Math.round(liters * 1000) : NaN;
       if (!Number.isFinite(add) || add < 1 || add > 2000) {
-        flashHabitNumericInputError(input, "请填 1–2000 毫升");
+        flashHabitNumericInputError(input, "请填 0.05–2 升");
         return;
       }
       const current = state.habitCheckins[dateKey][habitKey];
@@ -120340,16 +120372,14 @@
       todayCell.classList.add("habit-en-week-cell--has-punch-meta");
       const note = meta.querySelector(".habit-en-today-note");
       if (note) {
-        const tc = getHabitCheckinTimesForDate(habitKey, formatDateInputValue(new Date()));
-        const compact = formatHabitWeekBarTimesLabel(tc);
+        const compact = formatHabitWeekBarPunchCountLabel(
+          habitKey,
+          formatDateInputValue(new Date())
+        );
         if (compact) note.textContent = compact;
-        else {
-          const m = String(note.textContent || "").trim().match(/^(\d+)\s*次$/);
-          if (m) note.textContent = m[1] + "次";
-        }
       }
       const clearBtn = meta.querySelector(".habit-en-clear-today-btn");
-      if (clearBtn) clearBtn.textContent = "减1次";
+      if (clearBtn) clearBtn.textContent = "减一次";
     }
 
     function renderHabitEnWeekBar(container, habitKey) {
@@ -120490,8 +120520,7 @@
           cell.textContent = cellLabel || (done ? "✓" : "今");
         } else if (done) {
           if (!isHabitWeekMetricKey(habitKey) && !cellLabel) {
-            const tc = getHabitCheckinTimesForDate(habitKey, dk);
-            cell.textContent = formatHabitWeekBarTimesLabel(tc) || "✓";
+            cell.textContent = formatHabitWeekBarPunchCountLabel(habitKey, dk) || "✓";
           } else {
             cell.textContent = cellLabel || "✓";
           }
@@ -121021,6 +121050,7 @@
       if (el.classList.contains("habit-title-lifetime-num")) return false;
       if (el.classList.contains("habit-title-daily-min")) return false;
       if (el.classList.contains("habit-title-lifetime-minutes")) return false;
+      if (el.classList.contains("habit-en-title-capsule--daily-30min")) return false;
       if (el.classList.contains("habit-en-experiment-lifetime-ratio")) return false;
       return (
         el.classList.contains("habit-en-title-capsule") ||
@@ -121250,7 +121280,7 @@
         if (!wrap || !body) return;
         const stats = Array.from(
           row.querySelectorAll(
-            ".habit-title-lifetime-num, .habit-title-daily-min, .habit-title-lifetime-minutes, .habit-en-experiment-lifetime-ratio"
+            ".habit-title-lifetime-num, .habit-title-daily-min, .habit-title-lifetime-minutes, .habit-en-title-capsule--daily-30min, .habit-en-experiment-lifetime-ratio"
           )
         ).filter(function (el) {
           return !wrap.contains(el) && !el.closest(".habit-en-remark-panel");
