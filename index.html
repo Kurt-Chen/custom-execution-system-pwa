@@ -10923,6 +10923,77 @@
       align-self: flex-start;
     }
 
+    /* 阅读设备胶囊：工具栏最左侧（列表/编辑按钮之前） */
+    .reading-plan-device-capsule {
+      box-sizing: border-box;
+      height: 28px;
+      min-height: 28px;
+      max-height: 28px;
+      padding: 0 8px;
+      border-radius: 999px;
+      border: 1px solid #e5e7eb;
+      background: #f8fafc;
+      color: #64748b;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 26px;
+      white-space: nowrap;
+      flex: 0 0 auto;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .reading-plan-device-capsule--wechat {
+      color: #166534;
+      background: #f0fdf4;
+      border-color: rgba(34, 197, 94, 0.28);
+    }
+
+    .reading-plan-device-capsule--hanvon {
+      color: #9a3412;
+      background: #fff7ed;
+      border-color: rgba(234, 88, 12, 0.28);
+    }
+
+    .reading-plan-device-capsule--paper {
+      color: #1e3a8a;
+      background: #eff6ff;
+      border-color: rgba(37, 99, 235, 0.28);
+    }
+
+    .reading-plan-device-capsule--empty {
+      color: #94a3b8;
+      background: #fff;
+      border-style: dashed;
+    }
+
+    .reading-plan-device-edit-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .reading-plan-device-edit-opt {
+      box-sizing: border-box;
+      height: 26px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid #e5e7eb;
+      background: #fff;
+      color: #475569;
+      font-size: 11px;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+    }
+
+    .reading-plan-device-edit-opt.is-on {
+      color: #166534;
+      background: #f0fdf4;
+      border-color: rgba(34, 197, 94, 0.35);
+    }
+
     .reading-plan-item-tool-btn {
       width: 28px;
       height: 28px;
@@ -11866,6 +11937,26 @@
         flex: 0 0 auto;
         align-self: flex-start;
         gap: 4px;
+      }
+
+      .reading-plan-device-capsule {
+        height: 28px;
+        min-height: 28px;
+        max-height: 28px;
+        padding: 0 7px;
+        font-size: 10px;
+        line-height: 26px;
+      }
+
+      .reading-plan-device-edit-row {
+        gap: 4px;
+        margin-top: 4px;
+      }
+
+      .reading-plan-device-edit-opt {
+        height: 24px;
+        padding: 0 8px;
+        font-size: 10px;
       }
 
       .reading-plan-item .reading-plan-item-toolbar .btn-delete {
@@ -79934,7 +80025,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260819d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260819e";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -82138,6 +82229,9 @@
       } else if (loseProb) {
         out.targetProblem = loseProb;
       }
+      const winRead = normalizeReadingPlanReadOn(winner.readOn);
+      const loseRead = normalizeReadingPlanReadOn(loser.readOn);
+      out.readOn = winRead || loseRead || "";
       if (winner.status !== "completed" && loser.status === "completed") {
         out.status = "completed";
         out.completedAt = Math.max(
@@ -110913,6 +111007,45 @@
       ["completed", "已完成"]
     ];
 
+    const READING_PLAN_READ_ON_CYCLE = ["wechat", "hanvon", "paper"];
+    const READING_PLAN_READ_ON_LABELS = {
+      wechat: "微信读书",
+      hanvon: "汉王",
+      paper: "纸质"
+    };
+
+    function normalizeReadingPlanReadOn(v) {
+      const s = String(v || "").trim();
+      if (s === "wechat" || s === "hanvon" || s === "paper") return s;
+      return "";
+    }
+
+    function readingPlanReadOnLabel(v) {
+      const k = normalizeReadingPlanReadOn(v);
+      return k ? READING_PLAN_READ_ON_LABELS[k] : "设备";
+    }
+
+    function cycleReadingPlanReadOn(cur) {
+      const k = normalizeReadingPlanReadOn(cur);
+      const i = READING_PLAN_READ_ON_CYCLE.indexOf(k);
+      if (i < 0) return "wechat";
+      if (i >= READING_PLAN_READ_ON_CYCLE.length - 1) return "";
+      return READING_PLAN_READ_ON_CYCLE[i + 1];
+    }
+
+    function syncReadingPlanDeviceCapsule(btn, readOn) {
+      if (!btn) return;
+      const k = normalizeReadingPlanReadOn(readOn);
+      btn.className =
+        "reading-plan-device-capsule" +
+        (k ? " reading-plan-device-capsule--" + k : " reading-plan-device-capsule--empty");
+      btn.textContent = readingPlanReadOnLabel(k);
+      btn.setAttribute(
+        "aria-label",
+        k ? "阅读设备：" + READING_PLAN_READ_ON_LABELS[k] + "，点击切换" : "未标注阅读设备，点击设置"
+      );
+    }
+
     function normalizeReadingPlanChapter(c) {
       if (!c || typeof c !== "object") return null;
       const text = String(c.text || "").trim();
@@ -110958,6 +111091,7 @@
             : "rp-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
         title: title,
         targetProblem: String(x.targetProblem || "").trim(),
+        readOn: normalizeReadingPlanReadOn(x.readOn),
         chapters: chapters,
         status: status,
         createdAt: createdAt,
@@ -111000,6 +111134,7 @@
         id: "rp-" + now.toString(36) + Math.random().toString(36).slice(2, 6),
         title: title.trim(),
         targetProblem: "",
+        readOn: "",
         chapters: [],
         status: st,
         createdAt: now
@@ -111074,16 +111209,28 @@
     }
 
     /** 更新书名与「针对的问题」（编辑保存时一并写入） */
-    function updateReadingPlanBookTitleAndProblem(bookId, newTitle, newProblem) {
+    function updateReadingPlanBookTitleAndProblem(bookId, newTitle, newProblem, readOnOpt) {
       const t = String(newTitle || "").trim();
       if (!t) return;
       const book = getReadingPlanBooks().find((b) => b.id === bookId);
       if (!book) return;
       book.title = t;
       book.targetProblem = String(newProblem || "").trim();
+      if (arguments.length >= 4) {
+        book.readOn = normalizeReadingPlanReadOn(readOnOpt);
+      }
       touchReadingPlanBookUpdatedAt(book);
       saveState();
       render();
+    }
+
+    function updateReadingPlanBookReadOn(bookId, next) {
+      const book = getReadingPlanBooks().find((b) => b.id === bookId);
+      if (!book) return;
+      book.readOn = normalizeReadingPlanReadOn(next);
+      touchReadingPlanBookUpdatedAt(book);
+      saveState();
+      renderReadingPlan();
     }
 
     function addReadingPlanChapter(bookId, chapterText) {
@@ -111315,10 +111462,21 @@
       let editing = false;
       let titleInput = null;
       let problemInput = null;
+      let deviceEditRow = null;
+      let editReadOn = normalizeReadingPlanReadOn(book.readOn);
       let authorEl = titleBlockEl.querySelector(".reading-plan-item-author");
       const titleEl = titleBlockEl.querySelector(".reading-plan-item-title");
       const problemEl = titleBlockEl.querySelector(".reading-plan-item-problem");
       const display = parseReadingPlanBookDisplay(book.title);
+
+      const deviceBtn = document.createElement("button");
+      deviceBtn.type = "button";
+      syncReadingPlanDeviceCapsule(deviceBtn, book.readOn);
+      deviceBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (editing) return;
+        updateReadingPlanBookReadOn(book.id, cycleReadingPlanReadOn(book.readOn));
+      });
 
       function finishEdit(save) {
         if (!editing || !titleInput) return;
@@ -111326,12 +111484,15 @@
         const nextProblem = save
           ? String((problemInput && problemInput.value) || "").trim()
           : String(book.targetProblem || "").trim();
+        const nextReadOn = save ? editReadOn : normalizeReadingPlanReadOn(book.readOn);
         if (
           save &&
           nextTitle &&
-          (nextTitle !== book.title || nextProblem !== String(book.targetProblem || "").trim())
+          (nextTitle !== book.title ||
+            nextProblem !== String(book.targetProblem || "").trim() ||
+            nextReadOn !== normalizeReadingPlanReadOn(book.readOn))
         ) {
-          updateReadingPlanBookTitleAndProblem(book.id, nextTitle, nextProblem);
+          updateReadingPlanBookTitleAndProblem(book.id, nextTitle, nextProblem, nextReadOn);
           return;
         }
         titleInput.replaceWith(titleEl);
@@ -111343,6 +111504,10 @@
             problemInput.remove();
           }
           problemInput = null;
+        }
+        if (deviceEditRow) {
+          deviceEditRow.remove();
+          deviceEditRow = null;
         }
         editing = false;
         editBtn.hidden = false;
@@ -111359,6 +111524,7 @@
           if (problemEl) {
             syncReadingPlanProblemDisplay(problemEl, book.targetProblem);
           }
+          syncReadingPlanDeviceCapsule(deviceBtn, book.readOn);
         }
       }
 
@@ -111386,6 +111552,27 @@
           titleBlockEl.appendChild(problemInput);
         }
 
+        editReadOn = normalizeReadingPlanReadOn(book.readOn);
+        deviceEditRow = document.createElement("div");
+        deviceEditRow.className = "reading-plan-device-edit-row";
+        READING_PLAN_READ_ON_CYCLE.forEach(function (key) {
+          const opt = document.createElement("button");
+          opt.type = "button";
+          opt.className = "reading-plan-device-edit-opt" + (editReadOn === key ? " is-on" : "");
+          opt.textContent = READING_PLAN_READ_ON_LABELS[key];
+          opt.addEventListener("click", function (e) {
+            e.stopPropagation();
+            editReadOn = editReadOn === key ? "" : key;
+            Array.from(deviceEditRow.querySelectorAll(".reading-plan-device-edit-opt")).forEach(function (b) {
+              const on = b.textContent === READING_PLAN_READ_ON_LABELS[editReadOn];
+              b.classList.toggle("is-on", on);
+            });
+            syncReadingPlanDeviceCapsule(deviceBtn, editReadOn);
+          });
+          deviceEditRow.appendChild(opt);
+        });
+        titleBlockEl.appendChild(deviceEditRow);
+
         editBtn.hidden = true;
         saveBtn.hidden = false;
         saveBtn.disabled = false;
@@ -111409,6 +111596,7 @@
         finishEdit(true);
       });
 
+      toolbarEl.appendChild(deviceBtn);
       toolbarEl.appendChild(toggleBtn);
       toolbarEl.appendChild(editBtn);
       toolbarEl.appendChild(saveBtn);
