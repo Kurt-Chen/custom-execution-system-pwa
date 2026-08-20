@@ -36289,6 +36289,16 @@
         font-size: 10px;
       }
 
+      #habitRoutineModule .habit-en-week-row:has(.habit-en-week-cell--has-punch-meta) .habit-en-week-cell {
+        height: auto;
+        min-height: 36px;
+      }
+
+      #habitRoutineModule .habit-en-week-cell--has-punch-meta .habit-en-today-note,
+      #habitRoutineModule .habit-en-week-cell--has-punch-meta .habit-en-clear-today-btn {
+        font-size: 10px;
+      }
+
       #habitRoutineModule #habitHabitsBundle .habit-en-row.habit-health-weight-row {
         display: grid;
         grid-template-columns: 32px minmax(0, 1fr) auto;
@@ -40127,6 +40137,51 @@
     #habitRoutineModule .habit-en-week-cell--today.habit-en-week-cell--done {
       background: #15803d;
       color: #ffffff;
+    }
+
+    /* 非时刻/体重习惯：今日格内叠「N 次 / 减一次」 */
+    #habitRoutineModule .habit-en-week-row:has(.habit-en-week-cell--has-punch-meta) .habit-en-week-cell {
+      height: auto;
+      min-height: 32px;
+      align-self: stretch;
+    }
+
+    #habitRoutineModule .habit-en-week-cell--has-punch-meta {
+      flex-direction: column;
+      justify-content: center;
+      gap: 0;
+      padding: 2px 1px;
+      box-sizing: border-box;
+    }
+
+    #habitRoutineModule .habit-en-week-cell--has-punch-meta .habit-en-punch-meta {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: auto;
+      width: 100%;
+      max-width: 100%;
+      margin: 0;
+      align-self: stretch;
+    }
+
+    #habitRoutineModule .habit-en-week-cell--has-punch-meta .habit-en-today-note,
+    #habitRoutineModule .habit-en-week-cell--has-punch-meta .habit-en-clear-today-btn {
+      width: 100%;
+      max-width: 100%;
+      text-align: center;
+      font-size: 9px;
+      line-height: 1.15;
+      color: inherit;
+    }
+
+    #habitRoutineModule .habit-en-week-cell--today.habit-en-week-cell--done.habit-en-week-cell--has-punch-meta .habit-en-clear-today-btn {
+      color: #ecfdf5;
+    }
+
+    #habitRoutineModule .habit-en-week-cell--today:not(.habit-en-week-cell--done).habit-en-week-cell--has-punch-meta .habit-en-clear-today-btn {
+      color: #14532d;
     }
 
     /* 早起 / 早睡 / 称体重：周格展示时刻或体重（桌面） */
@@ -80119,7 +80174,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260819e";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260819f";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -119831,10 +119886,48 @@
       return streak;
     }
 
+    function parkHabitPunchMetaFromWeekBar(card) {
+      if (!card) return;
+      const meta = card.querySelector(".habit-en-week-bar .habit-en-punch-meta");
+      const actions = card.querySelector(":scope > .habit-en-actions");
+      card.querySelectorAll(".habit-en-week-cell--has-punch-meta").forEach(function (cell) {
+        cell.classList.remove("habit-en-week-cell--has-punch-meta");
+      });
+      if (!meta || !actions) return;
+      const check = actions.querySelector(".habit-en-check-btn");
+      if (check) actions.insertBefore(meta, check);
+      else actions.appendChild(meta);
+    }
+
+    function isHabitPunchMetaPopulated(meta) {
+      if (!meta) return false;
+      const note = meta.querySelector(".habit-en-today-note");
+      const btn = meta.querySelector(".habit-en-clear-today-btn");
+      if (note && String(note.textContent || "").trim()) return true;
+      if (btn && !btn.hidden) return true;
+      return false;
+    }
+
+    /** 除早起/早睡/称体重外，把「N 次 / 减一次」放进当天周格 */
+    function relocateHabitPunchMetaIntoTodayWeekCell(card, habitKey) {
+      if (!card) return;
+      parkHabitPunchMetaFromWeekBar(card);
+      if (isHabitWeekMetricKey(habitKey)) return;
+      const meta = card.querySelector(":scope > .habit-en-actions .habit-en-punch-meta");
+      const todayCell = card.querySelector(".habit-en-week-cell--today");
+      if (!meta || !todayCell) return;
+      if (!isHabitPunchMetaPopulated(meta)) return;
+      todayCell.textContent = "";
+      todayCell.appendChild(meta);
+      todayCell.classList.add("habit-en-week-cell--has-punch-meta");
+    }
+
     function renderHabitEnWeekBar(container, habitKey) {
       if (!container) {
         return;
       }
+      const card = container.closest(".habit-en-row");
+      if (card) parkHabitPunchMetaFromWeekBar(card);
       const weekMonday = getHabitEnWeekMonday(new Date());
       const todayKey = formatDateInputValue(new Date());
       container.innerHTML = "";
@@ -121634,6 +121727,9 @@
           btnEl.setAttribute("title", checked ? "点击取消" : "");
         }
         btnEl.classList.toggle("checked", checked);
+      });
+      document.querySelectorAll("#habitRoutineModule .habit-en-row[data-habit-key]").forEach(function (row) {
+        relocateHabitPunchMetaIntoTodayWeekCell(row, row.getAttribute("data-habit-key"));
       });
       syncZhanZhuangMobileMinutesLayout();
       syncHabitMobileCapsuleAndTitleLayout();
