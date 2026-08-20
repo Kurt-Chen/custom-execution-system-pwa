@@ -67594,7 +67594,7 @@
                 <section class="submodule-card submodule-card-nested habit-en-row" data-habit-key="drinkWater">
                   <div class="habit-en-icon habit-en-icon--drink-water" aria-hidden="true">💧</div>
                   <div class="habit-en-body">
-                    <h3 class="submodule-title">喝水<span class="habit-en-title-capsule habit-en-title-capsule--water-tea-coffee" aria-label="含茶与咖啡">含茶与咖啡</span></h3>
+                    <h3 class="submodule-title">足量饮水<span class="habit-en-title-capsule habit-en-title-capsule--water-tea-coffee" aria-label="含茶与咖啡">含茶与咖啡</span></h3>
                   </div>
                   <div class="habit-en-actions">
                     <div class="habit-en-minutes-row">
@@ -67607,7 +67607,7 @@
                         step="0.05"
                         inputmode="decimal"
                         placeholder="升"
-                        aria-label="本次喝水量（升，含茶与咖啡）"
+                        aria-label="本次足量饮水量（升，含茶与咖啡）"
                       />
                     </div>
                     <div class="habit-en-punch-meta">
@@ -89888,6 +89888,8 @@
     /** 每日鸡蛋最低个数：有执行即打卡；标题色仅达标后恢复 */
     const HABIT_DAILY_EGG_TARGET = 3;
     const HABIT_DAILY_WATER_ML_TARGET = 3000;
+    /** 点勾选且未填升数时，按一杯默认量打卡（不等 3 升） */
+    const HABIT_WATER_DEFAULT_SIP_LITERS = 0.2;
     const ENTREPRENEUR_DAILY_THREE_QUESTIONS_KEY = "entrepreneurDailyThreeQuestions";
     const HABIT_DAILY_QUESTION_TARGET = 3;
 
@@ -89906,7 +89908,13 @@
       if (!v || typeof v !== "object") {
         return false;
       }
-      return Number.isFinite(v.ml) && v.ml > 0;
+      if (Number.isFinite(v.ml) && v.ml > 0) {
+        return true;
+      }
+      if (Number.isFinite(v.times) && v.times > 0) {
+        return true;
+      }
+      return Array.isArray(v.batches) && v.batches.length > 0;
     }
 
     /** 毫升 → 升文案（1.25 升） */
@@ -90268,8 +90276,12 @@
       if (!current || typeof current !== "object") {
         return 0;
       }
-      if (Number.isFinite(current.times) && current.times >= 0) {
+      if (Number.isFinite(current.times) && current.times >= 1) {
         return current.times;
+      }
+      const batchLen = Array.isArray(current.batches) ? current.batches.length : 0;
+      if (batchLen > 0) {
+        return batchLen;
       }
       const total = current[valueKey];
       if (Number.isFinite(total) && total > 0) {
@@ -90925,10 +90937,10 @@
       if (!timesEl) {
         timesEl = document.createElement("span");
         timesEl.className = "habit-title-lifetime-num";
-        timesEl.setAttribute("aria-label", "终身喝水次数");
+        timesEl.setAttribute("aria-label", "终身足量饮水次数");
         titleEl.appendChild(timesEl);
       } else {
-        timesEl.setAttribute("aria-label", "终身喝水次数");
+        timesEl.setAttribute("aria-label", "终身足量饮水次数");
       }
       const staleVol = titleEl.querySelector(":scope > .habit-title-lifetime-minutes");
       if (staleVol) {
@@ -91134,12 +91146,15 @@
      */
     function isHabitCheckedOnDate(dateKey, habitKey) {
       const day = state.habitCheckins[dateKey];
+      const v = day ? day[habitKey] : undefined;
+      if (isHabitWaterKey(habitKey)) {
+        if (isHabitWaterChecked(v)) return true;
+        return getHabitNumericDayTotal(habitKey, dateKey) > 0;
+      }
       if (!day) return false;
-      const v = day[habitKey];
       if (habitKey === "weightAndBodyFat") return isWeightBodyFatChecked(v);
       if (isHabitZhanZhuangKey(habitKey)) return isHabitMinutesHabitChecked(v);
       if (isHabitEggsKey(habitKey)) return isHabitEggsHabitChecked(v);
-      if (isHabitWaterKey(habitKey)) return isHabitWaterChecked(v);
       if (isHabitQuestionsKey(habitKey)) return isHabitQuestionsChecked(v);
       if (isHabitMinutesKey(habitKey)) return isHabitMinutesHabitChecked(v);
       if (isHabitWordCountKey(habitKey)) return isHabitWordCountChecked(v);
@@ -91177,7 +91192,7 @@
       weightAndBodyFat: "称体重·测体脂",
       earlyWake: "早起",
       earlySleep: "早睡",
-      drinkWater: "喝水",
+      drinkWater: "足量饮水",
       experimentLab10000: "10,000 Experiments",
       exmindVocab: "Exmind 记单词",
       miraaShadowing: "Miraa 跟读英语",
@@ -92559,7 +92574,9 @@
       const card = document.querySelector('#habitRoutineModule [data-habit-key="' + habitKey + '"]');
       const input = getHabitNumericInputEl(card, habitKey);
       const raw = input && String(input.value).trim();
-      const liters = parseFloat(String(raw || "").replace(",", "."));
+      const liters = raw
+        ? parseFloat(String(raw).replace(",", "."))
+        : HABIT_WATER_DEFAULT_SIP_LITERS;
       const add = Number.isFinite(liters) ? Math.round(liters * 1000) : NaN;
       if (!Number.isFinite(add) || add < 1 || add > 2000) {
         flashHabitNumericInputError(input, "请填 0.05–2 升");
@@ -93021,6 +93038,10 @@
     function toggleHabitCheckin(habitKey) {
       if (habitKey === "weightAndBodyFat") {
         toggleWeightBodyFatCheckin();
+        return;
+      }
+      if (isHabitWaterKey(habitKey)) {
+        toggleHabitWaterCheckin(habitKey);
         return;
       }
       if (isHabitNumericInputKey(habitKey)) {
@@ -120807,7 +120828,11 @@
         }
         cell.title = tip;
         if (isToday) {
-          cell.textContent = cellLabel || (done ? "✓" : "今");
+          if (done && isHabitWaterKey(habitKey) && !cellLabel) {
+            cell.textContent = formatHabitWeekBarPunchCountLabel(habitKey, dk) || "✓";
+          } else {
+            cell.textContent = cellLabel || (done ? "✓" : "今");
+          }
         } else if (done) {
           if (!isHabitWeekMetricKey(habitKey) && !cellLabel) {
             cell.textContent = formatHabitWeekBarPunchCountLabel(habitKey, dk) || "✓";
@@ -122134,7 +122159,7 @@
           } else if (isHabitWaterKey(key)) {
             const waterInput = card.querySelector(".habit-en-water-input");
             const v = dayData[key];
-            const waterActive = isHabitWaterChecked(v);
+            const waterActive = isHabitCheckedOnDate(todayKey, key);
             if (waterInput) {
               waterInput.value = "";
               waterInput.disabled = false;
@@ -122144,11 +122169,11 @@
               clearBtn.hidden = !waterActive;
             }
             if (todayNote) {
-              if (waterActive && v && typeof v === "object" && Number.isFinite(v.ml) && v.ml > 0) {
-                const tc = getHabitNumericStampTimes(v, "ml");
+              if (waterActive) {
+                const tc = v && typeof v === "object"
+                  ? Math.max(getHabitNumericStampTimes(v, "ml"), 1)
+                  : 1;
                 todayNote.textContent = formatHabitWeekBarTimesLabel(tc);
-              } else if (waterActive && v === true) {
-                todayNote.textContent = formatHabitWeekBarTimesLabel(1);
               } else {
                 todayNote.textContent = "";
               }
