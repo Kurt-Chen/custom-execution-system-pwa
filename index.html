@@ -8041,6 +8041,53 @@
       }
     }
 
+    #habitRoutineModule .daily-win-modern-save-row {
+      display: flex;
+      justify-content: flex-end;
+      list-style: none;
+      margin: 0;
+      padding: 0 2px 4px;
+    }
+
+    #habitRoutineModule .daily-win-modern-save {
+      min-height: 28px;
+      border-radius: 999px;
+      border: none;
+      background: #f59e0b;
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 4px 14px;
+      line-height: 1.1;
+      cursor: pointer;
+    }
+
+    #habitRoutineModule .daily-win-modern-save:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    #habitRoutineModule .daily-win-modern-pending-title {
+      margin: 0 0 4px;
+      color: #525252;
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.35;
+    }
+
+    #habitRoutineModule .daily-win-modern-pending-input {
+      width: 100%;
+      min-height: 34px;
+      border-radius: 8px;
+      border: 1px solid #d4d4d4;
+      background: #f3f4f6;
+      color: #525252;
+      padding: 0 10px;
+      font-size: 13px;
+      outline: none;
+      box-sizing: border-box;
+    }
+
     /* 每天三赢：进度条全宽单列 */
     #habitRoutineModule .daily-win-modern-progress-bars--single {
       display: grid;
@@ -33536,7 +33583,7 @@
 
     body.primary-module-fullscreen #habitRoutineModule.module-focus-active #dailyWinTomorrowList .daily-win-modern-card--pending {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       gap: 10px;
       border: 1px dashed #85b7eb;
       background: #f4f9fe;
@@ -33607,10 +33654,16 @@
       display: block;
     }
 
-    body.primary-module-fullscreen #habitRoutineModule.module-focus-active .daily-win-modern-pending-actions {
+    body.primary-module-fullscreen #habitRoutineModule.module-focus-active .daily-win-modern-pending-actions,
+    body.primary-module-fullscreen #habitRoutineModule.module-focus-active .daily-win-modern-save-row {
       display: flex;
       justify-content: flex-end;
       margin-top: 2px;
+    }
+
+    body.primary-module-fullscreen #habitRoutineModule.module-focus-active #dailyWinList > li.daily-win-modern-save-row,
+    body.primary-module-fullscreen #habitRoutineModule.module-focus-active #dailyWinTomorrowList > li.daily-win-modern-save-row {
+      padding: 0 2px 2px !important;
     }
 
     body.primary-module-fullscreen #habitRoutineModule.module-focus-active .daily-win-modern-save {
@@ -33623,6 +33676,11 @@
       font-weight: 700;
       padding: 2px 10px;
       line-height: 1.1;
+    }
+
+    body.primary-module-fullscreen #habitRoutineModule.module-focus-active .daily-win-modern-save:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
     }
 
     body.primary-module-fullscreen #habitRoutineModule.module-focus-active .daily-win-modern-pending-hint {
@@ -94233,46 +94291,51 @@
     }
 
     function addDailyWin(opts) {
-      const text = dailyWinInput.value.trim();
-      if (!text) {
-        dailyWinInput.focus();
+      const forceToday = opts && opts.forceToday;
+      const forTomorrow = Boolean(opts && opts.forTomorrow) && !forceToday;
+      const texts = Array.isArray(opts && opts.texts)
+        ? opts.texts.map(function (t) { return String(t || "").trim(); }).filter(Boolean)
+        : [String((dailyWinInput && dailyWinInput.value) || "").trim()].filter(Boolean);
+      if (!texts.length) {
+        if (dailyWinInput) dailyWinInput.focus();
         return;
       }
 
-      const forceToday = opts && opts.forceToday;
-      const forTomorrow = Boolean(opts && opts.forTomorrow) && !forceToday;
       const todayKey = getDailyWinTodayDateKey();
       const targetDateKey = forTomorrow ? getDailyWinPresetTomorrowKey() : todayKey;
       const sameDayCount = forTomorrow
           ? getDailyWinTomorrowRefList(targetDateKey).length
           : countDailyWinEntriesForDate(targetDateKey);
-      if (sameDayCount >= 3) {
+      if (sameDayCount + texts.length > 3) {
         alert("每天三赢每天最多 3 条，请先删除一条再添加。");
         return;
       }
 
-      if (forTomorrow) {
-        const twId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-        getDailyWinTomorrowRefList(targetDateKey).unshift({
-          id: twId,
-          text: text.trim(),
-          completed: false,
-          createdAt: Date.now()
-        });
-      } else {
-        const dw = createDailyWin(text, targetDateKey);
-        state.dailyWin.unshift(dw);
-      }
-      if (!forTomorrow && sameDayCount === 2) {
+      const now = Date.now();
+      texts.forEach(function (text, i) {
+        if (forTomorrow) {
+          getDailyWinTomorrowRefList(targetDateKey).unshift({
+            id: now.toString(36) + Math.random().toString(36).slice(2, 7),
+            text: text,
+            completed: false,
+            createdAt: now + i
+          });
+        } else {
+          const dw = createDailyWin(text, targetDateKey);
+          dw.createdAt = (dw.createdAt || now) + i;
+          state.dailyWin.unshift(dw);
+        }
+      });
+      if (!forTomorrow && sameDayCount + texts.length >= 3) {
         selectedDoneDate = targetDateKey;
         if (doneDateFilter) {
           doneDateFilter.value = selectedDoneDate;
         }
       }
-      dailyWinInput.value = "";
+      if (dailyWinInput) dailyWinInput.value = "";
       saveState();
       render();
-      dailyWinInput.focus();
+      if (dailyWinInput) dailyWinInput.focus();
     }
 
     function createProjectTask(projectKey, text) {
@@ -107318,6 +107381,7 @@
         ul.appendChild(li);
       });
 
+      const pendingInputs = [];
       for (let nextIndex = ordered.length + 1; nextIndex <= 3; nextIndex++) {
         const pending = document.createElement("li");
         pending.className =
@@ -107339,71 +107403,41 @@
         const inputMain = document.createElement("input");
         inputMain.className = "daily-win-modern-pending-input";
         inputMain.type = "text";
+        pendingInputs.push(inputMain);
 
         content.appendChild(title);
-        if (isTomorrowMode) {
-          const collapsed = document.createElement("div");
-          collapsed.className = "daily-win-modern-pending-collapsed";
-          collapsed.textContent = "明天第" + (cnNums[nextIndex - 1] || String(nextIndex)) + "赢是什么？";
-
-          const editor = document.createElement("div");
-          editor.className = "daily-win-modern-pending-editor";
-          const btnRow = document.createElement("div");
-          btnRow.className = "daily-win-modern-pending-actions";
-          const saveBtn = document.createElement("button");
-          saveBtn.type = "button";
-          saveBtn.className = "daily-win-modern-save";
-          saveBtn.textContent = "记录";
-          saveBtn.addEventListener("click", () => {
-            const mainText = String(inputMain.value || "").trim();
-            if (!mainText) {
-              inputMain.focus();
-              return;
-            }
-            dailyWinInput.value = mainText;
-            addDailyWin({ forTomorrow: true });
-          });
-          btnRow.appendChild(saveBtn);
-          editor.appendChild(inputMain);
-          editor.appendChild(btnRow);
-          pending.appendChild(badge);
-          pending.appendChild(collapsed);
-          pending.appendChild(editor);
-          pending.addEventListener("click", (ev) => {
-            if (ev.target.closest("input,button")) return;
-            pending.classList.add("is-editing");
-            inputMain.focus();
-          });
-        } else if (nextIndex === ordered.length + 1) {
-          const btnRow = document.createElement("div");
-          btnRow.className = "daily-win-modern-pending-actions";
-          const saveBtn = document.createElement("button");
-          saveBtn.type = "button";
-          saveBtn.className = "daily-win-modern-save";
-          saveBtn.textContent = "记录";
-          saveBtn.addEventListener("click", () => {
-            const mainText = String(inputMain.value || "").trim();
-            if (!mainText) {
-              inputMain.focus();
-              return;
-            }
-            dailyWinInput.value = mainText;
-            addDailyWin({ forceToday: true });
-          });
-          btnRow.appendChild(saveBtn);
-          content.appendChild(inputMain);
-          content.appendChild(btnRow);
-          pending.appendChild(badge);
-          pending.appendChild(content);
-        } else {
-          const hint = document.createElement("p");
-          hint.className = "daily-win-modern-pending-hint";
-          hint.textContent = "留给今天的下一次小胜利";
-          content.appendChild(hint);
-          pending.appendChild(badge);
-          pending.appendChild(content);
-        }
+        content.appendChild(inputMain);
+        pending.appendChild(badge);
+        pending.appendChild(content);
         ul.appendChild(pending);
+      }
+
+      if (pendingInputs.length) {
+        const saveRow = document.createElement("li");
+        saveRow.className = "daily-win-modern-save-row";
+        const saveBtn = document.createElement("button");
+        saveBtn.type = "button";
+        saveBtn.className = "daily-win-modern-save";
+        saveBtn.textContent = "记录";
+        const syncSaveEnabled = function () {
+          const ready = pendingInputs.every(function (inp) {
+            return String(inp.value || "").trim();
+          });
+          saveBtn.disabled = !ready;
+        };
+        pendingInputs.forEach(function (inp) {
+          inp.addEventListener("input", syncSaveEnabled);
+        });
+        syncSaveEnabled();
+        saveBtn.addEventListener("click", function () {
+          const texts = pendingInputs.map(function (inp) {
+            return String(inp.value || "").trim();
+          });
+          if (texts.some(function (t) { return !t; })) return;
+          addDailyWin(isTomorrowMode ? { forTomorrow: true, texts: texts } : { forceToday: true, texts: texts });
+        });
+        saveRow.appendChild(saveBtn);
+        ul.appendChild(saveRow);
       }
 
       const footer = document.createElement("li");
