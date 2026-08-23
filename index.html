@@ -15718,11 +15718,12 @@
       line-height: 1;
     }
 
-    /* Open List：尚未进入三天 Sprint，不展示日期范围导航 */
+    /* Open List：尚未进入三天 Sprint，不展示日期范围导航与列表/看板切换 */
     #weeklyPlanSection.weekly-plan-shell-open #weeklyPlanPrevWeekBtn,
     #weeklyPlanSection.weekly-plan-shell-open #weeklyPlanNextWeekBtn,
     #weeklyPlanSection.weekly-plan-shell-open #weeklyPlanRangeCompact,
-    #weeklyPlanSection.weekly-plan-shell-open #weeklyPlanThisWeekBtn {
+    #weeklyPlanSection.weekly-plan-shell-open #weeklyPlanThisWeekBtn,
+    #weeklyPlanSection.weekly-plan-shell-open #weeklyPlanViewToggle {
       display: none !important;
     }
     /* 3-Day Sprint 日期：对齐 Body「1次打卡」实心绿胶囊（中绿底 + 粗白字） */
@@ -16301,6 +16302,52 @@
       background-clip: border-box;
       -webkit-text-fill-color: #c71585;
       font-style: normal;
+    }
+
+    /* Open List：输入框提示改为 Work = Outputs 公式（Open 同时带 shell-work，需盖住 Work 提示） */
+    #weeklyPlanSection .weekly-plan-composer-trigger__hint-compass--open {
+      display: none;
+    }
+
+    #weeklyPlanSection.weekly-plan-shell-open .weekly-plan-composer-trigger__input:placeholder-shown ~ .weekly-plan-composer-trigger__hint {
+      grid-template-columns: minmax(0, 1fr);
+      justify-items: center;
+    }
+
+    #weeklyPlanSection.weekly-plan-shell-open .weekly-plan-composer-trigger__hint-compass--life,
+    #weeklyPlanSection.weekly-plan-shell-open .weekly-plan-composer-trigger__hint-compass--work,
+    #weeklyPlanSection.weekly-plan-shell-open .weekly-plan-composer-trigger__hint-deadline {
+      display: none !important;
+    }
+
+    #weeklyPlanSection.weekly-plan-shell-open .weekly-plan-composer-trigger__hint-compass--open {
+      display: inline-flex;
+      flex-wrap: nowrap;
+      justify-content: center;
+      white-space: nowrap;
+      font-size: clamp(11px, 2.4vw, 16px);
+      font-weight: 700;
+    }
+
+    #weeklyPlanSection.weekly-plan-shell-open .weekly-plan-composer-trigger__hint-word--navy,
+    #weeklyPlanSection.weekly-plan-shell-open .weekly-plan-composer-trigger__hint-compass--open .weekly-plan-composer-trigger__hint-sep {
+      color: #1e293b;
+      background: none;
+      -webkit-background-clip: border-box;
+      background-clip: border-box;
+      -webkit-text-fill-color: #1e293b;
+      font-style: normal;
+      font-weight: 700;
+    }
+
+    #weeklyPlanSection.weekly-plan-shell-open .weekly-plan-composer-trigger__hint-word--eq-accent {
+      color: #ea580c;
+      background: none;
+      -webkit-background-clip: border-box;
+      background-clip: border-box;
+      -webkit-text-fill-color: #ea580c;
+      font-style: italic;
+      font-weight: 700;
     }
 
     @container wp-composer-field (max-width: 560px) {
@@ -34927,9 +34974,14 @@
 
       body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection .weekly-plan-range-compact {
         font-size: clamp(10px, 2.6vw, 11px) !important;
-        padding: 0 2px !important;
+        padding: 3px 9px !important;
         flex-shrink: 1 !important;
         min-width: 0 !important;
+        border-radius: 999px !important;
+        border: 1px solid #15803d !important;
+        background: #16a34a !important;
+        color: #ffffff !important;
+        font-weight: 700 !important;
       }
 
       body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection .weekly-plan-this-week-chip {
@@ -67666,6 +67718,15 @@
                         <span class="weekly-plan-composer-trigger__hint-word weekly-plan-composer-trigger__hint-word--green">回收</span>
                         <span class="weekly-plan-composer-trigger__hint-word weekly-plan-composer-trigger__hint-word--magenta">能量</span>
                       </span>
+                      <span class="weekly-plan-composer-trigger__hint-compass weekly-plan-composer-trigger__hint-compass--open">
+                        <span class="weekly-plan-composer-trigger__hint-word weekly-plan-composer-trigger__hint-word--navy">Work</span>
+                        <span class="weekly-plan-composer-trigger__hint-sep" aria-hidden="true"> = </span>
+                        <span class="weekly-plan-composer-trigger__hint-word weekly-plan-composer-trigger__hint-word--eq-accent">Outputs</span>
+                        <span class="weekly-plan-composer-trigger__hint-sep" aria-hidden="true"> = </span>
+                        <span class="weekly-plan-composer-trigger__hint-word weekly-plan-composer-trigger__hint-word--eq-accent">Volume</span>
+                        <span class="weekly-plan-composer-trigger__hint-sep" aria-hidden="true"> x </span>
+                        <span class="weekly-plan-composer-trigger__hint-word weekly-plan-composer-trigger__hint-word--eq-accent">Leverage</span>
+                      </span>
                       <span class="weekly-plan-composer-trigger__hint-deadline">
                         <span class="weekly-plan-composer-trigger__hint-word weekly-plan-composer-trigger__hint-word--blue">+极端截止期限</span>
                       </span>
@@ -97010,6 +97071,28 @@
       if (dailyWinInput) dailyWinInput.focus();
     }
 
+    /** 每天三赢「记录」：拦住 form 默认提交，避免整页刷新把未落盘输入清掉 */
+    function bindDailyWinRecordForms() {
+      [
+        { id: "dailyWinTodayForm", forTomorrow: false },
+        { id: "dailyWinTomorrowForm", forTomorrow: true }
+      ].forEach(function (cfg) {
+        const form = document.getElementById(cfg.id);
+        if (!form || form.dataset.boundSubmit === "1") return;
+        form.dataset.boundSubmit = "1";
+        form.addEventListener("submit", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const inputs = form.querySelectorAll(".daily-win-modern-pending-input");
+          const texts = Array.prototype.map.call(inputs, function (inp) {
+            return String(inp.value || "").trim();
+          });
+          if (!texts.length || texts.some(function (t) { return !t; })) return;
+          addDailyWin(cfg.forTomorrow ? { forTomorrow: true, texts: texts } : { forceToday: true, texts: texts });
+        });
+      });
+    }
+
     function createProjectTask(projectKey, text) {
       return {
         id: projectKey + "-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
@@ -114217,11 +114300,11 @@
       if (closedListEmpty && closedKanbanOn) closedListEmpty.style.display = "none";
 
       if (weeklyPlanViewToggle) {
-        weeklyPlanViewToggle.hidden = !desktop || !isWeeklyPlanTaskShell(shell);
+        weeklyPlanViewToggle.hidden = !desktop || !isWeeklyPlanTaskShell(shell) || shell === "open";
       }
       const wpShell = isWeeklyPlanTaskShell(shell) ? shell : getWeeklyPlanAddLane();
       const wpMode =
-        desktop && isWeeklyPlanTaskShell(shell) ? getSprintViewMode(wpShell) : "list";
+        desktop && isWeeklyPlanTaskShell(shell) && shell !== "open" ? getSprintViewMode(wpShell) : "list";
       syncSprintViewToggleButtons(weeklyPlanViewToggle, wpMode);
       const wpKanbanOn = wpMode === "kanban" && isWeeklyPlanTaskShell(shell);
       const composerShell = document.querySelector("#weeklyPlanTasksPanel .weekly-plan-lane-add-shell");
@@ -127511,6 +127594,7 @@
     addDailyWinBtn.addEventListener("click", function () {
       addDailyWin({ forceToday: true });
     });
+    bindDailyWinRecordForms();
     if (addSuccessCriteriaBtn) {
       addSuccessCriteriaBtn.addEventListener("click", addSuccessCriteria);
     }
