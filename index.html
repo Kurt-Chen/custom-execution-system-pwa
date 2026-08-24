@@ -27737,12 +27737,12 @@
         color: #0f172a;
       }
 
-      /* 当前冲刺底栏与下方任务区之间的分割线 */
+      /* 当前冲刺底栏与任务区：分割改由列表首条 .done-time-sprint-finish（时段结束整点）承担 */
       ul.app-done-time-timeline.done-time-block-list
         > li.done-time-block--sprint-current
         .done-time-block-sprint-insert--bottom
         + .done-time-content {
-        border-top: 2px solid rgba(15, 23, 42, 0.22);
+        border-top: none;
       }
 
     /* 桌面：冲刺顶/底栏置于下层，任务列表压在其上，避免浅绿分栏「压住」首条任务标题 */
@@ -28603,6 +28603,10 @@
       text-align: left;
     }
 
+    ul.app-done-time-timeline .done-time-block-body:has(.done-time-sprint-finish) > .done-time-block-head {
+      border-bottom: none;
+    }
+
     ul.app-done-time-timeline .done-time-block.done-time-block--lateNight .done-time-block-head,
     ul.app-done-time-timeline .done-time-block.done-time-block--dawn .done-time-block-head {
       background: #ecfdf5;
@@ -29044,6 +29048,13 @@
         font-size: 9px;
         letter-spacing: 0.02em;
       }
+      ul.app-done-time-timeline .done-time-sprint-finish__urgency {
+        font-size: 8px;
+      }
+      ul.app-done-time-timeline .done-time-sprint-finish__line--left::after,
+      ul.app-done-time-timeline .done-time-sprint-finish__line--right::before {
+        font-size: 8px;
+      }
       ul.app-done-time-timeline .done-time-sprint-finish__rule {
         gap: 6px;
       }
@@ -29162,14 +29173,41 @@
       gap: 8px;
     }
     ul.app-done-time-timeline .done-time-sprint-finish__line {
+      position: relative;
       flex: 1 1 0;
       height: 2px;
       min-width: 8px;
       background: var(--sprint-finish-orange);
       border-radius: 1px;
     }
-    ul.app-done-time-timeline .done-time-sprint-finish__label {
+    ul.app-done-time-timeline .done-time-sprint-finish__line--left::after,
+    ul.app-done-time-timeline .done-time-sprint-finish__line--right::before {
+      content: ">>>";
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: -0.08em;
+      line-height: 1;
+      color: var(--sprint-finish-orange);
+      font-style: italic;
+    }
+    ul.app-done-time-timeline .done-time-sprint-finish__line--left::after {
+      right: 0;
+    }
+    ul.app-done-time-timeline .done-time-sprint-finish__line--right::before {
+      left: 0;
+    }
+    ul.app-done-time-timeline .done-time-sprint-finish__copy {
       flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1px;
+      min-width: 0;
+    }
+    ul.app-done-time-timeline .done-time-sprint-finish__label {
       font-size: 11px;
       font-weight: 800;
       font-style: italic;
@@ -29179,6 +29217,16 @@
       white-space: nowrap;
       text-transform: uppercase;
       line-height: 1.2;
+    }
+    ul.app-done-time-timeline .done-time-sprint-finish__urgency {
+      font-size: 9px;
+      font-weight: 400;
+      font-style: normal;
+      letter-spacing: 0.02em;
+      color: var(--sprint-finish-orange);
+      white-space: nowrap;
+      line-height: 1.2;
+      text-align: center;
     }
     ul.app-done-time-timeline .done-time-sprint-finish__flag {
       flex-shrink: 0;
@@ -30238,6 +30286,13 @@
       }
       ul.app-done-time-timeline .done-time-sprint-finish__label {
         font-size: 12px;
+      }
+      ul.app-done-time-timeline .done-time-sprint-finish__urgency {
+        font-size: 10px;
+      }
+      ul.app-done-time-timeline .done-time-sprint-finish__line--left::after,
+      ul.app-done-time-timeline .done-time-sprint-finish__line--right::before {
+        font-size: 10px;
       }
       ul.app-done-time-timeline .done-time-sprint-finish__flag svg {
         width: 18px;
@@ -104994,9 +105049,26 @@
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 14" width="16" height="12" aria-hidden="true"><rect x="1.1" y="0" width="1.3" height="14" fill="#111"/><rect x="3.2" y="1" width="14" height="9" fill="#fff" stroke="#111" stroke-width="0.55"/><rect x="3.2" y="1" width="3.5" height="3" fill="#111"/><rect x="10.2" y="1" width="3.5" height="3" fill="#111"/><rect x="6.7" y="4" width="3.5" height="3" fill="#111"/><rect x="13.7" y="4" width="3.5" height="3" fill="#111"/><rect x="3.2" y="7" width="3.5" height="3" fill="#111"/><rect x="10.2" y="7" width="3.5" height="3" fill="#111"/></svg>';
 
     /**
-     * 跨整点分割线：结束整点 06:00–23:00 → 冲刺 1–18（5–6 点为冲刺 1）。
-     * 列表为新→旧时，finishHour 取较新一条所在小时。
+     * 时段内全部冲刺结束整点（有无任务都插入；新→旧从大到小）。
+     * 早晨 11–6、白天 17–12、晚间 23–18；5–6 点为冲刺 1。
      */
+    function getDoneTimeBlockSprintFinishHours(blockKey) {
+      if (blockKey === "morning") return [11, 10, 9, 8, 7, 6];
+      if (blockKey === "day") return [17, 16, 15, 14, 13, 12];
+      if (blockKey === "evening") return [23, 22, 21, 20, 19, 18];
+      return [];
+    }
+
+    function getDoneSprintFinishAnchorMs(dateKey, finishHour) {
+      const raw = String(dateKey || "").trim();
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+      const base = m
+        ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+        : new Date();
+      base.setHours(Number(finishHour) || 0, 0, 0, 0);
+      return base.getTime();
+    }
+
     function createDoneTimeSprintFinishLi(finishHour) {
       const hour = Number(finishHour);
       if (!(hour >= 6 && hour <= 23)) return null;
@@ -105018,15 +105090,25 @@
       rule.className = "done-time-sprint-finish__rule";
 
       const lineL = document.createElement("span");
-      lineL.className = "done-time-sprint-finish__line";
+      lineL.className = "done-time-sprint-finish__line done-time-sprint-finish__line--left";
       lineL.setAttribute("aria-hidden", "true");
+
+      const copy = document.createElement("span");
+      copy.className = "done-time-sprint-finish__copy";
 
       const label = document.createElement("span");
       label.className = "done-time-sprint-finish__label";
       label.textContent = "SPRINT " + sprintNum + " · FINISH";
 
+      const urgency = document.createElement("span");
+      urgency.className = "done-time-sprint-finish__urgency";
+      urgency.textContent = "⚡ Maniacal Urgency ⚡";
+
+      copy.appendChild(label);
+      copy.appendChild(urgency);
+
       const lineR = document.createElement("span");
-      lineR.className = "done-time-sprint-finish__line";
+      lineR.className = "done-time-sprint-finish__line done-time-sprint-finish__line--right";
       lineR.setAttribute("aria-hidden", "true");
 
       const flag = document.createElement("span");
@@ -105035,13 +105117,67 @@
       flag.innerHTML = DONE_TIME_SPRINT_FINISH_FLAG_SVG;
 
       rule.appendChild(lineL);
-      rule.appendChild(label);
+      rule.appendChild(copy);
       rule.appendChild(lineR);
       rule.appendChild(flag);
       li.appendChild(timeEl);
       li.appendChild(axis);
       li.appendChild(rule);
       return li;
+    }
+
+    /** 任务行与该时段全部冲刺结束线混排（新→旧）；无任务也插入结束线 */
+    function fillDoneTimeBlockItems(itemWrap, block, blockTasks, ln) {
+      const tasks = Array.isArray(blockTasks) ? blockTasks : [];
+      const dateKey = selectedDoneDate || formatDateInputValue(new Date());
+      const finishHours = getDoneTimeBlockSprintFinishHours(block && block.key);
+      const rows = [];
+      tasks.forEach(function (task, idx) {
+        rows.push({
+          kind: "task",
+          task: task,
+          idx: idx,
+          at: Number(task && task.completedAt) || 0
+        });
+      });
+      finishHours.forEach(function (h) {
+        rows.push({
+          kind: "sprint",
+          hour: h,
+          at: getDoneSprintFinishAnchorMs(dateKey, h)
+        });
+      });
+      rows.sort(function (a, b) {
+        if (b.at !== a.at) return b.at - a.at;
+        if (a.kind !== b.kind) return a.kind === "task" ? -1 : 1;
+        return 0;
+      });
+      let lastTaskLabel = null;
+      rows.forEach(function (row) {
+        if (row.kind === "sprint") {
+          const sprintLi = createDoneTimeSprintFinishLi(row.hour);
+          if (sprintLi) itemWrap.appendChild(sprintLi);
+          return;
+        }
+        const task = row.task;
+        const curLabel = formatDoneListTime(task.completedAt);
+        const suppressDuplicateDoneTime =
+          Boolean(curLabel) && curLabel === lastTaskLabel;
+        lastTaskLabel = curLabel;
+        const li = taskItem(task, ln, row.idx, tasks.length, undefined, {
+          suppressDuplicateDoneTime: suppressDuplicateDoneTime,
+          timeBlockFlexLayout: true,
+          blockKey: block.key,
+          blockIndex: row.idx,
+          blockLength: tasks.length
+        });
+        li.classList.add(
+          "done-time-block-item",
+          "done-time-block-item--" + block.key,
+          "done-time-block-item--flex-row"
+        );
+        itemWrap.appendChild(li);
+      });
     }
 
     function getDoneTimeBlockKey(ts) {
@@ -112827,16 +112963,22 @@
           head.appendChild(badge);
         }
 
+        /* 冲刺时段（早/昼/晚）：有无任务都插入该时段全部结束整点（含 17:00 / 11:00） */
+        const markHourBoundaries =
+          block.key === "morning" || block.key === "day" || block.key === "evening";
+
         if (!blockTasks.length) {
           blockLi.classList.add("done-time-block--empty");
           if (!block.mantra) {
             blockLi.classList.add("done-time-block--empty-no-mantra");
           }
-          body.appendChild(head);
-          applyDoneTimeBlockSprintLayer(blockLi, body, block);
-          blockLi.appendChild(body);
-          ul.appendChild(blockLi);
-          return;
+          if (!markHourBoundaries) {
+            body.appendChild(head);
+            applyDoneTimeBlockSprintLayer(blockLi, body, block);
+            blockLi.appendChild(body);
+            ul.appendChild(blockLi);
+            return;
+          }
         }
 
         const contentCol = document.createElement("div");
@@ -112844,41 +112986,7 @@
 
         const itemWrap = document.createElement("ul");
         itemWrap.className = "done-time-block-items";
-        /* 冲刺时段（早/昼/晚）：跨小时时插入 SPRINT N · FINISH 条，跳过的整点各补一条 */
-        const markHourBoundaries =
-          block.key === "morning" || block.key === "day" || block.key === "evening";
-        blockTasks.forEach((task, idx) => {
-          const curLabel = formatDoneListTime(task.completedAt);
-          const prevLabel =
-            idx > 0 ? formatDoneListTime(blockTasks[idx - 1].completedAt) : null;
-          const suppressDuplicateDoneTime =
-            Boolean(curLabel) && curLabel === prevLabel;
-          if (markHourBoundaries && idx > 0) {
-            const prevHour = getDoneListHour(blockTasks[idx - 1].completedAt);
-            const curHour = getDoneListHour(task.completedAt);
-            if (prevHour != null && curHour != null && prevHour !== curHour) {
-              const hi = Math.max(prevHour, curHour);
-              const lo = Math.min(prevHour, curHour);
-              for (let h = hi; h > lo; h--) {
-                const sprintLi = createDoneTimeSprintFinishLi(h);
-                if (sprintLi) itemWrap.appendChild(sprintLi);
-              }
-            }
-          }
-          const li = taskItem(task, ln, idx, blockTasks.length, undefined, {
-            suppressDuplicateDoneTime,
-            timeBlockFlexLayout: true,
-            blockKey: block.key,
-            blockIndex: idx,
-            blockLength: blockTasks.length
-          });
-          li.classList.add(
-            "done-time-block-item",
-            "done-time-block-item--" + block.key,
-            "done-time-block-item--flex-row"
-          );
-          itemWrap.appendChild(li);
-        });
+        fillDoneTimeBlockItems(itemWrap, block, blockTasks, ln);
         contentCol.appendChild(itemWrap);
 
         body.appendChild(head);
