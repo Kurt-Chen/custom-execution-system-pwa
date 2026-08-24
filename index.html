@@ -3139,6 +3139,68 @@
       background: linear-gradient(180deg, #fff7ed 0%, #ffedd5 42%, #fed7aa 78%, #fdba74 100%);
     }
 
+    .done-vd-index-rules-marquee__track--formula {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .done-vd-index-rules-marquee__formula-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3px 11px 5px;
+      border-radius: 999px;
+      font-family: var(--font-sans-zh), Georgia, "Times New Roman", serif;
+      font-size: 13px;
+      font-weight: 800;
+      font-style: italic;
+      line-height: 1.15;
+      white-space: nowrap;
+      border-bottom: 2px solid var(--vd-formula-edge, #0f766e);
+      box-shadow:
+        0 3px 0 var(--vd-formula-edge, #0f766e),
+        1px 4px 0 var(--vd-formula-edge-soft, rgba(15, 118, 110, 0.28)),
+        inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    }
+
+    .done-vd-index-rules-marquee__formula-pill--work {
+      --vd-formula-edge: #0f766e;
+      --vd-formula-edge-soft: rgba(15, 118, 110, 0.28);
+      color: #115e59;
+      background: linear-gradient(180deg, #f0fdfa 0%, #ccfbf1 42%, #99f6e4 78%, #5eead4 100%);
+    }
+
+    .done-vd-index-rules-marquee__formula-pill--outputs {
+      --vd-formula-edge: #b91c1c;
+      --vd-formula-edge-soft: rgba(185, 28, 28, 0.28);
+      color: #7f1d1d;
+      background: linear-gradient(180deg, #fff1f2 0%, #ffe4e6 42%, #fecdd3 78%, #fda4af 100%);
+    }
+
+    .done-vd-index-rules-marquee__formula-pill--volume {
+      --vd-formula-edge: #15803d;
+      --vd-formula-edge-soft: rgba(21, 128, 61, 0.28);
+      color: #14532d;
+      background: linear-gradient(180deg, #f0fdf4 0%, #dcfce7 42%, #bbf7d0 78%, #86efac 100%);
+    }
+
+    .done-vd-index-rules-marquee__formula-pill--leverage {
+      --vd-formula-edge: #6d28d9;
+      --vd-formula-edge-soft: rgba(109, 40, 217, 0.28);
+      color: #4c1d95;
+      background: linear-gradient(180deg, #f5f3ff 0%, #ede9fe 42%, #ddd6fe 78%, #c4b5fd 100%);
+    }
+
+    .done-vd-index-rules-marquee__formula-op {
+      flex: 0 0 auto;
+      color: #0f172a;
+      font-size: 14px;
+      font-weight: 800;
+      font-style: italic;
+      line-height: 1;
+    }
+
     @keyframes done-vd-index-rules-marquee-rtl {
       from {
         transform: translateX(0);
@@ -3807,6 +3869,19 @@
       .done-vd-index-rules-marquee__chip {
         padding: 2px 8px 4px;
         font-size: 11px;
+      }
+
+      .done-vd-index-rules-marquee__track--formula {
+        gap: 5px;
+      }
+
+      .done-vd-index-rules-marquee__formula-pill {
+        padding: 2px 8px 4px;
+        font-size: 11px;
+      }
+
+      .done-vd-index-rules-marquee__formula-op {
+        font-size: 12px;
       }
 
       .done-vd-desire-marquee-overlay {
@@ -105962,7 +106037,7 @@
       }
     }
 
-    /** V/D 胶囊规则跑马灯：记录原则 + 90-Day War Game + 闭合回路；每 10 分钟准点一条、连滚两次 */
+    /** V/D 胶囊规则跑马灯：记录原则 + 90-Day War Game + 闭合回路 + Work 公式；每 10 分钟准点一条、连滚两次 */
     const VD_INDEX_RULES_MARQUEE_ITEMS = [
       {
         id: "vdRule:record-all-day",
@@ -106032,6 +106107,20 @@
         kind: "chip",
         chip: "energy",
         text: "能量感是在行动中获取，而在大脑空转中漏光的。"
+      },
+      {
+        id: "vdRule:work-outputs",
+        kind: "formula",
+        text: "Work = Outputs = Volume x Leverage",
+        tokens: [
+          { type: "pill", mod: "work", text: "Work" },
+          { type: "op", text: "=" },
+          { type: "pill", mod: "outputs", text: "Outputs" },
+          { type: "op", text: "=" },
+          { type: "pill", mod: "volume", text: "Volume" },
+          { type: "op", text: "x" },
+          { type: "pill", mod: "leverage", text: "Leverage" }
+        ]
       }
     ];
     const VD_INDEX_RULES_MARQUEE_SLOT_STORAGE_KEY = "vd-index-rules-marquee-last-slot-v1";
@@ -106140,9 +106229,12 @@
       return byId[nextId] || null;
     }
 
-    function vdIndexRulesMarqueeDurationSec(text) {
-      const len = String(text || "").length;
-      return Math.max(16, Math.min(90, Math.round(len * 0.4)));
+    function vdIndexRulesMarqueeDurationSec(itemOrText) {
+      const item = itemOrText && typeof itemOrText === "object" ? itemOrText : null;
+      const text = item ? String(item.text || "") : String(itemOrText || "");
+      const base = Math.max(16, Math.min(90, Math.round(text.length * 0.4)));
+      if (item && item.kind === "formula") return Math.max(22, base);
+      return base;
     }
 
     function mountVdIndexRulesMarqueeOverlay(hostEl, item, totalDurationSec, elapsedSecOpt) {
@@ -106165,6 +106257,26 @@
           "done-vd-index-rules-marquee__chip done-vd-index-rules-marquee__chip--" + chipMod;
         chip.textContent = item.text;
         track.appendChild(chip);
+      } else if (item.kind === "formula" && Array.isArray(item.tokens)) {
+        track.classList.add("done-vd-index-rules-marquee__track--formula");
+        item.tokens.forEach(function (tok) {
+          if (!tok) return;
+          if (tok.type === "op") {
+            const op = document.createElement("span");
+            op.className = "done-vd-index-rules-marquee__formula-op";
+            op.setAttribute("aria-hidden", "true");
+            op.textContent = String(tok.text || "");
+            track.appendChild(op);
+            return;
+          }
+          const pill = document.createElement("span");
+          const pillMod = String(tok.mod || "work").replace(/[^a-z-]/g, "") || "work";
+          pill.className =
+            "done-vd-index-rules-marquee__formula-pill done-vd-index-rules-marquee__formula-pill--" +
+            pillMod;
+          pill.textContent = String(tok.text || "");
+          track.appendChild(pill);
+        });
       } else {
         track.textContent = item.text;
       }
@@ -106213,7 +106325,7 @@
       if (!item) return false;
       const host = queryVdIndexRulesMarqueeHost();
       if (!host) return false;
-      const passSec = vdIndexRulesMarqueeDurationSec(item.text);
+      const passSec = vdIndexRulesMarqueeDurationSec(item);
       const passes = Math.max(1, Number(VD_INDEX_RULES_MARQUEE_PASSES) || 1);
       const durationSec = passSec * passes;
       const reduceMotion =
