@@ -29097,6 +29097,9 @@
           1px 3px 0 rgba(21, 128, 61, 0.28),
           inset 0 1px 0 rgba(255, 255, 255, 0.7);
       }
+      ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__text {
+        font-size: 10px;
+      }
     }
 
     ul.app-done-time-timeline.done-time-block-list .done-time-block-time-item:not(.done-text-expanded) {
@@ -29444,6 +29447,92 @@
     @media (prefers-reduced-motion: reduce) {
       ul.app-done-time-timeline .done-sprint-finish-rough-start-marquee__track {
         padding-left: 100%;
+      }
+    }
+
+    /* 当前冲刺小时终点线：Closed List / 十二周年当周纯文本跑马灯（无胶囊） */
+    ul.app-done-time-timeline .done-time-sprint-finish.is-hour-task-marquee-playing
+      .done-time-sprint-finish__rule {
+      visibility: hidden;
+    }
+    ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      overflow: hidden;
+      box-sizing: border-box;
+      pointer-events: none;
+      background: transparent;
+    }
+    ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      overflow: hidden;
+      mask-image: linear-gradient(
+        90deg,
+        transparent 0,
+        #000 10px,
+        #000 calc(100% - 10px),
+        transparent 100%
+      );
+      -webkit-mask-image: linear-gradient(
+        90deg,
+        transparent 0,
+        #000 10px,
+        #000 calc(100% - 10px),
+        transparent 100%
+      );
+    }
+    ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__track {
+      display: inline-flex;
+      align-items: center;
+      white-space: nowrap;
+      padding-left: 100%;
+      will-change: transform;
+    }
+    ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__track.is-running {
+      animation: done-sprint-finish-close-loop-marquee-rtl var(--marquee-duration, 24s) linear infinite;
+    }
+    ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__text {
+      display: inline;
+      margin: 0;
+      padding: 0;
+      font-family: var(--font-sans-zh), system-ui, -apple-system, "Segoe UI", sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      font-style: italic;
+      line-height: 1.2;
+      white-space: nowrap;
+      letter-spacing: 0.01em;
+    }
+    ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__text--closed {
+      color: #5b21b6;
+    }
+    ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__text--anniversary {
+      color: #c2410c;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__track {
+        padding-left: 100%;
+      }
+    }
+    @media (min-width: 768px) {
+      ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__text {
+        font-size: 13px;
+      }
+    }
+    @media (max-width: 767px) {
+      ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__text {
+        font-size: 11px;
+        font-weight: 700;
+      }
+    }
+    @media (max-width: 1366px) and (pointer: coarse) {
+      ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__text {
+        font-size: 11px;
       }
     }
 
@@ -30519,6 +30608,9 @@
       }
       ul.app-done-time-timeline .done-sprint-finish-rough-start-marquee__chip {
         padding: 3px 14px 5px;
+        font-size: 13px;
+      }
+      ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__text {
         font-size: 13px;
       }
       ul.app-done-time-timeline .done-time-block-time-item .done-time-axis-cell {
@@ -85642,7 +85734,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260825r";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260826b";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -102440,13 +102532,34 @@
       scheduleExpandAndFocusDoneJournalAssess(newDoneId);
     }
 
+    /**
+     * 添加框提交后立刻刷新列表。
+     * 焦点仍在 #doneManualInput 时 render() 会因 isAppUiEditingInProgress 推迟，
+     * 表现为回车 / 点 + 后输入被清空、任务却不出现。
+     */
+    function flushDoneComposerRender() {
+      try {
+        if (doneManualInput && document.activeElement === doneManualInput) {
+          doneManualInput.blur();
+        }
+      } catch (_doneComposerBlurErr) {}
+      renderDeferredWhileEditing = false;
+      if (renderWhenEditingEndsTimer) {
+        clearTimeout(renderWhenEditingEndsTimer);
+        renderWhenEditingEndsTimer = null;
+      }
+      render();
+    }
+
     function addManualDone() {
+      if (!doneManualInput) return;
       const text = doneManualInput.value.trim();
       if (!text) {
         doneManualInput.focus();
         return;
       }
-      const ts = habitDateToCompletedAt(selectedDoneDate);
+      const dateKey = selectedDoneDate || formatDateInputValue(new Date());
+      const ts = habitDateToCompletedAt(dateKey);
       state.done.unshift({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text,
@@ -102455,7 +102568,7 @@
       });
       doneManualInput.value = "";
       saveState();
-      render();
+      flushDoneComposerRender();
       doneManualInput.focus();
     }
 
@@ -105636,12 +105749,15 @@
         if (keep.has(el)) return;
         el.classList.remove(
           "is-rough-start-marquee-playing",
-          "is-close-loop-marquee-playing"
+          "is-close-loop-marquee-playing",
+          "is-hour-task-marquee-playing"
         );
         const green = el.querySelector(".done-sprint-finish-rough-start-marquee-overlay");
         const blue = el.querySelector(".done-sprint-finish-close-loop-marquee-overlay");
+        const hourTask = el.querySelector(".done-sprint-finish-hour-task-marquee-overlay");
         if (green) green.remove();
         if (blue) blue.remove();
+        if (hourTask) hourTask.remove();
       });
     }
 
@@ -105693,6 +105809,9 @@
       clearSprintFinishCloseLoopMarqueeOverlay(hostEl);
       if (typeof clearSprintFinishRoughStartMarqueeOverlay === "function") {
         clearSprintFinishRoughStartMarqueeOverlay(hostEl);
+      }
+      if (typeof clearSprintFinishHourTaskMarqueeOverlay === "function") {
+        clearSprintFinishHourTaskMarqueeOverlay(hostEl);
       }
       hostEl.classList.add("is-close-loop-marquee-playing");
       const overlay = document.createElement("div");
@@ -105747,6 +105866,13 @@
         sprintFinishRoughStartMarqueeState.phase === "playing"
       ) {
         return false;
+      }
+      if (
+        typeof sprintFinishHourTaskMarqueeState !== "undefined" &&
+        sprintFinishHourTaskMarqueeState.phase === "playing" &&
+        typeof finishSprintFinishHourTaskMarqueePlay === "function"
+      ) {
+        finishSprintFinishHourTaskMarqueePlay(sprintFinishHourTaskMarqueeState.playToken);
       }
       const passSec = sprintFinishCloseLoopMarqueeDurationSec();
       const remainMs = msUntilClockMinuteEnd();
@@ -105900,6 +106026,9 @@
       if (!rule) return;
       clearSprintFinishRoughStartMarqueeOverlay(hostEl);
       clearSprintFinishCloseLoopMarqueeOverlay(hostEl);
+      if (typeof clearSprintFinishHourTaskMarqueeOverlay === "function") {
+        clearSprintFinishHourTaskMarqueeOverlay(hostEl);
+      }
       hostEl.classList.add("is-rough-start-marquee-playing");
       const overlay = document.createElement("div");
       overlay.className = "done-sprint-finish-rough-start-marquee-overlay";
@@ -105952,6 +106081,13 @@
       const hosts = querySprintFinishMarqueeHosts();
       if (!hosts.length) return false;
       if (sprintFinishCloseLoopMarqueeState.phase === "playing") return false;
+      if (
+        typeof sprintFinishHourTaskMarqueeState !== "undefined" &&
+        sprintFinishHourTaskMarqueeState.phase === "playing" &&
+        typeof finishSprintFinishHourTaskMarqueePlay === "function"
+      ) {
+        finishSprintFinishHourTaskMarqueePlay(sprintFinishHourTaskMarqueeState.playToken);
+      }
       const passSec = sprintFinishRoughStartMarqueeDurationSec();
       const remainMs = msUntilClockMinuteEnd();
       sprintFinishRoughStartMarqueeState.phase = "playing";
@@ -106007,6 +106143,328 @@
         startSprintFinishRoughStartMarqueePlay();
       } finally {
         sprintFinishRoughStartMarqueeSyncing = false;
+      }
+    }
+
+    /**
+     * 当前小时终点线：Closed List 当天全部 / 十二周年当周全部。
+     * 与蓝/绿胶囊同一套 overlay + 触发分钟内循环滚；无胶囊外观。
+     * :01/:21/:41 Closed List；:16/:36/:56 十二周年。
+     */
+    const SPRINT_FINISH_HOUR_TASK_MARQUEE_SLOT_STORAGE_KEY =
+      "sprint-finish-hour-task-marquee-last-slot-v1";
+    const SPRINT_FINISH_HOUR_TASK_MARQUEE_KIND_BY_MINUTE = {
+      1: "closed",
+      16: "anniversary",
+      21: "closed",
+      36: "anniversary",
+      41: "closed",
+      56: "anniversary"
+    };
+    let sprintFinishHourTaskMarqueeSyncing = false;
+    let sprintFinishHourTaskMarqueeState = {
+      phase: "idle",
+      lastSlotKey: "",
+      kind: "",
+      text: "",
+      playToken: 0,
+      playEndsAt: 0,
+      playStartedAt: 0,
+      playDurationMs: 0,
+      finishTimerId: null
+    };
+
+    function getSprintFinishHourTaskMarqueeClockSlot(dateOpt) {
+      const d = dateOpt instanceof Date ? dateOpt : new Date();
+      const min = d.getMinutes();
+      const kind = SPRINT_FINISH_HOUR_TASK_MARQUEE_KIND_BY_MINUTE[min];
+      if (!kind) return null;
+      const y = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      const h = String(d.getHours()).padStart(2, "0");
+      const mm = String(min).padStart(2, "0");
+      return {
+        kind: kind,
+        slotKey: y + "-" + mo + "-" + day + "T" + h + ":" + mm
+      };
+    }
+
+    function readSprintFinishHourTaskMarqueeLastSlotKey() {
+      if (sprintFinishHourTaskMarqueeState.lastSlotKey) {
+        return sprintFinishHourTaskMarqueeState.lastSlotKey;
+      }
+      try {
+        return String(
+          sessionStorage.getItem(SPRINT_FINISH_HOUR_TASK_MARQUEE_SLOT_STORAGE_KEY) || ""
+        );
+      } catch (err) {
+        return "";
+      }
+    }
+
+    function writeSprintFinishHourTaskMarqueeLastSlotKey(slotKey) {
+      const key = String(slotKey || "");
+      sprintFinishHourTaskMarqueeState.lastSlotKey = key;
+      if (!key) return;
+      try {
+        sessionStorage.setItem(SPRINT_FINISH_HOUR_TASK_MARQUEE_SLOT_STORAGE_KEY, key);
+      } catch (err) {
+        /* ignore */
+      }
+    }
+
+    function getSprintFinishFallbackCopy(hostEl) {
+      const hour = Number(hostEl && hostEl.getAttribute("data-finish-hour"));
+      const n = hour >= 6 && hour <= 23 ? hour - 5 : 1;
+      return "SPRINT " + n + " · FINISH · Maniacal Urgency";
+    }
+
+    function buildSprintHourClosedListScrollPayload(hostEl) {
+      const todayKey = formatDateInputValue(new Date());
+      const raw =
+        typeof getClosedListItemsVisibleForViewDate === "function"
+          ? getClosedListItemsVisibleForViewDate(todayKey)
+          : [];
+      const allHave =
+        raw.length > 0 &&
+        raw.every(function (x) {
+          return typeof x.listOrder === "number";
+        });
+      const items = raw.slice().sort(function (a, b) {
+        return compareClosedListItemsForSort(a, b, allHave);
+      });
+      const progress =
+        typeof countClosedListProgressUnits === "function"
+          ? countClosedListProgressUnits(items)
+          : { done: 0, total: 0, pct: 0 };
+      const prefix =
+        "Closed List " + progress.done + "/" + progress.total + " · " + progress.pct + "%";
+      const names = items
+        .map(function (it) {
+          return String((it && it.text) || "").replace(/\s+/g, " ").trim();
+        })
+        .filter(Boolean);
+      const fallback = getSprintFinishFallbackCopy(hostEl);
+      return prefix + " · " + (names.length ? names.join(" · ") : fallback);
+    }
+
+    function buildSprintHourAnniversaryScrollPayload(hostEl) {
+      const todayKey = formatDateInputValue(new Date());
+      const fallback = getSprintFinishFallbackCopy(hostEl);
+      const target =
+        typeof resolveAnniversaryTwJumpTargetForDate === "function"
+          ? resolveAnniversaryTwJumpTargetForDate(todayKey)
+          : null;
+      if (!target || !target.moduleKey || !(target.weekNum >= 1 && target.weekNum <= 13)) {
+        return "十二周年 0/0 · 0% · " + fallback;
+      }
+      const num =
+        typeof anniversaryTwNumberFromModuleKey === "function"
+          ? anniversaryTwNumberFromModuleKey(target.moduleKey)
+          : 0;
+      const tasks =
+        typeof getAnniversaryTwWeekTasks === "function"
+          ? getAnniversaryTwWeekTasks(target.moduleKey, target.weekNum)
+          : [];
+      const progress =
+        typeof computeAnniversaryWeekTaskProgress === "function"
+          ? computeAnniversaryWeekTaskProgress(tasks)
+          : { done: 0, total: 0, pct: 0 };
+      const prefix =
+        "十二周年#" +
+        num +
+        " 第" +
+        target.weekNum +
+        "周 " +
+        progress.done +
+        "/" +
+        progress.total +
+        " · " +
+        progress.pct +
+        "%";
+      const names = [];
+      if (typeof getAnniversaryTwWeekGoalEntry === "function") {
+        const goalEntry = getAnniversaryTwWeekGoalEntry(target.moduleKey, target.weekNum);
+        const goal = String((goalEntry && goalEntry.goal) || "").replace(/\s+/g, " ").trim();
+        if (goal) names.push(goal);
+      }
+      tasks.forEach(function (t) {
+        const tx = String((t && t.text) || "").replace(/\s+/g, " ").trim();
+        if (tx) names.push(tx);
+      });
+      return prefix + " · " + (names.length ? names.join(" · ") : fallback);
+    }
+
+    function buildSprintHourTaskMarqueeText(kind, hostEl) {
+      if (kind === "anniversary") return buildSprintHourAnniversaryScrollPayload(hostEl);
+      return buildSprintHourClosedListScrollPayload(hostEl);
+    }
+
+    function sprintFinishHourTaskMarqueeDurationSec(text) {
+      const len = String(text || "").length;
+      /* 与蓝/绿胶囊同速（len * 0.4）；触发分钟内循环滚 */
+      return Math.max(16, Math.min(90, Math.round(len * 0.4)));
+    }
+
+    function clearSprintFinishHourTaskMarqueeFinishTimer() {
+      if (sprintFinishHourTaskMarqueeState.finishTimerId) {
+        clearTimeout(sprintFinishHourTaskMarqueeState.finishTimerId);
+        sprintFinishHourTaskMarqueeState.finishTimerId = null;
+      }
+    }
+
+    function clearSprintFinishHourTaskMarqueeOverlay(hostEl) {
+      const hosts = hostEl
+        ? [hostEl]
+        : Array.prototype.slice.call(
+            document.querySelectorAll(".done-time-sprint-finish.is-hour-task-marquee-playing")
+          ).concat(querySprintFinishMarqueeHosts());
+      const seen = new Set();
+      hosts.forEach(function (host) {
+        if (!host || seen.has(host)) return;
+        seen.add(host);
+        host.classList.remove("is-hour-task-marquee-playing");
+        const overlay = host.querySelector(".done-sprint-finish-hour-task-marquee-overlay");
+        if (overlay) overlay.remove();
+      });
+    }
+
+    function sprintFinishHourTaskMarqueeOverlayHealthy(hostEl, kind, text) {
+      if (!hostEl) return false;
+      const overlay = hostEl.querySelector(".done-sprint-finish-hour-task-marquee-overlay");
+      if (!overlay || overlay.getAttribute("data-marquee-kind") !== kind) return false;
+      const el = overlay.querySelector(".done-sprint-finish-hour-task-marquee__text");
+      return Boolean(el && el.textContent === text);
+    }
+
+    function mountSprintFinishHourTaskMarqueeOverlay(hostEl, kind, text, totalDurationSec, elapsedSecOpt) {
+      if (!hostEl) return;
+      const rule = hostEl.querySelector(".done-time-sprint-finish__rule");
+      if (!rule) return;
+      clearSprintFinishHourTaskMarqueeOverlay(hostEl);
+      if (typeof clearSprintFinishCloseLoopMarqueeOverlay === "function") {
+        clearSprintFinishCloseLoopMarqueeOverlay(hostEl);
+      }
+      if (typeof clearSprintFinishRoughStartMarqueeOverlay === "function") {
+        clearSprintFinishRoughStartMarqueeOverlay(hostEl);
+      }
+      hostEl.classList.add("is-hour-task-marquee-playing");
+      const overlay = document.createElement("div");
+      overlay.className = "done-sprint-finish-hour-task-marquee-overlay";
+      overlay.setAttribute("data-marquee-kind", kind);
+      overlay.setAttribute("aria-hidden", "true");
+      const viewport = document.createElement("span");
+      viewport.className = "done-sprint-finish-hour-task-marquee";
+      const track = document.createElement("span");
+      track.className = "done-sprint-finish-hour-task-marquee__track";
+      const line = document.createElement("span");
+      line.className =
+        "done-sprint-finish-hour-task-marquee__text done-sprint-finish-hour-task-marquee__text--" +
+        (kind === "anniversary" ? "anniversary" : "closed");
+      line.textContent = text;
+      track.appendChild(line);
+      const passSec = Math.max(
+        1,
+        Number(totalDurationSec) || sprintFinishHourTaskMarqueeDurationSec(text)
+      );
+      const elapsedSec = Math.max(0, Number(elapsedSecOpt) || 0);
+      track.style.setProperty("--marquee-duration", String(passSec) + "s");
+      const peekSec = elapsedSec > 0.05 ? 0 : 4;
+      const delaySec = elapsedSec + peekSec;
+      if (delaySec > 0.05) {
+        track.style.animationDelay = String(-Math.min(delaySec, passSec - 0.05)) + "s";
+      }
+      viewport.appendChild(track);
+      overlay.appendChild(viewport);
+      hostEl.appendChild(overlay);
+      void track.offsetWidth;
+      track.classList.add("is-running");
+    }
+
+    function finishSprintFinishHourTaskMarqueePlay(playToken) {
+      if (playToken !== sprintFinishHourTaskMarqueeState.playToken) return;
+      if (sprintFinishHourTaskMarqueeState.phase !== "playing") return;
+      clearSprintFinishHourTaskMarqueeFinishTimer();
+      clearSprintFinishHourTaskMarqueeOverlay();
+      sprintFinishHourTaskMarqueeState.phase = "idle";
+      sprintFinishHourTaskMarqueeState.kind = "";
+      sprintFinishHourTaskMarqueeState.text = "";
+      sprintFinishHourTaskMarqueeState.playEndsAt = 0;
+      sprintFinishHourTaskMarqueeState.playStartedAt = 0;
+      sprintFinishHourTaskMarqueeState.playDurationMs = 0;
+    }
+
+    function startSprintFinishHourTaskMarqueePlay(kind, slotKey) {
+      const hosts = querySprintFinishMarqueeHosts();
+      if (!hosts.length) return false;
+      if (sprintFinishCloseLoopMarqueeState.phase === "playing") return false;
+      if (sprintFinishRoughStartMarqueeState.phase === "playing") return false;
+      const host = hosts[0];
+      const text = buildSprintHourTaskMarqueeText(kind, host);
+      const passSec = sprintFinishHourTaskMarqueeDurationSec(text);
+      const remainMs = msUntilClockMinuteEnd();
+      sprintFinishHourTaskMarqueeState.phase = "playing";
+      sprintFinishHourTaskMarqueeState.kind = kind;
+      sprintFinishHourTaskMarqueeState.text = text;
+      sprintFinishHourTaskMarqueeState.playToken += 1;
+      const token = sprintFinishHourTaskMarqueeState.playToken;
+      sprintFinishHourTaskMarqueeState.playStartedAt = Date.now();
+      sprintFinishHourTaskMarqueeState.playDurationMs = remainMs;
+      sprintFinishHourTaskMarqueeState.playEndsAt =
+        sprintFinishHourTaskMarqueeState.playStartedAt + remainMs;
+      writeSprintFinishHourTaskMarqueeLastSlotKey(slotKey);
+      clearSprintFinishHourTaskMarqueeFinishTimer();
+      stripSprintFinishMarqueesNotIn(hosts);
+      hosts.forEach(function (el) {
+        mountSprintFinishHourTaskMarqueeOverlay(el, kind, text, passSec, 0);
+      });
+      sprintFinishHourTaskMarqueeState.finishTimerId = window.setTimeout(function () {
+        if (getSprintFinishHourTaskMarqueeClockSlot(new Date())) return;
+        finishSprintFinishHourTaskMarqueePlay(token);
+      }, remainMs + 80);
+      return true;
+    }
+
+    function ensureSprintFinishHourTaskMarqueeOverlayMounted(kind) {
+      const hosts = querySprintFinishMarqueeHosts();
+      if (!hosts.length) return;
+      stripSprintFinishMarqueesNotIn(hosts);
+      const host = hosts[0];
+      const text = buildSprintHourTaskMarqueeText(kind, host);
+      sprintFinishHourTaskMarqueeState.kind = kind;
+      sprintFinishHourTaskMarqueeState.text = text;
+      const passSec = sprintFinishHourTaskMarqueeDurationSec(text);
+      const started = sprintFinishHourTaskMarqueeState.playStartedAt || Date.now();
+      const elapsedSec = Math.max(0, (Date.now() - started) / 1000) % passSec;
+      hosts.forEach(function (el) {
+        if (!sprintFinishHourTaskMarqueeOverlayHealthy(el, kind, text)) {
+          mountSprintFinishHourTaskMarqueeOverlay(el, kind, text, passSec, elapsedSec);
+        }
+      });
+    }
+
+    function syncSprintFinishHourTaskMarquee() {
+      if (sprintFinishHourTaskMarqueeSyncing) return;
+      sprintFinishHourTaskMarqueeSyncing = true;
+      try {
+        const hosts = querySprintFinishMarqueeHosts();
+        const slot = getSprintFinishHourTaskMarqueeClockSlot(new Date());
+        if (!hosts.length || !slot) {
+          if (sprintFinishHourTaskMarqueeState.phase === "playing") {
+            finishSprintFinishHourTaskMarqueePlay(sprintFinishHourTaskMarqueeState.playToken);
+          }
+          return;
+        }
+        if (sprintFinishCloseLoopMarqueeState.phase === "playing") return;
+        if (sprintFinishRoughStartMarqueeState.phase === "playing") return;
+        if (sprintFinishHourTaskMarqueeState.phase === "playing") {
+          ensureSprintFinishHourTaskMarqueeOverlayMounted(slot.kind);
+          return;
+        }
+        startSprintFinishHourTaskMarqueePlay(slot.kind, slot.slotKey);
+      } finally {
+        sprintFinishHourTaskMarqueeSyncing = false;
       }
     }
 
@@ -109541,6 +109999,9 @@
       }
       if (typeof syncSprintFinishRoughStartMarquee === "function") {
         syncSprintFinishRoughStartMarquee();
+      }
+      if (typeof syncSprintFinishHourTaskMarquee === "function") {
+        syncSprintFinishHourTaskMarquee();
       }
       const todayKey = formatDateInputValue(new Date());
       const ul = document.getElementById("doneList");
@@ -127344,6 +127805,8 @@
     /** 当前焦点是否在可编辑字段上（只读 / 非文本类 input 不算编辑中） */
     function isActiveEditableField(el) {
       if (!el || !isFieldVisibleForEditGuard(el)) return false;
+      /* 顶栏「添加已完成」是静态节点，render 不会拆掉；当成编辑中会导致添加后列表不刷新 */
+      if (el.id === "doneManualInput") return false;
       if (el.isContentEditable) return true;
       const tag = el.tagName;
       if (tag === "TEXTAREA") return !el.readOnly;
