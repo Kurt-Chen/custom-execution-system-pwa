@@ -29042,14 +29042,14 @@
         padding-bottom: 8px;
       }
       ul.app-done-time-timeline .done-time-sprint-finish__time {
-        font-size: 11px;
+        font-size: 10px;
       }
       ul.app-done-time-timeline .done-time-sprint-finish__label {
-        font-size: 11px;
+        font-size: 10px;
         letter-spacing: 0.02em;
       }
       ul.app-done-time-timeline .done-time-sprint-finish__urgency {
-        font-size: 8px;
+        font-size: 7px;
       }
       ul.app-done-time-timeline .done-time-sprint-finish__chev svg {
         width: 16px;
@@ -29059,8 +29059,8 @@
         gap: 6px;
       }
       ul.app-done-time-timeline .done-time-sprint-finish__flag svg {
-        width: 22px;
-        height: 17px;
+        width: 30px;
+        height: 21px;
       }
     }
 
@@ -29147,12 +29147,13 @@
       background: transparent;
     }
     ul.app-done-time-timeline .done-time-sprint-finish__time {
-      flex-shrink: 0;
+      flex: 0 0 44px;
+      width: 44px;
       min-width: 44px;
-      padding-right: 6px;
+      padding: 0;
       box-sizing: border-box;
-      text-align: right;
-      font-size: 12px;
+      text-align: center;
+      font-size: 11px;
       font-weight: 700;
       font-style: italic;
       font-variant-numeric: tabular-nums;
@@ -29211,7 +29212,7 @@
       min-width: 0;
     }
     ul.app-done-time-timeline .done-time-sprint-finish__label {
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 800;
       font-style: italic;
       letter-spacing: 0.03em;
@@ -29221,7 +29222,7 @@
       line-height: 1.15;
     }
     ul.app-done-time-timeline .done-time-sprint-finish__urgency {
-      font-size: 10px;
+      font-size: 9px;
       font-weight: 400;
       font-style: italic;
       letter-spacing: 0.03em;
@@ -29238,8 +29239,8 @@
     }
     ul.app-done-time-timeline .done-time-sprint-finish__flag svg {
       display: block;
-      width: 26px;
-      height: 20px;
+      width: 32px;
+      height: 22px;
     }
 
     /* of .done-time-block-item：斑马纹按任务行计 */
@@ -30284,21 +30285,21 @@
         padding-bottom: 12px;
       }
       ul.app-done-time-timeline .done-time-sprint-finish__time {
-        font-size: 14px;
+        font-size: 13px;
       }
       ul.app-done-time-timeline .done-time-sprint-finish__label {
-        font-size: 16px;
+        font-size: 15px;
       }
       ul.app-done-time-timeline .done-time-sprint-finish__urgency {
-        font-size: 11px;
+        font-size: 10px;
       }
       ul.app-done-time-timeline .done-time-sprint-finish__chev svg {
         width: 20px;
         height: 11px;
       }
       ul.app-done-time-timeline .done-time-sprint-finish__flag svg {
-        width: 30px;
-        height: 23px;
+        width: 38px;
+        height: 26px;
       }
       ul.app-done-time-timeline .done-time-block-time-item .done-time-axis-cell {
         padding: 9px 4px 9px 0;
@@ -105047,27 +105048,68 @@
       return d.getHours();
     }
 
-    /** 飘荡格纹旗：每条冲刺线独立 clip/pattern id，避免多条同屏 id 冲突 */
+    /** 飘荡格纹旗：3×5 格随 S 浪错切；每条冲刺线独立 clip id */
     function buildDoneTimeSprintFinishFlagSvg() {
       const uid = "sf" + Math.random().toString(36).slice(2, 9);
       const clipId = uid + "c";
-      const patId = uid + "p";
+      const x0 = 3.8;
+      const x1 = 30.7;
+      const y0 = 2.05;
+      const flagH = 11.35;
+      const cols = 5;
+      const rows = 3;
+      function waveY(t) {
+        return Math.sin(t * 2 * Math.PI) * (0.48 + 0.82 * t) + Math.sin(t * 4 * Math.PI) * 0.3 * t;
+      }
+      function fx(t) {
+        return x0 + (x1 - x0) * t;
+      }
+      function fy(t, u) {
+        return y0 + flagH * u + waveY(t);
+      }
+      function n(v) {
+        return Math.round(v * 100) / 100;
+      }
+      const outlinePts = [];
+      const steps = 24;
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        outlinePts.push(n(fx(t)) + "," + n(fy(t, 0)));
+      }
+      for (let i = steps; i >= 0; i--) {
+        const t = i / steps;
+        outlinePts.push(n(fx(t)) + "," + n(fy(t, 1)));
+      }
+      const outlineD = "M" + outlinePts.join("L") + "Z";
+      let cells = "";
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          if ((r + c) % 2 !== 0) continue;
+          const t0 = c / cols;
+          const t1 = (c + 1) / cols;
+          const u0 = r / rows;
+          const u1 = (r + 1) / rows;
+          cells +=
+            '<polygon points="' +
+            n(fx(t0)) + "," + n(fy(t0, u0)) + " " +
+            n(fx(t1)) + "," + n(fy(t1, u0)) + " " +
+            n(fx(t1)) + "," + n(fy(t1, u1)) + " " +
+            n(fx(t0)) + "," + n(fy(t0, u1)) +
+            '" fill="#111"/>';
+        }
+      }
       return (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 20" width="22" height="17" aria-hidden="true">' +
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 22" aria-hidden="true">' +
         "<defs>" +
-        '<clipPath id="' + clipId + '">' +
-        '<path d="M5 1.8C8.4.4 11.6 3.4 15.2 1.9 18.4.7 21.4 3.1 24.6 1.7v10.8c-3.2 1.4-6.2-1-9.4.2C11.6 14.2 8.4 11.2 5 12.6Z"/>' +
-        "</clipPath>" +
-        '<pattern id="' + patId + '" width="5.2" height="4.2" patternUnits="userSpaceOnUse">' +
-        '<rect width="5.2" height="4.2" fill="#fff"/>' +
-        '<rect width="2.6" height="2.1" fill="#111"/>' +
-        '<rect x="2.6" y="2.1" width="2.6" height="2.1" fill="#111"/>' +
-        "</pattern>" +
+        '<clipPath id="' + clipId + '"><path d="' + outlineD + '"/></clipPath>' +
         "</defs>" +
-        '<rect x="1.5" y=".3" width="1.7" height="19.4" rx=".45" fill="#111"/>' +
-        '<rect x="1.2" y=".15" width="2.3" height="1.5" rx=".4" fill="#111"/>' +
-        '<rect x="4.8" y=".4" width="20.2" height="13.6" fill="url(#' + patId + ')" clip-path="url(#' + clipId + ')"/>' +
-        '<path d="M5 1.8C8.4.4 11.6 3.4 15.2 1.9 18.4.7 21.4 3.1 24.6 1.7v10.8c-3.2 1.4-6.2-1-9.4.2C11.6 14.2 8.4 11.2 5 12.6Z" fill="none" stroke="#111" stroke-width=".75"/>' +
+        '<rect x="2.2" y="1.2" width="1.55" height="19.5" rx=".4" fill="#111"/>' +
+        '<rect x="1.8" y="1" width="2.35" height="1.3" rx=".28" fill="#111"/>' +
+        '<g clip-path="url(#' + clipId + ')">' +
+        '<path d="' + outlineD + '" fill="#fff"/>' +
+        cells +
+        "</g>" +
+        '<path d="' + outlineD + '" fill="none" stroke="#111" stroke-width=".7" stroke-linejoin="round"/>' +
         "</svg>"
       );
     }
@@ -105076,14 +105118,42 @@
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 10" width="18" height="10" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="miter" stroke-linecap="square" d="M1 1l4 4-4 4M7 1l4 4-4 4M13 1l4 4-4 4"/></svg>';
 
     /**
-     * 时段内全部冲刺结束整点（有无任务都插入；新→旧从大到小）。
+     * 当天尚未到达的下一条冲刺终点整点（6–23）。
+     * 历史日 / 今日已过 23:00 返回 null（表示后面没有未到的线，已过的全部照常显示）。
+     * 未来日从 06:00 起；整点一到视为本条完成，下一条 +1。
+     */
+    function getDoneTimeNextSprintFinishHour(dateKey, nowOpt) {
+      const raw = String(dateKey || "").trim();
+      const todayKey = formatDateInputValue(new Date());
+      if (raw && raw < todayKey) return null;
+      if (raw && raw > todayKey) return 6;
+      const now = nowOpt instanceof Date ? nowOpt : new Date();
+      const hour = now.getHours();
+      if (hour < 6) return 6;
+      if (hour >= 23) return null;
+      return hour + 1;
+    }
+
+    /**
+     * 该时段要插入的冲刺结束整点（新→旧）：已过的全部 + 下一条；更后面的先藏。
      * 早晨 11–6、白天 17–12、晚间 23–18；5–6 点为冲刺 1。
      */
-    function getDoneTimeBlockSprintFinishHours(blockKey) {
-      if (blockKey === "morning") return [11, 10, 9, 8, 7, 6];
-      if (blockKey === "day") return [17, 16, 15, 14, 13, 12];
-      if (blockKey === "evening") return [23, 22, 21, 20, 19, 18];
-      return [];
+    function getDoneTimeBlockSprintFinishHours(blockKey, nextHour) {
+      const all =
+        blockKey === "morning"
+          ? [11, 10, 9, 8, 7, 6]
+          : blockKey === "day"
+            ? [17, 16, 15, 14, 13, 12]
+            : blockKey === "evening"
+              ? [23, 22, 21, 20, 19, 18]
+              : [];
+      if (!all.length) return [];
+      if (nextHour == null) return all;
+      const cap = Number(nextHour);
+      if (!(cap >= 6 && cap <= 23)) return all;
+      return all.filter(function (h) {
+        return h <= cap;
+      });
     }
 
     function getDoneSprintFinishAnchorMs(dateKey, finishHour) {
@@ -105173,11 +105243,12 @@
       return li;
     }
 
-    /** 任务行与该时段全部冲刺结束线混排（新→旧）；无任务也插入结束线 */
+    /** 任务行与冲刺结束线混排（新→旧）：已过的照常显示，只多插下一条 */
     function fillDoneTimeBlockItems(itemWrap, block, blockTasks, ln) {
       const tasks = Array.isArray(blockTasks) ? blockTasks : [];
       const dateKey = selectedDoneDate || formatDateInputValue(new Date());
-      const finishHours = getDoneTimeBlockSprintFinishHours(block && block.key);
+      const nextHour = getDoneTimeNextSprintFinishHour(dateKey);
+      const finishHours = getDoneTimeBlockSprintFinishHours(block && block.key, nextHour);
       const rows = [];
       tasks.forEach(function (task, idx) {
         rows.push({
@@ -107431,9 +107502,11 @@
     }
 
     function getDoneTodayVisibilityDigest(nowMin) {
-      return DONE_TIME_BLOCKS.map(function (b) {
+      const blockBits = DONE_TIME_BLOCKS.map(function (b) {
         return shouldShowDoneTimeBlockOnToday(b, nowMin) ? "1" : "0";
       }).join("");
+      const nextH = getDoneTimeNextSprintFinishHour(formatDateInputValue(new Date()));
+      return blockBits + ":sf" + (nextH == null ? "x" : String(nextH));
     }
 
     /** 早晨/白天/晚间：Day 1～3（手机 Sprint 与全端角标）；凌晨/深夜：桌面角标「深度休息 · N」，≤767px 仅数字以免挤两行 */
@@ -113010,7 +113083,7 @@
           head.appendChild(badge);
         }
 
-        /* 冲刺时段（早/昼/晚）：有无任务都插入该时段全部结束整点（含 17:00 / 11:00） */
+        /* 冲刺时段（早/昼/晚）：已过终点线照常插入，另加下一条；更后面的整点先藏 */
         const markHourBoundaries =
           block.key === "morning" || block.key === "day" || block.key === "evening";
 
