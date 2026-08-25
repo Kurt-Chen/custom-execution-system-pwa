@@ -85629,7 +85629,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260825m";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260825n";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -105594,8 +105594,8 @@
     }
 
     /**
-     * 当前冲刺块内所有可见小时终点线（紫框里那几条橙线）。
-     * 17:35 只有 18:00；18:35 则 19:00 与 18:00 都会挂，避免用户盯着的那条不滚。
+     * 只挂用户眼前那一条：日志上方的本小时整点。
+     * 18:00–18:59 → 18:00（不要滚上面的 19:00）；17:xx → 下一条 18:00。
      */
     function querySprintFinishMarqueeHosts() {
       const todayKey = formatDateInputValue(new Date());
@@ -105605,22 +105605,45 @@
       const ul = document.getElementById("doneList");
       if (!ul) return [];
       const block = ul.querySelector(":scope > li.done-time-block--sprint-current");
-      let nodes = block
+      const inBlock = block
         ? Array.prototype.slice.call(block.querySelectorAll(".done-time-sprint-finish"))
         : [];
-      if (!nodes.length) {
-        const hour = new Date().getHours();
-        const thisHourHost = ul.querySelector(
-          '.done-time-sprint-finish[data-finish-hour="' + String(hour) + '"]'
+      const hour = String(new Date().getHours());
+      const thisHourInBlock = inBlock.find(function (el) {
+        return (
+          el.getAttribute("data-finish-hour") === hour && sprintFinishMarqueeHostIsVisible(el)
         );
-        const upcoming = ul.querySelector(".done-time-sprint-finish--current");
-        nodes = [thisHourHost, upcoming].filter(Boolean);
+      });
+      if (thisHourInBlock) return [thisHourInBlock];
+      const upcomingInBlock = inBlock.find(function (el) {
+        return (
+          el.classList.contains("done-time-sprint-finish--current") &&
+          sprintFinishMarqueeHostIsVisible(el)
+        );
+      });
+      if (upcomingInBlock) return [upcomingInBlock];
+      if (inBlock.length) {
+        const last = inBlock[inBlock.length - 1];
+        if (last && sprintFinishMarqueeHostIsVisible(last)) return [last];
       }
-      const seen = new Set();
-      return nodes.filter(function (el) {
-        if (!el || seen.has(el) || !sprintFinishMarqueeHostIsVisible(el)) return false;
-        seen.add(el);
-        return true;
+      const upcoming = ul.querySelector(".done-time-sprint-finish--current");
+      if (upcoming && sprintFinishMarqueeHostIsVisible(upcoming)) return [upcoming];
+      return [];
+    }
+
+    /** 清掉其它终点线上残留的胶囊，避免 19:00 在滚、18:00 停着一条静态绿条 */
+    function stripSprintFinishMarqueesNotIn(keepHosts) {
+      const keep = new Set(keepHosts || []);
+      document.querySelectorAll(".done-time-sprint-finish").forEach(function (el) {
+        if (keep.has(el)) return;
+        el.classList.remove(
+          "is-rough-start-marquee-playing",
+          "is-close-loop-marquee-playing"
+        );
+        const green = el.querySelector(".done-sprint-finish-rough-start-marquee-overlay");
+        const blue = el.querySelector(".done-sprint-finish-close-loop-marquee-overlay");
+        if (green) green.remove();
+        if (blue) blue.remove();
       });
     }
 
@@ -105747,6 +105770,7 @@
       sprintFinishCloseLoopMarqueeState.playEndsAt =
         sprintFinishCloseLoopMarqueeState.playStartedAt + remainMs;
       clearSprintFinishCloseLoopMarqueeFinishTimer();
+      stripSprintFinishMarqueesNotIn(hosts);
       hosts.forEach(function (host) {
         mountSprintFinishCloseLoopMarqueeOverlay(host, passSec, 0);
       });
@@ -105760,6 +105784,7 @@
     function ensureSprintFinishCloseLoopMarqueeOverlayMounted() {
       const hosts = querySprintFinishMarqueeHosts();
       if (!hosts.length) return;
+      stripSprintFinishMarqueesNotIn(hosts);
       const passSec = sprintFinishCloseLoopMarqueeDurationSec();
       const started = sprintFinishCloseLoopMarqueeState.playStartedAt || Date.now();
       const elapsedSec = Math.max(0, (Date.now() - started) / 1000) % passSec;
@@ -105948,6 +105973,7 @@
       sprintFinishRoughStartMarqueeState.playEndsAt =
         sprintFinishRoughStartMarqueeState.playStartedAt + remainMs;
       clearSprintFinishRoughStartMarqueeFinishTimer();
+      stripSprintFinishMarqueesNotIn(hosts);
       hosts.forEach(function (host) {
         mountSprintFinishRoughStartMarqueeOverlay(host, passSec, 0);
       });
@@ -105961,6 +105987,7 @@
     function ensureSprintFinishRoughStartMarqueeOverlayMounted() {
       const hosts = querySprintFinishMarqueeHosts();
       if (!hosts.length) return;
+      stripSprintFinishMarqueesNotIn(hosts);
       const passSec = sprintFinishRoughStartMarqueeDurationSec();
       const started = sprintFinishRoughStartMarqueeState.playStartedAt || Date.now();
       const elapsedSec = Math.max(0, (Date.now() - started) / 1000) % passSec;
