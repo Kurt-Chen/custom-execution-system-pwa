@@ -86071,7 +86071,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260827c";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260827d";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -106525,8 +106525,8 @@
     /**
      * 当前小时终点线：Closed List 当天全部 / 十二周年当周全部 / 年岁目标 / 逃离数字 / 时薪。
      * 与蓝/绿胶囊同一套 overlay；无胶囊外壳。触发后连着滚 3 遍再停（本分钟不重开）。
-     * :01/:21/:41 Closed List；:16/:46/:56 十二周年；:23 年岁目标；:33 逃离数字；:37 自省六句；:53 时薪标准。
-     * 十二周年不用 :36，避免与 :37 自省抢同一条终点线。
+     * :01/:21/:41 Closed List；:16/:46/:56 十二周年；:26 年岁目标；:33 逃离数字；:37 自省六句；:53 时薪标准。
+     * 年岁目标用 :26，避开 :21 Closed 与 :25 绿胶囊。任务滚动总时长封顶到下一次整五分钟/自省之前，保证 3 遍能播完。
      */
     const SPRINT_FINISH_HOUR_TASK_MARQUEE_SLOT_STORAGE_KEY =
       "sprint-finish-hour-task-marquee-last-slot-v1";
@@ -106535,7 +106535,7 @@
       1: "closed",
       16: "anniversary",
       21: "closed",
-      23: "age",
+      26: "age",
       33: "escape",
       41: "closed",
       46: "anniversary",
@@ -106850,6 +106850,38 @@
       return Math.max(16, Math.min(90, Math.round(len * 0.4)));
     }
 
+    /** 整五分钟绿/蓝胶囊或 :37 自省会占用终点线并打断任务滚动 */
+    function sprintFinishLineHasBlockingCapsuleAtMinute(min) {
+      const m = ((Number(min) % 60) + 60) % 60;
+      if (m === 37) return true;
+      if (m === 15 || m === 30 || m === 45) return true;
+      return m % 5 === 0;
+    }
+
+    /**
+     * 距下一次绿/蓝/自省占用终点线的秒数。
+     * 任务滚动 3 遍总时长不得超过此时长，否则会被掐断或挡住下一槽。
+     */
+    function sprintFinishHourTaskSecUntilNextBlock(dateOpt) {
+      const d = dateOpt instanceof Date ? dateOpt : new Date();
+      const startMin = d.getMinutes();
+      for (let ahead = 1; ahead <= 60; ahead++) {
+        const m = (startMin + ahead) % 60;
+        if (sprintFinishLineHasBlockingCapsuleAtMinute(m)) {
+          const secInto = d.getSeconds() + d.getMilliseconds() / 1000;
+          return ahead * 60 - secInto;
+        }
+      }
+      return 240;
+    }
+
+    function sprintFinishHourTaskMarqueePlayDurationSec(text, dateOpt) {
+      const passes = Math.max(1, Number(SPRINT_FINISH_HOUR_TASK_MARQUEE_PASSES) || 3);
+      const uncapped = sprintFinishHourTaskMarqueeDurationSec(text) * passes;
+      const cap = Math.max(12, sprintFinishHourTaskSecUntilNextBlock(dateOpt) - 0.8);
+      return Math.min(uncapped, cap);
+    }
+
     function clearSprintFinishHourTaskMarqueeFinishTimer() {
       if (sprintFinishHourTaskMarqueeState.finishTimerId) {
         clearTimeout(sprintFinishHourTaskMarqueeState.finishTimerId);
@@ -107013,9 +107045,7 @@
       const host = hosts[0];
       const payload = buildSprintHourTaskMarqueePayload(kind, host);
       const text = sprintHourTaskMarqueePlainText(payload);
-      const passSec = sprintFinishHourTaskMarqueeDurationSec(text);
-      const passes = Math.max(1, Number(SPRINT_FINISH_HOUR_TASK_MARQUEE_PASSES) || 3);
-      const durationSec = passSec * passes;
+      const durationSec = sprintFinishHourTaskMarqueePlayDurationSec(text, new Date());
       const playMs = durationSec * 1000;
       sprintFinishHourTaskMarqueeState.phase = "playing";
       sprintFinishHourTaskMarqueeState.kind = kind;
