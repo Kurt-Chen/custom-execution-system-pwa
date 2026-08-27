@@ -45378,8 +45378,8 @@
       overflow: hidden;
     }
 
-    /* 站桩：周格显示当天累计分钟（如 3min），桌面 / 手机同一套紧凑数字 */
-    #habitRoutineModule .habit-en-week-bar--zhan-minutes .habit-en-week-cell {
+    /* 站桩：仅过去周格显示累计分钟；今日格仍是次数+减少 */
+    #habitRoutineModule .habit-en-week-bar--zhan-minutes .habit-en-week-cell:not(.habit-en-week-cell--today) {
       padding: 0 1px;
       font-variant-numeric: tabular-nums;
       letter-spacing: -0.03em;
@@ -86080,7 +86080,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260827g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260827h";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -95703,19 +95703,22 @@
       return "";
     }
 
-    /** 周格当天累计：站桩显示分钟，鸡蛋 / 三个问题用「N个」，其余「N次」 */
+    /** 周格当天累计：鸡蛋 / 三个问题用「N个」，其余「N次」；站桩今日格也走次数 */
     function formatHabitWeekBarPunchCountLabel(habitKey, dateKey) {
-      if (isHabitZhanZhuangKey(habitKey)) {
-        const n = Math.floor(Number(getHabitNumericDayTotal(habitKey, dateKey)) || 0);
-        if (n <= 0) return "";
-        return String(n) + "min";
-      }
       if (isHabitEggsKey(habitKey) || isHabitQuestionsKey(habitKey)) {
         const n = getHabitNumericDayTotal(habitKey, dateKey);
         if (!Number.isFinite(n) || n <= 0) return "";
         return String(Math.floor(n)) + "个";
       }
       return formatHabitWeekBarTimesLabel(getHabitCheckinTimesForDate(habitKey, dateKey));
+    }
+
+    /** 站桩过去周格：当天累计分钟（今日格仍用次数+减少） */
+    function formatHabitZhanZhuangPastWeekCellLabel(habitKey, dateKey) {
+      if (!isHabitZhanZhuangKey(habitKey)) return "";
+      const n = Math.floor(Number(getHabitNumericDayTotal(habitKey, dateKey)) || 0);
+      if (n <= 0) return "";
+      return String(n) + "min";
     }
 
     /** 周格统计胶囊当前值；无日目标则 0（不把打卡次数当周格内容） */
@@ -129604,11 +129607,7 @@
         }
         cell.title = tip;
         if (isToday) {
-          if (
-            done &&
-            !cellLabel &&
-            (isHabitWaterKey(habitKey) || isHabitZhanZhuangKey(habitKey))
-          ) {
+          if (done && isHabitWaterKey(habitKey) && !cellLabel) {
             cell.textContent = formatHabitWeekBarPunchCountLabel(habitKey, dk) || "✓";
           } else {
             cell.textContent = cellLabel || (done ? "✓" : "今");
@@ -129619,6 +129618,8 @@
               formatHabitEnglishWeekCellLabel(habitKey, dk) ||
               formatHabitWeekBarPunchCountLabel(habitKey, dk) ||
               "✓";
+          } else if (isHabitZhanZhuangKey(habitKey) && !cellLabel) {
+            cell.textContent = formatHabitZhanZhuangPastWeekCellLabel(habitKey, dk) || "✓";
           } else if (!isHabitWeekMetricKey(habitKey) && !cellLabel) {
             cell.textContent = formatHabitWeekBarPunchCountLabel(habitKey, dk) || "✓";
           } else {
@@ -130898,14 +130899,10 @@
             }
             if (todayNote) {
               if (minutesActive && v && typeof v === "object" && Number.isFinite(v.minutes) && v.minutes > 0) {
-                if (isHabitZhanZhuangKey(key)) {
-                  todayNote.textContent = formatHabitWeekBarPunchCountLabel(key, todayKey);
-                } else {
-                  const tc = getHabitNumericStampTimes(v, "minutes");
-                  todayNote.textContent = isHabitRoutineCompactMobile()
-                    ? formatHabitCompactTodayCountLabel(tc)
-                    : "共 " + String(v.minutes) + " 分钟 · " + String(tc) + " 次";
-                }
+                const tc = getHabitNumericStampTimes(v, "minutes");
+                todayNote.textContent = isHabitRoutineCompactMobile()
+                  ? formatHabitCompactTodayCountLabel(tc)
+                  : "共 " + String(v.minutes) + " 分钟 · " + String(tc) + " 次";
               } else if (minutesActive && v === true) {
                 todayNote.textContent = isHabitRoutineCompactMobile()
                   ? formatHabitCompactTodayCountLabel(1)
