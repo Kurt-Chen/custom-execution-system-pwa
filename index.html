@@ -91634,15 +91634,30 @@
       return out;
     }
 
-    /** 同一习惯、同一日：取累计量较大侧，避免推送合并时本地旧快照盖掉他端新打卡 */
+    /** 槽位是否已打卡：true / 次数或数值 > 0；空对象与 times:0 视为未打卡 */
+    function isHabitCheckinValueChecked(val) {
+      if (val === true) return true;
+      if (val === false || val == null) return false;
+      if (typeof val !== "object") return Boolean(val);
+      if (mergeHabitCheckinEntrySyncScore(val) > 0) return true;
+      const w = Number(val.weightJin);
+      if (Number.isFinite(w) && w > 0) return true;
+      const stamp = Number(val.stampAt);
+      if (Number.isFinite(stamp) && stamp > 0) return true;
+      if (val.horizon || val.periodKey) return true;
+      if (typeof val.remark === "string" && val.remark.trim()) return true;
+      return false;
+    }
+
+    /** 同一习惯、同一日：已打卡优先于未打卡；两端都已打卡则取累计量较大侧 */
     function mergeHabitCheckinValueForSync(localVal, remoteVal) {
       if (localVal === true) localVal = { times: 1 };
       if (remoteVal === true) remoteVal = { times: 1 };
-      if (localVal === false || localVal == null) {
-        if (remoteVal === false || remoteVal == null) return false;
-        return remoteVal;
-      }
-      if (remoteVal === false || remoteVal == null) return localVal;
+      const localChecked = isHabitCheckinValueChecked(localVal);
+      const remoteChecked = isHabitCheckinValueChecked(remoteVal);
+      if (localChecked && !remoteChecked) return localVal;
+      if (remoteChecked && !localChecked) return remoteVal;
+      if (!localChecked && !remoteChecked) return false;
       if (typeof localVal !== "object" || typeof remoteVal !== "object") {
         return localVal != null ? localVal : remoteVal;
       }
@@ -91743,11 +91758,13 @@
         if (sanitizedOut && typeof sanitizedOut === "object") {
           return sanitizedOut;
         }
+        /* sanitize 失败时仍保留已打卡侧，禁止用 false 盖掉勾选 */
         if (sanitizedOut === false) {
-          return false;
+          return scoreA >= scoreB ? a : b;
         }
       }
-      return out;
+      if (isHabitCheckinValueChecked(out)) return out;
+      return scoreA >= scoreB ? a : b;
     }
 
     function mergeHabitCheckinsForSync(localHc, remoteHc) {
@@ -91761,8 +91778,15 @@
         const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
         const day = {};
         keys.forEach((k) => {
+          if (k === "dailyThreeWinsDoneSuppressed") return;
           day[k] = mergeHabitCheckinValueForSync(a[k], b[k]);
         });
+        /* 每日三赢已打卡时，不让他端的「撤销抑制」把勾选盖掉 */
+        if (isHabitCheckinValueChecked(day.dailyThreeWins)) {
+          delete day.dailyThreeWinsDoneSuppressed;
+        } else if (a.dailyThreeWinsDoneSuppressed || b.dailyThreeWinsDoneSuppressed) {
+          day.dailyThreeWinsDoneSuppressed = true;
+        }
         out[d] = day;
       });
       return out;
@@ -94283,6 +94307,12 @@
         window.alert("本机数据已与云端最新版一致，无需覆盖。");
         return false;
       }
+      let localHcSnap = null;
+      try {
+        localHcSnap = JSON.parse(JSON.stringify(state.habitCheckins || {}));
+      } catch (_hcSnapErr) {
+        localHcSnap = state.habitCheckins && typeof state.habitCheckins === "object" ? state.habitCheckins : {};
+      }
       cloudSyncApplyingRemote = true;
       const persistRes = applyStateJsonToLocalStorage(remoteRaw);
       if (!persistRes.ok) {
@@ -94295,6 +94325,20 @@
           persistRes.quotaError,
           "本地存储空间不足"
         );
+      }
+      /* 整包写入后：本机已打卡不得被远端未打卡盖掉，并补回对应 Done 行 */
+      if (localHcSnap && typeof localHcSnap === "object") {
+        const mergedHc = mergeHabitCheckinsForSync(localHcSnap, state.habitCheckins);
+        try {
+          if (JSON.stringify(state.habitCheckins || {}) !== JSON.stringify(mergedHc || {})) {
+            state.habitCheckins = mergedHc;
+            reconcileDerivedCheckinsFromDoneAfterLoad();
+            persistStateToLocalStorage();
+          }
+        } catch (_hcKeepErr) {
+          state.habitCheckins = mergedHc;
+          reconcileDerivedCheckinsFromDoneAfterLoad();
+        }
       }
       if (reconcileWeeklyPlanTasksToDeadlineWeeks()) {
         saveState();
@@ -97135,9 +97179,10 @@
       ) {
         const opts = getHabitNumericSanitizeOpts(habitKey);
         const sanitized = sanitizeHabitNumericCheckinValue(rebuilt, opts);
-        state.habitCheckins[dateStr][habitKey] = sanitized === false ? false : sanitized;
-      } else if (rebuilt === false) {
-        state.habitCheckins[dateStr][habitKey] = false;
+        state.habitCheckins[dateStr][habitKey] = mergeHabitCheckinValueForSync(
+          prev,
+          sanitized === false ? false : sanitized
+        );
       } else {
         state.habitCheckins[dateStr][habitKey] = mergeHabitCheckinValueForSync(prev, rebuilt);
       }
@@ -97837,13 +97882,16 @@
               return;
             }
             const reb = rebuiltHc[dateStr] && rebuiltHc[dateStr][habitKey];
-            if (reb == null) {
+            if (!isHabitCheckinValueChecked(reb)) {
               return;
             }
             if (!state.habitCheckins[dateStr]) {
               state.habitCheckins[dateStr] = {};
             }
-            state.habitCheckins[dateStr][habitKey] = reb;
+            state.habitCheckins[dateStr][habitKey] = mergeHabitCheckinValueForSync(
+              state.habitCheckins[dateStr][habitKey],
+              reb
+            );
           });
         });
       }
