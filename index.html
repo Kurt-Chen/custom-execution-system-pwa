@@ -29514,6 +29514,13 @@
     ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee-overlay[data-marquee-kind="rate"] {
       background: #ccfbf1;
     }
+    ul.app-done-time-timeline .done-time-sprint-finish.is-hour-task-marquee-results {
+      --sprint-finish-orange: #2563eb;
+      --sprint-finish-wash: #dbeafe;
+    }
+    ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee-overlay[data-marquee-kind="results"] {
+      background: #dbeafe;
+    }
     ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee {
       display: block;
       width: 100%;
@@ -29641,6 +29648,17 @@
       color: #134e4a;
       background: #ccfbf1;
       border-color: #5eead4;
+    }
+    /* 结果上瘾：蓝色平底胶囊（无厚底） */
+    ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__pill--results.done-sprint-finish-hour-task-marquee__pill--quote {
+      color: #1e3a8a;
+      background: #dbeafe;
+      border-color: #60a5fa;
+    }
+    ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__pill--results.done-sprint-finish-hour-task-marquee__pill--quote-1 {
+      color: #1d4ed8;
+      background: #eff6ff;
+      border-color: #93c5fd;
     }
     ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__prefix {
       display: inline;
@@ -86105,7 +86123,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260828k";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260830a";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -106139,6 +106157,7 @@
           "is-hour-task-marquee-age",
           "is-hour-task-marquee-escape",
           "is-hour-task-marquee-rate",
+          "is-hour-task-marquee-results",
           "is-audit-marquee-playing"
         );
         const green = el.querySelector(".done-sprint-finish-rough-start-marquee-overlay");
@@ -106607,9 +106626,10 @@
     }
 
     /**
-     * 当前小时终点线：Closed List 当天全部 / 十二周年当周全部 / 年岁目标 / 逃离数字 / 时薪。
+     * 当前小时终点线：Closed List 当天全部 / 十二周年当周全部 / 年岁目标 / 逃离数字 / 时薪 / 结果上瘾。
      * 与蓝/绿胶囊同一套 overlay；无胶囊外壳。触发后连着滚 2 遍再停（本分钟不重开）。
-     * :02/:22/:42 Closed List；:17/:47/:57 十二周年；:27 年岁目标；:33 逃离数字；:37 自省六句；:53 时薪标准。
+     * :02/:22/:42 Closed List；:03/:13/:23/:43 结果上瘾蓝平底；:17/:47/:57 十二周年；
+     * :27 年岁目标；:33 逃离数字；:37 自省六句；:53 时薪标准。
      * 相邻滚动至少空 1 分钟（如 :35 绿胶囊与 :37 自省）；2 遍总时长封顶到下一槽前 1 分钟。
      */
     const SPRINT_FINISH_MARQUEE_MIN_GAP_SEC = 60;
@@ -106618,11 +106638,15 @@
     const SPRINT_FINISH_HOUR_TASK_MARQUEE_PASSES = 2;
     const SPRINT_FINISH_HOUR_TASK_MARQUEE_KIND_BY_MINUTE = {
       2: "closed",
+      3: "results",
+      13: "results",
       17: "anniversary",
       22: "closed",
+      23: "results",
       27: "age",
       33: "escape",
       42: "closed",
+      43: "results",
       47: "anniversary",
       53: "rate",
       57: "anniversary"
@@ -106631,13 +106655,19 @@
       anniversary: "is-hour-task-marquee-anniversary",
       age: "is-hour-task-marquee-age",
       escape: "is-hour-task-marquee-escape",
-      rate: "is-hour-task-marquee-rate"
+      rate: "is-hour-task-marquee-rate",
+      results: "is-hour-task-marquee-results"
     };
     const SPRINT_FINISH_HOUR_TASK_MARQUEE_HOST_CLASS_LIST = [
       "is-hour-task-marquee-anniversary",
       "is-hour-task-marquee-age",
       "is-hour-task-marquee-escape",
-      "is-hour-task-marquee-rate"
+      "is-hour-task-marquee-rate",
+      "is-hour-task-marquee-results"
+    ];
+    const SPRINT_FINISH_RESULTS_QUOTES = [
+      "You don't have to love the work, but you're addicted to the results.（你不必热爱工作，但你必须对结果上瘾）",
+      "Cleaners only care about the end result.（统治者只在乎最终结果）"
     ];
     let sprintFinishHourTaskMarqueeSyncing = false;
     let sprintFinishHourTaskMarqueeState = {
@@ -106701,6 +106731,7 @@
     function sprintHourTaskMarqueePlainText(payload) {
       if (!payload) return "";
       const goals = Array.isArray(payload.goalPills) ? payload.goalPills : [];
+      const quotes = Array.isArray(payload.quotes) ? payload.quotes : [];
       return [
         payload.name,
         payload.titlePrefix,
@@ -106710,6 +106741,7 @@
         payload.progress
       ]
         .concat(goals)
+        .concat(quotes)
         .concat([payload.body])
         .filter(Boolean)
         .join(" · ");
@@ -106932,11 +106964,20 @@
       };
     }
 
+    /** 分钟尾数为 3：结果上瘾蓝平底胶囊（:33/:53 仍留给逃离数字 / 时薪） */
+    function buildSprintHourResultsScrollPayload() {
+      return {
+        kind: "results",
+        quotes: SPRINT_FINISH_RESULTS_QUOTES.slice()
+      };
+    }
+
     function buildSprintHourTaskMarqueePayload(kind, hostEl) {
       if (kind === "anniversary") return buildSprintHourAnniversaryScrollPayload(hostEl);
       if (kind === "age") return buildSprintHourAgeGoalScrollPayload(hostEl);
       if (kind === "escape") return buildSprintHourEscapeNumberScrollPayload();
       if (kind === "rate") return buildSprintHourRateScrollPayload();
+      if (kind === "results") return buildSprintHourResultsScrollPayload();
       return buildSprintHourClosedListScrollPayload(hostEl);
     }
 
@@ -107101,6 +107142,15 @@
           "done-sprint-finish-hour-task-marquee__pill--goal-" + (i % 4)
         );
       });
+      (payload.quotes || []).forEach(function (q, i) {
+        appendSprintHourTaskMarqueePill(
+          track,
+          q,
+          kind,
+          "quote",
+          i === 1 ? "done-sprint-finish-hour-task-marquee__pill--quote-1" : ""
+        );
+      });
       if (payload.body) {
         const body = document.createElement("span");
         body.className =
@@ -107242,6 +107292,18 @@
           if (now >= sprintFinishHourTaskMarqueeState.playEndsAt) {
             finishSprintFinishHourTaskMarqueePlay(sprintFinishHourTaskMarqueeState.playToken);
           } else {
+            const liveSlot = getSprintFinishHourTaskMarqueeClockSlot(new Date());
+            /* :x2 Closed List 可能拖进 :x3，结果上瘾优先打断以便本分钟能看见蓝胶囊 */
+            if (
+              liveSlot &&
+              liveSlot.kind === "results" &&
+              sprintFinishHourTaskMarqueeState.kind !== "results" &&
+              liveSlot.slotKey !== readSprintFinishHourTaskMarqueeLastSlotKey()
+            ) {
+              finishSprintFinishHourTaskMarqueePlay(sprintFinishHourTaskMarqueeState.playToken);
+              startSprintFinishHourTaskMarqueePlay(liveSlot.kind, liveSlot.slotKey);
+              return;
+            }
             ensureSprintFinishHourTaskMarqueeOverlayMounted(
               sprintFinishHourTaskMarqueeState.kind
             );
