@@ -26218,6 +26218,96 @@
       pointer-events: none;
     }
 
+    /* Done 输入条三句：分钟尾号 0/5 滚一条、连滚三次 */
+    .done-manual-input-wrap--done-slogan.is-input-slogan-marquee-playing {
+      overflow: hidden;
+    }
+    .done-manual-input-wrap--done-slogan.is-input-slogan-marquee-playing .done-manual-input-slogan {
+      visibility: hidden;
+    }
+    .done-manual-input-wrap--done-slogan .done-input-slogan-marquee-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      display: none;
+      align-items: center;
+      box-sizing: border-box;
+      pointer-events: none;
+      overflow: hidden;
+      border-radius: inherit;
+      background: #fff;
+    }
+    .done-manual-input-wrap--done-slogan.is-input-slogan-marquee-playing .done-input-slogan-marquee-overlay {
+      display: flex;
+    }
+    .done-manual-input-wrap--done-slogan .done-input-slogan-marquee {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      overflow: hidden;
+      mask-image: linear-gradient(
+        90deg,
+        transparent 0,
+        #000 8px,
+        #000 calc(100% - 8px),
+        transparent 100%
+      );
+      -webkit-mask-image: linear-gradient(
+        90deg,
+        transparent 0,
+        #000 8px,
+        #000 calc(100% - 8px),
+        transparent 100%
+      );
+    }
+    .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__track {
+      display: inline-flex;
+      align-items: center;
+      white-space: nowrap;
+      padding-left: 100%;
+      will-change: transform;
+    }
+    .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__track.is-running {
+      animation: done-input-slogan-marquee-rtl var(--marquee-duration, 16s) linear
+        var(--marquee-passes, 3) forwards;
+    }
+    .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__item {
+      font-family: var(--font-sans-zh), Georgia, "Times New Roman", "Liberation Serif", Times, serif;
+      font-style: italic;
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: 0.02em;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__item--lead {
+      color: #e91e8c;
+    }
+    .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__item--mid {
+      color: #0d9488;
+    }
+    .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__item--escape {
+      background: linear-gradient(105deg, #f59e0b 0%, #f97316 42%, #dc2626 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      font-weight: 800;
+    }
+    @keyframes done-input-slogan-marquee-rtl {
+      from {
+        transform: translateX(0);
+      }
+      to {
+        transform: translateX(-100%);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__track {
+        padding-left: 10px;
+        animation: none;
+      }
+    }
+
     .done-manual-input-wrap--done-slogan .done-manual-input-slogan__lead {
       flex-shrink: 0;
       color: #e91e8c;
@@ -26302,6 +26392,10 @@
         min-width: 0;
         overflow: visible;
         text-overflow: clip;
+        font-size: 17px;
+      }
+
+      .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__item {
         font-size: 17px;
       }
 
@@ -26455,6 +26549,10 @@
         letter-spacing: 0;
         flex: 0 1 auto;
         min-width: 0;
+      }
+
+      .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__item {
+        font-size: 12px;
       }
 
       /* 手机：隐藏「1天=8640瞬间」，右侧改显示 Escape Number（与桌面同渐变）；标签用中文「逃离数字」 */
@@ -87016,7 +87114,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260831h";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260831i";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -113439,6 +113537,9 @@
       if (typeof syncSprintFinishAuditMarquee === "function") {
         syncSprintFinishAuditMarquee();
       }
+      if (typeof syncDoneInputSloganMarquee === "function") {
+        syncDoneInputSloganMarquee();
+      }
       const todayKey = formatDateInputValue(new Date());
       const ul = document.getElementById("doneList");
       if (!ul || !ul.classList.contains("done-time-block-list")) {
@@ -117435,6 +117536,286 @@
           daySize -= 0.25;
           day.style.fontSize = daySize + "px";
         }
+      }
+    }
+
+    /** Done 输入条三句：分钟尾号 0/5 滚一条，连滚三次；输入中不播 */
+    const DONE_INPUT_SLOGAN_MARQUEE_PASSES = 3;
+    const DONE_INPUT_SLOGAN_MARQUEE_SLOT_STORAGE_KEY = "done-input-slogan-marquee-last-slot-v1";
+    let doneInputSloganMarqueeSyncing = false;
+    let doneInputSloganMarqueeState = {
+      phase: "idle",
+      lastSlotKey: "",
+      playToken: 0,
+      playEndsAt: 0,
+      playStartedAt: 0,
+      playDurationMs: 0,
+      finishTimerId: null,
+      itemId: "",
+      text: ""
+    };
+
+    function isDoneInputSloganMarqueeMobile() {
+      return (
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(max-width: 767px)").matches
+      );
+    }
+
+    function getDoneInputSloganMarqueeItems() {
+      const escapeText = isDoneInputSloganMarqueeMobile()
+        ? "逃离数字：$1000万"
+        : "Escape Number：$1000万";
+      return [
+        { id: "lead", kind: "lead", text: "Is this the HARD choice?" },
+        { id: "mid", kind: "mid", text: "Maniacal Urgency!" },
+        { id: "escape", kind: "escape", text: escapeText }
+      ];
+    }
+
+    /** 仅当分钟个位为 0/5 时返回槽位键；按 :00→HARD、:05→Urgency、:10→Escape 轮换 */
+    function getDoneInputSloganMarqueeClockSlotKey(dateOpt) {
+      const d = dateOpt instanceof Date ? dateOpt : new Date();
+      const min = d.getMinutes();
+      if (min % 5 !== 0) return "";
+      const y = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      const h = String(d.getHours()).padStart(2, "0");
+      const mm = String(min).padStart(2, "0");
+      return y + "-" + mo + "-" + day + "T" + h + ":" + mm;
+    }
+
+    function pickDoneInputSloganMarqueeItem(dateOpt) {
+      const d = dateOpt instanceof Date ? dateOpt : new Date();
+      const items = getDoneInputSloganMarqueeItems();
+      const idx = Math.floor(d.getMinutes() / 5) % items.length;
+      return items[idx] || items[0];
+    }
+
+    function queryDoneInputSloganMarqueeHost() {
+      return document.querySelector(
+        "#dynamicModule .kinetic-sub-done .done-manual-input-wrap--done-slogan"
+      );
+    }
+
+    function isDoneInputSloganMarqueeHostReady(hostEl) {
+      const host = hostEl || queryDoneInputSloganMarqueeHost();
+      if (!host || host.getClientRects().length === 0) return false;
+      const input =
+        host.querySelector("#doneManualInput") || document.getElementById("doneManualInput");
+      if (!input) return false;
+      if (document.activeElement === input) return false;
+      if (String(input.value || "").length > 0) return false;
+      return true;
+    }
+
+    function readDoneInputSloganMarqueeLastSlotKey() {
+      if (doneInputSloganMarqueeState.lastSlotKey) {
+        return doneInputSloganMarqueeState.lastSlotKey;
+      }
+      try {
+        return String(sessionStorage.getItem(DONE_INPUT_SLOGAN_MARQUEE_SLOT_STORAGE_KEY) || "");
+      } catch (err) {
+        return "";
+      }
+    }
+
+    function writeDoneInputSloganMarqueeLastSlotKey(slotKey) {
+      const key = String(slotKey || "");
+      doneInputSloganMarqueeState.lastSlotKey = key;
+      if (!key) return;
+      try {
+        sessionStorage.setItem(DONE_INPUT_SLOGAN_MARQUEE_SLOT_STORAGE_KEY, key);
+      } catch (err) {
+        /* ignore */
+      }
+    }
+
+    function clearDoneInputSloganMarqueeFinishTimer() {
+      if (doneInputSloganMarqueeState.finishTimerId) {
+        clearTimeout(doneInputSloganMarqueeState.finishTimerId);
+        doneInputSloganMarqueeState.finishTimerId = null;
+      }
+    }
+
+    function clearDoneInputSloganMarqueeOverlay(hostEl) {
+      const host = hostEl || queryDoneInputSloganMarqueeHost();
+      if (!host) return;
+      host.classList.remove("is-input-slogan-marquee-playing");
+      const overlay = host.querySelector(".done-input-slogan-marquee-overlay");
+      if (overlay) overlay.remove();
+    }
+
+    function doneInputSloganMarqueeDurationSec(text) {
+      if (typeof sprintFinishLineMarqueeDurationSecForText === "function") {
+        return sprintFinishLineMarqueeDurationSecForText(text);
+      }
+      const len = String(text || "").length;
+      return Math.max(16, Math.min(90, Math.round(len * 0.4)));
+    }
+
+    function mountDoneInputSloganMarqueeOverlay(hostEl, item, totalDurationSec, elapsedSecOpt) {
+      if (!hostEl || !item) return 0;
+      clearDoneInputSloganMarqueeOverlay(hostEl);
+      hostEl.classList.add("is-input-slogan-marquee-playing");
+      const overlay = document.createElement("div");
+      overlay.className = "done-input-slogan-marquee-overlay";
+      overlay.setAttribute("data-marquee-item-id", String(item.id || ""));
+      overlay.setAttribute("aria-hidden", "true");
+      const viewport = document.createElement("span");
+      viewport.className = "done-input-slogan-marquee";
+      const track = document.createElement("span");
+      track.className = "done-input-slogan-marquee__track";
+      const chip = document.createElement("span");
+      chip.className =
+        "done-input-slogan-marquee__item done-input-slogan-marquee__item--" +
+        (item.kind || "lead");
+      chip.textContent = item.text;
+      track.appendChild(chip);
+      const passes = Math.max(1, Number(DONE_INPUT_SLOGAN_MARQUEE_PASSES) || 3);
+      const givenTotal = Number(totalDurationSec) || 0;
+      let passSec =
+        givenTotal > 0
+          ? Math.max(1, givenTotal / passes)
+          : doneInputSloganMarqueeDurationSec(item.text);
+      const elapsedSec = Math.max(0, Number(elapsedSecOpt) || 0);
+      track.style.setProperty("--marquee-duration", String(passSec) + "s");
+      track.style.setProperty("--marquee-passes", String(passes));
+      if (elapsedSec > 0.05) {
+        track.style.animationDelay =
+          String(-Math.min(elapsedSec, Math.max(passSec * passes, 1) - 0.05)) + "s";
+      }
+      viewport.appendChild(track);
+      overlay.appendChild(viewport);
+      hostEl.appendChild(overlay);
+      const reduceMotion =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (!reduceMotion) {
+        void track.offsetWidth;
+        if (!(givenTotal > 0) && typeof applySprintMarqueeSpeedMatchingRoughStart === "function") {
+          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec);
+        }
+        track.classList.add("is-running");
+      }
+      return passSec;
+    }
+
+    function doneInputSloganMarqueeOverlayHealthy(hostEl, itemId) {
+      if (!hostEl) return false;
+      const overlay = hostEl.querySelector(".done-input-slogan-marquee-overlay");
+      return Boolean(
+        overlay && overlay.getAttribute("data-marquee-item-id") === String(itemId || "")
+      );
+    }
+
+    function finishDoneInputSloganMarqueePlay(playToken) {
+      if (playToken !== doneInputSloganMarqueeState.playToken) return;
+      if (doneInputSloganMarqueeState.phase !== "playing") return;
+      clearDoneInputSloganMarqueeFinishTimer();
+      clearDoneInputSloganMarqueeOverlay();
+      doneInputSloganMarqueeState.phase = "idle";
+      doneInputSloganMarqueeState.itemId = "";
+      doneInputSloganMarqueeState.text = "";
+      doneInputSloganMarqueeState.playEndsAt = 0;
+      doneInputSloganMarqueeState.playStartedAt = 0;
+      doneInputSloganMarqueeState.playDurationMs = 0;
+      if (typeof fitDoneManualInputSlogan === "function") {
+        fitDoneManualInputSlogan();
+      }
+    }
+
+    function startDoneInputSloganMarqueePlay(item) {
+      const host = queryDoneInputSloganMarqueeHost();
+      if (!host || !item || !item.text) return false;
+      if (!isDoneInputSloganMarqueeHostReady(host)) return false;
+      const passes = Math.max(1, Number(DONE_INPUT_SLOGAN_MARQUEE_PASSES) || 3);
+      const measuredPass =
+        mountDoneInputSloganMarqueeOverlay(host, item, 0, 0) ||
+        doneInputSloganMarqueeDurationSec(item.text);
+      const durationSec = Math.max(1, measuredPass * passes);
+      const reduceMotion =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const playMs = reduceMotion
+        ? Math.min(8000, durationSec * 1000)
+        : durationSec * 1000;
+      doneInputSloganMarqueeState.phase = "playing";
+      doneInputSloganMarqueeState.itemId = item.id;
+      doneInputSloganMarqueeState.text = item.text;
+      doneInputSloganMarqueeState.playToken += 1;
+      const token = doneInputSloganMarqueeState.playToken;
+      doneInputSloganMarqueeState.playStartedAt = Date.now();
+      doneInputSloganMarqueeState.playDurationMs = playMs;
+      doneInputSloganMarqueeState.playEndsAt =
+        doneInputSloganMarqueeState.playStartedAt + playMs;
+      clearDoneInputSloganMarqueeFinishTimer();
+      if (Math.abs(playMs / 1000 - durationSec) > 0.05) {
+        mountDoneInputSloganMarqueeOverlay(host, item, playMs / 1000, 0);
+      }
+      doneInputSloganMarqueeState.finishTimerId = window.setTimeout(function () {
+        finishDoneInputSloganMarqueePlay(token);
+      }, playMs + 40);
+      return true;
+    }
+
+    function ensureDoneInputSloganMarqueeOverlayMounted(item) {
+      const host = queryDoneInputSloganMarqueeHost();
+      if (!host || !item) return;
+      if (doneInputSloganMarqueeOverlayHealthy(host, item.id)) return;
+      const totalMs =
+        doneInputSloganMarqueeState.playDurationMs > 0
+          ? doneInputSloganMarqueeState.playDurationMs
+          : Math.max(1000, doneInputSloganMarqueeState.playEndsAt - Date.now());
+      const elapsedSec = Math.max(
+        0,
+        (Date.now() - (doneInputSloganMarqueeState.playStartedAt || Date.now())) / 1000
+      );
+      mountDoneInputSloganMarqueeOverlay(host, item, totalMs / 1000, elapsedSec);
+    }
+
+    function interruptDoneInputSloganMarqueeIfBusy() {
+      if (doneInputSloganMarqueeState.phase !== "playing") return;
+      finishDoneInputSloganMarqueePlay(doneInputSloganMarqueeState.playToken);
+    }
+
+    /** 由 tickDoneTimeBlockSprint 每秒调用；纯 UI，不 saveState */
+    function syncDoneInputSloganMarquee() {
+      if (doneInputSloganMarqueeSyncing) return;
+      doneInputSloganMarqueeSyncing = true;
+      try {
+        const now = Date.now();
+        if (doneInputSloganMarqueeState.phase === "playing") {
+          if (!isDoneInputSloganMarqueeHostReady() || now >= doneInputSloganMarqueeState.playEndsAt) {
+            finishDoneInputSloganMarqueePlay(doneInputSloganMarqueeState.playToken);
+          } else {
+            const items = getDoneInputSloganMarqueeItems();
+            let playing = null;
+            for (let i = 0; i < items.length; i++) {
+              if (items[i].id === doneInputSloganMarqueeState.itemId) {
+                playing = items[i];
+                break;
+              }
+            }
+            if (!playing) {
+              finishDoneInputSloganMarqueePlay(doneInputSloganMarqueeState.playToken);
+            } else {
+              ensureDoneInputSloganMarqueeOverlayMounted(playing);
+            }
+            return;
+          }
+        }
+        if (doneInputSloganMarqueeState.phase === "playing") return;
+        const slotKey = getDoneInputSloganMarqueeClockSlotKey(new Date());
+        if (!slotKey) return;
+        if (slotKey === readDoneInputSloganMarqueeLastSlotKey()) return;
+        if (!isDoneInputSloganMarqueeHostReady()) return;
+        const item = pickDoneInputSloganMarqueeItem(new Date());
+        if (!startDoneInputSloganMarqueePlay(item)) return;
+        writeDoneInputSloganMarqueeLastSlotKey(slotKey);
+      } finally {
+        doneInputSloganMarqueeSyncing = false;
       }
     }
 
@@ -133806,6 +134187,18 @@
         event.preventDefault();
       });
       addDoneManualBtn.addEventListener("click", addManualDone);
+    }
+    if (doneManualInput) {
+      doneManualInput.addEventListener("focus", function () {
+        if (typeof interruptDoneInputSloganMarqueeIfBusy === "function") {
+          interruptDoneInputSloganMarqueeIfBusy();
+        }
+      });
+      doneManualInput.addEventListener("input", function () {
+        if (typeof interruptDoneInputSloganMarqueeIfBusy === "function") {
+          interruptDoneInputSloganMarqueeIfBusy();
+        }
+      });
     }
     addStopDoingBtn.addEventListener("click", addStopDoingItem);
     addNotToDoBtn.addEventListener("click", addNotToDoItem);
