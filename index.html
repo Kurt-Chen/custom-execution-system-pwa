@@ -87180,7 +87180,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260831k";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260831l";
     /**
      * 运动整点提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -88020,6 +88020,8 @@
     let cloudSyncTxnQueued = null;
     let cloudSyncSafetyPullTimer = null;
     let cloudSyncLastPullAt = 0;
+    /** 后台错过 5 分钟安全网时记一笔，回前台立刻补拉 */
+    let cloudSyncSafetyPullDue = false;
     let cloudSyncInitInFlight = false;
     /** 合并远端与内存 state 时避免 saveState → scheduleCloudSyncPush 递归 */
     let cloudSyncSuppressPush = false;
@@ -88058,6 +88060,8 @@
     /** 本地改动后后台 Push 防抖（只延迟 Firebase，不阻塞 UI） */
     const CLOUD_SYNC_PUSH_DEBOUNCE_MS = 2000;
     const CLOUD_SYNC_SAFETY_PULL_INTERVAL_MS = 5 * 60 * 1000;
+    /** 回前台补拉最短间隔，避免切应用连打；5 分钟安全网仍是硬上限 */
+    const CLOUD_SYNC_FOREGROUND_PULL_MIN_MS = 12000;
     /** 本地连写时若刚拉过云，跳过 Pull，只做 Batch Push */
     const CLOUD_SYNC_LOCAL_EDIT_SKIP_PULL_MS = 45000;
     /** pulse 截止期限：待上传的周键 / 封闭清单 id / 十二周年 moduleKey→周次（构建 payload 后清空） */
@@ -88263,6 +88267,7 @@
         }
         refresh();
         refreshCloudSyncPulseFromServer();
+        requestCloudSyncSafetyPull("foreground");
         if (!cloudSyncReady || !cloudSyncRef || cloudSyncSuppressPush) return;
         const pendingHash = serializeStateForCloud();
         if (pendingHash && pendingHash !== cloudSyncLastHash) {
@@ -88271,6 +88276,10 @@
       });
       window.addEventListener("pagehide", function () {
         flushCloudSyncPulseImmediate();
+      });
+      window.addEventListener("pageshow", function () {
+        refreshCloudSyncPulseFromServer();
+        requestCloudSyncSafetyPull("foreground");
       });
       window.addEventListener("offline", refresh);
       refresh();
@@ -89652,7 +89661,42 @@
       if (next.moveBreakDay || prev.moveBreakDay) {
         next.moveBreakDay = mergeMoveBreakDayForSync(prev.moveBreakDay, next.moveBreakDay);
       }
+      /* 打卡 pulse 为整包覆盖：他端未打卡快照不得盖掉本端已打卡 */
+      next.habitCheckins = mergeHabitCheckinsForSync(prev.habitCheckins, next.habitCheckins);
+      next.done = mergeDoneArraysForSync(
+        Array.isArray(prev.done) ? prev.done : [],
+        Array.isArray(next.done) ? next.done : [],
+        false
+      );
+      if (prev.forge || next.forge) {
+        const pf = prev.forge && typeof prev.forge === "object" ? prev.forge : {};
+        const nf = next.forge && typeof next.forge === "object" ? next.forge : {};
+        const forgeOut = {};
+        const kb = mergeForgeShallowMapsForSync(pf.kbWeightKg, nf.kbWeightKg, false);
+        const cc = mergeForgeShallowMapsForSync(pf.ccProgressStep, nf.ccProgressStep, false);
+        if (kb && typeof kb === "object" && Object.keys(kb).length) forgeOut.kbWeightKg = kb;
+        if (cc && typeof cc === "object" && Object.keys(cc).length) forgeOut.ccProgressStep = cc;
+        if (Object.keys(forgeOut).length) next.forge = forgeOut;
+        else if (!next.forge && prev.forge) next.forge = prev.forge;
+      }
+      if (prev.syncTombstones || next.syncTombstones) {
+        next.syncTombstones = mergeSyncTombstoneMaps(prev.syncTombstones, next.syncTombstones);
+      }
       return next;
+    }
+
+    /** 粘合后的 pulse 写回本机，避免「自己覆盖写入」把刚粘上的他端打卡丢掉 */
+    function applyStickyMergedPulseToLocal(mergedState) {
+      if (!mergedState || typeof mergedState !== "object") return false;
+      const changed = mergeCloudSyncPulseIntoState(mergedState);
+      if (!changed) return false;
+      try {
+        reconcileCloudSyncPulseDerivedState(mergedState);
+      } catch (_recErr) {}
+      setCloudSyncHashFromCurrentState();
+      scheduleCloudSyncPersistDebounced();
+      scheduleCloudSyncRenderDebounced();
+      return true;
     }
 
     /** 十二周年 pulse 合并：按周并集，并剔除 syncTombstones 已删 id */
@@ -90474,9 +90518,10 @@
     }
 
     function applyCloudSyncPulseFromRoom(pulseNode) {
-      if (!pulseNode || !pulseNode.state || pulseNode.updatedBy === cloudSyncClientId) return false;
+      if (!pulseNode || !pulseNode.state) return false;
       const pu = coerceCloudUpdatedAt(pulseNode.updatedAt);
       const last = getCloudLastPulseSeen();
+      /* 不再因 updatedBy===本机而整包跳过：粘合写入后本机也要吃到他端打卡 */
       if (pu > 0 && pu <= last) return false;
       const lifetimeBefore = captureCloudSyncLifetimeSnapshot(state);
       let localSnap = null;
@@ -90835,7 +90880,11 @@
         .then(function (snap) {
           const prevNode = snap && typeof snap.val === "function" ? snap.val() : null;
           const prevState = prevNode && prevNode.state && typeof prevNode.state === "object" ? prevNode.state : null;
-          return writePulse(mergeStickyCloudSyncPulseState(prevState, pulseState));
+          const merged = mergeStickyCloudSyncPulseState(prevState, pulseState);
+          try {
+            applyStickyMergedPulseToLocal(merged);
+          } catch (_stickyLocalErr) {}
+          return writePulse(merged);
         })
         .catch(function () {
           return writePulse(pulseState);
@@ -92944,7 +92993,6 @@
       return readCloudSyncRoomChildValue("pulse")
         .then(function (remoteNode) {
           if (!remoteNode || !remoteNode.state) return false;
-          if (remoteNode.updatedBy === cloudSyncClientId) return false;
           const pu = coerceCloudUpdatedAt(remoteNode.updatedAt);
           const last = getCloudLastPulseSeen();
           if (pu > 0 && pu <= last) return false;
@@ -95533,10 +95581,40 @@
     function ensureCloudSyncSafetyPullTimer() {
       if (cloudSyncSafetyPullTimer) return;
       cloudSyncSafetyPullTimer = window.setInterval(function () {
-        if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-        if (!cloudSyncReady || !cloudSyncRoomRef) return;
-        void runCloudSyncTransaction({ mode: "incremental", reason: "safety-pull" });
+        requestCloudSyncSafetyPull("safety-pull");
       }, CLOUD_SYNC_SAFETY_PULL_INTERVAL_MS);
+    }
+
+    /**
+     * 5 分钟内必须与云端对齐：后台错过则记 due，回前台立刻补拉。
+     * 实时 pulse 仍走快路径；这里保证最慢不超过安全网间隔。
+     */
+    function requestCloudSyncSafetyPull(reason) {
+      const why = String(reason || "safety-pull");
+      const hidden =
+        typeof document !== "undefined" && document.visibilityState && document.visibilityState !== "visible";
+      if (hidden) {
+        cloudSyncSafetyPullDue = true;
+        return;
+      }
+      if (!cloudSyncReady || !cloudSyncRoomRef) {
+        cloudSyncSafetyPullDue = true;
+        return;
+      }
+      const now = Date.now();
+      const dueByTimer =
+        cloudSyncSafetyPullDue ||
+        cloudSyncLastPullAt <= 0 ||
+        now - cloudSyncLastPullAt >= CLOUD_SYNC_SAFETY_PULL_INTERVAL_MS;
+      const dueByForeground =
+        why === "foreground" &&
+        (cloudSyncLastPullAt <= 0 || now - cloudSyncLastPullAt >= CLOUD_SYNC_FOREGROUND_PULL_MIN_MS);
+      if (!dueByTimer && !dueByForeground) return;
+      cloudSyncSafetyPullDue = false;
+      void runCloudSyncTransaction({
+        mode: "incremental",
+        reason: dueByTimer && why !== "foreground" ? "safety-pull" : why
+      });
     }
 
     /**
@@ -112227,7 +112305,8 @@
     }
 
     /**
-     * 并入全部钟点提醒槽位（不限冲刺区间）：TIME_REFLECTION + 十二周年 + 年岁目标。
+     * 并入全部钟点提醒槽位（不限冲刺区间）：TIME_REFLECTION + 十二周年。
+     * 年岁目标只走小时冲刺条 :26，不进当前冲刺提醒池。
      * 已有 Done 文案优先，否则用槽位默认文案，确保未到点也能进洗牌队列。
      */
     function appendAllClockReminderSlotsToMarqueePool(out, seen, todayKey) {
@@ -112277,28 +112356,7 @@
           pushItem(id, textFromDoneOrFallback(id, fallback));
         }
       }
-
-      if (
-        typeof AGE_GOAL_MILESTONE_PROMPT_SLOTS !== "undefined" &&
-        Array.isArray(AGE_GOAL_MILESTONE_PROMPT_SLOTS)
-      ) {
-        let ageFallback = "";
-        if (typeof getActiveAgeGoalMilestoneForDonePrompt === "function") {
-          const milestone = getActiveAgeGoalMilestoneForDonePrompt();
-          if (
-            milestone &&
-            typeof buildAgeGoalMilestoneDonePromptText === "function"
-          ) {
-            ageFallback = buildAgeGoalMilestoneDonePromptText(milestone);
-          }
-        }
-        for (let i = 0; i < AGE_GOAL_MILESTONE_PROMPT_SLOTS.length; i++) {
-          const slot = AGE_GOAL_MILESTONE_PROMPT_SLOTS[i];
-          if (!slot) continue;
-          const id = "timeReflection:" + todayKey + ":" + slot.slotKey;
-          pushItem(id, textFromDoneOrFallback(id, ageFallback));
-        }
-      }
+      /* 年岁目标已在小时冲刺条 :26 滚动，当前冲刺提醒池不再重复带入 */
     }
 
     function normalizeSprintReminderMarqueePlainText(raw) {
@@ -112422,6 +112480,7 @@
           if (formatDateInputValue(d) !== todayKey) continue;
           const id = String(task.id || "");
           if (!id || seen[id]) continue;
+          if (/:ageGoal(?:0715|1415|2115)$/.test(id)) continue;
           seen[id] = true;
           out.push({ id: id, text: text });
         }
@@ -117740,7 +117799,7 @@
             p("pill", "Decision Power（决策权）", "key"),
             p("plain", "，最终把人生从「难」推向「易」。飞轮由四个打击力量组成：1. "),
             p("pill", "Absolute Responsibility（绝对责任）", "force"),
-            p("plain", "——先搞清楚「这真的才是正确的目标吗？」（侦察）；2. "),
+            p("plain", "——先搞清楚「这真的是正确的目标吗？」（侦察）；2. "),
             p("pill", "Episodic Courage（阶段性勇气）", "force"),
             p("plain", "——鼓起勇气迈出第一步（点火）；3. "),
             p("pill", "Routine Discipline（日常纪律）", "force"),
