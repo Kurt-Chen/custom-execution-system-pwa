@@ -1426,6 +1426,349 @@ test("rollover 依赖快照不得漏真实依赖", function () {
   assertEq(ctx.isWeeklyPlanSprintKeyPastCurrent("2026-09-03", "2026-09-03"), false);
 });
 
+function wpUiExtras(over) {
+  return Object.assign(
+    {
+      calendarDay: "2026-09-01",
+      currentSprintKey: "2026-08-31",
+      viewSprintStartKey: "2026-08-31",
+      kanbanDesktop: true,
+      readingPlanMobile: false,
+      microExpandedIds: [],
+      readingPlanAllChaptersExpandedIds: []
+    },
+    over || {}
+  );
+}
+
+function wpUiBase(over) {
+  return emptyState(
+    Object.assign(
+      {
+        weeklyPlan: {
+          "2026-08-31": [
+            {
+              id: "w1",
+              text: "主任务",
+              lane: "life",
+              mainDone: false,
+              completedAt: null,
+              deadlineAt: 1725200000000,
+              microTasks: [{ id: "m1", text: "微任务", done: false }],
+              updatedAt: 10
+            }
+          ]
+        },
+        weeklyPlanUi: {
+          addLane: "life",
+          shell: "life",
+          viewMode: { closed: "list", life: "list", work: "list" },
+          readingPlanLane: "reading",
+          readingPlanExpandedBooks: {},
+          readingPlanAllChaptersExpanded: {},
+          stopDoingTab: "rules"
+        },
+        readingPlan: {
+          books: [
+            {
+              id: "b1",
+              title: "书名",
+              status: "reading",
+              targetProblem: "问题",
+              readOn: "paper",
+              createdAt: 1,
+              chapters: [{ id: "c1", text: "第一章", done: false }]
+            }
+          ]
+        },
+        closedList: [
+          {
+            id: "cl1",
+            text: "今日封闭",
+            completed: false,
+            createdAt: Date.parse("2026-09-01T12:00:00"),
+            deadlineAt: Date.parse("2026-09-01T18:00:00")
+          }
+        ],
+        weeklyPlanDoneRef: { "2026-08-31": { items: { "main:w1": "done-w1" } } },
+        done: [
+          {
+            id: "done-w1",
+            text: "【周计划】主任务",
+            completedAt: 100,
+            weeklyPlanMeta: { weekKey: "2026-08-31", syncKey: "main:w1", kind: "main", taskId: "w1" }
+          }
+        ],
+        habitCheckins: {}
+      },
+      over || {}
+    )
+  );
+}
+
+function wpUiShouldRender(prevState, nextState, extras, opts) {
+  const ex = extras || wpUiExtras();
+  const prev = ctx.getWeeklyPlanUiDependencySnapshot(prevState, ex);
+  const next = ctx.getWeeklyPlanUiDependencySnapshot(nextState, ex);
+  return ctx.shouldRenderWeeklyPlanUI(prev, next, opts);
+}
+
+test("启动时无 prev 快照：Weekly Plan UI 必须刷新", function () {
+  const snap = ctx.getWeeklyPlanUiDependencySnapshot(wpUiBase(), wpUiExtras());
+  assertEq(ctx.shouldRenderWeeklyPlanUI(null, snap), true);
+});
+
+test("forceAll：即使 Weekly Plan UI 指纹相同也必须刷新", function () {
+  const snap = ctx.getWeeklyPlanUiDependencySnapshot(wpUiBase(), wpUiExtras());
+  assertEq(ctx.shouldRenderWeeklyPlanUI(snap, snap, { forceAll: true }), true);
+});
+
+test("普通 habitCheckins 勾选：Weekly Plan UI 可跳过", function () {
+  const prev = wpUiBase();
+  const next = wpUiBase({
+    habitCheckins: { "2026-09-01": { water: true } },
+    done: prev.done.concat([{ id: "h1", text: "喝水", habitMeta: { key: "water" }, completedAt: 1 }])
+  });
+  assertEq(wpUiShouldRender(prev, next), false);
+});
+
+test("连续 10 次普通习惯勾选：Weekly Plan UI 次数 10→0", function () {
+  const base = wpUiBase();
+  const extras = wpUiExtras();
+  let prev = ctx.getWeeklyPlanUiDependencySnapshot(base, extras);
+  let runs = 0;
+  for (let i = 0; i < 10; i++) {
+    const st = wpUiBase({
+      habitCheckins: { "2026-09-01": { water: i + 1 } },
+      done: base.done.concat([{ id: "h" + i, text: "喝水", habitMeta: { key: "water" }, completedAt: i }])
+    });
+    const next = ctx.getWeeklyPlanUiDependencySnapshot(st, extras);
+    if (ctx.shouldRenderWeeklyPlanUI(prev, next)) runs += 1;
+    prev = next;
+  }
+  assertEq(runs, 0);
+});
+
+test("weeklyPlan 任务文案/完成改变 → Weekly Plan UI 必须刷新", function () {
+  const prev = wpUiBase();
+  const textNext = wpUiBase({
+    weeklyPlan: {
+      "2026-08-31": [
+        {
+          id: "w1",
+          text: "主任务改了",
+          lane: "life",
+          mainDone: false,
+          microTasks: [{ id: "m1", text: "微任务", done: false }]
+        }
+      ]
+    }
+  });
+  const doneNext = wpUiBase({
+    weeklyPlan: {
+      "2026-08-31": [
+        {
+          id: "w1",
+          text: "主任务",
+          lane: "life",
+          mainDone: true,
+          completedAt: 99,
+          microTasks: []
+        }
+      ]
+    }
+  });
+  const added = wpUiBase({
+    weeklyPlan: {
+      "2026-08-31": prev.weeklyPlan["2026-08-31"].concat([
+        { id: "w2", text: "新任务", lane: "work", mainDone: false, microTasks: [] }
+      ])
+    }
+  });
+  assertEq(wpUiShouldRender(prev, textNext), true);
+  assertEq(wpUiShouldRender(prev, doneNext), true);
+  assertEq(wpUiShouldRender(prev, added), true);
+});
+
+test("原地 mutation：同一任务对象改 text 仍能被指纹发现", function () {
+  const prev = wpUiBase();
+  const next = wpUiBase();
+  next.weeklyPlan["2026-08-31"][0].text = "原地改标题";
+  assertEq(wpUiShouldRender(prev, next), true);
+});
+
+test("microTask 变化 → Weekly Plan UI 必须刷新", function () {
+  const prev = wpUiBase();
+  const next = wpUiBase({
+    weeklyPlan: {
+      "2026-08-31": [
+        {
+          id: "w1",
+          text: "主任务",
+          lane: "life",
+          mainDone: false,
+          microTasks: [{ id: "m1", text: "微任务改了", done: true }]
+        }
+      ]
+    }
+  });
+  assertEq(wpUiShouldRender(prev, next), true);
+});
+
+test("readingPlan 变化 → Weekly Plan UI 必须刷新", function () {
+  const prev = wpUiBase();
+  const next = wpUiBase({
+    readingPlan: {
+      books: [
+        {
+          id: "b1",
+          title: "书名改了",
+          status: "reading",
+          targetProblem: "问题",
+          readOn: "paper",
+          createdAt: 1,
+          chapters: [{ id: "c1", text: "第一章", done: true }]
+        }
+      ]
+    }
+  });
+  assertEq(wpUiShouldRender(prev, next), true);
+});
+
+test("Sprint/week/date 真实依赖改变 → Weekly Plan UI 必须刷新", function () {
+  const st = wpUiBase();
+  const baseEx = wpUiExtras();
+  const prev = ctx.getWeeklyPlanUiDependencySnapshot(st, baseEx);
+  assertEq(
+    ctx.shouldRenderWeeklyPlanUI(prev, ctx.getWeeklyPlanUiDependencySnapshot(st, wpUiExtras({ currentSprintKey: "2026-09-03" }))),
+    true
+  );
+  assertEq(
+    ctx.shouldRenderWeeklyPlanUI(prev, ctx.getWeeklyPlanUiDependencySnapshot(st, wpUiExtras({ viewSprintStartKey: "2026-09-03" }))),
+    true
+  );
+  assertEq(
+    ctx.shouldRenderWeeklyPlanUI(prev, ctx.getWeeklyPlanUiDependencySnapshot(st, wpUiExtras({ calendarDay: "2026-09-02" }))),
+    true
+  );
+});
+
+test("shell / viewMode 改变 → Weekly Plan UI 必须刷新", function () {
+  const prev = wpUiBase();
+  const shellNext = wpUiBase({
+    weeklyPlanUi: Object.assign({}, prev.weeklyPlanUi, { shell: "work", addLane: "work" })
+  });
+  const modeNext = wpUiBase({
+    weeklyPlanUi: Object.assign({}, prev.weeklyPlanUi, {
+      viewMode: { closed: "list", life: "kanban", work: "list" }
+    })
+  });
+  assertEq(wpUiShouldRender(prev, shellNext), true);
+  assertEq(wpUiShouldRender(prev, modeNext), true);
+});
+
+test("微任务展开态 extras 改变 → Weekly Plan UI 必须刷新", function () {
+  const st = wpUiBase();
+  const prev = ctx.getWeeklyPlanUiDependencySnapshot(st, wpUiExtras());
+  const next = ctx.getWeeklyPlanUiDependencySnapshot(st, wpUiExtras({ microExpandedIds: ["w1"] }));
+  assertEq(ctx.shouldRenderWeeklyPlanUI(prev, next), true);
+});
+
+test("封闭清单完成态（ISG 门禁）改变 → Weekly Plan UI 必须刷新", function () {
+  const prev = wpUiBase();
+  const next = wpUiBase({
+    closedList: [
+      {
+        id: "cl1",
+        text: "今日封闭",
+        completed: true,
+        completedAt: Date.parse("2026-09-01T18:00:00"),
+        createdAt: Date.parse("2026-09-01T12:00:00"),
+        deadlineAt: Date.parse("2026-09-01T18:00:00")
+      }
+    ]
+  });
+  assertEq(wpUiShouldRender(prev, next), true);
+});
+
+test("仅 weeklyPlanDoneRef / 普通 Done 变化：Weekly Plan UI 可跳过（不与 Done 对账混用）", function () {
+  const prev = wpUiBase();
+  const next = wpUiBase({
+    weeklyPlanDoneRef: { "2026-08-31": { items: { "main:w1": "done-other" } } },
+    done: prev.done.concat([{ id: "h2", text: "无关 Done", completedAt: 2 }])
+  });
+  assertEq(wpUiShouldRender(prev, next), false);
+});
+
+test("云端 merge 改变 weeklyPlan / readingPlan → Weekly Plan UI 必须刷新", function () {
+  const extras = wpUiExtras();
+  const loc = wpUiBase({
+    readingPlan: { books: [] },
+    weeklyPlan: {
+      "2026-08-31": [{ id: "w1", text: "local", lane: "life", mainDone: false, microTasks: [], updatedAt: 1 }]
+    }
+  });
+  const remWp = wpUiBase({
+    readingPlan: { books: [] },
+    weeklyPlan: {
+      "2026-08-31": [{ id: "w1", text: "remote", lane: "life", mainDone: false, microTasks: [], updatedAt: 99 }]
+    }
+  });
+  const prev = ctx.getWeeklyPlanUiDependencySnapshot(loc, extras);
+  const mergedWp = fullMerge(loc, remWp, 100, 0);
+  const nextWp = ctx.getWeeklyPlanUiDependencySnapshot(mergedWp, extras);
+  assertEq(ctx.shouldRenderWeeklyPlanUI(prev, nextWp), true);
+
+  const locRp = wpUiBase();
+  const remRp = wpUiBase({
+    readingPlan: {
+      books: [
+        {
+          id: "b1",
+          title: "云端书名",
+          status: "reading",
+          targetProblem: "问题",
+          readOn: "wechat",
+          createdAt: 1,
+          updatedAt: 99,
+          chapters: [{ id: "c1", text: "第一章", done: false }]
+        }
+      ]
+    }
+  });
+  const prevRp = ctx.getWeeklyPlanUiDependencySnapshot(locRp, extras);
+  const nextRp = ctx.getWeeklyPlanUiDependencySnapshot(remRp, extras);
+  assertEq(ctx.shouldRenderWeeklyPlanUI(prevRp, nextRp), true, "merged-in readingPlan fields must dirty UI");
+});
+
+test("Weekly Plan UI 依赖快照不得漏实际影响 DOM 的字段", function () {
+  const payload = ctx.collectWeeklyPlanUiDepPayload(wpUiBase(), wpUiExtras());
+  assertEq(payload.calendarDay, "2026-09-01");
+  assertEq(payload.currentSprintKey, "2026-08-31");
+  assertEq(payload.viewSprintStartKey, "2026-08-31");
+  assertEq(payload.kanbanDesktop, true);
+  assertEq(payload.shell, "life");
+  assertEq(payload.addLane, "life");
+  assertEq(payload.viewMode.life, "list");
+  assertEq(payload.readingPlanLane, "reading");
+  assertEq(payload.weeks["2026-08-31"][0].id, "w1");
+  assertEq(payload.weeks["2026-08-31"][0].text, "主任务");
+  assertEq(payload.weeks["2026-08-31"][0].lane, "life");
+  assertEq(payload.weeks["2026-08-31"][0].mainDone, false);
+  assertEq(payload.weeks["2026-08-31"][0].deadlineAt, 1725200000000);
+  assertEq(payload.weeks["2026-08-31"][0].microTasks[0].id, "m1");
+  assertEq(payload.weeks["2026-08-31"][0].microTasks[0].text, "微任务");
+  assertEq(payload.weeks["2026-08-31"][0].microTasks[0].done, false);
+  assertEq(payload.readingPlan[0].id, "b1");
+  assertEq(payload.readingPlan[0].title, "书名");
+  assertEq(payload.readingPlan[0].status, "reading");
+  assertEq(payload.readingPlan[0].chapters[0].done, false);
+  assertEq(payload.closedListIsg[0].id, "cl1");
+  assertEq(payload.closedListIsg[0].completed, false);
+  assert(!Object.prototype.hasOwnProperty.call(payload, "weeklyPlanDoneRef"), "must not mix Done mirror into UI fingerprint");
+  assert(!Object.prototype.hasOwnProperty.call(payload, "done"), "must not mix Done list into UI fingerprint");
+});
+
 console.log("");
 if (failed) {
   console.log("失败 " + failed + " / " + (passed + failed));

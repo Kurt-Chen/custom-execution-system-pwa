@@ -88199,7 +88199,10 @@
       rolloverPassCount: 0,
       rolloverSkippedCount: 0,
       rolloverScanCount: 0,
-      rolloverMs: 0
+      rolloverMs: 0,
+      weeklyPlanUiRenderCount: 0,
+      weeklyPlanUiSkippedCount: 0,
+      weeklyPlanUiRenderMs: 0
     };
 
     function isCloudSyncPerfEnabled() {
@@ -88304,7 +88307,10 @@
         rolloverPassCount: c.rolloverPassCount,
         rolloverSkippedCount: c.rolloverSkippedCount,
         rolloverScanCount: c.rolloverScanCount,
-        rolloverMs: Math.round(c.rolloverMs * 100) / 100
+        rolloverMs: Math.round(c.rolloverMs * 100) / 100,
+        weeklyPlanUiRenderCount: c.weeklyPlanUiRenderCount,
+        weeklyPlanUiSkippedCount: c.weeklyPlanUiSkippedCount,
+        weeklyPlanUiRenderMs: Math.round(c.weeklyPlanUiRenderMs * 100) / 100
       };
     }
 
@@ -123865,18 +123871,42 @@
       appendRows(weeklyPlanList, tasksSorted);
     }
 
-    function renderWeeklyPlanUI() {
-      applyWeeklyPlanShellLayout();
-      renderWeeklyPlanChrome();
-      renderWeeklyPlanList();
-      if (typeof syncWeeklyPlanSprintStrip === "function") {
-        syncWeeklyPlanSprintStrip();
+    /**
+     * 周计划 + 阅读计划 DOM。依赖指纹未变则跳过全量重建（习惯勾选等）；
+     * 不跳过 Done 对账 / 结转 / repair。无 prev 或 forceAll 仍刷新。
+     */
+    function renderWeeklyPlanUI(opts) {
+      const t0 = beginCloudSyncPerf();
+      let ran = false;
+      try {
+        const extras =
+          typeof getLiveWeeklyPlanUiRenderExtras === "function"
+            ? getLiveWeeklyPlanUiRenderExtras()
+            : {};
+        const nextSnap = getWeeklyPlanUiDependencySnapshot(state, extras);
+        if (!shouldRenderWeeklyPlanUI(lastWeeklyPlanUiDepSnapshot, nextSnap, opts)) {
+          bumpHeavyModuleSliceCounter("weeklyPlanUiSkippedCount");
+          lastWeeklyPlanUiDepSnapshot = nextSnap;
+          return false;
+        }
+        ran = true;
+        bumpHeavyModuleSliceCounter("weeklyPlanUiRenderCount");
+        applyWeeklyPlanShellLayout();
+        renderWeeklyPlanChrome();
+        renderWeeklyPlanList();
+        if (typeof syncWeeklyPlanSprintStrip === "function") {
+          syncWeeklyPlanSprintStrip();
+        }
+        if (typeof ensureDoneTimeBlockSprintTicker === "function") {
+          ensureDoneTimeBlockSprintTicker();
+        }
+        renderReadingPlan();
+        syncSprintViewModeUi();
+        lastWeeklyPlanUiDepSnapshot = nextSnap;
+        return true;
+      } finally {
+        if (ran) addCloudSyncPerf(null, "weeklyPlanUiRenderMs", t0);
       }
-      if (typeof ensureDoneTimeBlockSprintTicker === "function") {
-        ensureDoneTimeBlockSprintTicker();
-      }
-      renderReadingPlan();
-      syncSprintViewModeUi();
     }
 
     const READING_PLAN_STATUS_OPTIONS = [
@@ -133181,6 +133211,172 @@
         : { currentSprintKey: "" };
     }
 
+    /** 周计划任务卡片真实 DOM 字段（文案/lane/完成/截止/微任务）；不含 updatedAt、Done 镜像。 */
+    function projectWeeklyPlanTaskForUi(task) {
+      if (!task || typeof task !== "object") return null;
+      const micros = Array.isArray(task.microTasks) ? task.microTasks : [];
+      return {
+        id: task.id,
+        text: String(task.text || ""),
+        lane: typeof normalizeWeeklyPlanLane === "function" ? normalizeWeeklyPlanLane(task.lane) : task.lane || "life",
+        mainDone: Boolean(task.mainDone),
+        completedAt: task.completedAt != null ? task.completedAt : null,
+        deadlineAt: task.deadlineAt != null ? task.deadlineAt : null,
+        microTasks: micros.map(function (m) {
+          if (!m || typeof m !== "object") return null;
+          return {
+            id: m.id,
+            text: String(m.text || ""),
+            done: Boolean(m.done)
+          };
+        })
+      };
+    }
+
+    function projectReadingPlanBookForUi(book) {
+      if (!book || typeof book !== "object") return null;
+      const chapters = Array.isArray(book.chapters) ? book.chapters : [];
+      return {
+        id: book.id,
+        title: String(book.title || ""),
+        status: book.status || "",
+        targetProblem: String(book.targetProblem || ""),
+        readOn: String(book.readOn || ""),
+        createdAt: book.createdAt != null ? book.createdAt : null,
+        completedAt: book.completedAt != null ? book.completedAt : null,
+        chapters: chapters.map(function (c) {
+          if (!c || typeof c !== "object") return null;
+          return {
+            id: c.id,
+            text: String(c.text || ""),
+            done: Boolean(c.done)
+          };
+        })
+      };
+    }
+
+    /** Life/Work ISG 门禁读今日封闭清单完成态；投影条目完成/截止/子步骤，不含 Done 镜像。 */
+    function collectWeeklyPlanUiClosedListGate(st) {
+      st = st && typeof st === "object" ? st : {};
+      const cl = Array.isArray(st.closedList) ? st.closedList : [];
+      return cl.map(function (item) {
+        if (!item) return null;
+        const steps =
+          typeof getClosedListSubStepsNormalized === "function"
+            ? getClosedListSubStepsNormalized(item)
+            : [];
+        return {
+          id: item.id,
+          completed: Boolean(item.completed),
+          completedAt: item.completedAt != null ? item.completedAt : null,
+          deadlineAt: item.deadlineAt != null ? item.deadlineAt : null,
+          createdAt: item.createdAt != null ? item.createdAt : null,
+          steps: steps.map(function (s) {
+            return {
+              id: s && s.id,
+              completed: Boolean(s && s.completed)
+            };
+          })
+        };
+      });
+    }
+
+    /**
+     * Weekly Plan UI 真实依赖：周计划任务 DOM 字段、阅读计划、shell/viewMode、
+     * 当前/查看 Sprint、日历日、看板桌面媒体查询、展开态、封闭清单 ISG。
+     * 不含 habitCheckins、Done 列表、weeklyPlanDoneRef、rollover 证据。
+     */
+    function collectWeeklyPlanUiDepPayload(st, extras) {
+      st = st && typeof st === "object" ? st : {};
+      extras = extras || {};
+      const wp = st.weeklyPlan && typeof st.weeklyPlan === "object" ? st.weeklyPlan : {};
+      const weeks = {};
+      Object.keys(wp)
+        .sort()
+        .forEach(function (wk) {
+          const arr = Array.isArray(wp[wk]) ? wp[wk] : [];
+          weeks[wk] = arr.map(projectWeeklyPlanTaskForUi);
+        });
+      const ui = st.weeklyPlanUi && typeof st.weeklyPlanUi === "object" ? st.weeklyPlanUi : {};
+      const rp = st.readingPlan && typeof st.readingPlan === "object" ? st.readingPlan : {};
+      const books = Array.isArray(rp.books) ? rp.books : [];
+      const microExpandedIds = Array.isArray(extras.microExpandedIds)
+        ? extras.microExpandedIds.slice().map(String).sort()
+        : [];
+      const readingChaptersExpanded = Array.isArray(extras.readingPlanAllChaptersExpandedIds)
+        ? extras.readingPlanAllChaptersExpandedIds.slice().map(String).sort()
+        : [];
+      return {
+        calendarDay: extras.calendarDay || "",
+        currentSprintKey: extras.currentSprintKey || "",
+        viewSprintStartKey: extras.viewSprintStartKey || "",
+        kanbanDesktop: Boolean(extras.kanbanDesktop),
+        readingPlanMobile: Boolean(extras.readingPlanMobile),
+        microExpandedIds: microExpandedIds,
+        readingPlanAllChaptersExpandedIds: readingChaptersExpanded,
+        weeks: weeks,
+        readingPlan: books.map(projectReadingPlanBookForUi),
+        shell: ui.shell || "closed",
+        addLane: ui.addLane || "life",
+        viewMode: ui.viewMode && typeof ui.viewMode === "object" ? ui.viewMode : {},
+        readingPlanLane: ui.readingPlanLane || "reading",
+        readingPlanExpandedBooks:
+          ui.readingPlanExpandedBooks && typeof ui.readingPlanExpandedBooks === "object"
+            ? ui.readingPlanExpandedBooks
+            : {},
+        readingPlanAllChaptersExpanded:
+          ui.readingPlanAllChaptersExpanded && typeof ui.readingPlanAllChaptersExpanded === "object"
+            ? ui.readingPlanAllChaptersExpanded
+            : {},
+        stopDoingTab: ui.stopDoingTab || "rules",
+        closedListIsg: collectWeeklyPlanUiClosedListGate(st)
+      };
+    }
+
+    function getWeeklyPlanUiDependencySnapshot(st, extras) {
+      return stableHeavyDepJson(collectWeeklyPlanUiDepPayload(st, extras));
+    }
+
+    function shouldRenderWeeklyPlanUI(prevSnap, nextSnap, opts) {
+      opts = opts || {};
+      if (opts.forceAll) return true;
+      if (!prevSnap) return true;
+      return prevSnap !== nextSnap;
+    }
+
+    function getLiveWeeklyPlanUiRenderExtras() {
+      const microExpandedIds = [];
+      if (typeof weeklyPlanMicroExpandedIds !== "undefined" && weeklyPlanMicroExpandedIds && typeof weeklyPlanMicroExpandedIds.forEach === "function") {
+        weeklyPlanMicroExpandedIds.forEach(function (id) {
+          microExpandedIds.push(String(id));
+        });
+      }
+      const readingPlanAllChaptersExpandedIdsLive = [];
+      if (
+        typeof readingPlanAllChaptersExpandedIds !== "undefined" &&
+        readingPlanAllChaptersExpandedIds &&
+        typeof readingPlanAllChaptersExpandedIds.forEach === "function"
+      ) {
+        readingPlanAllChaptersExpandedIds.forEach(function (id) {
+          readingPlanAllChaptersExpandedIdsLive.push(String(id));
+        });
+      }
+      return {
+        calendarDay: typeof formatDateInputValue === "function" ? formatDateInputValue(new Date()) : "",
+        currentSprintKey:
+          typeof getCurrentWeeklyPlanSprintStartKey === "function" ? getCurrentWeeklyPlanSprintStartKey() : "",
+        viewSprintStartKey:
+          typeof getWeeklyPlanViewSprintStartKey === "function" ? getWeeklyPlanViewSprintStartKey() : "",
+        kanbanDesktop: typeof isSprintKanbanDesktopEnabled === "function" ? isSprintKanbanDesktopEnabled() : false,
+        readingPlanMobile:
+          typeof window !== "undefined" &&
+          window.matchMedia &&
+          window.matchMedia("(max-width: 767px)").matches,
+        microExpandedIds: microExpandedIds,
+        readingPlanAllChaptersExpandedIds: readingPlanAllChaptersExpandedIdsLive
+      };
+    }
+
     function syncAllAnniversaryDoneLists(opts) {
       const t0 = beginCloudSyncPerf();
       let ran = false;
@@ -133340,6 +133536,7 @@
     let lastAnniversaryDoneSyncDepSnapshot = null;
     let lastWeeklyPlanDoneSyncDepSnapshot = null;
     let lastWeeklyPlanRolloverDepSnapshot = null;
+    let lastWeeklyPlanUiDepSnapshot = null;
 
     function scheduleRenderHeavyModulesDeferred() {
       const run = function () {

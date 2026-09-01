@@ -145,7 +145,13 @@ const REQUIRED_FNS = [
   "collectWeeklyPlanRolloverClosedMirrors",
   "collectWeeklyPlanRolloverDepPayload",
   "getWeeklyPlanRolloverDependencySnapshot",
-  "shouldRunWeeklyPlanRollover"
+  "shouldRunWeeklyPlanRollover",
+  "projectWeeklyPlanTaskForUi",
+  "projectReadingPlanBookForUi",
+  "collectWeeklyPlanUiClosedListGate",
+  "collectWeeklyPlanUiDepPayload",
+  "getWeeklyPlanUiDependencySnapshot",
+  "shouldRenderWeeklyPlanUI"
 ];
 
 const OPTIONAL_FNS = [];
