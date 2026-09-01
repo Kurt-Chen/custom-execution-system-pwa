@@ -359,6 +359,7 @@
       text-size-adjust: 100%;
       overflow-x: hidden;
       max-width: 100%;
+      scrollbar-gutter: stable;
     }
 
     /* 全量 render 会拆掉进度条再重建；关掉 width 过渡，避免从 0% 弹到当前值 */
@@ -377,6 +378,29 @@
     html.is-ui-rebuild-snap .rule100-hours-bar__fill,
     html.is-ui-rebuild-snap .sprint-kanban-card__bar,
     html.is-ui-rebuild-snap .done-time-block-sprint-split-fill {
+      transition: none !important;
+    }
+
+    /* 进度条默认 width:0% + transition 会在节点重建时从 0 弹到当前值；宽度改由 JS 直接写入 */
+    .weekly-plan-progress-fill,
+    .weekly-plan-head-progress-fill,
+    .done-sleep-countdown__fill,
+    .closed-list-day-progress__fill,
+    .reading-plan-item-progress-fill,
+    .tw020-week-progress-fill,
+    .forge-progress-fill,
+    .forge-task-card-fill,
+    .forge-weekly-min-fill,
+    .forge-wp-summary-fill,
+    .forge-wp-task-progress-fill,
+    .rule100-title-progress__fill,
+    .rule100-hours-bar__fill,
+    .sprint-kanban-card__bar,
+    .done-time-block-sprint-split-fill,
+    #weeklyPlanSection .weekly-plan-head-progress-fill,
+    #weeklyPlanSection.weekly-plan-ui-v2 .weekly-plan-head-progress-fill,
+    #forgeModule .forge-wp-summary-fill,
+    #forgeModule .forge-wp-summary-row--sync-tick .forge-wp-summary-fill {
       transition: none !important;
     }
 
@@ -87390,7 +87414,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260901b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260901d";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -88313,6 +88337,10 @@
     const CLOUD_SYNC_PERSIST_DEBOUNCE_MS = 1500;
     /** 上次全量 render 时的界面数据指纹；云合并未改可见数据则跳过重绘 */
     let lastUiRenderFingerprint = "";
+    let lastCloudUiRenderAt = 0;
+    const CLOUD_UI_RENDER_MIN_INTERVAL_MS = 8000;
+    let renderDepth = 0;
+    let renderSuppressCloudUntil = 0;
     let uiRebuildSnapGen = 0;
     /** 用户正在编辑时推迟全量 render，避免 innerHTML 重建清空输入 */
     let renderDeferredWhileEditing = false;
@@ -90843,7 +90871,7 @@
       const pulseHasMoveBreak =
         pulseNode.state && pulseNode.state.moveBreakDay && typeof pulseNode.state.moveBreakDay === "object";
       if (pulseHasHabit || pulseHasForge || pulseHasDeadline || pulseHasReadingPlan || pulseHasMoveBreak) {
-        if (!isUiRenderFingerprintUnchanged()) render();
+        if (!shouldSkipCloudUiRender()) render();
       } else {
         scheduleCloudSyncRenderDebounced();
       }
@@ -90860,19 +90888,53 @@
       }, CLOUD_SYNC_PERSIST_DEBOUNCE_MS);
     }
 
-    /** 界面可见数据指纹（排除 updatedAt 等同步元数据，避免「只改了时间戳也整页重绘」） */
+    /** 轻量指纹：禁止整包 JSON.stringify（大数据会卡主线程，看起来像整页闪） */
     function captureUiRenderFingerprint(st) {
       if (!st || typeof st !== "object") return "";
-      const slice = {};
-      Object.keys(st).forEach(function (k) {
-        if (k === "updatedAt" || k === "cloudUpdatedAt") return;
-        slice[k] = st[k];
+      const done = Array.isArray(st.done) ? st.done.length : 0;
+      const closed = Array.isArray(st.closedList) ? st.closedList.length : 0;
+      const memo = Array.isArray(st.memo) ? st.memo.length : 0;
+      const wp = st.weeklyPlan && typeof st.weeklyPlan === "object" ? Object.keys(st.weeklyPlan).length : 0;
+      const mb = st.moveBreakDay && typeof st.moveBreakDay === "object" ? st.moveBreakDay : {};
+      return [
+        done,
+        closed,
+        memo,
+        wp,
+        mb.dateKey || "",
+        mb.count || 0,
+        Array.isArray(mb.ackedHours) ? mb.ackedHours.join(".") : ""
+      ].join("|");
+    }
+
+    function captureUiScrollSnapshot() {
+      const ids = [
+        "doneList",
+        "weeklyPlanList",
+        "closedList",
+        "kineticCountdownList",
+        "dynamicModule",
+        "forgeModule"
+      ];
+      const snap = { winX: window.scrollX, winY: window.scrollY, nodes: [] };
+      ids.forEach(function (id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        snap.nodes.push({ el: el, top: el.scrollTop, left: el.scrollLeft });
       });
-      try {
-        return JSON.stringify(slice);
-      } catch (_fpErr) {
-        return "";
+      return snap;
+    }
+
+    function restoreUiScrollSnapshot(snap) {
+      if (!snap) return;
+      if (typeof window.scrollTo === "function") {
+        window.scrollTo(snap.winX, snap.winY);
       }
+      snap.nodes.forEach(function (n) {
+        if (!n.el) return;
+        n.el.scrollTop = n.top;
+        n.el.scrollLeft = n.left;
+      });
     }
 
     function rememberUiRenderFingerprint() {
@@ -90882,6 +90944,16 @@
     function isUiRenderFingerprintUnchanged() {
       const fp = captureUiRenderFingerprint(state);
       return Boolean(fp && lastUiRenderFingerprint && fp === lastUiRenderFingerprint);
+    }
+
+    function shouldSkipCloudUiRender() {
+      if (renderDepth > 0) return true;
+      if (Date.now() < renderSuppressCloudUntil) return true;
+      if (isUiRenderFingerprintUnchanged()) return true;
+      if (lastCloudUiRenderAt > 0 && Date.now() - lastCloudUiRenderAt < CLOUD_UI_RENDER_MIN_INTERVAL_MS) {
+        return true;
+      }
+      return false;
     }
 
     /** 重建进度条期间关掉 width 过渡；双 rAF 等宽度落地后再恢复 */
@@ -90904,7 +90976,7 @@
       if (cloudSyncRenderDebounceTimer) clearTimeout(cloudSyncRenderDebounceTimer);
       cloudSyncRenderDebounceTimer = setTimeout(function () {
         cloudSyncRenderDebounceTimer = null;
-        if (isUiRenderFingerprintUnchanged()) return;
+        if (shouldSkipCloudUiRender()) return;
         render();
       }, CLOUD_SYNC_RENDER_DEBOUNCE_MS);
     }
@@ -113917,10 +113989,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (
         tickOnly &&
         prevKey === block.key &&
-        host.querySelector(".done-time-block-sprint-split-bar") &&
-        host.querySelector(".done-time-block-sprint-split-fill") &&
-        host.querySelectorAll(".done-time-block-sprint-hour-tick").length >=
-          countDoneSprintHourTicks(block.startMin, block.endMin)
+        host.querySelector(".done-time-block-sprint-split-fill")
       ) {
         updateDoneTimeBlockSprintProgressDom(host);
         refreshWeeklyPlanSprintCountdownLabels(host);
@@ -114064,10 +114133,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         doneTodayVisibilityDigest = vis;
       } else if (vis !== doneTodayVisibilityDigest) {
         doneTodayVisibilityDigest = vis;
-        if (typeof render === "function") render();
-        return;
+        ul.querySelectorAll("li.done-time-block[data-done-block-key]").forEach(function (li) {
+          const key = li.getAttribute("data-done-block-key");
+          const block = DONE_TIME_BLOCKS.find(function (b) {
+            return b.key === key;
+          });
+          if (!block) return;
+          const body = li.querySelector(".done-time-block-body") || li;
+          applyDoneTimeBlockSprintLayer(li, body, block);
+        });
       }
-      let needFullRender = false;
       ul.querySelectorAll("li.done-time-block[data-done-block-key]").forEach(function (li) {
         const key = li.getAttribute("data-done-block-key");
         const block = DONE_TIME_BLOCKS.find(function (b) {
@@ -114077,14 +114152,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         let phase = "past";
         if (nowMin < block.startMin) phase = "future";
         else if (nowMin < block.endMin) phase = "current";
-        if ((li.getAttribute("data-sprint-phase") || "") !== phase) {
-          needFullRender = true;
+        const prevPhase = li.getAttribute("data-sprint-phase") || "";
+        if (!prevPhase) {
+          li.setAttribute("data-sprint-phase", phase);
+          return;
+        }
+        if (prevPhase !== phase) {
+          const body = li.querySelector(".done-time-block-body") || li;
+          applyDoneTimeBlockSprintLayer(li, body, block);
         }
       });
-      if (needFullRender && typeof render === "function") {
-        render();
-        return;
-      }
       ul.querySelectorAll("li.done-time-block--sprint-current").forEach(function (li) {
         updateDoneTimeBlockSprintProgressDom(li);
       });
@@ -132518,12 +132595,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function render(force) {
+      if (renderDepth > 0) return;
       if (!force && isAppUiEditingInProgress()) {
         renderDeferredWhileEditing = true;
         scheduleRenderWhenEditingEnds();
         return;
       }
+      renderDepth += 1;
+      renderSuppressCloudUntil = Date.now() + CLOUD_UI_RENDER_MIN_INTERVAL_MS;
+      try {
       beginUiRebuildSnap();
+      const uiScrollSnap = captureUiScrollSnapshot();
+      lastCloudUiRenderAt = Date.now();
       renderDeferredWhileEditing = false;
       if (renderWhenEditingEndsTimer) {
         clearTimeout(renderWhenEditingEndsTimer);
@@ -132745,8 +132828,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       syncExtremeDeadlineChipsInDocument();
       requestAnimationFrame(fitResponsiveSingleLineSlogans);
+      restoreUiScrollSnapshot(uiScrollSnap);
+      requestAnimationFrame(function () {
+        restoreUiScrollSnapshot(uiScrollSnap);
+      });
       rememberUiRenderFingerprint();
       endUiRebuildSnap();
+      } finally {
+        renderDepth = Math.max(0, renderDepth - 1);
+      }
     }
 
     /** 首屏延后的重模块：历史面板 / 十二周年 / Rule100 / 回收站等 */
