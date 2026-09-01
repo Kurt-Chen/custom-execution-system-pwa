@@ -130,7 +130,12 @@ const REQUIRED_FNS = [
   "getHeavyModuleDependencySnapshot",
   "allHeavyModuleSlicesDirty",
   "diffHeavyModuleDependencies",
-  "planHeavyModuleRenders"
+  "planHeavyModuleRenders",
+  "projectAnniversaryModuleForDoneSync",
+  "collectAnniversaryDoneEntriesForSyncDep",
+  "collectAnniversaryDoneSyncDepPayload",
+  "getAnniversaryDoneSyncDependencySnapshot",
+  "shouldRunAnniversaryDoneSync"
 ];
 
 const OPTIONAL_FNS = [];

@@ -88187,7 +88187,11 @@
       retentionPassCount: 0,
       retentionPassMs: 0,
       persistCount: 0,
-      persistMs: 0
+      persistMs: 0,
+      anniversaryDoneSyncPassCount: 0,
+      anniversaryDoneSyncSkippedCount: 0,
+      anniversaryDoneSyncScanCount: 0,
+      anniversaryDoneSyncMs: 0
     };
 
     function isCloudSyncPerfEnabled() {
@@ -88280,7 +88284,11 @@
         retentionPassMs: Math.round(c.retentionPassMs * 100) / 100,
         persistCount: c.persistCount,
         persistMs: Math.round(c.persistMs * 100) / 100,
-        persistAvgMs: avg(c.persistMs, c.persistCount)
+        persistAvgMs: avg(c.persistMs, c.persistCount),
+        anniversaryDoneSyncPassCount: c.anniversaryDoneSyncPassCount,
+        anniversaryDoneSyncSkippedCount: c.anniversaryDoneSyncSkippedCount,
+        anniversaryDoneSyncScanCount: c.anniversaryDoneSyncScanCount,
+        anniversaryDoneSyncMs: Math.round(c.anniversaryDoneSyncMs * 100) / 100
       };
     }
 
@@ -132510,17 +132518,8 @@
       if (syncLife4000WeeklyToDone()) {
         saveState();
       }
-      syncAnniversaryTw020DoneList();
-      syncAnniversaryTw021DoneList();
-      syncAnniversaryTw022DoneList();
       ensureAnniversaryTwRegistry();
-      (state.anniversaryTwRegistry.dynamicKeys || []).forEach(function (moduleKey) {
-        syncAnniversaryTwModuleDoneList(moduleKey);
-        syncAnniversaryDeepTimeDoneList(moduleKey, anniversaryTwSuffixFromModuleKey(moduleKey));
-      });
-      syncAnniversaryDeepTimeDoneList("tw020", "020");
-      syncAnniversaryDeepTimeDoneList("tw021", "021");
-      syncAnniversaryDeepTimeDoneList("tw022", "022");
+      syncAllAnniversaryDoneLists();
       ensureTimeReflectionPromptsForToday();
       ensureAgeGoalMilestonePromptsForToday();
       ensureAnniversaryTw020PromptsForToday();
@@ -132839,6 +132838,164 @@
       cloudSyncPerfCounters[countKey] += 1;
     }
 
+    /**
+     * 周年 → My Done 同步的真实依赖投影。
+     * 只含扫描会读的字段：weeks 任务 id/text/done/subs、anchor（新 Done 文案周标签）、deepTime.days。
+     * 不含 ui.weekExpanded / futureStory 等，避免展开周也误扫。
+     */
+    function projectAnniversaryModuleForDoneSync(mod) {
+      if (!mod || typeof mod !== "object") return null;
+      const weeksOut = {};
+      const weeks = mod.weeks && typeof mod.weeks === "object" ? mod.weeks : {};
+      Object.keys(weeks)
+        .sort()
+        .forEach(function (wk) {
+          const arr = Array.isArray(weeks[wk]) ? weeks[wk] : [];
+          weeksOut[wk] = arr.map(function (task) {
+            if (!task || typeof task !== "object") return null;
+            const subs = Array.isArray(task.subs) ? task.subs : [];
+            return {
+              id: task.id,
+              text: task.text,
+              done: Boolean(task.done),
+              subs: subs.map(function (s) {
+                if (!s || typeof s !== "object") return null;
+                return { id: s.id, text: s.text, done: Boolean(s.done) };
+              })
+            };
+          });
+        });
+      let deepTime = null;
+      if (mod.deepTime && typeof mod.deepTime === "object") {
+        const days = mod.deepTime.days && typeof mod.deepTime.days === "object" ? mod.deepTime.days : {};
+        const daysOut = {};
+        Object.keys(days)
+          .sort()
+          .forEach(function (dk) {
+            const ent = days[dk];
+            if (ent && typeof ent === "object") {
+              daysOut[dk] = { hours: ent.hours, loggedAt: ent.loggedAt || null };
+            } else {
+              daysOut[dk] = ent;
+            }
+          });
+        deepTime = { days: daysOut };
+      }
+      return {
+        anchor: mod.anchor != null ? mod.anchor : null,
+        weeks: weeksOut,
+        deepTime: deepTime
+      };
+    }
+
+    function collectAnniversaryDoneEntriesForSyncDep(st) {
+      st = st && typeof st === "object" ? st : {};
+      const done = Array.isArray(st.done) ? st.done : [];
+      const out = [];
+      for (let i = 0; i < done.length; i++) {
+        const t = done[i];
+        if (!t) continue;
+        if (!t.anniversaryTwMeta && !t.anniversaryDeepTimeMeta) continue;
+        out.push({
+          id: t.id,
+          text: t.text,
+          completedAt: t.completedAt,
+          anniversaryTwMeta: t.anniversaryTwMeta || null,
+          anniversaryDeepTimeMeta: t.anniversaryDeepTimeMeta || null
+        });
+      }
+      return out;
+    }
+
+    function collectAnniversaryDoneSyncDepPayload(st) {
+      st = st && typeof st === "object" ? st : {};
+      const modules = {};
+      const keys =
+        typeof listAnniversaryTwStateKeysForSync === "function"
+          ? listAnniversaryTwStateKeysForSync(st, null)
+          : ["anniversaryTw020", "anniversaryTw021", "anniversaryTw022"];
+      keys.slice().sort().forEach(function (sk) {
+        modules[sk] = projectAnniversaryModuleForDoneSync(st[sk]);
+      });
+      return {
+        registry: st.anniversaryTwRegistry || null,
+        doneRef: st.anniversaryDoneRef || null,
+        modules: modules,
+        anniversaryDone: collectAnniversaryDoneEntriesForSyncDep(st)
+      };
+    }
+
+    function getAnniversaryDoneSyncDependencySnapshot(st) {
+      return stableHeavyDepJson(collectAnniversaryDoneSyncDepPayload(st));
+    }
+
+    /**
+     * 无 prev / forceAll → 必须扫描（启动、显式对账）。
+     * 指纹相同 → 跳过；周年任务/Done 源/ref/deepTime 变化 → 扫描。
+     */
+    function shouldRunAnniversaryDoneSync(prevSnap, nextSnap, opts) {
+      opts = opts || {};
+      if (opts.forceAll) return true;
+      if (!prevSnap) return true;
+      return prevSnap !== nextSnap;
+    }
+
+    function syncAllAnniversaryDoneLists(opts) {
+      const t0 = beginCloudSyncPerf();
+      let ran = false;
+      try {
+        const nextSnap = getAnniversaryDoneSyncDependencySnapshot(state);
+        if (!shouldRunAnniversaryDoneSync(lastAnniversaryDoneSyncDepSnapshot, nextSnap, opts)) {
+          bumpHeavyModuleSliceCounter("anniversaryDoneSyncSkippedCount");
+          lastAnniversaryDoneSyncDepSnapshot = nextSnap;
+          return false;
+        }
+        ran = true;
+        bumpHeavyModuleSliceCounter("anniversaryDoneSyncPassCount");
+        function runOneScan(fn) {
+          bumpHeavyModuleSliceCounter("anniversaryDoneSyncScanCount");
+          fn();
+        }
+        runOneScan(function () {
+          syncAnniversaryTw020DoneList();
+        });
+        runOneScan(function () {
+          syncAnniversaryTw021DoneList();
+        });
+        runOneScan(function () {
+          syncAnniversaryTw022DoneList();
+        });
+        if (typeof ensureAnniversaryTwRegistry === "function") {
+          ensureAnniversaryTwRegistry();
+        }
+        const dyn =
+          state.anniversaryTwRegistry && Array.isArray(state.anniversaryTwRegistry.dynamicKeys)
+            ? state.anniversaryTwRegistry.dynamicKeys
+            : [];
+        dyn.forEach(function (moduleKey) {
+          runOneScan(function () {
+            syncAnniversaryTwModuleDoneList(moduleKey);
+          });
+          runOneScan(function () {
+            syncAnniversaryDeepTimeDoneList(moduleKey, anniversaryTwSuffixFromModuleKey(moduleKey));
+          });
+        });
+        runOneScan(function () {
+          syncAnniversaryDeepTimeDoneList("tw020", "020");
+        });
+        runOneScan(function () {
+          syncAnniversaryDeepTimeDoneList("tw021", "021");
+        });
+        runOneScan(function () {
+          syncAnniversaryDeepTimeDoneList("tw022", "022");
+        });
+        lastAnniversaryDoneSyncDepSnapshot = getAnniversaryDoneSyncDependencySnapshot(state);
+        return true;
+      } finally {
+        if (ran) addCloudSyncPerf(null, "anniversaryDoneSyncMs", t0);
+      }
+    }
+
     /** 首屏延后的重模块：历史面板 / 十二周年 / Rule100 / 回收站等 */
     function renderHeavyModules(forceAll) {
       const t0 = beginCloudSyncPerf();
@@ -132939,6 +133096,7 @@
     let isBootFirstRenderPass = true;
     let renderHeavyIdleHandle = null;
     let lastHeavyModuleDepSnapshot = null;
+    let lastAnniversaryDoneSyncDepSnapshot = null;
 
     function scheduleRenderHeavyModulesDeferred() {
       const run = function () {

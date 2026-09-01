@@ -704,6 +704,239 @@ test("依赖指纹变化 ⇒ 对应切片 dirty（防止 state 已变而计划�
   });
 });
 
+function annDoneBase(over) {
+  return emptyState(
+    Object.assign(
+      {
+        anniversaryTw020: {
+          anchor: "2026-01-04",
+          weeks: {
+            "1": [{ id: "t1", text: "keep", done: true, subs: [] }]
+          },
+          deepTime: { days: { "2026-09-01": { hours: 1.5, loggedAt: 10 } } }
+        },
+        anniversaryTw021: { weeks: {} },
+        anniversaryTw022: { weeks: {} },
+        anniversaryTwRegistry: { nextNumber: 23, dynamicKeys: [] },
+        anniversaryDoneRef: {
+          tw020: { items: { "main:1:t1": "done-t1" } },
+          tw021: { items: {} },
+          tw022: { items: {} }
+        },
+        done: [
+          {
+            id: "done-t1",
+            text: "【十二周年】keep",
+            completedAt: 10,
+            anniversaryTwMeta: { module: "tw020", syncKey: "main:1:t1", weekNum: 1, taskId: "t1" }
+          }
+        ],
+        habitCheckins: {}
+      },
+      over || {}
+    )
+  );
+}
+
+function annShouldRun(prevState, nextState, opts) {
+  const prev = ctx.getAnniversaryDoneSyncDependencySnapshot(prevState);
+  const next = ctx.getAnniversaryDoneSyncDependencySnapshot(nextState);
+  return ctx.shouldRunAnniversaryDoneSync(prev, next, opts);
+}
+
+test("启动时无 prev 快照：周年 Done 扫描必须执行", function () {
+  const snap = ctx.getAnniversaryDoneSyncDependencySnapshot(annDoneBase());
+  assertEq(ctx.shouldRunAnniversaryDoneSync(null, snap), true);
+});
+
+test("forceAll：即使指纹相同也必须扫描", function () {
+  const snap = ctx.getAnniversaryDoneSyncDependencySnapshot(annDoneBase());
+  assertEq(ctx.shouldRunAnniversaryDoneSync(snap, snap, { forceAll: true }), true);
+});
+
+test("普通 habitCheckins 勾选：周年依赖未变化 → 跳过扫描", function () {
+  const prev = annDoneBase();
+  const next = annDoneBase({
+    habitCheckins: { "2026-09-01": { water: true } },
+    done: prev.done.concat([{ id: "h1", text: "喝水", habitMeta: { key: "water" }, completedAt: 1 }])
+  });
+  assertEq(annShouldRun(prev, next), false);
+});
+
+test("连续 10 次普通习惯勾选：周年扫描次数 10→0", function () {
+  const base = annDoneBase();
+  let prev = ctx.getAnniversaryDoneSyncDependencySnapshot(base);
+  let runs = 0;
+  for (let i = 0; i < 10; i++) {
+    const st = annDoneBase({
+      habitCheckins: { "2026-09-01": { water: i + 1 } },
+      done: base.done.concat([{ id: "h" + i, text: "喝水", habitMeta: { key: "water" }, completedAt: i }])
+    });
+    const next = ctx.getAnniversaryDoneSyncDependencySnapshot(st);
+    if (ctx.shouldRunAnniversaryDoneSync(prev, next)) runs += 1;
+    prev = next;
+  }
+  assertEq(runs, 0);
+});
+
+test("周年任务 done 变化 → 必须扫描", function () {
+  const prev = annDoneBase();
+  const next = annDoneBase({
+    anniversaryTw020: {
+      anchor: "2026-01-04",
+      weeks: { "1": [{ id: "t1", text: "keep", done: false, subs: [] }] },
+      deepTime: { days: { "2026-09-01": { hours: 1.5, loggedAt: 10 } } }
+    }
+  });
+  assertEq(annShouldRun(prev, next), true);
+});
+
+test("周年任务增删 → 必须扫描", function () {
+  const prev = annDoneBase();
+  const next = annDoneBase({
+    anniversaryTw020: {
+      anchor: "2026-01-04",
+      weeks: {
+        "1": [
+          { id: "t1", text: "keep", done: true, subs: [] },
+          { id: "t2", text: "new", done: false, subs: [] }
+        ]
+      },
+      deepTime: { days: { "2026-09-01": { hours: 1.5, loggedAt: 10 } } }
+    }
+  });
+  assertEq(annShouldRun(prev, next), true);
+});
+
+test("删除周年任务 → 必须扫描（Done 镜像应对账）", function () {
+  const prev = annDoneBase();
+  const next = annDoneBase({
+    anniversaryTw020: {
+      anchor: "2026-01-04",
+      weeks: { "1": [] },
+      deepTime: { days: { "2026-09-01": { hours: 1.5, loggedAt: 10 } } }
+    }
+  });
+  assertEq(annShouldRun(prev, next), true);
+});
+
+test("恢复周年任务 → 必须扫描", function () {
+  const emptyWeeks = annDoneBase({
+    anniversaryTw020: {
+      anchor: "2026-01-04",
+      weeks: { "1": [] },
+      deepTime: { days: { "2026-09-01": { hours: 1.5, loggedAt: 10 } } }
+    }
+  });
+  const restored = annDoneBase();
+  assertEq(annShouldRun(emptyWeeks, restored), true);
+});
+
+test("周年 Done 源变化（镜像行删除）→ 必须扫描", function () {
+  const prev = annDoneBase();
+  const next = annDoneBase({ done: [] });
+  assertEq(annShouldRun(prev, next), true);
+});
+
+test("anniversaryDoneRef 变化 → 必须扫描", function () {
+  const prev = annDoneBase();
+  const next = annDoneBase({
+    anniversaryDoneRef: {
+      tw020: { items: {} },
+      tw021: { items: {} },
+      tw022: { items: {} }
+    }
+  });
+  assertEq(annShouldRun(prev, next), true);
+});
+
+test("深度时间 hours 变化 → 必须扫描", function () {
+  const prev = annDoneBase();
+  const next = annDoneBase({
+    anniversaryTw020: {
+      anchor: "2026-01-04",
+      weeks: { "1": [{ id: "t1", text: "keep", done: true, subs: [] }] },
+      deepTime: { days: { "2026-09-01": { hours: 3, loggedAt: 10 } } }
+    }
+  });
+  assertEq(annShouldRun(prev, next), true);
+});
+
+test("子任务 done 变化 → 必须扫描", function () {
+  const prev = annDoneBase({
+    anniversaryTw020: {
+      anchor: "2026-01-04",
+      weeks: {
+        "1": [{ id: "t1", text: "keep", done: true, subs: [{ id: "s1", text: "sub", done: false }] }]
+      },
+      deepTime: { days: { "2026-09-01": { hours: 1.5, loggedAt: 10 } } }
+    }
+  });
+  const next = annDoneBase({
+    anniversaryTw020: {
+      anchor: "2026-01-04",
+      weeks: {
+        "1": [{ id: "t1", text: "keep", done: true, subs: [{ id: "s1", text: "sub", done: true }] }]
+      },
+      deepTime: { days: { "2026-09-01": { hours: 1.5, loggedAt: 10 } } }
+    }
+  });
+  assertEq(annShouldRun(prev, next), true);
+});
+
+test("跨天 / selectedDoneDate / 归档视图 不在周年 Done 扫描依赖内", function () {
+  const st = annDoneBase();
+  const snap = ctx.getAnniversaryDoneSyncDependencySnapshot(st);
+  const withUi = annDoneBase({
+    anniversaryTw020: Object.assign({}, st.anniversaryTw020, {
+      ui: { weekExpanded: { "1": true } },
+      futureStory: "changed story"
+    })
+  });
+  assertEq(ctx.shouldRunAnniversaryDoneSync(snap, ctx.getAnniversaryDoneSyncDependencySnapshot(withUi)), false);
+});
+
+test("registry 动态周期新增 → 必须扫描", function () {
+  const prev = annDoneBase();
+  const next = annDoneBase({
+    anniversaryTwRegistry: { nextNumber: 24, dynamicKeys: ["tw023"] },
+    anniversaryTw023: { weeks: { "1": [{ id: "n1", text: "dyn", done: false, subs: [] }] } }
+  });
+  assertEq(annShouldRun(prev, next), true);
+});
+
+test("云端 merge 改了十二周年文案 → 周年 Done 扫描必须执行", function () {
+  const loc = annDoneBase({
+    anniversaryTw020: {
+      anchor: "2026-01-04",
+      weeks: { "1": [{ id: "t1", text: "local", done: true, subs: [], updatedAt: 1 }] },
+      deepTime: { days: {} }
+    }
+  });
+  const rem = annDoneBase({
+    anniversaryTw020: {
+      anchor: "2026-01-04",
+      weeks: { "1": [{ id: "t1", text: "remote", done: true, subs: [], updatedAt: 99 }] },
+      deepTime: { days: {} }
+    }
+  });
+  const prev = ctx.getAnniversaryDoneSyncDependencySnapshot(loc);
+  const merged = fullMerge(loc, rem, 100, 0);
+  const next = ctx.getAnniversaryDoneSyncDependencySnapshot(merged);
+  assertEq(ctx.shouldRunAnniversaryDoneSync(prev, next), true);
+});
+
+test("周年 Done 依赖快照不得漏掉真实依赖（投影含 id/text/done/subs/deepTime/ref）", function () {
+  const payload = ctx.collectAnniversaryDoneSyncDepPayload(annDoneBase());
+  assert(payload.modules.anniversaryTw020, "missing tw020 module projection");
+  assertEq(payload.modules.anniversaryTw020.weeks["1"][0].id, "t1");
+  assertEq(payload.modules.anniversaryTw020.weeks["1"][0].done, true);
+  assertEq(payload.modules.anniversaryTw020.deepTime.days["2026-09-01"].hours, 1.5);
+  assertEq(payload.doneRef.tw020.items["main:1:t1"], "done-t1");
+  assertEq(payload.anniversaryDone[0].id, "done-t1");
+  assert(payload.anniversaryDone[0].anniversaryTwMeta, "missing anniversaryTwMeta on done dep");
+});
+
 console.log("");
 if (failed) {
   console.log("失败 " + failed + " / " + (passed + failed));
