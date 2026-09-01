@@ -483,6 +483,227 @@ test("skipDoneHygiene 不改变 merge 并集结果", function () {
   assertEq(ids(merged.done), ["a", "b"]);
 });
 
+function heavyExtras(over) {
+  return Object.assign(
+    {
+      calendarDay: "2026-09-01",
+      selectedDoneDate: "2026-09-01",
+      anniversaryTwArchiveViewKey: ""
+    },
+    over || {}
+  );
+}
+
+function heavyBase(over) {
+  return emptyState(
+    Object.assign(
+      {
+        ruleOf100: { rule100A: { checkins: ["1"], name: "A" } },
+        rule100DayProjectKeys: ["rule100A"],
+        rule100UnitProjectKeys: [],
+        life4000Weeks: { name: "", birthDate: "1990-01-01", birthLunarText: "", lastDoneTuesdayKey: "" },
+        trash: [],
+        forge: { dailyMinimums: [], weeklyMinimums: [] },
+        anniversaryTw020: { weeks: { "1": [{ id: "t1", text: "keep", done: false }] } },
+        habitCheckins: {}
+      },
+      over || {}
+    )
+  );
+}
+
+function heavyDirty(prevState, nextState, extras) {
+  const prev = ctx.getHeavyModuleDependencySnapshot(prevState, extras || heavyExtras());
+  const next = ctx.getHeavyModuleDependencySnapshot(nextState, extras || heavyExtras());
+  return ctx.diffHeavyModuleDependencies(prev, next);
+}
+
+test("启动时无 prev 快照：全部 heavy 切片必须刷新", function () {
+  const snap = ctx.getHeavyModuleDependencySnapshot(heavyBase(), heavyExtras());
+  const dirty = ctx.diffHeavyModuleDependencies(null, snap);
+  assertEq(dirty.rule100, true);
+  assertEq(dirty.life4000, true);
+  assertEq(dirty.trash, true);
+  assertEq(dirty.anniversary, true);
+  assertEq(dirty.forgeMins, true);
+  assertEq(dirty.any, true);
+});
+
+test("planHeavyModuleRenders forceAll：即使指纹相同也全刷", function () {
+  const snap = ctx.getHeavyModuleDependencySnapshot(heavyBase(), heavyExtras());
+  const dirty = ctx.planHeavyModuleRenders(snap, snap, { forceAll: true });
+  assertEq(dirty.any, true);
+  assertEq(dirty.anniversary, true);
+});
+
+test("无关习惯勾选：十二周年 / Rule100 / 回收站 / 人生进度 / Forge 下限可跳过", function () {
+  const prev = heavyBase();
+  const next = heavyBase({
+    habitCheckins: { "2026-09-01": { water: true } },
+    done: [{ id: "h1", text: "喝水", habitMeta: { key: "water" }, completedAt: 1 }]
+  });
+  const dirty = heavyDirty(prev, next);
+  assertEq(dirty.rule100, false);
+  assertEq(dirty.life4000, false);
+  assertEq(dirty.trash, false);
+  assertEq(dirty.anniversary, false);
+  assertEq(dirty.forgeMins, false);
+  assertEq(dirty.any, false);
+});
+
+test("高频习惯勾选路径：10 次无关变化 heavy 全跳过（调用次数证明）", function () {
+  const extras = heavyExtras();
+  const base = heavyBase();
+  let prev = ctx.getHeavyModuleDependencySnapshot(base, extras);
+  let skipped = 0;
+  let rendered = 0;
+  for (let i = 0; i < 10; i++) {
+    const st = heavyBase({
+      habitCheckins: { "2026-09-01": { water: i + 1 } },
+      done: [{ id: "h" + i, text: "喝水", habitMeta: { key: "water" }, completedAt: i }]
+    });
+    const next = ctx.getHeavyModuleDependencySnapshot(st, extras);
+    const dirty = ctx.diffHeavyModuleDependencies(prev, next);
+    if (dirty.any) rendered += 1;
+    else skipped += 1;
+    prev = next;
+  }
+  assertEq(rendered, 0);
+  assertEq(skipped, 10);
+});
+
+test("相关 state 改变：Rule100 必须刷新，其它切片可跳过", function () {
+  const prev = heavyBase();
+  const next = heavyBase({
+    ruleOf100: { rule100A: { checkins: ["1", "2"], name: "A" } }
+  });
+  const dirty = heavyDirty(prev, next);
+  assertEq(dirty.rule100, true);
+  assertEq(dirty.anniversary, false);
+  assertEq(dirty.trash, false);
+  assertEq(dirty.any, true);
+});
+
+test("相关 state 改变：十二周年周任务必须刷新", function () {
+  const prev = heavyBase();
+  const next = heavyBase({
+    anniversaryTw020: { weeks: { "1": [{ id: "t1", text: "keep", done: true }] } }
+  });
+  const dirty = heavyDirty(prev, next);
+  assertEq(dirty.anniversary, true);
+  assertEq(dirty.rule100, false);
+  assertEq(dirty.trash, false);
+});
+
+test("相关 state 改变：删除/恢复垃圾箱必须刷新 trash", function () {
+  const prev = heavyBase({ trash: [] });
+  const next = heavyBase({
+    trash: [{ id: "x", deletedAt: 1, sourceList: "done", payload: {} }]
+  });
+  const dirty = heavyDirty(prev, next);
+  assertEq(dirty.trash, true);
+  assertEq(dirty.anniversary, false);
+  assertEq(dirty.rule100, false);
+});
+
+test("相关 state 改变：Forge 打卡 Done 必须刷新 forgeMins", function () {
+  const prev = heavyBase();
+  const next = heavyBase({
+    done: [
+      {
+        id: "f1",
+        text: "【Forge】壶铃",
+        forgeMindMeta: { dateKey: "2026-09-01", amount: 10 },
+        completedAt: 1
+      }
+    ]
+  });
+  const dirty = heavyDirty(prev, next);
+  assertEq(dirty.forgeMins, true);
+  assertEq(dirty.anniversary, false);
+  assertEq(dirty.rule100, false);
+  assertEq(dirty.trash, false);
+});
+
+test("日期筛选变化：Forge 下限必须刷新（日/周聚合跟 selectedDoneDate）", function () {
+  const st = heavyBase();
+  const prev = ctx.getHeavyModuleDependencySnapshot(st, heavyExtras({ selectedDoneDate: "2026-09-01" }));
+  const next = ctx.getHeavyModuleDependencySnapshot(st, heavyExtras({ selectedDoneDate: "2026-09-02" }));
+  const dirty = ctx.diffHeavyModuleDependencies(prev, next);
+  assertEq(dirty.forgeMins, true);
+  assertEq(dirty.anniversary, false);
+});
+
+test("跨天：calendarDay 变化时所有 heavy 切片必须刷新", function () {
+  const st = heavyBase();
+  const prev = ctx.getHeavyModuleDependencySnapshot(st, heavyExtras({ calendarDay: "2026-09-01" }));
+  const next = ctx.getHeavyModuleDependencySnapshot(st, heavyExtras({ calendarDay: "2026-09-02" }));
+  const dirty = ctx.diffHeavyModuleDependencies(prev, next);
+  assertEq(dirty.rule100, true);
+  assertEq(dirty.life4000, true);
+  assertEq(dirty.trash, true);
+  assertEq(dirty.anniversary, true);
+  assertEq(dirty.forgeMins, true);
+  assertEq(dirty.any, true);
+});
+
+test("归档视图 UI 依赖变化：anniversary 必须刷新", function () {
+  const st = heavyBase();
+  const prev = ctx.getHeavyModuleDependencySnapshot(st, heavyExtras({ anniversaryTwArchiveViewKey: "" }));
+  const next = ctx.getHeavyModuleDependencySnapshot(st, heavyExtras({ anniversaryTwArchiveViewKey: "tw020" }));
+  const dirty = ctx.diffHeavyModuleDependencies(prev, next);
+  assertEq(dirty.anniversary, true);
+  assertEq(dirty.rule100, false);
+});
+
+test("待滚动十二周年：forceAnniversary 即使指纹相同也刷", function () {
+  const snap = ctx.getHeavyModuleDependencySnapshot(heavyBase(), heavyExtras());
+  const dirty = ctx.planHeavyModuleRenders(snap, snap, { forceAnniversary: true });
+  assertEq(dirty.anniversary, true);
+  assertEq(dirty.any, true);
+  assertEq(dirty.rule100, false);
+});
+
+test("云端 merge 改了十二周年文案 → anniversary 必须刷新", function () {
+  const extras = heavyExtras();
+  const loc = heavyBase({
+    anniversaryTw020: { weeks: { "1": [{ id: "t1", text: "local", done: false, updatedAt: 1 }] } }
+  });
+  const rem = heavyBase({
+    anniversaryTw020: { weeks: { "1": [{ id: "t1", text: "remote", done: false, updatedAt: 99 }] } }
+  });
+  const prev = ctx.getHeavyModuleDependencySnapshot(loc, extras);
+  const merged = fullMerge(loc, rem, 100, 0);
+  const next = ctx.getHeavyModuleDependencySnapshot(merged, extras);
+  const dirty = ctx.diffHeavyModuleDependencies(prev, next);
+  assertEq(dirty.anniversary, true);
+});
+
+test("依赖指纹变化 ⇒ 对应切片 dirty（防止 state 已变而计划跳过）", function () {
+  const slices = ["rule100", "life4000", "trash", "anniversary", "forgeMins"];
+  const prev = ctx.getHeavyModuleDependencySnapshot(heavyBase(), heavyExtras());
+  const variants = [
+    ["rule100", heavyBase({ ruleOf100: { rule100A: { checkins: ["x"], name: "A" } } })],
+    ["life4000", heavyBase({ life4000Weeks: { name: "n", birthDate: "1990-01-01", birthLunarText: "", lastDoneTuesdayKey: "" } })],
+    ["trash", heavyBase({ trash: [{ id: "gone", deletedAt: 2 }] })],
+    ["anniversary", heavyBase({ anniversaryTw021: { weeks: { "1": [{ id: "z", text: "new" }] } } })],
+    [
+      "forgeMins",
+      heavyBase({ forge: { dailyMinimums: [{ id: "m", label: "x", dailyMin: "10" }], weeklyMinimums: [] } })
+    ]
+  ];
+  variants.forEach(function (pair) {
+    const slice = pair[0];
+    const next = ctx.getHeavyModuleDependencySnapshot(pair[1], heavyExtras());
+    const dirty = ctx.diffHeavyModuleDependencies(prev, next);
+    assert(dirty[slice], slice + " should be dirty");
+    slices.forEach(function (other) {
+      if (other === slice) return;
+      assertEq(dirty[other], false, slice + " change leaked to " + other);
+    });
+  });
+});
+
 console.log("");
 if (failed) {
   console.log("失败 " + failed + " / " + (passed + failed));

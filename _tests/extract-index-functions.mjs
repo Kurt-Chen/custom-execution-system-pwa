@@ -123,7 +123,14 @@ const REQUIRED_FNS = [
   "runDataRetentionPass",
   "purgeExpiredTrash",
   "pruneTrashEntryCount",
-  "compactStateForLocalStorage"
+  "compactStateForLocalStorage",
+  "stableHeavyDepJson",
+  "collectAnniversaryHeavyDepPayload",
+  "collectForgeMinsHeavyDepPayload",
+  "getHeavyModuleDependencySnapshot",
+  "allHeavyModuleSlicesDirty",
+  "diffHeavyModuleDependencies",
+  "planHeavyModuleRenders"
 ];
 
 const OPTIONAL_FNS = [];

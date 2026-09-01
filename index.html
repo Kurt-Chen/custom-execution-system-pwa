@@ -88175,6 +88175,12 @@
       renderMs: 0,
       renderHeavyModulesCount: 0,
       renderHeavyModulesMs: 0,
+      renderHeavyModulesSkippedCount: 0,
+      renderHeavyRule100Count: 0,
+      renderHeavyLife4000Count: 0,
+      renderHeavyTrashCount: 0,
+      renderHeavyAnniversaryCount: 0,
+      renderHeavyForgeMinsCount: 0,
       cloudPullCount: 0,
       cloudPushCount: 0,
       cloudMergeCount: 0,
@@ -88261,6 +88267,12 @@
         renderAvgMs: avg(c.renderMs, c.renderCount),
         renderHeavyModulesCount: c.renderHeavyModulesCount,
         renderHeavyModulesMs: Math.round(c.renderHeavyModulesMs * 100) / 100,
+        renderHeavyModulesSkippedCount: c.renderHeavyModulesSkippedCount,
+        renderHeavyRule100Count: c.renderHeavyRule100Count,
+        renderHeavyLife4000Count: c.renderHeavyLife4000Count,
+        renderHeavyTrashCount: c.renderHeavyTrashCount,
+        renderHeavyAnniversaryCount: c.renderHeavyAnniversaryCount,
+        renderHeavyForgeMinsCount: c.renderHeavyForgeMinsCount,
         cloudPullCount: c.cloudPullCount,
         cloudPushCount: c.cloudPushCount,
         cloudMergeCount: c.cloudMergeCount,
@@ -132690,65 +132702,243 @@
       }
     }
 
-    /** 首屏延后的重模块：历史面板 / 十二周年 / Rule100 / 回收站等 */
-    function renderHeavyModules() {
-      const t0 = beginCloudSyncPerf();
+    /**
+     * Heavy 模块依赖指纹：按实际数据切片比较，而不是按「本次操作类型」跳过。
+     * 依赖无法确定的模块保持刷新；calendarDay 进入各切片，保证跨天 UI 不会 stale。
+     */
+    function stableHeavyDepJson(value) {
       try {
-      try {
-        renderRuleOf100();
-      } catch (rule100Err) {
-        console.warn("[Rule of 100] renderRuleOf100 失败:", rule100Err);
+        return JSON.stringify(value);
+      } catch (_e) {
+        return "unserializable";
       }
+    }
+
+    function collectAnniversaryHeavyDepPayload(st) {
+      st = st && typeof st === "object" ? st : {};
+      const out = {
+        registry: st.anniversaryTwRegistry || null,
+        archivedKeys: st.anniversaryTwArchivedKeys || null
+      };
+      const keys =
+        typeof listAnniversaryTwStateKeysForSync === "function"
+          ? listAnniversaryTwStateKeysForSync(st, null)
+          : ["anniversaryTw020", "anniversaryTw021", "anniversaryTw022"];
+      keys.slice().sort().forEach(function (sk) {
+        out[sk] = st[sk] || null;
+      });
+      return out;
+    }
+
+    function collectForgeMinsHeavyDepPayload(st, extras) {
+      st = st && typeof st === "object" ? st : {};
+      extras = extras || {};
+      const done = Array.isArray(st.done) ? st.done : [];
+      const forgeDone = [];
+      for (let i = 0; i < done.length; i++) {
+        const t = done[i];
+        if (!t) continue;
+        if (t.forgeMindMeta || t.forgeBodyMeta) {
+          forgeDone.push({
+            id: t.id,
+            text: t.text,
+            completedAt: t.completedAt,
+            forgeMindMeta: t.forgeMindMeta || null,
+            forgeBodyMeta: t.forgeBodyMeta || null
+          });
+        }
+      }
+      return {
+        calendarDay: extras.calendarDay || "",
+        selectedDoneDate: extras.selectedDoneDate || "",
+        forge: st.forge || null,
+        forgeDone: forgeDone
+      };
+    }
+
+    function getHeavyModuleDependencySnapshot(st, extras) {
+      st = st && typeof st === "object" ? st : {};
+      extras = extras || {};
+      const day = extras.calendarDay || "";
+      return {
+        rule100: stableHeavyDepJson({
+          calendarDay: day,
+          ruleOf100: st.ruleOf100 || null,
+          rule100DayProjectKeys: st.rule100DayProjectKeys || null,
+          rule100UnitProjectKeys: st.rule100UnitProjectKeys || null
+        }),
+        life4000: stableHeavyDepJson({
+          calendarDay: day,
+          life4000Weeks: st.life4000Weeks || null
+        }),
+        trash: stableHeavyDepJson({
+          calendarDay: day,
+          trash: st.trash || []
+        }),
+        anniversary: stableHeavyDepJson({
+          calendarDay: day,
+          archiveViewKey: extras.anniversaryTwArchiveViewKey || "",
+          payload: collectAnniversaryHeavyDepPayload(st)
+        }),
+        forgeMins: stableHeavyDepJson(collectForgeMinsHeavyDepPayload(st, extras))
+      };
+    }
+
+    function allHeavyModuleSlicesDirty() {
+      return {
+        rule100: true,
+        life4000: true,
+        trash: true,
+        anniversary: true,
+        forgeMins: true,
+        any: true
+      };
+    }
+
+    function diffHeavyModuleDependencies(prevSnap, nextSnap) {
+      if (!prevSnap || !nextSnap) return allHeavyModuleSlicesDirty();
+      const dirty = {
+        rule100: prevSnap.rule100 !== nextSnap.rule100,
+        life4000: prevSnap.life4000 !== nextSnap.life4000,
+        trash: prevSnap.trash !== nextSnap.trash,
+        anniversary: prevSnap.anniversary !== nextSnap.anniversary,
+        forgeMins: prevSnap.forgeMins !== nextSnap.forgeMins,
+        any: false
+      };
+      dirty.any = dirty.rule100 || dirty.life4000 || dirty.trash || dirty.anniversary || dirty.forgeMins;
+      return dirty;
+    }
+
+    /**
+     * 根据依赖快照决定哪些 heavy 切片必须重绘。
+     * forceAll / 无 prev → 全部刷新（启动、首屏延迟）。
+     * forceAnniversary → 待滚动目标等 UI 动作，即使数据指纹未变也刷十二周年。
+     */
+    function planHeavyModuleRenders(prevSnap, nextSnap, opts) {
+      opts = opts || {};
+      if (opts.forceAll) return allHeavyModuleSlicesDirty();
+      const dirty = diffHeavyModuleDependencies(prevSnap, nextSnap);
+      if (opts.forceAnniversary) {
+        dirty.anniversary = true;
+        dirty.any = true;
+      }
+      return dirty;
+    }
+
+    function getLiveHeavyModuleRenderExtras() {
+      return {
+        calendarDay: typeof formatDateInputValue === "function" ? formatDateInputValue(new Date()) : "",
+        selectedDoneDate: selectedDoneDate || "",
+        anniversaryTwArchiveViewKey:
+          typeof anniversaryTwArchiveViewKey === "string" ? anniversaryTwArchiveViewKey : ""
+      };
+    }
+
+    function bumpHeavyModuleSliceCounter(countKey) {
+      if (!countKey || !cloudSyncPerfCounters || cloudSyncPerfCounters[countKey] == null) return;
+      cloudSyncPerfCounters[countKey] += 1;
+    }
+
+    /** 首屏延后的重模块：历史面板 / 十二周年 / Rule100 / 回收站等 */
+    function renderHeavyModules(forceAll) {
+      const t0 = beginCloudSyncPerf();
+      let didHeavyWork = false;
       try {
-        renderLife4000Weeks();
-      } catch (life4000Err) {
-        console.warn("[人生进度表] renderLife4000Weeks 失败:", life4000Err);
+      const extras = getLiveHeavyModuleRenderExtras();
+      const nextSnap = getHeavyModuleDependencySnapshot(state, extras);
+      const dirty = planHeavyModuleRenders(lastHeavyModuleDepSnapshot, nextSnap, {
+        forceAll: Boolean(forceAll),
+        forceAnniversary: Boolean(anniversaryTwPendingScrollTarget)
+      });
+      if (!dirty.any) {
+        lastHeavyModuleDepSnapshot = nextSnap;
+        bumpHeavyModuleSliceCounter("renderHeavyModulesSkippedCount");
+        try {
+          refreshDynamicModuleLunarHints();
+        } catch (lunarErr) {
+          console.warn("[农历提示] 刷新失败:", lunarErr);
+        }
+        return;
+      }
+      didHeavyWork = true;
+      if (dirty.rule100) {
+        bumpHeavyModuleSliceCounter("renderHeavyRule100Count");
+        try {
+          renderRuleOf100();
+        } catch (rule100Err) {
+          console.warn("[Rule of 100] renderRuleOf100 失败:", rule100Err);
+        }
+      }
+      if (dirty.life4000) {
+        bumpHeavyModuleSliceCounter("renderHeavyLife4000Count");
+        try {
+          renderLife4000Weeks();
+        } catch (life4000Err) {
+          console.warn("[人生进度表] renderLife4000Weeks 失败:", life4000Err);
+        }
       }
       try { renderProjectTasks(); } catch (e) { console.warn("[项目] renderProjectTasks 失败:", e); }
-      try { renderTrash(); } catch (e) { console.warn("[回收站] 失败:", e); }
-      try {
-        ensureAnniversaryTwArchivePass();
-      } catch (err) {
-        console.warn("[十二周年] 归档检查失败:", err);
+      if (dirty.trash) {
+        bumpHeavyModuleSliceCounter("renderHeavyTrashCount");
+        try { renderTrash(); } catch (e) { console.warn("[回收站] 失败:", e); }
       }
-      const annTwWeekListScroll = captureAnniversaryTwWeekListScrollTops();
-      try { renderAnniversaryTw020(); } catch (e) { console.warn("[十二周年#20] 渲染失败:", e); }
-      try { renderAnniversaryTw021(); } catch (e) { console.warn("[十二周年#21] 渲染失败:", e); }
-      try { renderAnniversaryTw022(); } catch (e) { console.warn("[十二周年#22] 渲染失败:", e); }
-      ensureAnniversaryTwRegistry();
-      (state.anniversaryTwRegistry.dynamicKeys || []).forEach(function (moduleKey) {
+      if (dirty.anniversary) {
+        bumpHeavyModuleSliceCounter("renderHeavyAnniversaryCount");
         try {
-          ensureAnniversaryTwDynamicPanelDom(moduleKey, anniversaryTwNumberFromModuleKey(moduleKey));
-          renderAnniversaryTwDynamic(moduleKey);
-        } catch (e) {
-          console.warn("[十二周年动态] 渲染失败:", moduleKey, e);
+          ensureAnniversaryTwArchivePass();
+        } catch (err) {
+          console.warn("[十二周年] 归档检查失败:", err);
         }
-      });
-      restoreAnniversaryTwWeekListScrollTops(annTwWeekListScroll);
-      try { scrollAnniversaryTwPendingWeekIntoView(); } catch (e) { console.warn("[十二周年] 滚动失败:", e); }
-      if (typeof syncAnniversaryTwActiveCycleSegmentTabs === "function") {
-        try { syncAnniversaryTwActiveCycleSegmentTabs(); } catch (e) { console.warn("[十二周年] 分段Tab同步失败:", e); }
+        const annTwWeekListScroll = captureAnniversaryTwWeekListScrollTops();
+        try { renderAnniversaryTw020(); } catch (e) { console.warn("[十二周年#20] 渲染失败:", e); }
+        try { renderAnniversaryTw021(); } catch (e) { console.warn("[十二周年#21] 渲染失败:", e); }
+        try { renderAnniversaryTw022(); } catch (e) { console.warn("[十二周年#22] 渲染失败:", e); }
+        ensureAnniversaryTwRegistry();
+        (state.anniversaryTwRegistry.dynamicKeys || []).forEach(function (moduleKey) {
+          try {
+            ensureAnniversaryTwDynamicPanelDom(moduleKey, anniversaryTwNumberFromModuleKey(moduleKey));
+            renderAnniversaryTwDynamic(moduleKey);
+          } catch (e) {
+            console.warn("[十二周年动态] 渲染失败:", moduleKey, e);
+          }
+        });
+        restoreAnniversaryTwWeekListScrollTops(annTwWeekListScroll);
+        try { scrollAnniversaryTwPendingWeekIntoView(); } catch (e) { console.warn("[十二周年] 滚动失败:", e); }
+        if (typeof syncAnniversaryTwActiveCycleSegmentTabs === "function") {
+          try { syncAnniversaryTwActiveCycleSegmentTabs(); } catch (e) { console.warn("[十二周年] 分段Tab同步失败:", e); }
+        }
+        if (typeof syncAnniversaryCycleRemainStrip === "function") {
+          try { syncAnniversaryCycleRemainStrip(); } catch (e) { console.warn("[十二周年] 进度条同步失败:", e); }
+        }
+        if (typeof activateKineticTab === "function") {
+          const activeKineticBtn = document.querySelector("#dynamicModule .kinetic-tab-btn[aria-selected='true']");
+          const kid = activeKineticBtn && activeKineticBtn.id && activeKineticBtn.id.indexOf("kineticTabBtn-") === 0
+            ? activeKineticBtn.id.slice("kineticTabBtn-".length)
+            : "";
+          if (kid) activateKineticTab(kid);
+        }
       }
-      if (typeof syncAnniversaryCycleRemainStrip === "function") {
-        try { syncAnniversaryCycleRemainStrip(); } catch (e) { console.warn("[十二周年] 进度条同步失败:", e); }
+      try {
+        refreshDynamicModuleLunarHints();
+      } catch (lunarErr) {
+        console.warn("[农历提示] 刷新失败:", lunarErr);
       }
-      refreshDynamicModuleLunarHints();
-      if (typeof activateKineticTab === "function") {
-        const activeKineticBtn = document.querySelector("#dynamicModule .kinetic-tab-btn[aria-selected='true']");
-        const kid = activeKineticBtn && activeKineticBtn.id && activeKineticBtn.id.indexOf("kineticTabBtn-") === 0
-          ? activeKineticBtn.id.slice("kineticTabBtn-".length)
-          : "";
-        if (kid) activateKineticTab(kid);
+      if (dirty.forgeMins) {
+        bumpHeavyModuleSliceCounter("renderHeavyForgeMinsCount");
+        renderForgeDailyMinRows();
+        renderForgeWeeklyMinRows();
       }
-      renderForgeDailyMinRows();
-      renderForgeWeeklyMinRows();
+      lastHeavyModuleDepSnapshot = nextSnap;
       } finally {
-        addCloudSyncPerf("renderHeavyModulesCount", "renderHeavyModulesMs", t0);
+        if (didHeavyWork) {
+          addCloudSyncPerf("renderHeavyModulesCount", "renderHeavyModulesMs", t0);
+        }
       }
     }
 
     let isBootFirstRenderPass = true;
     let renderHeavyIdleHandle = null;
+    let lastHeavyModuleDepSnapshot = null;
 
     function scheduleRenderHeavyModulesDeferred() {
       const run = function () {
