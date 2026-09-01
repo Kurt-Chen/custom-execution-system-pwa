@@ -46,7 +46,13 @@ const REQUIRED_FNS = [
   "mergeHabitCheckinValueForSync",
   "mergeHabitCheckinsForSync",
   "mergeForgeShallowMapsForSync",
+  "isDoneMoveHourlyKindId",
+  "getDoneMoveHourlyKindIndex",
+  "getDoneMoveHourlyKind",
+  "emptyMoveBreakKindByHour",
+  "normalizeMoveBreakKindByHour",
   "normalizeMoveBreakDayValue",
+  "mergeSameDayMoveBreakDay",
   "mergeMoveBreakDayForSync",
   "mergeStickyCloudSyncPulseState",
   "normalizeWeeklyPlanLane",
@@ -328,6 +334,13 @@ export function loadSyncFns(indexPath) {
     CLOUD_SYNC_CONFLICT_LOG_KEY: "todo-app-cloud-conflict-log-v1",
     CLOUD_SYNC_CONFLICT_LOG_MAX: 40,
     ANNIVERSARY_PROGRESS_BAND_DEFAULTS: Object.freeze({ okMinPct: 85, cautionMinPct: 40 }),
+    DONE_MOVE_HOURLY_KINDS: Object.freeze([
+      Object.freeze({ id: "mind", label: "Mind Training" }),
+      Object.freeze({ id: "body", label: "Body Training" }),
+      Object.freeze({ id: "sex", label: "Sex Training" })
+    ]),
+    DONE_MOVE_ALERT_HOUR_MIN: 5,
+    DONE_MOVE_ALERT_HOUR_MAX: 22,
     ANNIVERSARY_TW_OKR_MAX_KEY_RESULTS: 4,
     TRASH_RETENTION_MS: 7 * 24 * 60 * 60 * 1000,
     DATA_RETENTION: {
