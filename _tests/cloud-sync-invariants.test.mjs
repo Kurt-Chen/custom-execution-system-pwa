@@ -1769,6 +1769,60 @@ test("Weekly Plan UI 依赖快照不得漏实际影响 DOM 的字段", function 
   assert(!Object.prototype.hasOwnProperty.call(payload, "done"), "must not mix Done list into UI fingerprint");
 });
 
+function assertFirebaseHasOwnPropertySafe(obj, label) {
+  function walk(v, path) {
+    if (!v || typeof v !== "object") return;
+    if (Array.isArray(v)) {
+      v.forEach(function (item, i) {
+        walk(item, path + "[" + i + "]");
+      });
+      return;
+    }
+    if (typeof v.hasOwnProperty !== "function") {
+      throw new Error((label || "object") + " at " + path + " lacks hasOwnProperty (Firebase would throw)");
+    }
+    Object.keys(v).forEach(function (k) {
+      walk(v[k], path + "." + k);
+    });
+  }
+  walk(obj, "$");
+}
+
+test("emptyMoveBreakKindByHour 是普通对象，Firebase 可调 hasOwnProperty", function () {
+  const empty = ctx.emptyMoveBreakKindByHour();
+  assert(empty && typeof empty === "object");
+  assertEq(Object.getPrototypeOf(empty), Object.prototype);
+  assert(typeof empty.hasOwnProperty === "function");
+  empty.hasOwnProperty("0");
+});
+
+test("normalizeMoveBreakDayValue 的 ackedKindByHour 可供 Firebase 写入", function () {
+  const day = ctx.normalizeMoveBreakDayValue({
+    dateKey: "2026-09-01",
+    count: 2,
+    ackedHours: [5, 6],
+    ackedKindByHour: { 5: "mind" }
+  });
+  assertEq(day.ackedHours, [5, 6]);
+  assertEq(day.ackedKindByHour["5"], "mind");
+  assertEq(day.ackedKindByHour["6"], "body");
+  assertFirebaseHasOwnPropertySafe(day, "normalizeMoveBreakDayValue");
+});
+
+test("mergeMoveBreakDayForSync 结果不含 null 原型（避免 pulse 上报 e.hasOwnProperty is not a function）", function () {
+  const merged = ctx.mergeMoveBreakDayForSync(
+    { dateKey: "2026-09-01", count: 1, ackedHours: [5], ackedKindByHour: { 5: "mind" } },
+    { dateKey: "2026-09-01", count: 1, ackedHours: [6], ackedKindByHour: { 6: "body" } }
+  );
+  assertEq(merged.ackedHours, [5, 6]);
+  assertEq(merged.ackedKindByHour["5"], "mind");
+  assertEq(merged.ackedKindByHour["6"], "body");
+  assertFirebaseHasOwnPropertySafe(merged, "mergeMoveBreakDayForSync");
+  const cloned = JSON.parse(JSON.stringify(merged));
+  cloned.hasOwnProperty("dateKey");
+  cloned.ackedKindByHour.hasOwnProperty("5");
+});
+
 console.log("");
 if (failed) {
   console.log("失败 " + failed + " / " + (passed + failed));
