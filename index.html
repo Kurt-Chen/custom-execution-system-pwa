@@ -88191,7 +88191,11 @@
       anniversaryDoneSyncPassCount: 0,
       anniversaryDoneSyncSkippedCount: 0,
       anniversaryDoneSyncScanCount: 0,
-      anniversaryDoneSyncMs: 0
+      anniversaryDoneSyncMs: 0,
+      weeklyPlanDoneSyncPassCount: 0,
+      weeklyPlanDoneSyncSkippedCount: 0,
+      weeklyPlanDoneSyncScanCount: 0,
+      weeklyPlanDoneSyncMs: 0
     };
 
     function isCloudSyncPerfEnabled() {
@@ -88288,7 +88292,11 @@
         anniversaryDoneSyncPassCount: c.anniversaryDoneSyncPassCount,
         anniversaryDoneSyncSkippedCount: c.anniversaryDoneSyncSkippedCount,
         anniversaryDoneSyncScanCount: c.anniversaryDoneSyncScanCount,
-        anniversaryDoneSyncMs: Math.round(c.anniversaryDoneSyncMs * 100) / 100
+        anniversaryDoneSyncMs: Math.round(c.anniversaryDoneSyncMs * 100) / 100,
+        weeklyPlanDoneSyncPassCount: c.weeklyPlanDoneSyncPassCount,
+        weeklyPlanDoneSyncSkippedCount: c.weeklyPlanDoneSyncSkippedCount,
+        weeklyPlanDoneSyncScanCount: c.weeklyPlanDoneSyncScanCount,
+        weeklyPlanDoneSyncMs: Math.round(c.weeklyPlanDoneSyncMs * 100) / 100
       };
     }
 
@@ -95507,7 +95515,7 @@
           /* 不写 saveState，避免合并过程中再次 push */
         }
         reconcileMirrorDeadlinesAfterCloudMerge();
-        syncAllWeeklyPlanDoneLists();
+        syncAllWeeklyPlanDoneLists({ forceAll: true });
         setCloudSyncHashFromCurrentState();
         const r = persistStateToLocalStorage();
         if (!skipRender) render();
@@ -120486,14 +120494,37 @@
     }
 
     /** 按周计划实际勾选状态，对齐所有周的 weeklyPlanDoneRef 与 My Done 镜像 */
-    function syncAllWeeklyPlanDoneLists() {
-      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
-      let changed = false;
-      Object.keys(state.weeklyPlan).forEach(function (weekKey) {
-        if (syncWeeklyPlanDoneListForWeek(weekKey)) changed = true;
-      });
-      if (changed) saveState();
-      return changed;
+    function syncAllWeeklyPlanDoneLists(opts) {
+      const t0 = beginCloudSyncPerf();
+      let ran = false;
+      try {
+        const extras =
+          typeof getLiveWeeklyPlanDoneSyncExtras === "function"
+            ? getLiveWeeklyPlanDoneSyncExtras()
+            : {};
+        const nextSnap = getWeeklyPlanDoneSyncDependencySnapshot(state, extras);
+        if (!shouldRunWeeklyPlanDoneSync(lastWeeklyPlanDoneSyncDepSnapshot, nextSnap, opts)) {
+          bumpHeavyModuleSliceCounter("weeklyPlanDoneSyncSkippedCount");
+          lastWeeklyPlanDoneSyncDepSnapshot = nextSnap;
+          return false;
+        }
+        ran = true;
+        bumpHeavyModuleSliceCounter("weeklyPlanDoneSyncPassCount");
+        if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
+          lastWeeklyPlanDoneSyncDepSnapshot = getWeeklyPlanDoneSyncDependencySnapshot(state, extras);
+          return false;
+        }
+        let changed = false;
+        Object.keys(state.weeklyPlan).forEach(function (weekKey) {
+          bumpHeavyModuleSliceCounter("weeklyPlanDoneSyncScanCount");
+          if (syncWeeklyPlanDoneListForWeek(weekKey)) changed = true;
+        });
+        if (changed) saveState();
+        lastWeeklyPlanDoneSyncDepSnapshot = getWeeklyPlanDoneSyncDependencySnapshot(state, extras);
+        return changed;
+      } finally {
+        if (ran) addCloudSyncPerf(null, "weeklyPlanDoneSyncMs", t0);
+      }
     }
 
     function syncWeeklyPlanDoneList() {
@@ -132940,6 +132971,88 @@
       return prevSnap !== nextSnap;
     }
 
+    /**
+     * 周计划 → My Done 同步的真实依赖：weekKey 桶、任务 id/text/mainDone/completedAt、
+     * microTasks done/text/completedAt、weeklyPlanDoneRef、suppress 表、带 weeklyPlanMeta 的 Done。
+     * currentSprintKey 覆盖跨 Sprint 滚动（rollover 可能改桶，但空转时也要扫一次）。
+     */
+    function projectWeeklyPlanTaskForDoneSync(task) {
+      if (!task || typeof task !== "object") return null;
+      const micros = Array.isArray(task.microTasks) ? task.microTasks : [];
+      return {
+        id: task.id,
+        text: task.text,
+        mainDone: Boolean(task.mainDone),
+        completedAt: task.completedAt != null ? task.completedAt : null,
+        microTasks: micros.map(function (m) {
+          if (!m || typeof m !== "object") return null;
+          return {
+            id: m.id,
+            text: m.text,
+            done: Boolean(m.done),
+            completedAt: m.completedAt != null ? m.completedAt : null
+          };
+        })
+      };
+    }
+
+    function collectWeeklyPlanDoneEntriesForSyncDep(st) {
+      st = st && typeof st === "object" ? st : {};
+      const done = Array.isArray(st.done) ? st.done : [];
+      const out = [];
+      for (let i = 0; i < done.length; i++) {
+        const t = done[i];
+        if (!t || !t.weeklyPlanMeta) continue;
+        out.push({
+          id: t.id,
+          text: t.text,
+          completedAt: t.completedAt,
+          weeklyPlanMeta: t.weeklyPlanMeta
+        });
+      }
+      return out;
+    }
+
+    function collectWeeklyPlanDoneSyncDepPayload(st, extras) {
+      st = st && typeof st === "object" ? st : {};
+      extras = extras || {};
+      const weeks = {};
+      const wp = st.weeklyPlan && typeof st.weeklyPlan === "object" ? st.weeklyPlan : {};
+      Object.keys(wp)
+        .sort()
+        .forEach(function (wk) {
+          const arr = Array.isArray(wp[wk]) ? wp[wk] : [];
+          weeks[wk] = arr.map(projectWeeklyPlanTaskForDoneSync);
+        });
+      return {
+        currentSprintKey: extras.currentSprintKey || "",
+        weeks: weeks,
+        doneRef: st.weeklyPlanDoneRef || null,
+        suppress: st.weeklyPlanDoneSuppress || null,
+        weeklyPlanDone: collectWeeklyPlanDoneEntriesForSyncDep(st)
+      };
+    }
+
+    function getWeeklyPlanDoneSyncDependencySnapshot(st, extras) {
+      return stableHeavyDepJson(collectWeeklyPlanDoneSyncDepPayload(st, extras));
+    }
+
+    function shouldRunWeeklyPlanDoneSync(prevSnap, nextSnap, opts) {
+      opts = opts || {};
+      if (opts.forceAll) return true;
+      if (!prevSnap) return true;
+      return prevSnap !== nextSnap;
+    }
+
+    function getLiveWeeklyPlanDoneSyncExtras() {
+      return {
+        currentSprintKey:
+          typeof getCurrentWeeklyPlanSprintStartKey === "function"
+            ? getCurrentWeeklyPlanSprintStartKey()
+            : ""
+      };
+    }
+
     function syncAllAnniversaryDoneLists(opts) {
       const t0 = beginCloudSyncPerf();
       let ran = false;
@@ -133097,6 +133210,7 @@
     let renderHeavyIdleHandle = null;
     let lastHeavyModuleDepSnapshot = null;
     let lastAnniversaryDoneSyncDepSnapshot = null;
+    let lastWeeklyPlanDoneSyncDepSnapshot = null;
 
     function scheduleRenderHeavyModulesDeferred() {
       const run = function () {

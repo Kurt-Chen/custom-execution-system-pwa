@@ -937,6 +937,250 @@ test("周年 Done 依赖快照不得漏掉真实依赖（投影含 id/text/done/
   assert(payload.anniversaryDone[0].anniversaryTwMeta, "missing anniversaryTwMeta on done dep");
 });
 
+function wpExtras(over) {
+  return Object.assign({ currentSprintKey: "2026-08-31" }, over || {});
+}
+
+function wpDoneBase(over) {
+  return emptyState(
+    Object.assign(
+      {
+        weeklyPlan: {
+          "2026-08-31": [
+            {
+              id: "w1",
+              text: "主任务",
+              lane: "life",
+              mainDone: true,
+              completedAt: 100,
+              microTasks: [],
+              updatedAt: 10
+            }
+          ]
+        },
+        weeklyPlanDoneRef: {
+          "2026-08-31": { items: { "main:w1": "done-w1" } }
+        },
+        weeklyPlanDoneSuppress: {},
+        done: [
+          {
+            id: "done-w1",
+            text: "【周计划】8/31 → 9/2 · 主任务",
+            completedAt: 100,
+            weeklyPlanMeta: { weekKey: "2026-08-31", syncKey: "main:w1", kind: "main", taskId: "w1" }
+          }
+        ],
+        habitCheckins: {}
+      },
+      over || {}
+    )
+  );
+}
+
+function wpShouldRun(prevState, nextState, extras, opts) {
+  const ex = extras || wpExtras();
+  const prev = ctx.getWeeklyPlanDoneSyncDependencySnapshot(prevState, ex);
+  const next = ctx.getWeeklyPlanDoneSyncDependencySnapshot(nextState, ex);
+  return ctx.shouldRunWeeklyPlanDoneSync(prev, next, opts);
+}
+
+test("启动时无 prev 快照：周计划 Done 扫描必须执行", function () {
+  const snap = ctx.getWeeklyPlanDoneSyncDependencySnapshot(wpDoneBase(), wpExtras());
+  assertEq(ctx.shouldRunWeeklyPlanDoneSync(null, snap), true);
+});
+
+test("forceAll：即使周计划指纹相同也必须扫描", function () {
+  const snap = ctx.getWeeklyPlanDoneSyncDependencySnapshot(wpDoneBase(), wpExtras());
+  assertEq(ctx.shouldRunWeeklyPlanDoneSync(snap, snap, { forceAll: true }), true);
+});
+
+test("普通 habitCheckins 勾选：周计划依赖未变化 → 跳过扫描", function () {
+  const prev = wpDoneBase();
+  const next = wpDoneBase({
+    habitCheckins: { "2026-09-01": { water: true } },
+    done: prev.done.concat([{ id: "h1", text: "喝水", habitMeta: { key: "water" }, completedAt: 1 }])
+  });
+  assertEq(wpShouldRun(prev, next), false);
+});
+
+test("连续 10 次普通习惯勾选：周计划 Done 扫描次数 10→0", function () {
+  const base = wpDoneBase();
+  const extras = wpExtras();
+  let prev = ctx.getWeeklyPlanDoneSyncDependencySnapshot(base, extras);
+  let runs = 0;
+  for (let i = 0; i < 10; i++) {
+    const st = wpDoneBase({
+      habitCheckins: { "2026-09-01": { water: i + 1 } },
+      done: base.done.concat([{ id: "h" + i, text: "喝水", habitMeta: { key: "water" }, completedAt: i }])
+    });
+    const next = ctx.getWeeklyPlanDoneSyncDependencySnapshot(st, extras);
+    if (ctx.shouldRunWeeklyPlanDoneSync(prev, next)) runs += 1;
+    prev = next;
+  }
+  assertEq(runs, 0);
+});
+
+test("当前周任务新增 → 必须扫描", function () {
+  const prev = wpDoneBase();
+  const next = wpDoneBase({
+    weeklyPlan: {
+      "2026-08-31": [
+        prev.weeklyPlan["2026-08-31"][0],
+        { id: "w2", text: "新任务", lane: "life", mainDone: false, microTasks: [], updatedAt: 11 }
+      ]
+    }
+  });
+  assertEq(wpShouldRun(prev, next), true);
+});
+
+test("当前周任务删除 → 必须扫描", function () {
+  const prev = wpDoneBase();
+  const next = wpDoneBase({
+    weeklyPlan: { "2026-08-31": [] }
+  });
+  assertEq(wpShouldRun(prev, next), true);
+});
+
+test("当前周任务完成态变化 → 必须扫描", function () {
+  const prev = wpDoneBase();
+  const next = wpDoneBase({
+    weeklyPlan: {
+      "2026-08-31": [
+        {
+          id: "w1",
+          text: "主任务",
+          lane: "life",
+          mainDone: false,
+          completedAt: null,
+          microTasks: [],
+          updatedAt: 10
+        }
+      ]
+    }
+  });
+  assertEq(wpShouldRun(prev, next), true);
+});
+
+test("子任务 / 微任务 done 变化 → 必须扫描", function () {
+  const withMicro = function (doneFlag) {
+    return wpDoneBase({
+      weeklyPlan: {
+        "2026-08-31": [
+          {
+            id: "w1",
+            text: "主任务",
+            lane: "life",
+            mainDone: false,
+            microTasks: [{ id: "m1", text: "微", done: doneFlag, completedAt: doneFlag ? 50 : null }],
+            updatedAt: 10
+          }
+        ]
+      }
+    });
+  };
+  assertEq(wpShouldRun(withMicro(false), withMicro(true)), true);
+});
+
+test("weekKey 新增桶 → 必须扫描", function () {
+  const prev = wpDoneBase();
+  const next = wpDoneBase({
+    weeklyPlan: Object.assign({}, prev.weeklyPlan, {
+      "2026-09-03": [{ id: "w3", text: "下期", lane: "work", mainDone: false, microTasks: [] }]
+    })
+  });
+  assertEq(wpShouldRun(prev, next), true);
+});
+
+test("跨周 currentSprintKey 变化 → 必须扫描", function () {
+  const st = wpDoneBase();
+  const prev = ctx.getWeeklyPlanDoneSyncDependencySnapshot(st, wpExtras({ currentSprintKey: "2026-08-31" }));
+  const next = ctx.getWeeklyPlanDoneSyncDependencySnapshot(st, wpExtras({ currentSprintKey: "2026-09-03" }));
+  assertEq(ctx.shouldRunWeeklyPlanDoneSync(prev, next), true);
+});
+
+test("Done 镜像被删除 → 必须扫描", function () {
+  const prev = wpDoneBase();
+  const next = wpDoneBase({ done: [] });
+  assertEq(wpShouldRun(prev, next), true);
+});
+
+test("恢复周计划任务 → 必须扫描", function () {
+  const empty = wpDoneBase({ weeklyPlan: { "2026-08-31": [] } });
+  const restored = wpDoneBase();
+  assertEq(wpShouldRun(empty, restored), true);
+});
+
+test("weeklyPlanDoneRef / suppress 变化 → 必须扫描", function () {
+  const prev = wpDoneBase();
+  const nextRef = wpDoneBase({
+    weeklyPlanDoneRef: { "2026-08-31": { items: {} } }
+  });
+  const nextSup = wpDoneBase({
+    weeklyPlanDoneSuppress: { w1: true }
+  });
+  assertEq(wpShouldRun(prev, nextRef), true);
+  assertEq(wpShouldRun(prev, nextSup), true);
+});
+
+test("selectedDoneDate / 封闭清单无关变化不触发周计划 Done 扫描", function () {
+  const prev = wpDoneBase();
+  const next = wpDoneBase({
+    closedList: [{ id: "c1", text: "x", completed: false }],
+    memo: [{ id: "m1", text: "note" }]
+  });
+  assertEq(wpShouldRun(prev, next), false);
+});
+
+test("云端 merge 改变 weeklyPlan → 周计划 Done 扫描必须执行", function () {
+  const extras = wpExtras();
+  const loc = wpDoneBase({
+    weeklyPlan: {
+      "2026-08-31": [
+        {
+          id: "w1",
+          text: "local",
+          lane: "life",
+          mainDone: true,
+          completedAt: 100,
+          microTasks: [],
+          updatedAt: 1
+        }
+      ]
+    }
+  });
+  const rem = wpDoneBase({
+    weeklyPlan: {
+      "2026-08-31": [
+        {
+          id: "w1",
+          text: "remote",
+          lane: "life",
+          mainDone: true,
+          completedAt: 100,
+          microTasks: [],
+          updatedAt: 99
+        }
+      ]
+    }
+  });
+  const prev = ctx.getWeeklyPlanDoneSyncDependencySnapshot(loc, extras);
+  const merged = fullMerge(loc, rem, 100, 0);
+  const next = ctx.getWeeklyPlanDoneSyncDependencySnapshot(merged, extras);
+  assertEq(ctx.shouldRunWeeklyPlanDoneSync(prev, next), true);
+});
+
+test("周计划 Done 依赖快照不得漏掉真实字段", function () {
+  const payload = ctx.collectWeeklyPlanDoneSyncDepPayload(wpDoneBase(), wpExtras());
+  assertEq(payload.currentSprintKey, "2026-08-31");
+  assert(payload.weeks["2026-08-31"], "missing week bucket");
+  assertEq(payload.weeks["2026-08-31"][0].id, "w1");
+  assertEq(payload.weeks["2026-08-31"][0].mainDone, true);
+  assertEq(payload.weeks["2026-08-31"][0].text, "主任务");
+  assertEq(payload.doneRef["2026-08-31"].items["main:w1"], "done-w1");
+  assertEq(payload.weeklyPlanDone[0].id, "done-w1");
+  assert(payload.weeklyPlanDone[0].weeklyPlanMeta, "missing weeklyPlanMeta");
+});
+
 console.log("");
 if (failed) {
   console.log("失败 " + failed + " / " + (passed + failed));

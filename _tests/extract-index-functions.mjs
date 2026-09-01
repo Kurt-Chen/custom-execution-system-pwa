@@ -135,7 +135,12 @@ const REQUIRED_FNS = [
   "collectAnniversaryDoneEntriesForSyncDep",
   "collectAnniversaryDoneSyncDepPayload",
   "getAnniversaryDoneSyncDependencySnapshot",
-  "shouldRunAnniversaryDoneSync"
+  "shouldRunAnniversaryDoneSync",
+  "projectWeeklyPlanTaskForDoneSync",
+  "collectWeeklyPlanDoneEntriesForSyncDep",
+  "collectWeeklyPlanDoneSyncDepPayload",
+  "getWeeklyPlanDoneSyncDependencySnapshot",
+  "shouldRunWeeklyPlanDoneSync"
 ];
 
 const OPTIONAL_FNS = [];
