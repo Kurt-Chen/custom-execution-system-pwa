@@ -119,7 +119,11 @@ const REQUIRED_FNS = [
   "rule100CardKeyTombstoneId",
   "mergeCloudSyncForgePulseIntoState",
   "mergeCloudSyncReadingPlanPulseIntoState",
-  "mergeCloudSyncAnniversaryModulePulseIntoState"
+  "mergeCloudSyncAnniversaryModulePulseIntoState",
+  "runDataRetentionPass",
+  "purgeExpiredTrash",
+  "pruneTrashEntryCount",
+  "compactStateForLocalStorage"
 ];
 
 const OPTIONAL_FNS = [];
@@ -296,7 +300,14 @@ export function loadSyncFns(indexPath) {
     CLOUD_SYNC_CONFLICT_LOG_KEY: "todo-app-cloud-conflict-log-v1",
     CLOUD_SYNC_CONFLICT_LOG_MAX: 40,
     ANNIVERSARY_PROGRESS_BAND_DEFAULTS: Object.freeze({ okMinPct: 85, cautionMinPct: 40 }),
-    ANNIVERSARY_TW_OKR_MAX_KEY_RESULTS: 4
+    ANNIVERSARY_TW_OKR_MAX_KEY_RESULTS: 4,
+    TRASH_RETENTION_MS: 7 * 24 * 60 * 60 * 1000,
+    DATA_RETENTION: {
+      trashMaxCount: 500,
+      aggressiveTrashMaxCount: 80
+    },
+    hygieneDoneCalls: 0,
+    hygieneClosedCalls: 0
   };
   sandbox.window = sandbox;
   sandbox.global = sandbox;
@@ -330,7 +341,16 @@ export function loadSyncFns(indexPath) {
     getForgeDoneLineInfo: "function getForgeDoneLineInfo() { return null; }",
     ensureAnniversaryTwWeekGoalsOnModule: "function ensureAnniversaryTwWeekGoalsOnModule() {}",
     formatDateInputValue:
-      "function formatDateInputValue(date) { var d = date instanceof Date ? date : new Date(date); if (!Number.isFinite(d.getTime())) return ''; var m = String(d.getMonth() + 1).padStart(2, '0'); var day = String(d.getDate()).padStart(2, '0'); return d.getFullYear() + '-' + m + '-' + day; }"
+      "function formatDateInputValue(date) { var d = date instanceof Date ? date : new Date(date); if (!Number.isFinite(d.getTime())) return ''; var m = String(d.getMonth() + 1).padStart(2, '0'); var day = String(d.getDate()).padStart(2, '0'); return d.getFullYear() + '-' + m + '-' + day; }",
+    pruneRedundantDoneEntriesInState:
+      "function pruneRedundantDoneEntriesInState() { hygieneDoneCalls += 1; return false; }",
+    dedupeClosedListWeeklyPlanMirrorsInState:
+      "function dedupeClosedListWeeklyPlanMirrorsInState() { hygieneClosedCalls += 1; return false; }",
+    pruneDoneHistoryByRetention: "function pruneDoneHistoryByRetention() { return false; }",
+    stripEmptyDoneJournalsOnOldEntries: "function stripEmptyDoneJournalsOnOldEntries() { return false; }",
+    pruneOldHabitCheckinDays: "function pruneOldHabitCheckinDays() { return false; }",
+    pruneOldFuelScores: "function pruneOldFuelScores() { return false; }",
+    pruneOldMemos: "function pruneOldMemos() { return false; }"
   };
   Object.keys(stubs).forEach(function (name) {
     if (typeof sandbox[name] !== "function") {

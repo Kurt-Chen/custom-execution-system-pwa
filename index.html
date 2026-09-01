@@ -92174,6 +92174,8 @@
 
     /**
      * 定期清理：例行只清「已删除」垃圾箱与重复脏数据；完整历史以云端为准。
+     * skipDoneHygiene：例行 persist 热路径跳过 Done/封闭清单全量扫描
+     * （仍由 render、24h 定时任务、runDataRetentionNow、配额紧急路径执行）。
      * @returns {boolean} 是否改动了 state
      */
     function runDataRetentionPass(opts) {
@@ -92181,18 +92183,21 @@
       const aggressive = Boolean(opts && opts.aggressive);
       let changed = false;
       try {
+        const skipDoneHygiene = Boolean(opts && opts.skipDoneHygiene);
         if (purgeExpiredTrash()) changed = true;
         if (pruneTrashEntryCount(aggressive ? DATA_RETENTION.aggressiveTrashMaxCount : DATA_RETENTION.trashMaxCount)) {
           changed = true;
         }
-        if (typeof pruneRedundantDoneEntriesInState === "function" && pruneRedundantDoneEntriesInState()) {
-          changed = true;
-        }
-        if (
-          typeof dedupeClosedListWeeklyPlanMirrorsInState === "function" &&
-          dedupeClosedListWeeklyPlanMirrorsInState()
-        ) {
-          changed = true;
+        if (!skipDoneHygiene) {
+          if (typeof pruneRedundantDoneEntriesInState === "function" && pruneRedundantDoneEntriesInState()) {
+            changed = true;
+          }
+          if (
+            typeof dedupeClosedListWeeklyPlanMirrorsInState === "function" &&
+            dedupeClosedListWeeklyPlanMirrorsInState()
+          ) {
+            changed = true;
+          }
         }
         if (aggressive) {
           if (pruneDoneHistoryByRetention(true)) changed = true;
@@ -96129,8 +96134,10 @@
       return name === "QuotaExceededError" || /quota/i.test(msg);
     }
 
+    /** 配额紧急时全量清理；例行落盘只清垃圾箱，Done/封闭清单去重交给 render 与定时 retention */
     function compactStateForLocalStorage(aggressive) {
-      return runDataRetentionPass({ aggressive: aggressive });
+      if (aggressive) return runDataRetentionPass({ aggressive: true });
+      return runDataRetentionPass({ skipDoneHygiene: true });
     }
 
     function persistStateToLocalStorage(explicitJson) {

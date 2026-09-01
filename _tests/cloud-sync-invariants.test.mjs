@@ -419,6 +419,70 @@ test("重复合并幂等：同一对 Done 合并两次不产生重复 id", funct
   assertEq(ids(twice), ["a", "b"]);
 });
 
+test("例行 retention 仍会跑 Done/封闭清单去重（render / 定时任务路径）", function () {
+  ctx.hygieneDoneCalls = 0;
+  ctx.hygieneClosedCalls = 0;
+  ctx.state.trash = [];
+  ctx.runDataRetentionPass({});
+  assertEq(ctx.hygieneDoneCalls, 1);
+  assertEq(ctx.hygieneClosedCalls, 1);
+});
+
+test("scheduled retention 仍会跑 Done/封闭清单去重（24h / visibility 路径）", function () {
+  ctx.hygieneDoneCalls = 0;
+  ctx.hygieneClosedCalls = 0;
+  ctx.state.trash = [];
+  ctx.runDataRetentionPass({ scheduled: true });
+  assertEq(ctx.hygieneDoneCalls, 1);
+  assertEq(ctx.hygieneClosedCalls, 1);
+});
+
+test("skipDoneHygiene：例行落盘不去扫全量 Done/封闭清单", function () {
+  ctx.hygieneDoneCalls = 0;
+  ctx.hygieneClosedCalls = 0;
+  ctx.state.trash = [];
+  ctx.runDataRetentionPass({ skipDoneHygiene: true });
+  assertEq(ctx.hygieneDoneCalls, 0);
+  assertEq(ctx.hygieneClosedCalls, 0);
+});
+
+test("skipDoneHygiene 仍会清掉过期垃圾箱（不丢 durability 所需的例行箱清理）", function () {
+  const old = Date.now() - 8 * 24 * 60 * 60 * 1000;
+  ctx.state.trash = [{ id: "old-trash", deletedAt: old, payload: {} }];
+  ctx.hygieneDoneCalls = 0;
+  ctx.runDataRetentionPass({ skipDoneHygiene: true });
+  assertEq((ctx.state.trash || []).length, 0);
+  assertEq(ctx.hygieneDoneCalls, 0);
+});
+
+test("compactStateForLocalStorage(false) 走 skipDoneHygiene（persist 热路径）", function () {
+  ctx.hygieneDoneCalls = 0;
+  ctx.hygieneClosedCalls = 0;
+  ctx.state.trash = [];
+  ctx.compactStateForLocalStorage(false);
+  assertEq(ctx.hygieneDoneCalls, 0);
+  assertEq(ctx.hygieneClosedCalls, 0);
+});
+
+test("compactStateForLocalStorage(true) 仍跑列表去重（配额紧急路径）", function () {
+  ctx.hygieneDoneCalls = 0;
+  ctx.hygieneClosedCalls = 0;
+  ctx.state.trash = [];
+  ctx.compactStateForLocalStorage(true);
+  assertEq(ctx.hygieneDoneCalls, 1);
+  assertEq(ctx.hygieneClosedCalls, 1);
+});
+
+test("skipDoneHygiene 不改变 merge 并集结果", function () {
+  const merged = fullMerge(
+    emptyState({ done: [{ id: "a", text: "A", createdAt: 1 }] }),
+    emptyState({ done: [{ id: "b", text: "B", createdAt: 2 }] }),
+    0,
+    0
+  );
+  assertEq(ids(merged.done), ["a", "b"]);
+});
+
 console.log("");
 if (failed) {
   console.log("失败 " + failed + " / " + (passed + failed));
