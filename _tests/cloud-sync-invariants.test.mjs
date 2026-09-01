@@ -1181,6 +1181,251 @@ test("周计划 Done 依赖快照不得漏掉真实字段", function () {
   assert(payload.weeklyPlanDone[0].weeklyPlanMeta, "missing weeklyPlanMeta");
 });
 
+function roExtras(over) {
+  return Object.assign({ currentSprintKey: "2026-09-03" }, over || {});
+}
+
+function roBase(over) {
+  return emptyState(
+    Object.assign(
+      {
+        weeklyPlan: {
+          "2026-08-31": [
+            {
+              id: "old-done",
+              text: "上期已完成",
+              lane: "life",
+              mainDone: true,
+              completedAt: 50,
+              microTasks: [],
+              updatedAt: 10
+            }
+          ],
+          "2026-09-03": [
+            {
+              id: "cur",
+              text: "本期任务",
+              lane: "life",
+              mainDone: false,
+              microTasks: [],
+              updatedAt: 11
+            }
+          ]
+        },
+        weeklyPlanDoneRef: {
+          "2026-08-31": { items: { "main:old-done": "d-old" } }
+        },
+        weeklyPlanDoneSuppress: {},
+        closedList: [],
+        done: [
+          {
+            id: "d-old",
+            text: "【周计划】上期已完成",
+            completedAt: 50,
+            weeklyPlanMeta: { weekKey: "2026-08-31", syncKey: "main:old-done", kind: "main", taskId: "old-done" }
+          }
+        ],
+        habitCheckins: {}
+      },
+      over || {}
+    )
+  );
+}
+
+function roShouldRun(prevState, nextState, extras, opts) {
+  const ex = extras || roExtras();
+  const prev = ctx.getWeeklyPlanRolloverDependencySnapshot(prevState, ex);
+  const next = ctx.getWeeklyPlanRolloverDependencySnapshot(nextState, ex);
+  return ctx.shouldRunWeeklyPlanRollover(prev, next, opts);
+}
+
+test("启动时无 prev 快照：周计划 rollover 必须执行", function () {
+  const snap = ctx.getWeeklyPlanRolloverDependencySnapshot(roBase(), roExtras());
+  assertEq(ctx.shouldRunWeeklyPlanRollover(null, snap), true);
+});
+
+test("forceAll：即使 rollover 指纹相同也必须执行", function () {
+  const snap = ctx.getWeeklyPlanRolloverDependencySnapshot(roBase(), roExtras());
+  assertEq(ctx.shouldRunWeeklyPlanRollover(snap, snap, { forceAll: true }), true);
+});
+
+test("普通 habitCheckins 勾选：rollover 可跳过", function () {
+  const prev = roBase();
+  const next = roBase({
+    habitCheckins: { "2026-09-01": { water: true } },
+    done: prev.done.concat([{ id: "h1", text: "喝水", habitMeta: { key: "water" }, completedAt: 1 }])
+  });
+  assertEq(roShouldRun(prev, next), false);
+});
+
+test("连续 10 次普通习惯勾选：rollover 次数 10→0", function () {
+  const base = roBase();
+  const extras = roExtras();
+  let prev = ctx.getWeeklyPlanRolloverDependencySnapshot(base, extras);
+  let runs = 0;
+  for (let i = 0; i < 10; i++) {
+    const st = roBase({
+      habitCheckins: { "2026-09-01": { water: i + 1 } },
+      done: base.done.concat([{ id: "h" + i, text: "喝水", habitMeta: { key: "water" }, completedAt: i }])
+    });
+    const next = ctx.getWeeklyPlanRolloverDependencySnapshot(st, extras);
+    if (ctx.shouldRunWeeklyPlanRollover(prev, next)) runs += 1;
+    prev = next;
+  }
+  assertEq(runs, 0);
+});
+
+test("当前周文案等无关字段变化：rollover 可跳过", function () {
+  const prev = roBase();
+  const next = roBase({
+    weeklyPlan: {
+      "2026-08-31": prev.weeklyPlan["2026-08-31"],
+      "2026-09-03": [
+        {
+          id: "cur",
+          text: "本期任务改了标题",
+          lane: "work",
+          mainDone: false,
+          microTasks: [],
+          updatedAt: 99
+        }
+      ]
+    }
+  });
+  assertEq(roShouldRun(prev, next), false);
+});
+
+test("currentSprintKey 改变 → rollover 必须执行", function () {
+  const st = roBase();
+  const prev = ctx.getWeeklyPlanRolloverDependencySnapshot(st, roExtras({ currentSprintKey: "2026-08-31" }));
+  const next = ctx.getWeeklyPlanRolloverDependencySnapshot(st, roExtras({ currentSprintKey: "2026-09-03" }));
+  assertEq(ctx.shouldRunWeeklyPlanRollover(prev, next), true);
+});
+
+test("weekKey 改变（新增过去桶）→ rollover 必须执行", function () {
+  const prev = roBase();
+  const next = roBase({
+    weeklyPlan: Object.assign({}, prev.weeklyPlan, {
+      "2026-08-28": [{ id: "older", text: "更早", mainDone: false, microTasks: [] }]
+    })
+  });
+  assertEq(roShouldRun(prev, next), true);
+});
+
+test("跨 Sprint：过去桶出现未完成任务 → 必须执行（应迁移）", function () {
+  const prev = roBase();
+  const next = roBase({
+    weeklyPlan: {
+      "2026-08-31": [
+        {
+          id: "old-open",
+          text: "上期未完成",
+          lane: "life",
+          mainDone: false,
+          microTasks: [],
+          updatedAt: 10
+        }
+      ],
+      "2026-09-03": prev.weeklyPlan["2026-09-03"]
+    }
+  });
+  assertEq(roShouldRun(prev, next), true);
+  const payload = ctx.collectWeeklyPlanRolloverDepPayload(next, roExtras());
+  assertEq(payload.pastWeeks["2026-08-31"][0].mainDone, false);
+  assertEq(payload.pastWeeks["2026-08-31"][0].id, "old-open");
+});
+
+test("已完成过去任务不进入迁移候选（指纹含 mainDone true）", function () {
+  const payload = ctx.collectWeeklyPlanRolloverDepPayload(roBase(), roExtras());
+  assertEq(payload.pastWeeks["2026-08-31"][0].mainDone, true);
+  assertEq(payload.pastWeeks["2026-08-31"][0].id, "old-done");
+  assert(!payload.pastWeeks["2026-09-03"], "current sprint must not be in pastWeeks");
+});
+
+test("微任务未完成的过去任务 → 必须执行", function () {
+  const prev = roBase();
+  const next = roBase({
+    weeklyPlan: {
+      "2026-08-31": [
+        {
+          id: "old-micro",
+          text: "带子任务",
+          mainDone: false,
+          microTasks: [{ id: "m1", text: "微", done: false, completedAt: null }]
+        }
+      ],
+      "2026-09-03": prev.weeklyPlan["2026-09-03"]
+    }
+  });
+  assertEq(roShouldRun(prev, next), true);
+});
+
+test("Done 镜像 / 封闭清单完成证据变化 → rollover 必须执行", function () {
+  const prev = roBase();
+  const nextDone = roBase({ done: [] });
+  const nextCl = roBase({
+    closedList: [
+      {
+        id: "cl1",
+        text: "镜",
+        completed: true,
+        mirrorOf: { kind: "weeklyPlan", id: "old-done", weekKey: "2026-08-31" }
+      }
+    ]
+  });
+  assertEq(roShouldRun(prev, nextDone), true);
+  assertEq(roShouldRun(prev, nextCl), true);
+});
+
+test("restore 把未完成任务放回过去桶 → 必须执行", function () {
+  const emptyPast = roBase({
+    weeklyPlan: { "2026-09-03": roBase().weeklyPlan["2026-09-03"] }
+  });
+  const restored = roBase({
+    weeklyPlan: {
+      "2026-08-31": [{ id: "restored", text: "恢复", mainDone: false, microTasks: [] }],
+      "2026-09-03": roBase().weeklyPlan["2026-09-03"]
+    }
+  });
+  assertEq(roShouldRun(emptyPast, restored), true);
+});
+
+test("云端 merge 改变过去周未完成任务 → rollover 必须执行", function () {
+  const extras = roExtras();
+  const loc = roBase({
+    weeklyPlan: {
+      "2026-08-31": [
+        { id: "w1", text: "keep", lane: "life", mainDone: false, microTasks: [], updatedAt: 1 }
+      ],
+      "2026-09-03": roBase().weeklyPlan["2026-09-03"]
+    }
+  });
+  const rem = roBase({
+    weeklyPlan: {
+      "2026-08-31": [
+        { id: "w1", text: "keep", lane: "life", mainDone: true, completedAt: 99, microTasks: [], updatedAt: 99 }
+      ],
+      "2026-09-03": roBase().weeklyPlan["2026-09-03"]
+    }
+  });
+  const prev = ctx.getWeeklyPlanRolloverDependencySnapshot(loc, extras);
+  const merged = fullMerge(loc, rem, 100, 0);
+  const next = ctx.getWeeklyPlanRolloverDependencySnapshot(merged, extras);
+  assertEq(ctx.shouldRunWeeklyPlanRollover(prev, next), true);
+});
+
+test("rollover 依赖快照不得漏真实依赖", function () {
+  const payload = ctx.collectWeeklyPlanRolloverDepPayload(roBase(), roExtras());
+  assertEq(payload.currentSprintKey, "2026-09-03");
+  assert(payload.weekKeys.indexOf("2026-08-31") !== -1);
+  assert(payload.weekKeys.indexOf("2026-09-03") !== -1);
+  assert(payload.pastWeeks["2026-08-31"], "past week missing");
+  assertEq(payload.doneRef["2026-08-31"].items["main:old-done"], "d-old");
+  assertEq(payload.weeklyPlanDone[0].weeklyPlanMeta.taskId, "old-done");
+  assertEq(ctx.isWeeklyPlanSprintKeyPastCurrent("2026-08-31", "2026-09-03"), true);
+  assertEq(ctx.isWeeklyPlanSprintKeyPastCurrent("2026-09-03", "2026-09-03"), false);
+});
+
 console.log("");
 if (failed) {
   console.log("失败 " + failed + " / " + (passed + failed));

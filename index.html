@@ -88195,7 +88195,11 @@
       weeklyPlanDoneSyncPassCount: 0,
       weeklyPlanDoneSyncSkippedCount: 0,
       weeklyPlanDoneSyncScanCount: 0,
-      weeklyPlanDoneSyncMs: 0
+      weeklyPlanDoneSyncMs: 0,
+      rolloverPassCount: 0,
+      rolloverSkippedCount: 0,
+      rolloverScanCount: 0,
+      rolloverMs: 0
     };
 
     function isCloudSyncPerfEnabled() {
@@ -88296,7 +88300,11 @@
         weeklyPlanDoneSyncPassCount: c.weeklyPlanDoneSyncPassCount,
         weeklyPlanDoneSyncSkippedCount: c.weeklyPlanDoneSyncSkippedCount,
         weeklyPlanDoneSyncScanCount: c.weeklyPlanDoneSyncScanCount,
-        weeklyPlanDoneSyncMs: Math.round(c.weeklyPlanDoneSyncMs * 100) / 100
+        weeklyPlanDoneSyncMs: Math.round(c.weeklyPlanDoneSyncMs * 100) / 100,
+        rolloverPassCount: c.rolloverPassCount,
+        rolloverSkippedCount: c.rolloverSkippedCount,
+        rolloverScanCount: c.rolloverScanCount,
+        rolloverMs: Math.round(c.rolloverMs * 100) / 100
       };
     }
 
@@ -120279,15 +120287,37 @@
     /**
      * Sprint 结束后：将所有「结束日早于今天」的 3-Day Sprint 中未完成任务并入本期（state.weeklyPlan[today]）。
      * 已完成任务保留在原 Sprint 作为记录；仅迁移 isWeeklyPlanMainComplete === false 的任务。
+     * 依赖指纹未变则跳过（习惯勾选等）；无 prev / forceAll / 跨 Sprint / 过去桶完成态变化仍执行。
      */
-    function rolloverWeeklyPlanIncompleteToCurrentWeek() {
-      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
+    function rolloverWeeklyPlanIncompleteToCurrentWeek(opts) {
+      const t0 = beginCloudSyncPerf();
+      let ran = false;
+      try {
+        const extras =
+          typeof getLiveWeeklyPlanRolloverExtras === "function"
+            ? getLiveWeeklyPlanRolloverExtras()
+            : {};
+        const nextSnap = getWeeklyPlanRolloverDependencySnapshot(state, extras);
+        if (!shouldRunWeeklyPlanRollover(lastWeeklyPlanRolloverDepSnapshot, nextSnap, opts)) {
+          bumpHeavyModuleSliceCounter("rolloverSkippedCount");
+          lastWeeklyPlanRolloverDepSnapshot = nextSnap;
+          return false;
+        }
+        ran = true;
+        bumpHeavyModuleSliceCounter("rolloverPassCount");
+      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
+        lastWeeklyPlanRolloverDepSnapshot = getWeeklyPlanRolloverDependencySnapshot(state, extras);
+        return false;
+      }
       const curKey = getCurrentWeeklyPlanSprintStartKey();
       const pastKeys = Object.keys(state.weeklyPlan).filter(function (k) {
         if (k === curKey) return false;
         return getSprintEndKeyFromStart(k) < curKey;
       });
-      if (pastKeys.length === 0) return false;
+      if (pastKeys.length === 0) {
+        lastWeeklyPlanRolloverDepSnapshot = getWeeklyPlanRolloverDependencySnapshot(state, extras);
+        return false;
+      }
       pastKeys.sort();
 
       const destBase = getWeeklyPlanTasksForWeekKey(curKey).map(function (t) {
@@ -120300,6 +120330,7 @@
       let changed = false;
 
       pastKeys.forEach(function (oldKey) {
+        bumpHeavyModuleSliceCounter("rolloverScanCount");
         const raw = state.weeklyPlan[oldKey];
         if (!Array.isArray(raw) || raw.length === 0) {
           delete state.weeklyPlan[oldKey];
@@ -120350,7 +120381,11 @@
         repointStaleWeeklyPlanMirrorsInClosedList();
         saveState();
       }
+      lastWeeklyPlanRolloverDepSnapshot = getWeeklyPlanRolloverDependencySnapshot(state, extras);
       return changed;
+      } finally {
+        if (ran) addCloudSyncPerf(null, "rolloverMs", t0);
+      }
     }
 
     function syncWeeklyPlanDoneListForWeek(weekKey) {
@@ -133053,6 +133088,99 @@
       };
     }
 
+    /**
+     * 周计划结转只看「早于当前 Sprint」的桶。合法 sprint 起始键下 weekKey < currentSprintKey
+     * 与 getSprintEndKeyFromStart(k) < currentSprintKey 等价；有后者时用后者。
+     */
+    function isWeeklyPlanSprintKeyPastCurrent(weekKey, currentSprintKey) {
+      if (!weekKey || !currentSprintKey || weekKey === currentSprintKey) return false;
+      if (typeof getSprintEndKeyFromStart === "function") {
+        return getSprintEndKeyFromStart(weekKey) < currentSprintKey;
+      }
+      return String(weekKey) < String(currentSprintKey);
+    }
+
+    function collectWeeklyPlanRolloverClosedMirrors(st) {
+      st = st && typeof st === "object" ? st : {};
+      const cl = Array.isArray(st.closedList) ? st.closedList : [];
+      const out = [];
+      for (let i = 0; i < cl.length; i++) {
+        const item = cl[i];
+        const mo = item && item.mirrorOf;
+        if (!mo || mo.kind !== "weeklyPlan") continue;
+        out.push({
+          id: item.id,
+          completed: Boolean(item.completed),
+          weekKey: mo.weekKey || "",
+          taskId: mo.id
+        });
+      }
+      return out;
+    }
+
+    /**
+     * 结转真实依赖：当前 Sprint 键、全部 weekKey、过去桶的完成态、
+     * Done 镜像证据、封闭清单周计划镜像。不含当前周文案/habitCheckins。
+     */
+    function collectWeeklyPlanRolloverDepPayload(st, extras) {
+      st = st && typeof st === "object" ? st : {};
+      extras = extras || {};
+      const currentSprintKey = extras.currentSprintKey || "";
+      const wp = st.weeklyPlan && typeof st.weeklyPlan === "object" ? st.weeklyPlan : {};
+      const pastWeeks = {};
+      Object.keys(wp)
+        .sort()
+        .forEach(function (wk) {
+          if (!isWeeklyPlanSprintKeyPastCurrent(wk, currentSprintKey)) return;
+          const arr = Array.isArray(wp[wk]) ? wp[wk] : [];
+          pastWeeks[wk] = arr.map(function (task) {
+            if (!task || typeof task !== "object") return null;
+            const micros = Array.isArray(task.microTasks) ? task.microTasks : [];
+            return {
+              id: task.id,
+              mainDone: Boolean(task.mainDone),
+              completedAt: task.completedAt != null ? task.completedAt : null,
+              microTasks: micros.map(function (m) {
+                if (!m || typeof m !== "object") return null;
+                return {
+                  id: m.id,
+                  done: Boolean(m.done),
+                  completedAt: m.completedAt != null ? m.completedAt : null
+                };
+              })
+            };
+          });
+        });
+      return {
+        currentSprintKey: currentSprintKey,
+        weekKeys: Object.keys(wp).sort(),
+        pastWeeks: pastWeeks,
+        doneRef: st.weeklyPlanDoneRef || null,
+        weeklyPlanDone:
+          typeof collectWeeklyPlanDoneEntriesForSyncDep === "function"
+            ? collectWeeklyPlanDoneEntriesForSyncDep(st)
+            : [],
+        closedMirrors: collectWeeklyPlanRolloverClosedMirrors(st)
+      };
+    }
+
+    function getWeeklyPlanRolloverDependencySnapshot(st, extras) {
+      return stableHeavyDepJson(collectWeeklyPlanRolloverDepPayload(st, extras));
+    }
+
+    function shouldRunWeeklyPlanRollover(prevSnap, nextSnap, opts) {
+      opts = opts || {};
+      if (opts.forceAll) return true;
+      if (!prevSnap) return true;
+      return prevSnap !== nextSnap;
+    }
+
+    function getLiveWeeklyPlanRolloverExtras() {
+      return typeof getLiveWeeklyPlanDoneSyncExtras === "function"
+        ? getLiveWeeklyPlanDoneSyncExtras()
+        : { currentSprintKey: "" };
+    }
+
     function syncAllAnniversaryDoneLists(opts) {
       const t0 = beginCloudSyncPerf();
       let ran = false;
@@ -133211,6 +133339,7 @@
     let lastHeavyModuleDepSnapshot = null;
     let lastAnniversaryDoneSyncDepSnapshot = null;
     let lastWeeklyPlanDoneSyncDepSnapshot = null;
+    let lastWeeklyPlanRolloverDepSnapshot = null;
 
     function scheduleRenderHeavyModulesDeferred() {
       const run = function () {

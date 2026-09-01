@@ -140,7 +140,12 @@ const REQUIRED_FNS = [
   "collectWeeklyPlanDoneEntriesForSyncDep",
   "collectWeeklyPlanDoneSyncDepPayload",
   "getWeeklyPlanDoneSyncDependencySnapshot",
-  "shouldRunWeeklyPlanDoneSync"
+  "shouldRunWeeklyPlanDoneSync",
+  "isWeeklyPlanSprintKeyPastCurrent",
+  "collectWeeklyPlanRolloverClosedMirrors",
+  "collectWeeklyPlanRolloverDepPayload",
+  "getWeeklyPlanRolloverDependencySnapshot",
+  "shouldRunWeeklyPlanRollover"
 ];
 
 const OPTIONAL_FNS = [];
