@@ -88330,6 +88330,172 @@
     const CLOUD_SYNC_FOREGROUND_PULL_MIN_MS = 12000;
     /** 本地连写时若刚拉过云，跳过 Pull，只做 Batch Push */
     const CLOUD_SYNC_LOCAL_EDIT_SKIP_PULL_MS = 45000;
+    /**
+     * 只读性能探针：默认开启。关闭：localStorage.setItem('todo-app-cloud-sync-perf-enabled-v1','0')
+     * 或 setCloudSyncPerfEnabled(false)。不改变同步结果，只计数/计时。
+     */
+    const CLOUD_SYNC_PERF_ENABLED_KEY = "todo-app-cloud-sync-perf-enabled-v1";
+    const cloudSyncPerfCounters = {
+      pulseBuildCount: 0,
+      pulseBuildMs: 0,
+      pulseBytes: 0,
+      pulseBytesLast: 0,
+      saveStateCount: 0,
+      saveStateMs: 0,
+      stringifyCount: 0,
+      stringifyMs: 0,
+      stringifyBytes: 0,
+      stringifyBytesLast: 0,
+      renderCount: 0,
+      renderMs: 0,
+      renderHeavyModulesCount: 0,
+      renderHeavyModulesMs: 0,
+      renderHeavyModulesSkippedCount: 0,
+      renderHeavyRule100Count: 0,
+      renderHeavyLife4000Count: 0,
+      renderHeavyTrashCount: 0,
+      renderHeavyAnniversaryCount: 0,
+      renderHeavyForgeMinsCount: 0,
+      cloudPullCount: 0,
+      cloudPushCount: 0,
+      cloudMergeCount: 0,
+      retentionPassCount: 0,
+      retentionPassMs: 0,
+      persistCount: 0,
+      persistMs: 0,
+      anniversaryDoneSyncPassCount: 0,
+      anniversaryDoneSyncSkippedCount: 0,
+      anniversaryDoneSyncScanCount: 0,
+      anniversaryDoneSyncMs: 0,
+      weeklyPlanDoneSyncPassCount: 0,
+      weeklyPlanDoneSyncSkippedCount: 0,
+      weeklyPlanDoneSyncScanCount: 0,
+      weeklyPlanDoneSyncMs: 0,
+      rolloverPassCount: 0,
+      rolloverSkippedCount: 0,
+      rolloverScanCount: 0,
+      rolloverMs: 0,
+      weeklyPlanUiRenderCount: 0,
+      weeklyPlanUiSkippedCount: 0,
+      weeklyPlanUiRenderMs: 0
+    };
+
+    function isCloudSyncPerfEnabled() {
+      try {
+        const v = localStorage.getItem(CLOUD_SYNC_PERF_ENABLED_KEY);
+        if (v === "0" || v === "false" || v === "off") return false;
+        return true;
+      } catch (_e) {
+        return true;
+      }
+    }
+
+    function cloudSyncPerfNow() {
+      return typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+    }
+
+    function beginCloudSyncPerf() {
+      if (!isCloudSyncPerfEnabled()) return null;
+      return cloudSyncPerfNow();
+    }
+
+    function addCloudSyncPerf(countKey, msKey, t0, extra) {
+      if (t0 == null) return;
+      const dt = Math.max(0, cloudSyncPerfNow() - t0);
+      if (countKey) cloudSyncPerfCounters[countKey] += 1;
+      if (msKey) cloudSyncPerfCounters[msKey] += dt;
+      if (extra && extra.bytes != null) {
+        if (extra.bytesField) cloudSyncPerfCounters[extra.bytesField] += extra.bytes;
+        if (extra.bytesLastField) cloudSyncPerfCounters[extra.bytesLastField] = extra.bytes;
+      }
+    }
+
+    function cloudSyncPerfJsonStringify(value) {
+      const t0 = beginCloudSyncPerf();
+      const s = JSON.stringify(value);
+      if (t0 != null) {
+        const bytes = typeof s === "string" ? s.length : 0;
+        addCloudSyncPerf("stringifyCount", "stringifyMs", t0, {
+          bytes: bytes,
+          bytesField: "stringifyBytes",
+          bytesLastField: "stringifyBytesLast"
+        });
+      }
+      return s;
+    }
+
+    function resetCloudSyncPerfCounters() {
+      Object.keys(cloudSyncPerfCounters).forEach(function (k) {
+        cloudSyncPerfCounters[k] = 0;
+      });
+    }
+
+    function snapshotCloudSyncPerf() {
+      const c = cloudSyncPerfCounters;
+      function avg(total, n) {
+        return n ? Math.round((total / n) * 100) / 100 : 0;
+      }
+      return {
+        enabled: isCloudSyncPerfEnabled(),
+        pulseBuildCount: c.pulseBuildCount,
+        pulseBuildMs: Math.round(c.pulseBuildMs * 100) / 100,
+        pulseBuildAvgMs: avg(c.pulseBuildMs, c.pulseBuildCount),
+        pulseBytes: c.pulseBytes,
+        pulseBytesLast: c.pulseBytesLast,
+        saveStateCount: c.saveStateCount,
+        saveStateMs: Math.round(c.saveStateMs * 100) / 100,
+        saveStateAvgMs: avg(c.saveStateMs, c.saveStateCount),
+        stringifyCount: c.stringifyCount,
+        stringifyMs: Math.round(c.stringifyMs * 100) / 100,
+        stringifyAvgMs: avg(c.stringifyMs, c.stringifyCount),
+        stringifyBytes: c.stringifyBytes,
+        stringifyBytesLast: c.stringifyBytesLast,
+        renderCount: c.renderCount,
+        renderMs: Math.round(c.renderMs * 100) / 100,
+        renderAvgMs: avg(c.renderMs, c.renderCount),
+        renderHeavyModulesCount: c.renderHeavyModulesCount,
+        renderHeavyModulesMs: Math.round(c.renderHeavyModulesMs * 100) / 100,
+        renderHeavyModulesSkippedCount: c.renderHeavyModulesSkippedCount,
+        renderHeavyRule100Count: c.renderHeavyRule100Count,
+        renderHeavyLife4000Count: c.renderHeavyLife4000Count,
+        renderHeavyTrashCount: c.renderHeavyTrashCount,
+        renderHeavyAnniversaryCount: c.renderHeavyAnniversaryCount,
+        renderHeavyForgeMinsCount: c.renderHeavyForgeMinsCount,
+        cloudPullCount: c.cloudPullCount,
+        cloudPushCount: c.cloudPushCount,
+        cloudMergeCount: c.cloudMergeCount,
+        retentionPassCount: c.retentionPassCount,
+        retentionPassMs: Math.round(c.retentionPassMs * 100) / 100,
+        persistCount: c.persistCount,
+        persistMs: Math.round(c.persistMs * 100) / 100,
+        persistAvgMs: avg(c.persistMs, c.persistCount),
+        anniversaryDoneSyncPassCount: c.anniversaryDoneSyncPassCount,
+        anniversaryDoneSyncSkippedCount: c.anniversaryDoneSyncSkippedCount,
+        anniversaryDoneSyncScanCount: c.anniversaryDoneSyncScanCount,
+        anniversaryDoneSyncMs: Math.round(c.anniversaryDoneSyncMs * 100) / 100,
+        weeklyPlanDoneSyncPassCount: c.weeklyPlanDoneSyncPassCount,
+        weeklyPlanDoneSyncSkippedCount: c.weeklyPlanDoneSyncSkippedCount,
+        weeklyPlanDoneSyncScanCount: c.weeklyPlanDoneSyncScanCount,
+        weeklyPlanDoneSyncMs: Math.round(c.weeklyPlanDoneSyncMs * 100) / 100,
+        rolloverPassCount: c.rolloverPassCount,
+        rolloverSkippedCount: c.rolloverSkippedCount,
+        rolloverScanCount: c.rolloverScanCount,
+        rolloverMs: Math.round(c.rolloverMs * 100) / 100,
+        weeklyPlanUiRenderCount: c.weeklyPlanUiRenderCount,
+        weeklyPlanUiSkippedCount: c.weeklyPlanUiSkippedCount,
+        weeklyPlanUiRenderMs: Math.round(c.weeklyPlanUiRenderMs * 100) / 100
+      };
+    }
+
+    window.resetCloudSyncPerfCounters = resetCloudSyncPerfCounters;
+    window.getCloudSyncPerfSnapshot = snapshotCloudSyncPerf;
+    window.setCloudSyncPerfEnabled = function setCloudSyncPerfEnabled(on) {
+      try {
+        localStorage.setItem(CLOUD_SYNC_PERF_ENABLED_KEY, on ? "1" : "0");
+      } catch (_e) {}
+    };
     /** pulse 截止期限：待上传的周键 / 封闭清单 id / 十二周年 moduleKey→周次（构建 payload 后清空） */
     let cloudSyncPulseWeeklyPlanWeekKeys = null;
     let cloudSyncPulseClosedListIds = null;
@@ -88703,6 +88869,7 @@
      * includeDone:false 时不拉 v2/done（core-only Delta）；返回 doneFetched 供解析层区分「未拉取」与「云端为空」。
      */
     async function fetchCloudSyncRoomDataPartial(opts) {
+      if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.cloudPullCount += 1;
       if (!cloudSyncRoomRef) {
         throw new Error("Firebase ref 无效");
       }
@@ -90605,6 +90772,7 @@
 
     /** 今日打卡快通道：今日 Done（含 Forge 打卡）+ 今日习惯 + Forge 壶铃/进度步进 */
     function buildCloudSyncPulsePayload() {
+      const t0 = beginCloudSyncPerf();
       const todayKey = formatDateInputValue(new Date());
       const doneToday = (Array.isArray(state.done) ? state.done : []).filter(function (t) {
         return doneTaskMatchesFilterDate(t, todayKey);
@@ -90663,10 +90831,24 @@
           pulseState.moveBreakDay = mb;
         }
       }
+      if (t0 != null) {
+        let bytes = 0;
+        try {
+          bytes = JSON.stringify(pulseState).length;
+        } catch (_pulseBytesErr) {
+          bytes = 0;
+        }
+        addCloudSyncPerf("pulseBuildCount", "pulseBuildMs", t0, {
+          bytes: bytes,
+          bytesField: "pulseBytes",
+          bytesLastField: "pulseBytesLast"
+        });
+      }
       return pulseState;
     }
 
     function mergeCloudSyncPulseIntoState(pulseState) {
+      if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.cloudMergeCount += 1;
       if (!pulseState || typeof pulseState !== "object") return false;
       let changed = false;
       cloudSyncSuppressPush = true;
@@ -91086,6 +91268,7 @@
       if (!shouldRunThrottledFullCloudPush() || cloudSyncFullPushInFlight) {
         return Promise.resolve(null);
       }
+      if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.cloudPushCount += 1;
       cloudSyncFullPushInFlight = true;
       /* 房间已有 v2 时必须写 v2/core：只写 legacy 会被「有 meta 优先读 core」的端永久忽略 */
       const useV2 = cloudSyncRoomHasV2Meta || isCloudPayloadTooLarge(uploadState);
@@ -91176,6 +91359,7 @@
           ? serverTs
           : Date.now();
       const writePulse = function (finalState) {
+        if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.cloudPushCount += 1;
         return cloudSyncRoomRef.child("pulse").set({
           updatedAt: ts,
           updatedBy: cloudSyncClientId,
@@ -91202,7 +91386,7 @@
     /** Realtime Database 拒绝含 undefined 的对象；须与 JSON.stringify 一致地去掉 undefined */
     function cloneStateForFirebaseUpload(src) {
       try {
-        return JSON.parse(JSON.stringify(src != null ? src : state));
+        return JSON.parse(cloudSyncPerfJsonStringify(src != null ? src : state));
       } catch (_e) {
         return null;
       }
@@ -91763,7 +91947,7 @@
 
     function serializeStateForCloud() {
       try {
-        return JSON.stringify(state);
+        return cloudSyncPerfJsonStringify(state);
       } catch (_err) {
         return "";
       }
@@ -92249,32 +92433,42 @@
 
     /**
      * 定期清理：例行只清「已删除」垃圾箱与重复脏数据；完整历史以云端为准。
+     * skipDoneHygiene：例行 persist 热路径跳过 Done/封闭清单全量扫描
+     * （仍由 render、24h 定时任务、runDataRetentionNow、配额紧急路径执行）。
      * @returns {boolean} 是否改动了 state
      */
     function runDataRetentionPass(opts) {
+      const t0 = beginCloudSyncPerf();
       const aggressive = Boolean(opts && opts.aggressive);
       let changed = false;
-      if (purgeExpiredTrash()) changed = true;
-      if (pruneTrashEntryCount(aggressive ? DATA_RETENTION.aggressiveTrashMaxCount : DATA_RETENTION.trashMaxCount)) {
-        changed = true;
+      try {
+        const skipDoneHygiene = Boolean(opts && opts.skipDoneHygiene);
+        if (purgeExpiredTrash()) changed = true;
+        if (pruneTrashEntryCount(aggressive ? DATA_RETENTION.aggressiveTrashMaxCount : DATA_RETENTION.trashMaxCount)) {
+          changed = true;
+        }
+        if (!skipDoneHygiene) {
+          if (typeof pruneRedundantDoneEntriesInState === "function" && pruneRedundantDoneEntriesInState()) {
+            changed = true;
+          }
+          if (
+            typeof dedupeClosedListWeeklyPlanMirrorsInState === "function" &&
+            dedupeClosedListWeeklyPlanMirrorsInState()
+          ) {
+            changed = true;
+          }
+        }
+        if (aggressive) {
+          if (pruneDoneHistoryByRetention(true)) changed = true;
+          if (stripEmptyDoneJournalsOnOldEntries(true)) changed = true;
+          if (pruneOldHabitCheckinDays(true)) changed = true;
+          if (pruneOldFuelScores(true)) changed = true;
+          if (pruneOldMemos(true)) changed = true;
+        }
+        return changed;
+      } finally {
+        addCloudSyncPerf("retentionPassCount", "retentionPassMs", t0);
       }
-      if (typeof pruneRedundantDoneEntriesInState === "function" && pruneRedundantDoneEntriesInState()) {
-        changed = true;
-      }
-      if (
-        typeof dedupeClosedListWeeklyPlanMirrorsInState === "function" &&
-        dedupeClosedListWeeklyPlanMirrorsInState()
-      ) {
-        changed = true;
-      }
-      if (aggressive) {
-        if (pruneDoneHistoryByRetention(true)) changed = true;
-        if (stripEmptyDoneJournalsOnOldEntries(true)) changed = true;
-        if (pruneOldHabitCheckinDays(true)) changed = true;
-        if (pruneOldFuelScores(true)) changed = true;
-        if (pruneOldMemos(true)) changed = true;
-      }
-      return changed;
     }
 
     function maybeRunScheduledDataRetentionOnStartup() {
@@ -94960,6 +95154,7 @@
      * remoteUpdatedAt > lastSeen 时，除 Rule of 100 外的全局配置类子树仍以远端为准（LWW）。
      */
     function mergeLocalStateWithRemotePayloadBeforePush(remoteState, remoteUpdatedAt, lastSeen) {
+      if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.cloudMergeCount += 1;
       if (!remoteState || typeof remoteState !== "object" || !Array.isArray(remoteState.done)) {
         return null;
       }
@@ -95556,7 +95751,7 @@
           /* 不写 saveState，避免合并过程中再次 push */
         }
         reconcileMirrorDeadlinesAfterCloudMerge();
-        syncAllWeeklyPlanDoneLists();
+        syncAllWeeklyPlanDoneLists({ forceAll: true });
         setCloudSyncHashFromCurrentState();
         const r = persistStateToLocalStorage();
         if (!skipRender && !isUiRenderFingerprintUnchanged()) render();
@@ -96138,7 +96333,8 @@
         cloudSyncLastHistoryMergeAt: getCloudSyncLastHistoryMergeAt(),
         cloudRemoteDoneCached: getCachedRemoteDoneCount(),
         cloudSyncRoom: cloudSyncRoomId || localStorage.getItem(CLOUD_SYNC_ROOM_KEY) || "",
-        hasEmergencyBackup: Boolean(localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY))
+        hasEmergencyBackup: Boolean(localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY)),
+        perf: typeof snapshotCloudSyncPerf === "function" ? snapshotCloudSyncPerf() : null
       };
     };
 
@@ -96202,16 +96398,20 @@
       return name === "QuotaExceededError" || /quota/i.test(msg);
     }
 
+    /** 配额紧急时全量清理；例行落盘只清垃圾箱，Done/封闭清单去重交给 render 与定时 retention */
     function compactStateForLocalStorage(aggressive) {
-      return runDataRetentionPass({ aggressive: aggressive });
+      if (aggressive) return runDataRetentionPass({ aggressive: true });
+      return runDataRetentionPass({ skipDoneHygiene: true });
     }
 
     function persistStateToLocalStorage(explicitJson) {
+      const t0 = beginCloudSyncPerf();
+      try {
       compactStateForLocalStorage(false);
       let json =
         explicitJson != null && String(explicitJson).length
           ? String(explicitJson)
-          : JSON.stringify(state);
+          : cloudSyncPerfJsonStringify(state);
 
       function syncWriteLocalOnly() {
         localStorage.setItem(STORAGE_KEY, json);
@@ -96253,16 +96453,19 @@
       } catch (err) {
         if (!isStorageQuotaExceededError(err)) throw err;
         compactStateForLocalStorage(true);
-        json = JSON.stringify(state);
+        json = cloudSyncPerfJsonStringify(state);
         try {
           return attemptPersist();
         } catch (err2) {
           if (!isStorageQuotaExceededError(err2)) throw err2;
           runDataRetentionPass({ aggressive: true });
           if (Array.isArray(state.trash)) state.trash = state.trash.slice(0, 20);
-          json = JSON.stringify(state);
+          json = cloudSyncPerfJsonStringify(state);
           return attemptPersist();
         }
+      }
+      } finally {
+        addCloudSyncPerf("persistCount", "persistMs", t0);
       }
     }
 
@@ -96291,6 +96494,8 @@
     }
 
     function saveState() {
+      const t0 = beginCloudSyncPerf();
+      try {
       try {
         const r = persistStateToLocalStorage();
         if (r.quotaRelief) {
@@ -96315,6 +96520,9 @@
       if (!cloudSyncSuppressPush) {
         markCloudSyncPendingUpload();
         scheduleCloudSyncPush();
+      }
+      } finally {
+        addCloudSyncPerf("saveStateCount", "saveStateMs", t0);
       }
     }
 
@@ -120312,15 +120520,37 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /**
      * Sprint 结束后：将所有「结束日早于今天」的 3-Day Sprint 中未完成任务并入本期（state.weeklyPlan[today]）。
      * 已完成任务保留在原 Sprint 作为记录；仅迁移 isWeeklyPlanMainComplete === false 的任务。
+     * 依赖指纹未变则跳过（习惯勾选等）；无 prev / forceAll / 跨 Sprint / 过去桶完成态变化仍执行。
      */
-    function rolloverWeeklyPlanIncompleteToCurrentWeek() {
-      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
+    function rolloverWeeklyPlanIncompleteToCurrentWeek(opts) {
+      const t0 = beginCloudSyncPerf();
+      let ran = false;
+      try {
+        const extras =
+          typeof getLiveWeeklyPlanRolloverExtras === "function"
+            ? getLiveWeeklyPlanRolloverExtras()
+            : {};
+        const nextSnap = getWeeklyPlanRolloverDependencySnapshot(state, extras);
+        if (!shouldRunWeeklyPlanRollover(lastWeeklyPlanRolloverDepSnapshot, nextSnap, opts)) {
+          bumpHeavyModuleSliceCounter("rolloverSkippedCount");
+          lastWeeklyPlanRolloverDepSnapshot = nextSnap;
+          return false;
+        }
+        ran = true;
+        bumpHeavyModuleSliceCounter("rolloverPassCount");
+      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
+        lastWeeklyPlanRolloverDepSnapshot = getWeeklyPlanRolloverDependencySnapshot(state, extras);
+        return false;
+      }
       const curKey = getCurrentWeeklyPlanSprintStartKey();
       const pastKeys = Object.keys(state.weeklyPlan).filter(function (k) {
         if (k === curKey) return false;
         return getSprintEndKeyFromStart(k) < curKey;
       });
-      if (pastKeys.length === 0) return false;
+      if (pastKeys.length === 0) {
+        lastWeeklyPlanRolloverDepSnapshot = getWeeklyPlanRolloverDependencySnapshot(state, extras);
+        return false;
+      }
       pastKeys.sort();
 
       const destBase = getWeeklyPlanTasksForWeekKey(curKey).map(function (t) {
@@ -120333,6 +120563,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       let changed = false;
 
       pastKeys.forEach(function (oldKey) {
+        bumpHeavyModuleSliceCounter("rolloverScanCount");
         const raw = state.weeklyPlan[oldKey];
         if (!Array.isArray(raw) || raw.length === 0) {
           delete state.weeklyPlan[oldKey];
@@ -120383,7 +120614,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         repointStaleWeeklyPlanMirrorsInClosedList();
         saveState();
       }
+      lastWeeklyPlanRolloverDepSnapshot = getWeeklyPlanRolloverDependencySnapshot(state, extras);
       return changed;
+      } finally {
+        if (ran) addCloudSyncPerf(null, "rolloverMs", t0);
+      }
     }
 
     function syncWeeklyPlanDoneListForWeek(weekKey) {
@@ -120527,14 +120762,37 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /** 按周计划实际勾选状态，对齐所有周的 weeklyPlanDoneRef 与 My Done 镜像 */
-    function syncAllWeeklyPlanDoneLists() {
-      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
-      let changed = false;
-      Object.keys(state.weeklyPlan).forEach(function (weekKey) {
-        if (syncWeeklyPlanDoneListForWeek(weekKey)) changed = true;
-      });
-      if (changed) saveState();
-      return changed;
+    function syncAllWeeklyPlanDoneLists(opts) {
+      const t0 = beginCloudSyncPerf();
+      let ran = false;
+      try {
+        const extras =
+          typeof getLiveWeeklyPlanDoneSyncExtras === "function"
+            ? getLiveWeeklyPlanDoneSyncExtras()
+            : {};
+        const nextSnap = getWeeklyPlanDoneSyncDependencySnapshot(state, extras);
+        if (!shouldRunWeeklyPlanDoneSync(lastWeeklyPlanDoneSyncDepSnapshot, nextSnap, opts)) {
+          bumpHeavyModuleSliceCounter("weeklyPlanDoneSyncSkippedCount");
+          lastWeeklyPlanDoneSyncDepSnapshot = nextSnap;
+          return false;
+        }
+        ran = true;
+        bumpHeavyModuleSliceCounter("weeklyPlanDoneSyncPassCount");
+        if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
+          lastWeeklyPlanDoneSyncDepSnapshot = getWeeklyPlanDoneSyncDependencySnapshot(state, extras);
+          return false;
+        }
+        let changed = false;
+        Object.keys(state.weeklyPlan).forEach(function (weekKey) {
+          bumpHeavyModuleSliceCounter("weeklyPlanDoneSyncScanCount");
+          if (syncWeeklyPlanDoneListForWeek(weekKey)) changed = true;
+        });
+        if (changed) saveState();
+        lastWeeklyPlanDoneSyncDepSnapshot = getWeeklyPlanDoneSyncDependencySnapshot(state, extras);
+        return changed;
+      } finally {
+        if (ran) addCloudSyncPerf(null, "weeklyPlanDoneSyncMs", t0);
+      }
     }
 
     function syncWeeklyPlanDoneList() {
@@ -123840,18 +124098,42 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       appendRows(weeklyPlanList, tasksSorted);
     }
 
-    function renderWeeklyPlanUI() {
-      applyWeeklyPlanShellLayout();
-      renderWeeklyPlanChrome();
-      renderWeeklyPlanList();
-      if (typeof syncWeeklyPlanSprintStrip === "function") {
-        syncWeeklyPlanSprintStrip();
+    /**
+     * 周计划 + 阅读计划 DOM。依赖指纹未变则跳过全量重建（习惯勾选等）；
+     * 不跳过 Done 对账 / 结转 / repair。无 prev 或 forceAll 仍刷新。
+     */
+    function renderWeeklyPlanUI(opts) {
+      const t0 = beginCloudSyncPerf();
+      let ran = false;
+      try {
+        const extras =
+          typeof getLiveWeeklyPlanUiRenderExtras === "function"
+            ? getLiveWeeklyPlanUiRenderExtras()
+            : {};
+        const nextSnap = getWeeklyPlanUiDependencySnapshot(state, extras);
+        if (!shouldRenderWeeklyPlanUI(lastWeeklyPlanUiDepSnapshot, nextSnap, opts)) {
+          bumpHeavyModuleSliceCounter("weeklyPlanUiSkippedCount");
+          lastWeeklyPlanUiDepSnapshot = nextSnap;
+          return false;
+        }
+        ran = true;
+        bumpHeavyModuleSliceCounter("weeklyPlanUiRenderCount");
+        applyWeeklyPlanShellLayout();
+        renderWeeklyPlanChrome();
+        renderWeeklyPlanList();
+        if (typeof syncWeeklyPlanSprintStrip === "function") {
+          syncWeeklyPlanSprintStrip();
+        }
+        if (typeof ensureDoneTimeBlockSprintTicker === "function") {
+          ensureDoneTimeBlockSprintTicker();
+        }
+        renderReadingPlan();
+        syncSprintViewModeUi();
+        lastWeeklyPlanUiDepSnapshot = nextSnap;
+        return true;
+      } finally {
+        if (ran) addCloudSyncPerf(null, "weeklyPlanUiRenderMs", t0);
       }
-      if (typeof ensureDoneTimeBlockSprintTicker === "function") {
-        ensureDoneTimeBlockSprintTicker();
-      }
-      renderReadingPlan();
-      syncSprintViewModeUi();
     }
 
     const READING_PLAN_STATUS_OPTIONS = [
@@ -132518,6 +132800,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function render(force) {
+      const t0 = beginCloudSyncPerf();
+      try {
       if (!force && isAppUiEditingInProgress()) {
         renderDeferredWhileEditing = true;
         scheduleRenderWhenEditingEnds();
@@ -132558,17 +132842,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (syncLife4000WeeklyToDone()) {
         saveState();
       }
-      syncAnniversaryTw020DoneList();
-      syncAnniversaryTw021DoneList();
-      syncAnniversaryTw022DoneList();
       ensureAnniversaryTwRegistry();
-      (state.anniversaryTwRegistry.dynamicKeys || []).forEach(function (moduleKey) {
-        syncAnniversaryTwModuleDoneList(moduleKey);
-        syncAnniversaryDeepTimeDoneList(moduleKey, anniversaryTwSuffixFromModuleKey(moduleKey));
-      });
-      syncAnniversaryDeepTimeDoneList("tw020", "020");
-      syncAnniversaryDeepTimeDoneList("tw021", "021");
-      syncAnniversaryDeepTimeDoneList("tw022", "022");
+      syncAllAnniversaryDoneLists();
       ensureTimeReflectionPromptsForToday();
       ensureAgeGoalMilestonePromptsForToday();
       ensureAnniversaryTw020PromptsForToday();
@@ -132747,67 +133022,753 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       requestAnimationFrame(fitResponsiveSingleLineSlogans);
       rememberUiRenderFingerprint();
       endUiRebuildSnap();
+      } finally {
+        addCloudSyncPerf("renderCount", "renderMs", t0);
+      }
+    }
+
+    /**
+     * Heavy 模块依赖指纹：按实际数据切片比较，而不是按「本次操作类型」跳过。
+     * 依赖无法确定的模块保持刷新；calendarDay 进入各切片，保证跨天 UI 不会 stale。
+     */
+    function stableHeavyDepJson(value) {
+      try {
+        return JSON.stringify(value);
+      } catch (_e) {
+        return "unserializable";
+      }
+    }
+
+    function collectAnniversaryHeavyDepPayload(st) {
+      st = st && typeof st === "object" ? st : {};
+      const out = {
+        registry: st.anniversaryTwRegistry || null,
+        archivedKeys: st.anniversaryTwArchivedKeys || null
+      };
+      const keys =
+        typeof listAnniversaryTwStateKeysForSync === "function"
+          ? listAnniversaryTwStateKeysForSync(st, null)
+          : ["anniversaryTw020", "anniversaryTw021", "anniversaryTw022"];
+      keys.slice().sort().forEach(function (sk) {
+        out[sk] = st[sk] || null;
+      });
+      return out;
+    }
+
+    function collectForgeMinsHeavyDepPayload(st, extras) {
+      st = st && typeof st === "object" ? st : {};
+      extras = extras || {};
+      const done = Array.isArray(st.done) ? st.done : [];
+      const forgeDone = [];
+      for (let i = 0; i < done.length; i++) {
+        const t = done[i];
+        if (!t) continue;
+        if (t.forgeMindMeta || t.forgeBodyMeta) {
+          forgeDone.push({
+            id: t.id,
+            text: t.text,
+            completedAt: t.completedAt,
+            forgeMindMeta: t.forgeMindMeta || null,
+            forgeBodyMeta: t.forgeBodyMeta || null
+          });
+        }
+      }
+      return {
+        calendarDay: extras.calendarDay || "",
+        selectedDoneDate: extras.selectedDoneDate || "",
+        forge: st.forge || null,
+        forgeDone: forgeDone
+      };
+    }
+
+    function getHeavyModuleDependencySnapshot(st, extras) {
+      st = st && typeof st === "object" ? st : {};
+      extras = extras || {};
+      const day = extras.calendarDay || "";
+      return {
+        rule100: stableHeavyDepJson({
+          calendarDay: day,
+          ruleOf100: st.ruleOf100 || null,
+          rule100DayProjectKeys: st.rule100DayProjectKeys || null,
+          rule100UnitProjectKeys: st.rule100UnitProjectKeys || null
+        }),
+        life4000: stableHeavyDepJson({
+          calendarDay: day,
+          life4000Weeks: st.life4000Weeks || null
+        }),
+        trash: stableHeavyDepJson({
+          calendarDay: day,
+          trash: st.trash || []
+        }),
+        anniversary: stableHeavyDepJson({
+          calendarDay: day,
+          archiveViewKey: extras.anniversaryTwArchiveViewKey || "",
+          payload: collectAnniversaryHeavyDepPayload(st)
+        }),
+        forgeMins: stableHeavyDepJson(collectForgeMinsHeavyDepPayload(st, extras))
+      };
+    }
+
+    function allHeavyModuleSlicesDirty() {
+      return {
+        rule100: true,
+        life4000: true,
+        trash: true,
+        anniversary: true,
+        forgeMins: true,
+        any: true
+      };
+    }
+
+    function diffHeavyModuleDependencies(prevSnap, nextSnap) {
+      if (!prevSnap || !nextSnap) return allHeavyModuleSlicesDirty();
+      const dirty = {
+        rule100: prevSnap.rule100 !== nextSnap.rule100,
+        life4000: prevSnap.life4000 !== nextSnap.life4000,
+        trash: prevSnap.trash !== nextSnap.trash,
+        anniversary: prevSnap.anniversary !== nextSnap.anniversary,
+        forgeMins: prevSnap.forgeMins !== nextSnap.forgeMins,
+        any: false
+      };
+      dirty.any = dirty.rule100 || dirty.life4000 || dirty.trash || dirty.anniversary || dirty.forgeMins;
+      return dirty;
+    }
+
+    /**
+     * 根据依赖快照决定哪些 heavy 切片必须重绘。
+     * forceAll / 无 prev → 全部刷新（启动、首屏延迟）。
+     * forceAnniversary → 待滚动目标等 UI 动作，即使数据指纹未变也刷十二周年。
+     */
+    function planHeavyModuleRenders(prevSnap, nextSnap, opts) {
+      opts = opts || {};
+      if (opts.forceAll) return allHeavyModuleSlicesDirty();
+      const dirty = diffHeavyModuleDependencies(prevSnap, nextSnap);
+      if (opts.forceAnniversary) {
+        dirty.anniversary = true;
+        dirty.any = true;
+      }
+      return dirty;
+    }
+
+    function getLiveHeavyModuleRenderExtras() {
+      return {
+        calendarDay: typeof formatDateInputValue === "function" ? formatDateInputValue(new Date()) : "",
+        selectedDoneDate: selectedDoneDate || "",
+        anniversaryTwArchiveViewKey:
+          typeof anniversaryTwArchiveViewKey === "string" ? anniversaryTwArchiveViewKey : ""
+      };
+    }
+
+    function bumpHeavyModuleSliceCounter(countKey) {
+      if (!countKey || !cloudSyncPerfCounters || cloudSyncPerfCounters[countKey] == null) return;
+      cloudSyncPerfCounters[countKey] += 1;
+    }
+
+    /**
+     * 周年 → My Done 同步的真实依赖投影。
+     * 只含扫描会读的字段：weeks 任务 id/text/done/subs、anchor（新 Done 文案周标签）、deepTime.days。
+     * 不含 ui.weekExpanded / futureStory 等，避免展开周也误扫。
+     */
+    function projectAnniversaryModuleForDoneSync(mod) {
+      if (!mod || typeof mod !== "object") return null;
+      const weeksOut = {};
+      const weeks = mod.weeks && typeof mod.weeks === "object" ? mod.weeks : {};
+      Object.keys(weeks)
+        .sort()
+        .forEach(function (wk) {
+          const arr = Array.isArray(weeks[wk]) ? weeks[wk] : [];
+          weeksOut[wk] = arr.map(function (task) {
+            if (!task || typeof task !== "object") return null;
+            const subs = Array.isArray(task.subs) ? task.subs : [];
+            return {
+              id: task.id,
+              text: task.text,
+              done: Boolean(task.done),
+              subs: subs.map(function (s) {
+                if (!s || typeof s !== "object") return null;
+                return { id: s.id, text: s.text, done: Boolean(s.done) };
+              })
+            };
+          });
+        });
+      let deepTime = null;
+      if (mod.deepTime && typeof mod.deepTime === "object") {
+        const days = mod.deepTime.days && typeof mod.deepTime.days === "object" ? mod.deepTime.days : {};
+        const daysOut = {};
+        Object.keys(days)
+          .sort()
+          .forEach(function (dk) {
+            const ent = days[dk];
+            if (ent && typeof ent === "object") {
+              daysOut[dk] = { hours: ent.hours, loggedAt: ent.loggedAt || null };
+            } else {
+              daysOut[dk] = ent;
+            }
+          });
+        deepTime = { days: daysOut };
+      }
+      return {
+        anchor: mod.anchor != null ? mod.anchor : null,
+        weeks: weeksOut,
+        deepTime: deepTime
+      };
+    }
+
+    function collectAnniversaryDoneEntriesForSyncDep(st) {
+      st = st && typeof st === "object" ? st : {};
+      const done = Array.isArray(st.done) ? st.done : [];
+      const out = [];
+      for (let i = 0; i < done.length; i++) {
+        const t = done[i];
+        if (!t) continue;
+        if (!t.anniversaryTwMeta && !t.anniversaryDeepTimeMeta) continue;
+        out.push({
+          id: t.id,
+          text: t.text,
+          completedAt: t.completedAt,
+          anniversaryTwMeta: t.anniversaryTwMeta || null,
+          anniversaryDeepTimeMeta: t.anniversaryDeepTimeMeta || null
+        });
+      }
+      return out;
+    }
+
+    function collectAnniversaryDoneSyncDepPayload(st) {
+      st = st && typeof st === "object" ? st : {};
+      const modules = {};
+      const keys =
+        typeof listAnniversaryTwStateKeysForSync === "function"
+          ? listAnniversaryTwStateKeysForSync(st, null)
+          : ["anniversaryTw020", "anniversaryTw021", "anniversaryTw022"];
+      keys.slice().sort().forEach(function (sk) {
+        modules[sk] = projectAnniversaryModuleForDoneSync(st[sk]);
+      });
+      return {
+        registry: st.anniversaryTwRegistry || null,
+        doneRef: st.anniversaryDoneRef || null,
+        modules: modules,
+        anniversaryDone: collectAnniversaryDoneEntriesForSyncDep(st)
+      };
+    }
+
+    function getAnniversaryDoneSyncDependencySnapshot(st) {
+      return stableHeavyDepJson(collectAnniversaryDoneSyncDepPayload(st));
+    }
+
+    /**
+     * 无 prev / forceAll → 必须扫描（启动、显式对账）。
+     * 指纹相同 → 跳过；周年任务/Done 源/ref/deepTime 变化 → 扫描。
+     */
+    function shouldRunAnniversaryDoneSync(prevSnap, nextSnap, opts) {
+      opts = opts || {};
+      if (opts.forceAll) return true;
+      if (!prevSnap) return true;
+      return prevSnap !== nextSnap;
+    }
+
+    /**
+     * 周计划 → My Done 同步的真实依赖：weekKey 桶、任务 id/text/mainDone/completedAt、
+     * microTasks done/text/completedAt、weeklyPlanDoneRef、suppress 表、带 weeklyPlanMeta 的 Done。
+     * currentSprintKey 覆盖跨 Sprint 滚动（rollover 可能改桶，但空转时也要扫一次）。
+     */
+    function projectWeeklyPlanTaskForDoneSync(task) {
+      if (!task || typeof task !== "object") return null;
+      const micros = Array.isArray(task.microTasks) ? task.microTasks : [];
+      return {
+        id: task.id,
+        text: task.text,
+        mainDone: Boolean(task.mainDone),
+        completedAt: task.completedAt != null ? task.completedAt : null,
+        microTasks: micros.map(function (m) {
+          if (!m || typeof m !== "object") return null;
+          return {
+            id: m.id,
+            text: m.text,
+            done: Boolean(m.done),
+            completedAt: m.completedAt != null ? m.completedAt : null
+          };
+        })
+      };
+    }
+
+    function collectWeeklyPlanDoneEntriesForSyncDep(st) {
+      st = st && typeof st === "object" ? st : {};
+      const done = Array.isArray(st.done) ? st.done : [];
+      const out = [];
+      for (let i = 0; i < done.length; i++) {
+        const t = done[i];
+        if (!t || !t.weeklyPlanMeta) continue;
+        out.push({
+          id: t.id,
+          text: t.text,
+          completedAt: t.completedAt,
+          weeklyPlanMeta: t.weeklyPlanMeta
+        });
+      }
+      return out;
+    }
+
+    function collectWeeklyPlanDoneSyncDepPayload(st, extras) {
+      st = st && typeof st === "object" ? st : {};
+      extras = extras || {};
+      const weeks = {};
+      const wp = st.weeklyPlan && typeof st.weeklyPlan === "object" ? st.weeklyPlan : {};
+      Object.keys(wp)
+        .sort()
+        .forEach(function (wk) {
+          const arr = Array.isArray(wp[wk]) ? wp[wk] : [];
+          weeks[wk] = arr.map(projectWeeklyPlanTaskForDoneSync);
+        });
+      return {
+        currentSprintKey: extras.currentSprintKey || "",
+        weeks: weeks,
+        doneRef: st.weeklyPlanDoneRef || null,
+        suppress: st.weeklyPlanDoneSuppress || null,
+        weeklyPlanDone: collectWeeklyPlanDoneEntriesForSyncDep(st)
+      };
+    }
+
+    function getWeeklyPlanDoneSyncDependencySnapshot(st, extras) {
+      return stableHeavyDepJson(collectWeeklyPlanDoneSyncDepPayload(st, extras));
+    }
+
+    function shouldRunWeeklyPlanDoneSync(prevSnap, nextSnap, opts) {
+      opts = opts || {};
+      if (opts.forceAll) return true;
+      if (!prevSnap) return true;
+      return prevSnap !== nextSnap;
+    }
+
+    function getLiveWeeklyPlanDoneSyncExtras() {
+      return {
+        currentSprintKey:
+          typeof getCurrentWeeklyPlanSprintStartKey === "function"
+            ? getCurrentWeeklyPlanSprintStartKey()
+            : ""
+      };
+    }
+
+    /**
+     * 周计划结转只看「早于当前 Sprint」的桶。合法 sprint 起始键下 weekKey < currentSprintKey
+     * 与 getSprintEndKeyFromStart(k) < currentSprintKey 等价；有后者时用后者。
+     */
+    function isWeeklyPlanSprintKeyPastCurrent(weekKey, currentSprintKey) {
+      if (!weekKey || !currentSprintKey || weekKey === currentSprintKey) return false;
+      if (typeof getSprintEndKeyFromStart === "function") {
+        return getSprintEndKeyFromStart(weekKey) < currentSprintKey;
+      }
+      return String(weekKey) < String(currentSprintKey);
+    }
+
+    function collectWeeklyPlanRolloverClosedMirrors(st) {
+      st = st && typeof st === "object" ? st : {};
+      const cl = Array.isArray(st.closedList) ? st.closedList : [];
+      const out = [];
+      for (let i = 0; i < cl.length; i++) {
+        const item = cl[i];
+        const mo = item && item.mirrorOf;
+        if (!mo || mo.kind !== "weeklyPlan") continue;
+        out.push({
+          id: item.id,
+          completed: Boolean(item.completed),
+          weekKey: mo.weekKey || "",
+          taskId: mo.id
+        });
+      }
+      return out;
+    }
+
+    /**
+     * 结转真实依赖：当前 Sprint 键、全部 weekKey、过去桶的完成态、
+     * Done 镜像证据、封闭清单周计划镜像。不含当前周文案/habitCheckins。
+     */
+    function collectWeeklyPlanRolloverDepPayload(st, extras) {
+      st = st && typeof st === "object" ? st : {};
+      extras = extras || {};
+      const currentSprintKey = extras.currentSprintKey || "";
+      const wp = st.weeklyPlan && typeof st.weeklyPlan === "object" ? st.weeklyPlan : {};
+      const pastWeeks = {};
+      Object.keys(wp)
+        .sort()
+        .forEach(function (wk) {
+          if (!isWeeklyPlanSprintKeyPastCurrent(wk, currentSprintKey)) return;
+          const arr = Array.isArray(wp[wk]) ? wp[wk] : [];
+          pastWeeks[wk] = arr.map(function (task) {
+            if (!task || typeof task !== "object") return null;
+            const micros = Array.isArray(task.microTasks) ? task.microTasks : [];
+            return {
+              id: task.id,
+              mainDone: Boolean(task.mainDone),
+              completedAt: task.completedAt != null ? task.completedAt : null,
+              microTasks: micros.map(function (m) {
+                if (!m || typeof m !== "object") return null;
+                return {
+                  id: m.id,
+                  done: Boolean(m.done),
+                  completedAt: m.completedAt != null ? m.completedAt : null
+                };
+              })
+            };
+          });
+        });
+      return {
+        currentSprintKey: currentSprintKey,
+        weekKeys: Object.keys(wp).sort(),
+        pastWeeks: pastWeeks,
+        doneRef: st.weeklyPlanDoneRef || null,
+        weeklyPlanDone:
+          typeof collectWeeklyPlanDoneEntriesForSyncDep === "function"
+            ? collectWeeklyPlanDoneEntriesForSyncDep(st)
+            : [],
+        closedMirrors: collectWeeklyPlanRolloverClosedMirrors(st)
+      };
+    }
+
+    function getWeeklyPlanRolloverDependencySnapshot(st, extras) {
+      return stableHeavyDepJson(collectWeeklyPlanRolloverDepPayload(st, extras));
+    }
+
+    function shouldRunWeeklyPlanRollover(prevSnap, nextSnap, opts) {
+      opts = opts || {};
+      if (opts.forceAll) return true;
+      if (!prevSnap) return true;
+      return prevSnap !== nextSnap;
+    }
+
+    function getLiveWeeklyPlanRolloverExtras() {
+      return typeof getLiveWeeklyPlanDoneSyncExtras === "function"
+        ? getLiveWeeklyPlanDoneSyncExtras()
+        : { currentSprintKey: "" };
+    }
+
+    /** 周计划任务卡片真实 DOM 字段（文案/lane/完成/截止/微任务）；不含 updatedAt、Done 镜像。 */
+    function projectWeeklyPlanTaskForUi(task) {
+      if (!task || typeof task !== "object") return null;
+      const micros = Array.isArray(task.microTasks) ? task.microTasks : [];
+      return {
+        id: task.id,
+        text: String(task.text || ""),
+        lane: typeof normalizeWeeklyPlanLane === "function" ? normalizeWeeklyPlanLane(task.lane) : task.lane || "life",
+        mainDone: Boolean(task.mainDone),
+        completedAt: task.completedAt != null ? task.completedAt : null,
+        deadlineAt: task.deadlineAt != null ? task.deadlineAt : null,
+        microTasks: micros.map(function (m) {
+          if (!m || typeof m !== "object") return null;
+          return {
+            id: m.id,
+            text: String(m.text || ""),
+            done: Boolean(m.done)
+          };
+        })
+      };
+    }
+
+    function projectReadingPlanBookForUi(book) {
+      if (!book || typeof book !== "object") return null;
+      const chapters = Array.isArray(book.chapters) ? book.chapters : [];
+      return {
+        id: book.id,
+        title: String(book.title || ""),
+        status: book.status || "",
+        targetProblem: String(book.targetProblem || ""),
+        readOn: String(book.readOn || ""),
+        createdAt: book.createdAt != null ? book.createdAt : null,
+        completedAt: book.completedAt != null ? book.completedAt : null,
+        chapters: chapters.map(function (c) {
+          if (!c || typeof c !== "object") return null;
+          return {
+            id: c.id,
+            text: String(c.text || ""),
+            done: Boolean(c.done)
+          };
+        })
+      };
+    }
+
+    /** Life/Work ISG 门禁读今日封闭清单完成态；投影条目完成/截止/子步骤，不含 Done 镜像。 */
+    function collectWeeklyPlanUiClosedListGate(st) {
+      st = st && typeof st === "object" ? st : {};
+      const cl = Array.isArray(st.closedList) ? st.closedList : [];
+      return cl.map(function (item) {
+        if (!item) return null;
+        const steps =
+          typeof getClosedListSubStepsNormalized === "function"
+            ? getClosedListSubStepsNormalized(item)
+            : [];
+        return {
+          id: item.id,
+          completed: Boolean(item.completed),
+          completedAt: item.completedAt != null ? item.completedAt : null,
+          deadlineAt: item.deadlineAt != null ? item.deadlineAt : null,
+          createdAt: item.createdAt != null ? item.createdAt : null,
+          steps: steps.map(function (s) {
+            return {
+              id: s && s.id,
+              completed: Boolean(s && s.completed)
+            };
+          })
+        };
+      });
+    }
+
+    /**
+     * Weekly Plan UI 真实依赖：周计划任务 DOM 字段、阅读计划、shell/viewMode、
+     * 当前/查看 Sprint、日历日、看板桌面媒体查询、展开态、封闭清单 ISG。
+     * 不含 habitCheckins、Done 列表、weeklyPlanDoneRef、rollover 证据。
+     */
+    function collectWeeklyPlanUiDepPayload(st, extras) {
+      st = st && typeof st === "object" ? st : {};
+      extras = extras || {};
+      const wp = st.weeklyPlan && typeof st.weeklyPlan === "object" ? st.weeklyPlan : {};
+      const weeks = {};
+      Object.keys(wp)
+        .sort()
+        .forEach(function (wk) {
+          const arr = Array.isArray(wp[wk]) ? wp[wk] : [];
+          weeks[wk] = arr.map(projectWeeklyPlanTaskForUi);
+        });
+      const ui = st.weeklyPlanUi && typeof st.weeklyPlanUi === "object" ? st.weeklyPlanUi : {};
+      const rp = st.readingPlan && typeof st.readingPlan === "object" ? st.readingPlan : {};
+      const books = Array.isArray(rp.books) ? rp.books : [];
+      const microExpandedIds = Array.isArray(extras.microExpandedIds)
+        ? extras.microExpandedIds.slice().map(String).sort()
+        : [];
+      const readingChaptersExpanded = Array.isArray(extras.readingPlanAllChaptersExpandedIds)
+        ? extras.readingPlanAllChaptersExpandedIds.slice().map(String).sort()
+        : [];
+      return {
+        calendarDay: extras.calendarDay || "",
+        currentSprintKey: extras.currentSprintKey || "",
+        viewSprintStartKey: extras.viewSprintStartKey || "",
+        kanbanDesktop: Boolean(extras.kanbanDesktop),
+        readingPlanMobile: Boolean(extras.readingPlanMobile),
+        microExpandedIds: microExpandedIds,
+        readingPlanAllChaptersExpandedIds: readingChaptersExpanded,
+        weeks: weeks,
+        readingPlan: books.map(projectReadingPlanBookForUi),
+        shell: ui.shell || "closed",
+        addLane: ui.addLane || "life",
+        viewMode: ui.viewMode && typeof ui.viewMode === "object" ? ui.viewMode : {},
+        readingPlanLane: ui.readingPlanLane || "reading",
+        readingPlanExpandedBooks:
+          ui.readingPlanExpandedBooks && typeof ui.readingPlanExpandedBooks === "object"
+            ? ui.readingPlanExpandedBooks
+            : {},
+        readingPlanAllChaptersExpanded:
+          ui.readingPlanAllChaptersExpanded && typeof ui.readingPlanAllChaptersExpanded === "object"
+            ? ui.readingPlanAllChaptersExpanded
+            : {},
+        stopDoingTab: ui.stopDoingTab || "rules",
+        closedListIsg: collectWeeklyPlanUiClosedListGate(st)
+      };
+    }
+
+    function getWeeklyPlanUiDependencySnapshot(st, extras) {
+      return stableHeavyDepJson(collectWeeklyPlanUiDepPayload(st, extras));
+    }
+
+    function shouldRenderWeeklyPlanUI(prevSnap, nextSnap, opts) {
+      opts = opts || {};
+      if (opts.forceAll) return true;
+      if (!prevSnap) return true;
+      return prevSnap !== nextSnap;
+    }
+
+    function getLiveWeeklyPlanUiRenderExtras() {
+      const microExpandedIds = [];
+      if (typeof weeklyPlanMicroExpandedIds !== "undefined" && weeklyPlanMicroExpandedIds && typeof weeklyPlanMicroExpandedIds.forEach === "function") {
+        weeklyPlanMicroExpandedIds.forEach(function (id) {
+          microExpandedIds.push(String(id));
+        });
+      }
+      const readingPlanAllChaptersExpandedIdsLive = [];
+      if (
+        typeof readingPlanAllChaptersExpandedIds !== "undefined" &&
+        readingPlanAllChaptersExpandedIds &&
+        typeof readingPlanAllChaptersExpandedIds.forEach === "function"
+      ) {
+        readingPlanAllChaptersExpandedIds.forEach(function (id) {
+          readingPlanAllChaptersExpandedIdsLive.push(String(id));
+        });
+      }
+      return {
+        calendarDay: typeof formatDateInputValue === "function" ? formatDateInputValue(new Date()) : "",
+        currentSprintKey:
+          typeof getCurrentWeeklyPlanSprintStartKey === "function" ? getCurrentWeeklyPlanSprintStartKey() : "",
+        viewSprintStartKey:
+          typeof getWeeklyPlanViewSprintStartKey === "function" ? getWeeklyPlanViewSprintStartKey() : "",
+        kanbanDesktop: typeof isSprintKanbanDesktopEnabled === "function" ? isSprintKanbanDesktopEnabled() : false,
+        readingPlanMobile:
+          typeof window !== "undefined" &&
+          window.matchMedia &&
+          window.matchMedia("(max-width: 767px)").matches,
+        microExpandedIds: microExpandedIds,
+        readingPlanAllChaptersExpandedIds: readingPlanAllChaptersExpandedIdsLive
+      };
+    }
+
+    function syncAllAnniversaryDoneLists(opts) {
+      const t0 = beginCloudSyncPerf();
+      let ran = false;
+      try {
+        const nextSnap = getAnniversaryDoneSyncDependencySnapshot(state);
+        if (!shouldRunAnniversaryDoneSync(lastAnniversaryDoneSyncDepSnapshot, nextSnap, opts)) {
+          bumpHeavyModuleSliceCounter("anniversaryDoneSyncSkippedCount");
+          lastAnniversaryDoneSyncDepSnapshot = nextSnap;
+          return false;
+        }
+        ran = true;
+        bumpHeavyModuleSliceCounter("anniversaryDoneSyncPassCount");
+        function runOneScan(fn) {
+          bumpHeavyModuleSliceCounter("anniversaryDoneSyncScanCount");
+          fn();
+        }
+        runOneScan(function () {
+          syncAnniversaryTw020DoneList();
+        });
+        runOneScan(function () {
+          syncAnniversaryTw021DoneList();
+        });
+        runOneScan(function () {
+          syncAnniversaryTw022DoneList();
+        });
+        if (typeof ensureAnniversaryTwRegistry === "function") {
+          ensureAnniversaryTwRegistry();
+        }
+        const dyn =
+          state.anniversaryTwRegistry && Array.isArray(state.anniversaryTwRegistry.dynamicKeys)
+            ? state.anniversaryTwRegistry.dynamicKeys
+            : [];
+        dyn.forEach(function (moduleKey) {
+          runOneScan(function () {
+            syncAnniversaryTwModuleDoneList(moduleKey);
+          });
+          runOneScan(function () {
+            syncAnniversaryDeepTimeDoneList(moduleKey, anniversaryTwSuffixFromModuleKey(moduleKey));
+          });
+        });
+        runOneScan(function () {
+          syncAnniversaryDeepTimeDoneList("tw020", "020");
+        });
+        runOneScan(function () {
+          syncAnniversaryDeepTimeDoneList("tw021", "021");
+        });
+        runOneScan(function () {
+          syncAnniversaryDeepTimeDoneList("tw022", "022");
+        });
+        lastAnniversaryDoneSyncDepSnapshot = getAnniversaryDoneSyncDependencySnapshot(state);
+        return true;
+      } finally {
+        if (ran) addCloudSyncPerf(null, "anniversaryDoneSyncMs", t0);
+      }
     }
 
     /** 首屏延后的重模块：历史面板 / 十二周年 / Rule100 / 回收站等 */
-    function renderHeavyModules() {
+    function renderHeavyModules(forceAll) {
+      const t0 = beginCloudSyncPerf();
+      let didHeavyWork = false;
       beginUiRebuildSnap();
       try {
-      try {
-        renderRuleOf100();
-      } catch (rule100Err) {
-        console.warn("[Rule of 100] renderRuleOf100 失败:", rule100Err);
+      const extras = getLiveHeavyModuleRenderExtras();
+      const nextSnap = getHeavyModuleDependencySnapshot(state, extras);
+      const dirty = planHeavyModuleRenders(lastHeavyModuleDepSnapshot, nextSnap, {
+        forceAll: Boolean(forceAll),
+        forceAnniversary: Boolean(anniversaryTwPendingScrollTarget)
+      });
+      if (!dirty.any) {
+        lastHeavyModuleDepSnapshot = nextSnap;
+        bumpHeavyModuleSliceCounter("renderHeavyModulesSkippedCount");
+        try {
+          refreshDynamicModuleLunarHints();
+        } catch (lunarErr) {
+          console.warn("[农历提示] 刷新失败:", lunarErr);
+        }
+        return;
       }
-      try {
-        renderLife4000Weeks();
-      } catch (life4000Err) {
-        console.warn("[人生进度表] renderLife4000Weeks 失败:", life4000Err);
+      didHeavyWork = true;
+      if (dirty.rule100) {
+        bumpHeavyModuleSliceCounter("renderHeavyRule100Count");
+        try {
+          renderRuleOf100();
+        } catch (rule100Err) {
+          console.warn("[Rule of 100] renderRuleOf100 失败:", rule100Err);
+        }
+      }
+      if (dirty.life4000) {
+        bumpHeavyModuleSliceCounter("renderHeavyLife4000Count");
+        try {
+          renderLife4000Weeks();
+        } catch (life4000Err) {
+          console.warn("[人生进度表] renderLife4000Weeks 失败:", life4000Err);
+        }
       }
       try { renderProjectTasks(); } catch (e) { console.warn("[项目] renderProjectTasks 失败:", e); }
-      try { renderTrash(); } catch (e) { console.warn("[回收站] 失败:", e); }
-      try {
-        ensureAnniversaryTwArchivePass();
-      } catch (err) {
-        console.warn("[十二周年] 归档检查失败:", err);
+      if (dirty.trash) {
+        bumpHeavyModuleSliceCounter("renderHeavyTrashCount");
+        try { renderTrash(); } catch (e) { console.warn("[回收站] 失败:", e); }
       }
-      const annTwWeekListScroll = captureAnniversaryTwWeekListScrollTops();
-      try { renderAnniversaryTw020(); } catch (e) { console.warn("[十二周年#20] 渲染失败:", e); }
-      try { renderAnniversaryTw021(); } catch (e) { console.warn("[十二周年#21] 渲染失败:", e); }
-      try { renderAnniversaryTw022(); } catch (e) { console.warn("[十二周年#22] 渲染失败:", e); }
-      ensureAnniversaryTwRegistry();
-      (state.anniversaryTwRegistry.dynamicKeys || []).forEach(function (moduleKey) {
+      if (dirty.anniversary) {
+        bumpHeavyModuleSliceCounter("renderHeavyAnniversaryCount");
         try {
-          ensureAnniversaryTwDynamicPanelDom(moduleKey, anniversaryTwNumberFromModuleKey(moduleKey));
-          renderAnniversaryTwDynamic(moduleKey);
-        } catch (e) {
-          console.warn("[十二周年动态] 渲染失败:", moduleKey, e);
+          ensureAnniversaryTwArchivePass();
+        } catch (err) {
+          console.warn("[十二周年] 归档检查失败:", err);
         }
-      });
-      restoreAnniversaryTwWeekListScrollTops(annTwWeekListScroll);
-      try { scrollAnniversaryTwPendingWeekIntoView(); } catch (e) { console.warn("[十二周年] 滚动失败:", e); }
-      if (typeof syncAnniversaryTwActiveCycleSegmentTabs === "function") {
-        try { syncAnniversaryTwActiveCycleSegmentTabs(); } catch (e) { console.warn("[十二周年] 分段Tab同步失败:", e); }
+        const annTwWeekListScroll = captureAnniversaryTwWeekListScrollTops();
+        try { renderAnniversaryTw020(); } catch (e) { console.warn("[十二周年#20] 渲染失败:", e); }
+        try { renderAnniversaryTw021(); } catch (e) { console.warn("[十二周年#21] 渲染失败:", e); }
+        try { renderAnniversaryTw022(); } catch (e) { console.warn("[十二周年#22] 渲染失败:", e); }
+        ensureAnniversaryTwRegistry();
+        (state.anniversaryTwRegistry.dynamicKeys || []).forEach(function (moduleKey) {
+          try {
+            ensureAnniversaryTwDynamicPanelDom(moduleKey, anniversaryTwNumberFromModuleKey(moduleKey));
+            renderAnniversaryTwDynamic(moduleKey);
+          } catch (e) {
+            console.warn("[十二周年动态] 渲染失败:", moduleKey, e);
+          }
+        });
+        restoreAnniversaryTwWeekListScrollTops(annTwWeekListScroll);
+        try { scrollAnniversaryTwPendingWeekIntoView(); } catch (e) { console.warn("[十二周年] 滚动失败:", e); }
+        if (typeof syncAnniversaryTwActiveCycleSegmentTabs === "function") {
+          try { syncAnniversaryTwActiveCycleSegmentTabs(); } catch (e) { console.warn("[十二周年] 分段Tab同步失败:", e); }
+        }
+        if (typeof syncAnniversaryCycleRemainStrip === "function") {
+          try { syncAnniversaryCycleRemainStrip(); } catch (e) { console.warn("[十二周年] 进度条同步失败:", e); }
+        }
+        if (typeof activateKineticTab === "function") {
+          const activeKineticBtn = document.querySelector("#dynamicModule .kinetic-tab-btn[aria-selected='true']");
+          const kid = activeKineticBtn && activeKineticBtn.id && activeKineticBtn.id.indexOf("kineticTabBtn-") === 0
+            ? activeKineticBtn.id.slice("kineticTabBtn-".length)
+            : "";
+          if (kid) activateKineticTab(kid);
+        }
       }
-      if (typeof syncAnniversaryCycleRemainStrip === "function") {
-        try { syncAnniversaryCycleRemainStrip(); } catch (e) { console.warn("[十二周年] 进度条同步失败:", e); }
+      try {
+        refreshDynamicModuleLunarHints();
+      } catch (lunarErr) {
+        console.warn("[农历提示] 刷新失败:", lunarErr);
       }
-      refreshDynamicModuleLunarHints();
-      if (typeof activateKineticTab === "function") {
-        const activeKineticBtn = document.querySelector("#dynamicModule .kinetic-tab-btn[aria-selected='true']");
-        const kid = activeKineticBtn && activeKineticBtn.id && activeKineticBtn.id.indexOf("kineticTabBtn-") === 0
-          ? activeKineticBtn.id.slice("kineticTabBtn-".length)
-          : "";
-        if (kid) activateKineticTab(kid);
+      if (dirty.forgeMins) {
+        bumpHeavyModuleSliceCounter("renderHeavyForgeMinsCount");
+        renderForgeDailyMinRows();
+        renderForgeWeeklyMinRows();
       }
-      renderForgeDailyMinRows();
-      renderForgeWeeklyMinRows();
+      lastHeavyModuleDepSnapshot = nextSnap;
       } finally {
+        if (didHeavyWork) {
+          addCloudSyncPerf("renderHeavyModulesCount", "renderHeavyModulesMs", t0);
+        }
         endUiRebuildSnap();
       }
     }
 
     let isBootFirstRenderPass = true;
     let renderHeavyIdleHandle = null;
+    let lastHeavyModuleDepSnapshot = null;
+    let lastAnniversaryDoneSyncDepSnapshot = null;
+    let lastWeeklyPlanDoneSyncDepSnapshot = null;
+    let lastWeeklyPlanRolloverDepSnapshot = null;
+    let lastWeeklyPlanUiDepSnapshot = null;
 
     function scheduleRenderHeavyModulesDeferred() {
       const run = function () {
