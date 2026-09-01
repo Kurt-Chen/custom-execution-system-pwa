@@ -87815,7 +87815,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260901d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260901f";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -88737,8 +88737,6 @@
     const CLOUD_SYNC_REMOTE_MERGE_DEBOUNCE_MS = 2000;
     const CLOUD_SYNC_RENDER_DEBOUNCE_MS = 500;
     const CLOUD_SYNC_PERSIST_DEBOUNCE_MS = 1500;
-    /** 上次全量 render 时的界面数据指纹；云合并未改可见数据则跳过重绘 */
-    let lastUiRenderFingerprint = "";
     let lastCloudUiRenderAt = 0;
     const CLOUD_UI_RENDER_MIN_INTERVAL_MS = 8000;
     let renderDepth = 0;
@@ -91472,25 +91470,6 @@
       }, CLOUD_SYNC_PERSIST_DEBOUNCE_MS);
     }
 
-    /** 轻量指纹：禁止整包 JSON.stringify（大数据会卡主线程，看起来像整页闪） */
-    function captureUiRenderFingerprint(st) {
-      if (!st || typeof st !== "object") return "";
-      const done = Array.isArray(st.done) ? st.done.length : 0;
-      const closed = Array.isArray(st.closedList) ? st.closedList.length : 0;
-      const memo = Array.isArray(st.memo) ? st.memo.length : 0;
-      const wp = st.weeklyPlan && typeof st.weeklyPlan === "object" ? Object.keys(st.weeklyPlan).length : 0;
-      const mb = st.moveBreakDay && typeof st.moveBreakDay === "object" ? st.moveBreakDay : {};
-      return [
-        done,
-        closed,
-        memo,
-        wp,
-        mb.dateKey || "",
-        mb.count || 0,
-        Array.isArray(mb.ackedHours) ? mb.ackedHours.join(".") : ""
-      ].join("|");
-    }
-
     function captureUiScrollSnapshot() {
       const ids = [
         "doneList",
@@ -91521,19 +91500,10 @@
       });
     }
 
-    function rememberUiRenderFingerprint() {
-      lastUiRenderFingerprint = captureUiRenderFingerprint(state);
-    }
-
-    function isUiRenderFingerprintUnchanged() {
-      const fp = captureUiRenderFingerprint(state);
-      return Boolean(fp && lastUiRenderFingerprint && fp === lastUiRenderFingerprint);
-    }
-
+    /** 云同步触发的重绘：只防重入与短间隔连刷，不再用整包/计数指纹 stringify */
     function shouldSkipCloudUiRender() {
       if (renderDepth > 0) return true;
       if (Date.now() < renderSuppressCloudUntil) return true;
-      if (isUiRenderFingerprintUnchanged()) return true;
       if (lastCloudUiRenderAt > 0 && Date.now() - lastCloudUiRenderAt < CLOUD_UI_RENDER_MIN_INTERVAL_MS) {
         return true;
       }
@@ -96233,7 +96203,7 @@
         syncAllWeeklyPlanDoneLists({ forceAll: true });
         setCloudSyncHashFromCurrentState();
         const r = persistStateToLocalStorage();
-        if (!skipRender && !isUiRenderFingerprintUnchanged()) render();
+        if (!skipRender) render();
         return r;
       } finally {
         cloudSyncSuppressPush = false;
@@ -121126,37 +121096,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /**
      * Sprint 结束后：将所有「结束日早于今天」的 3-Day Sprint 中未完成任务并入本期（state.weeklyPlan[today]）。
      * 已完成任务保留在原 Sprint 作为记录；仅迁移 isWeeklyPlanMainComplete === false 的任务。
-     * 依赖指纹未变则跳过（习惯勾选等）；无 prev / forceAll / 跨 Sprint / 过去桶完成态变化仍执行。
+     * 每次 render 直接扫描过去桶（不另做 fingerprint / snapshot skip）。
      */
     function rolloverWeeklyPlanIncompleteToCurrentWeek(opts) {
       const t0 = beginCloudSyncPerf();
-      let ran = false;
       try {
-        const extras =
-          typeof getLiveWeeklyPlanRolloverExtras === "function"
-            ? getLiveWeeklyPlanRolloverExtras()
-            : {};
-        const nextSnap = getWeeklyPlanRolloverDependencySnapshot(state, extras);
-        if (!shouldRunWeeklyPlanRollover(lastWeeklyPlanRolloverDepSnapshot, nextSnap, opts)) {
-          bumpHeavyModuleSliceCounter("rolloverSkippedCount");
-          lastWeeklyPlanRolloverDepSnapshot = nextSnap;
-          return false;
-        }
-        ran = true;
         bumpHeavyModuleSliceCounter("rolloverPassCount");
-      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
-        lastWeeklyPlanRolloverDepSnapshot = getWeeklyPlanRolloverDependencySnapshot(state, extras);
-        return false;
-      }
+      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
       const curKey = getCurrentWeeklyPlanSprintStartKey();
       const pastKeys = Object.keys(state.weeklyPlan).filter(function (k) {
         if (k === curKey) return false;
         return getSprintEndKeyFromStart(k) < curKey;
       });
-      if (pastKeys.length === 0) {
-        lastWeeklyPlanRolloverDepSnapshot = getWeeklyPlanRolloverDependencySnapshot(state, extras);
-        return false;
-      }
+      if (pastKeys.length === 0) return false;
       pastKeys.sort();
 
       const destBase = getWeeklyPlanTasksForWeekKey(curKey).map(function (t) {
@@ -121220,10 +121172,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         repointStaleWeeklyPlanMirrorsInClosedList();
         saveState();
       }
-      lastWeeklyPlanRolloverDepSnapshot = getWeeklyPlanRolloverDependencySnapshot(state, extras);
       return changed;
       } finally {
-        if (ran) addCloudSyncPerf(null, "rolloverMs", t0);
+        addCloudSyncPerf(null, "rolloverMs", t0);
       }
     }
 
@@ -121367,37 +121318,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return changed;
     }
 
-    /** 按周计划实际勾选状态，对齐所有周的 weeklyPlanDoneRef 与 My Done 镜像 */
+    /** 按周计划实际勾选状态，对齐所有周的 weeklyPlanDoneRef 与 My Done 镜像（每次直接扫描，不做 snapshot skip） */
     function syncAllWeeklyPlanDoneLists(opts) {
       const t0 = beginCloudSyncPerf();
-      let ran = false;
       try {
-        const extras =
-          typeof getLiveWeeklyPlanDoneSyncExtras === "function"
-            ? getLiveWeeklyPlanDoneSyncExtras()
-            : {};
-        const nextSnap = getWeeklyPlanDoneSyncDependencySnapshot(state, extras);
-        if (!shouldRunWeeklyPlanDoneSync(lastWeeklyPlanDoneSyncDepSnapshot, nextSnap, opts)) {
-          bumpHeavyModuleSliceCounter("weeklyPlanDoneSyncSkippedCount");
-          lastWeeklyPlanDoneSyncDepSnapshot = nextSnap;
-          return false;
-        }
-        ran = true;
         bumpHeavyModuleSliceCounter("weeklyPlanDoneSyncPassCount");
-        if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
-          lastWeeklyPlanDoneSyncDepSnapshot = getWeeklyPlanDoneSyncDependencySnapshot(state, extras);
-          return false;
-        }
+        if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
         let changed = false;
         Object.keys(state.weeklyPlan).forEach(function (weekKey) {
           bumpHeavyModuleSliceCounter("weeklyPlanDoneSyncScanCount");
           if (syncWeeklyPlanDoneListForWeek(weekKey)) changed = true;
         });
         if (changed) saveState();
-        lastWeeklyPlanDoneSyncDepSnapshot = getWeeklyPlanDoneSyncDependencySnapshot(state, extras);
         return changed;
       } finally {
-        if (ran) addCloudSyncPerf(null, "weeklyPlanDoneSyncMs", t0);
+        addCloudSyncPerf(null, "weeklyPlanDoneSyncMs", t0);
       }
     }
 
@@ -133635,7 +133570,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       requestAnimationFrame(function () {
         restoreUiScrollSnapshot(uiScrollSnap);
       });
-      rememberUiRenderFingerprint();
       endUiRebuildSnap();
       } finally {
         renderDepth = Math.max(0, renderDepth - 1);
@@ -133778,283 +133712,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function bumpHeavyModuleSliceCounter(countKey) {
       if (!countKey || !cloudSyncPerfCounters || cloudSyncPerfCounters[countKey] == null) return;
       cloudSyncPerfCounters[countKey] += 1;
-    }
-
-    /**
-     * 周年 → My Done 同步的真实依赖投影。
-     * 只含扫描会读的字段：weeks 任务 id/text/done/subs、anchor（新 Done 文案周标签）、deepTime.days。
-     * 不含 ui.weekExpanded / futureStory 等，避免展开周也误扫。
-     */
-    function projectAnniversaryModuleForDoneSync(mod) {
-      if (!mod || typeof mod !== "object") return null;
-      const weeksOut = {};
-      const weeks = mod.weeks && typeof mod.weeks === "object" ? mod.weeks : {};
-      Object.keys(weeks)
-        .sort()
-        .forEach(function (wk) {
-          const arr = Array.isArray(weeks[wk]) ? weeks[wk] : [];
-          weeksOut[wk] = arr.map(function (task) {
-            if (!task || typeof task !== "object") return null;
-            const subs = Array.isArray(task.subs) ? task.subs : [];
-            return {
-              id: task.id,
-              text: task.text,
-              done: Boolean(task.done),
-              subs: subs.map(function (s) {
-                if (!s || typeof s !== "object") return null;
-                return { id: s.id, text: s.text, done: Boolean(s.done) };
-              })
-            };
-          });
-        });
-      let deepTime = null;
-      if (mod.deepTime && typeof mod.deepTime === "object") {
-        const days = mod.deepTime.days && typeof mod.deepTime.days === "object" ? mod.deepTime.days : {};
-        const daysOut = {};
-        Object.keys(days)
-          .sort()
-          .forEach(function (dk) {
-            const ent = days[dk];
-            if (ent && typeof ent === "object") {
-              daysOut[dk] = { hours: ent.hours, loggedAt: ent.loggedAt || null };
-            } else {
-              daysOut[dk] = ent;
-            }
-          });
-        deepTime = { days: daysOut };
-      }
-      return {
-        anchor: mod.anchor != null ? mod.anchor : null,
-        weeks: weeksOut,
-        deepTime: deepTime
-      };
-    }
-
-    function collectAnniversaryDoneEntriesForSyncDep(st) {
-      st = st && typeof st === "object" ? st : {};
-      const done = Array.isArray(st.done) ? st.done : [];
-      const out = [];
-      for (let i = 0; i < done.length; i++) {
-        const t = done[i];
-        if (!t) continue;
-        if (!t.anniversaryTwMeta && !t.anniversaryDeepTimeMeta) continue;
-        out.push({
-          id: t.id,
-          text: t.text,
-          completedAt: t.completedAt,
-          anniversaryTwMeta: t.anniversaryTwMeta || null,
-          anniversaryDeepTimeMeta: t.anniversaryDeepTimeMeta || null
-        });
-      }
-      return out;
-    }
-
-    function collectAnniversaryDoneSyncDepPayload(st) {
-      st = st && typeof st === "object" ? st : {};
-      const modules = {};
-      const keys =
-        typeof listAnniversaryTwStateKeysForSync === "function"
-          ? listAnniversaryTwStateKeysForSync(st, null)
-          : ["anniversaryTw020", "anniversaryTw021", "anniversaryTw022"];
-      keys.slice().sort().forEach(function (sk) {
-        modules[sk] = projectAnniversaryModuleForDoneSync(st[sk]);
-      });
-      return {
-        registry: st.anniversaryTwRegistry || null,
-        doneRef: st.anniversaryDoneRef || null,
-        modules: modules,
-        anniversaryDone: collectAnniversaryDoneEntriesForSyncDep(st)
-      };
-    }
-
-    function getAnniversaryDoneSyncDependencySnapshot(st) {
-      return stableHeavyDepJson(collectAnniversaryDoneSyncDepPayload(st));
-    }
-
-    /**
-     * 无 prev / forceAll → 必须扫描（启动、显式对账）。
-     * 指纹相同 → 跳过；周年任务/Done 源/ref/deepTime 变化 → 扫描。
-     */
-    function shouldRunAnniversaryDoneSync(prevSnap, nextSnap, opts) {
-      opts = opts || {};
-      if (opts.forceAll) return true;
-      if (!prevSnap) return true;
-      return prevSnap !== nextSnap;
-    }
-
-    /**
-     * 周计划 → My Done 同步的真实依赖：weekKey 桶、任务 id/text/mainDone/completedAt、
-     * microTasks done/text/completedAt、weeklyPlanDoneRef、suppress 表、带 weeklyPlanMeta 的 Done。
-     * currentSprintKey 覆盖跨 Sprint 滚动（rollover 可能改桶，但空转时也要扫一次）。
-     */
-    function projectWeeklyPlanTaskForDoneSync(task) {
-      if (!task || typeof task !== "object") return null;
-      const micros = Array.isArray(task.microTasks) ? task.microTasks : [];
-      return {
-        id: task.id,
-        text: task.text,
-        mainDone: Boolean(task.mainDone),
-        completedAt: task.completedAt != null ? task.completedAt : null,
-        microTasks: micros.map(function (m) {
-          if (!m || typeof m !== "object") return null;
-          return {
-            id: m.id,
-            text: m.text,
-            done: Boolean(m.done),
-            completedAt: m.completedAt != null ? m.completedAt : null
-          };
-        })
-      };
-    }
-
-    function collectWeeklyPlanDoneEntriesForSyncDep(st) {
-      st = st && typeof st === "object" ? st : {};
-      const done = Array.isArray(st.done) ? st.done : [];
-      const out = [];
-      for (let i = 0; i < done.length; i++) {
-        const t = done[i];
-        if (!t || !t.weeklyPlanMeta) continue;
-        out.push({
-          id: t.id,
-          text: t.text,
-          completedAt: t.completedAt,
-          weeklyPlanMeta: t.weeklyPlanMeta
-        });
-      }
-      return out;
-    }
-
-    function collectWeeklyPlanDoneSyncDepPayload(st, extras) {
-      st = st && typeof st === "object" ? st : {};
-      extras = extras || {};
-      const weeks = {};
-      const wp = st.weeklyPlan && typeof st.weeklyPlan === "object" ? st.weeklyPlan : {};
-      Object.keys(wp)
-        .sort()
-        .forEach(function (wk) {
-          const arr = Array.isArray(wp[wk]) ? wp[wk] : [];
-          weeks[wk] = arr.map(projectWeeklyPlanTaskForDoneSync);
-        });
-      return {
-        currentSprintKey: extras.currentSprintKey || "",
-        weeks: weeks,
-        doneRef: st.weeklyPlanDoneRef || null,
-        suppress: st.weeklyPlanDoneSuppress || null,
-        weeklyPlanDone: collectWeeklyPlanDoneEntriesForSyncDep(st)
-      };
-    }
-
-    function getWeeklyPlanDoneSyncDependencySnapshot(st, extras) {
-      return stableHeavyDepJson(collectWeeklyPlanDoneSyncDepPayload(st, extras));
-    }
-
-    function shouldRunWeeklyPlanDoneSync(prevSnap, nextSnap, opts) {
-      opts = opts || {};
-      if (opts.forceAll) return true;
-      if (!prevSnap) return true;
-      return prevSnap !== nextSnap;
-    }
-
-    function getLiveWeeklyPlanDoneSyncExtras() {
-      return {
-        currentSprintKey:
-          typeof getCurrentWeeklyPlanSprintStartKey === "function"
-            ? getCurrentWeeklyPlanSprintStartKey()
-            : ""
-      };
-    }
-
-    /**
-     * 周计划结转只看「早于当前 Sprint」的桶。合法 sprint 起始键下 weekKey < currentSprintKey
-     * 与 getSprintEndKeyFromStart(k) < currentSprintKey 等价；有后者时用后者。
-     */
-    function isWeeklyPlanSprintKeyPastCurrent(weekKey, currentSprintKey) {
-      if (!weekKey || !currentSprintKey || weekKey === currentSprintKey) return false;
-      if (typeof getSprintEndKeyFromStart === "function") {
-        return getSprintEndKeyFromStart(weekKey) < currentSprintKey;
-      }
-      return String(weekKey) < String(currentSprintKey);
-    }
-
-    function collectWeeklyPlanRolloverClosedMirrors(st) {
-      st = st && typeof st === "object" ? st : {};
-      const cl = Array.isArray(st.closedList) ? st.closedList : [];
-      const out = [];
-      for (let i = 0; i < cl.length; i++) {
-        const item = cl[i];
-        const mo = item && item.mirrorOf;
-        if (!mo || mo.kind !== "weeklyPlan") continue;
-        out.push({
-          id: item.id,
-          completed: Boolean(item.completed),
-          weekKey: mo.weekKey || "",
-          taskId: mo.id
-        });
-      }
-      return out;
-    }
-
-    /**
-     * 结转真实依赖：当前 Sprint 键、全部 weekKey、过去桶的完成态、
-     * Done 镜像证据、封闭清单周计划镜像。不含当前周文案/habitCheckins。
-     */
-    function collectWeeklyPlanRolloverDepPayload(st, extras) {
-      st = st && typeof st === "object" ? st : {};
-      extras = extras || {};
-      const currentSprintKey = extras.currentSprintKey || "";
-      const wp = st.weeklyPlan && typeof st.weeklyPlan === "object" ? st.weeklyPlan : {};
-      const pastWeeks = {};
-      Object.keys(wp)
-        .sort()
-        .forEach(function (wk) {
-          if (!isWeeklyPlanSprintKeyPastCurrent(wk, currentSprintKey)) return;
-          const arr = Array.isArray(wp[wk]) ? wp[wk] : [];
-          pastWeeks[wk] = arr.map(function (task) {
-            if (!task || typeof task !== "object") return null;
-            const micros = Array.isArray(task.microTasks) ? task.microTasks : [];
-            return {
-              id: task.id,
-              mainDone: Boolean(task.mainDone),
-              completedAt: task.completedAt != null ? task.completedAt : null,
-              microTasks: micros.map(function (m) {
-                if (!m || typeof m !== "object") return null;
-                return {
-                  id: m.id,
-                  done: Boolean(m.done),
-                  completedAt: m.completedAt != null ? m.completedAt : null
-                };
-              })
-            };
-          });
-        });
-      return {
-        currentSprintKey: currentSprintKey,
-        weekKeys: Object.keys(wp).sort(),
-        pastWeeks: pastWeeks,
-        doneRef: st.weeklyPlanDoneRef || null,
-        weeklyPlanDone:
-          typeof collectWeeklyPlanDoneEntriesForSyncDep === "function"
-            ? collectWeeklyPlanDoneEntriesForSyncDep(st)
-            : [],
-        closedMirrors: collectWeeklyPlanRolloverClosedMirrors(st)
-      };
-    }
-
-    function getWeeklyPlanRolloverDependencySnapshot(st, extras) {
-      return stableHeavyDepJson(collectWeeklyPlanRolloverDepPayload(st, extras));
-    }
-
-    function shouldRunWeeklyPlanRollover(prevSnap, nextSnap, opts) {
-      opts = opts || {};
-      if (opts.forceAll) return true;
-      if (!prevSnap) return true;
-      return prevSnap !== nextSnap;
-    }
-
-    function getLiveWeeklyPlanRolloverExtras() {
-      return typeof getLiveWeeklyPlanDoneSyncExtras === "function"
-        ? getLiveWeeklyPlanDoneSyncExtras()
-        : { currentSprintKey: "" };
     }
 
     /** 周计划任务卡片真实 DOM 字段（文案/lane/完成/截止/微任务）；不含 updatedAt、Done 镜像。 */
@@ -134223,17 +133880,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       };
     }
 
+    /** 十二周年主/子任务与深度时间 → My Done（每次直接扫描，不做 snapshot skip） */
     function syncAllAnniversaryDoneLists(opts) {
       const t0 = beginCloudSyncPerf();
-      let ran = false;
       try {
-        const nextSnap = getAnniversaryDoneSyncDependencySnapshot(state);
-        if (!shouldRunAnniversaryDoneSync(lastAnniversaryDoneSyncDepSnapshot, nextSnap, opts)) {
-          bumpHeavyModuleSliceCounter("anniversaryDoneSyncSkippedCount");
-          lastAnniversaryDoneSyncDepSnapshot = nextSnap;
-          return false;
-        }
-        ran = true;
         bumpHeavyModuleSliceCounter("anniversaryDoneSyncPassCount");
         function runOneScan(fn) {
           bumpHeavyModuleSliceCounter("anniversaryDoneSyncScanCount");
@@ -134272,10 +133922,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         runOneScan(function () {
           syncAnniversaryDeepTimeDoneList("tw022", "022");
         });
-        lastAnniversaryDoneSyncDepSnapshot = getAnniversaryDoneSyncDependencySnapshot(state);
         return true;
       } finally {
-        if (ran) addCloudSyncPerf(null, "anniversaryDoneSyncMs", t0);
+        addCloudSyncPerf(null, "anniversaryDoneSyncMs", t0);
       }
     }
 
@@ -134381,9 +134030,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     let isBootFirstRenderPass = true;
     let renderHeavyIdleHandle = null;
     let lastHeavyModuleDepSnapshot = null;
-    let lastAnniversaryDoneSyncDepSnapshot = null;
-    let lastWeeklyPlanDoneSyncDepSnapshot = null;
-    let lastWeeklyPlanRolloverDepSnapshot = null;
     let lastWeeklyPlanUiDepSnapshot = null;
 
     function scheduleRenderHeavyModulesDeferred() {
