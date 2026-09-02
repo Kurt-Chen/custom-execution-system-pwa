@@ -13052,6 +13052,41 @@
       color: #9ca3af;
     }
 
+    .reading-plan-item-completed-date {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      margin-top: 2px;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1.35;
+      color: #4b5563;
+    }
+
+    .reading-plan-item-completed-date__label {
+      flex: 0 0 auto;
+      color: #6b7280;
+    }
+
+    .reading-plan-item-completed-date__input {
+      margin: 0;
+      padding: 0;
+      border: none;
+      background: transparent;
+      font: inherit;
+      font-weight: 600;
+      color: #1d4ed8;
+      min-width: 9.6em;
+      max-width: 100%;
+      cursor: pointer;
+    }
+
+    .reading-plan-item-completed-date__input::-webkit-calendar-picker-indicator {
+      cursor: pointer;
+      opacity: 0.7;
+    }
+
     .reading-plan-item .reading-plan-item-toolbar .btn-delete {
       display: none !important;
     }
@@ -14072,6 +14107,16 @@
         font-size: 12px;
         padding: 5px 8px;
         margin-top: 4px;
+      }
+
+      .reading-plan-item-completed-date {
+        margin-top: 3px;
+        font-size: 11px;
+        gap: 4px;
+      }
+
+      .reading-plan-item-completed-date__input {
+        min-width: 8.8em;
       }
 
       .reading-plan-item-toolbar {
@@ -31379,6 +31424,14 @@
       background: #fef08a;
       color: #854d0e;
       box-shadow: 0 0 0 1px rgba(133, 77, 14, 0.12);
+      flex: 0 1 auto;
+      width: auto;
+      max-width: min(42vw, 12rem);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      word-break: normal;
+      overflow-wrap: normal;
     }
     ul.app-done-time-timeline .done-entry-pill--default {
       background: #e2e8f0;
@@ -31422,6 +31475,9 @@
       flex: 1 1 0%;
       min-width: 0;
       max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     ul.app-done-time-timeline .done-compact-text-wrap:has(.done-compact-meta-stack) {
       flex-direction: column;
@@ -87841,7 +87897,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260902f";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260902h";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -94276,13 +94332,21 @@
       return out;
     }
 
+    /** 镜像 ref 存的是 Done 条目 id；合并时不可 Boolean()，否则会变成 true，他端再补出一堆「今天」 */
+    function pickMergedDoneRefItemId(aVal, bVal) {
+      const as = typeof aVal === "string" && aVal ? aVal : "";
+      const bs = typeof bVal === "string" && bVal ? bVal : "";
+      return as || bs;
+    }
+
     function mergeWeeklyPlanDoneRefItemsForSync(itemsA, itemsB) {
       const a = itemsA && typeof itemsA === "object" ? itemsA : {};
       const b = itemsB && typeof itemsB === "object" ? itemsB : {};
       const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
       const out = {};
       keys.forEach(function (k) {
-        out[k] = Boolean(a[k]) || Boolean(b[k]);
+        const id = pickMergedDoneRefItemId(a[k], b[k]);
+        if (id) out[k] = id;
       });
       return out;
     }
@@ -94465,7 +94529,8 @@
       const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
       const out = {};
       keys.forEach(function (k) {
-        out[k] = Boolean(a[k]) || Boolean(b[k]);
+        const id = pickMergedDoneRefItemId(a[k], b[k]);
+        if (id) out[k] = id;
       });
       return out;
     }
@@ -96373,6 +96438,9 @@
         }
         reconcileMirrorDeadlinesAfterCloudMerge();
         syncAllWeeklyPlanDoneLists({ forceAll: true });
+        if (typeof syncAllAnniversaryDoneLists === "function") {
+          syncAllAnniversaryDoneLists({ forceAll: true });
+        }
         setCloudSyncHashFromCurrentState();
         const r = persistStateToLocalStorage();
         if (!skipRender) {
@@ -116971,10 +117039,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return "default";
     }
 
+    function anniversaryDonePillDisplayLabel(innerText) {
+      const s = String(innerText || "").trim();
+      const cut = s.split(/[：:]/)[0].trim();
+      return cut || s;
+    }
+
     function createDoneEntryPill(innerText, variant) {
       const pill = document.createElement("span");
       pill.className = "done-entry-pill done-entry-pill--" + variant;
-      pill.textContent = innerText;
+      const label = variant === "anniversary" ? anniversaryDonePillDisplayLabel(innerText) : innerText;
+      pill.textContent = label;
       pill.setAttribute("title", "【" + innerText + "】");
       pill.setAttribute("aria-hidden", "true");
       return pill;
@@ -121837,6 +121912,271 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return m;
     }
 
+    function coerceAnniversaryDoneRefItemId(value) {
+      return typeof value === "string" && value ? value : "";
+    }
+
+    function findDoneIdByAnniversarySyncKey(moduleId, syncKey) {
+      const list = Array.isArray(state.done) ? state.done : [];
+      for (let i = 0; i < list.length; i++) {
+        const d = list[i];
+        const m = d && d.anniversaryTwMeta;
+        if (m && m.module === moduleId && m.syncKey === syncKey && d.id) {
+          return d.id;
+        }
+      }
+      return "";
+    }
+
+    function anniversaryDoneMirrorExists(doneId) {
+      if (!doneId) return false;
+      return (state.done || []).some(function (d) {
+        return d && d.id === doneId;
+      });
+    }
+
+    function parseAnniversaryDoneSyncKey(syncKey) {
+      const mainM = /^main:(\d+):(.+)$/.exec(syncKey);
+      if (mainM) {
+        return { kind: "main", weekNum: Number(mainM[1]), taskId: mainM[2], subId: null };
+      }
+      const subM = /^sub:(\d+):([^:]+):(.+)$/.exec(syncKey);
+      if (subM) {
+        return { kind: "sub", weekNum: Number(subM[1]), taskId: subM[2], subId: subM[3] };
+      }
+      return null;
+    }
+
+    function anniversaryWeekStartForDoneMirror(moduleId, weekNum) {
+      if (!(weekNum > 0)) return null;
+      if (moduleId === "tw020") return tw020WeekStartSunday(weekNum);
+      if (moduleId === "tw021") return tw021WeekStartSunday(weekNum);
+      if (moduleId === "tw022") return tw022WeekStartSunday(weekNum);
+      const suf = String(moduleId || "").replace(/^tw/, "");
+      if (typeof getAnniversaryTwWeekStartSundayForSuffix === "function") {
+        return getAnniversaryTwWeekStartSundayForSuffix(suf, weekNum);
+      }
+      return null;
+    }
+
+    function completedAtForAnniversaryDoneMirror(task, sub, moduleId, weekNum) {
+      const src = sub || task || {};
+      const n = Number(src.completedAt) || Number(task && task.completedAt) || 0;
+      if (n > 0) return n;
+      const sun = anniversaryWeekStartForDoneMirror(moduleId, weekNum);
+      if (!sun) return 0;
+      const key = formatIsoDate(sun);
+      if (typeof habitDateToNoonCompletedAt === "function") {
+        return habitDateToNoonCompletedAt(key);
+      }
+      return habitDateToCompletedAt(key);
+    }
+
+    function resolveAnniversaryDoneMirrorPayload(syncKey, prefix, getTasks, weekLabelFn) {
+      const parsed = parseAnniversaryDoneSyncKey(syncKey);
+      if (!parsed) return null;
+      const t = (getTasks(parsed.weekNum) || []).find(function (x) {
+        return x && x.id === parsed.taskId;
+      });
+      const mainT = t && String(t.text || "").trim() ? t.text : "（任务）";
+      let sub = null;
+      let text = prefix + weekLabelFn(parsed.weekNum) + " · " + mainT;
+      if (parsed.kind === "sub") {
+        sub = t && t.subs ? t.subs.find(function (s) {
+          return s && s.id === parsed.subId;
+        }) : null;
+        const subT = sub && String(sub.text || "").trim() ? sub.text : "（子任务）";
+        text = prefix + weekLabelFn(parsed.weekNum) + " · " + mainT + " › " + subT;
+      }
+      return { parsed: parsed, task: t, sub: sub, text: text };
+    }
+
+    function touchAnniversaryDoneMirrorText(doneId, text) {
+      if (!doneId || !text) return false;
+      const entry = (state.done || []).find(function (d) {
+        return d && d.id === doneId;
+      });
+      if (entry && entry.text !== text) {
+        entry.text = text;
+        return true;
+      }
+      return false;
+    }
+
+    /**
+     * 他端同步：优先挂回已有 My Done，禁止用「今天/当前选中日」批量补洞。
+     * 无完成时刻时落到该周周日正午（与习惯补洞同一原则）。
+     */
+    function adoptOrCreateAnniversaryDoneMirror(moduleId, items, syncKey, text, weekNum, taskId, subId, kind, task, sub) {
+      const refId = coerceAnniversaryDoneRefItemId(items[syncKey]);
+      if (anniversaryDoneMirrorExists(refId)) {
+        return touchAnniversaryDoneMirrorText(refId, text);
+      }
+      const found = findDoneIdByAnniversarySyncKey(moduleId, syncKey);
+      if (found) {
+        items[syncKey] = found;
+        touchAnniversaryDoneMirrorText(found, text);
+        return true;
+      }
+      const ts = completedAtForAnniversaryDoneMirror(task, sub, moduleId, weekNum);
+      if (!(ts > 0) || !text) return false;
+      const newId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+      state.done.unshift({
+        id: newId,
+        text: text,
+        createdAt: ts,
+        completedAt: ts,
+        anniversaryTwMeta: {
+          module: moduleId,
+          syncKey: syncKey,
+          weekNum: weekNum,
+          taskId: taskId,
+          subId: subId,
+          kind: kind
+        }
+      });
+      items[syncKey] = newId;
+      return true;
+    }
+
+    function dropUndesiredAnniversaryDoneRefKeys(moduleId, items, desiredKeys) {
+      let changed = false;
+      Object.keys(items).forEach(function (k) {
+        if (k.indexOf("deepTime:") === 0) return;
+        if (desiredKeys.has(k)) return;
+        const doneId = coerceAnniversaryDoneRefItemId(items[k]) || findDoneIdByAnniversarySyncKey(moduleId, k);
+        if (doneId) {
+          state.done = state.done.filter(function (d) {
+            return !d || d.id !== doneId;
+          });
+        }
+        delete items[k];
+        changed = true;
+      });
+      return changed;
+    }
+
+    function sanitizeAnniversaryDoneRefItems() {
+      const ref = state.anniversaryDoneRef;
+      if (!ref || typeof ref !== "object") return false;
+      let changed = false;
+      Object.keys(ref).forEach(function (mod) {
+        const items = ref[mod] && ref[mod].items;
+        if (!items || typeof items !== "object") return;
+        Object.keys(items).forEach(function (k) {
+          if (k.indexOf("deepTime:") === 0) return;
+          const id = coerceAnniversaryDoneRefItemId(items[k]);
+          if (id && anniversaryDoneMirrorExists(id)) {
+            if (items[k] !== id) {
+              items[k] = id;
+              changed = true;
+            }
+            return;
+          }
+          const found = findDoneIdByAnniversarySyncKey(mod, k);
+          if (found) {
+            items[k] = found;
+            changed = true;
+            return;
+          }
+          if (items[k] === true || items[k] === 1 || items[k] === "true" || !id) {
+            delete items[k];
+            changed = true;
+          }
+        });
+      });
+      return changed;
+    }
+
+    function pruneDuplicateAnniversaryDoneMirrors() {
+      const done = Array.isArray(state.done) ? state.done : [];
+      const best = Object.create(null);
+      done.forEach(function (d) {
+        const m = d && d.anniversaryTwMeta;
+        if (!m || !m.module || !m.syncKey) return;
+        const k = m.module + "\0" + m.syncKey;
+        const prev = best[k];
+        const at = Number(d.completedAt) || 0;
+        if (!prev) {
+          best[k] = d;
+          return;
+        }
+        const prevAt = Number(prev.completedAt) || 0;
+        if (at > 0 && (prevAt <= 0 || at < prevAt)) best[k] = d;
+      });
+      const keepIds = new Set();
+      Object.keys(best).forEach(function (k) {
+        keepIds.add(best[k].id);
+      });
+      const next = [];
+      let changed = false;
+      done.forEach(function (d) {
+        const m = d && d.anniversaryTwMeta;
+        if (!m || !m.syncKey) {
+          next.push(d);
+          return;
+        }
+        if (keepIds.has(d.id)) next.push(d);
+        else changed = true;
+      });
+      if (!changed) return false;
+      state.done = next;
+      Object.keys(best).forEach(function (k) {
+        const d = best[k];
+        const m = d && d.anniversaryTwMeta;
+        if (!m || !m.module || !m.syncKey) return;
+        const ref = ensureAnniversaryDoneModuleRef(m.module);
+        if (ref.items[m.syncKey] !== d.id) {
+          ref.items[m.syncKey] = d.id;
+        }
+      });
+      return true;
+    }
+
+    /** 同一分钟涌出 3+ 条且不在该周内：视为同步误打到「今天」，改回周日起点 */
+    function restampBurstAnniversaryDoneMirrors() {
+      const byMinute = Object.create(null);
+      (state.done || []).forEach(function (d) {
+        if (!d || !d.anniversaryTwMeta) return;
+        const at = Number(d.completedAt) || 0;
+        if (!(at > 0)) return;
+        const bucket = String(Math.floor(at / 60000));
+        (byMinute[bucket] || (byMinute[bucket] = [])).push(d);
+      });
+      let changed = false;
+      Object.keys(byMinute).forEach(function (b) {
+        const arr = byMinute[b];
+        if (arr.length < 3) return;
+        arr.forEach(function (d) {
+          const m = d.anniversaryTwMeta;
+          const sun = anniversaryWeekStartForDoneMirror(m.module, m.weekNum);
+          if (!sun) return;
+          const weekKey = formatIsoDate(sun);
+          const weekTs =
+            typeof habitDateToNoonCompletedAt === "function"
+              ? habitDateToNoonCompletedAt(weekKey)
+              : habitDateToCompletedAt(weekKey);
+          const weekEnd = weekTs + 8 * 86400000;
+          const at = Number(d.completedAt) || 0;
+          if (at >= weekTs && at <= weekEnd) return;
+          if (weekTs && at !== weekTs) {
+            d.completedAt = weekTs;
+            d.createdAt = weekTs;
+            changed = true;
+          }
+        });
+      });
+      return changed;
+    }
+
+    function repairAnniversaryDoneMirrorsAfterCloud() {
+      let changed = false;
+      if (sanitizeAnniversaryDoneRefItems()) changed = true;
+      if (pruneDuplicateAnniversaryDoneMirrors()) changed = true;
+      if (restampBurstAnniversaryDoneMirrors()) changed = true;
+      return changed;
+    }
+
     function buildAnniversaryWeekLabelTw020(weekNum) {
       const s = tw020WeekStartSunday(weekNum);
       const e = tw020WeekEndSaturday(weekNum);
@@ -121864,12 +122204,37 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return "第" + weekNum + "周（" + formatIsoDate(s) + "～" + formatIsoDate(e) + "）";
     }
 
+    function syncAnniversaryModuleDoneDesired(moduleId, items, desiredKeys, prefix, getTasks, weekLabelFn) {
+      let changed = dropUndesiredAnniversaryDoneRefKeys(moduleId, items, desiredKeys);
+      desiredKeys.forEach(function (syncKey) {
+        const payload = resolveAnniversaryDoneMirrorPayload(syncKey, prefix, getTasks, weekLabelFn);
+        if (!payload) return;
+        if (
+          adoptOrCreateAnniversaryDoneMirror(
+            moduleId,
+            items,
+            syncKey,
+            payload.text,
+            payload.parsed.weekNum,
+            payload.parsed.taskId,
+            payload.parsed.subId,
+            payload.parsed.kind,
+            payload.task,
+            payload.sub
+          )
+        ) {
+          changed = true;
+        }
+      });
+      return changed;
+    }
+
     function syncAnniversaryTw020DoneList() {
       normalizeAnniversaryTw020State();
       const ref = ensureAnniversaryDoneModuleRef("tw020");
       const items = ref.items;
       const desiredKeys = new Set();
-      const prefix = "【" + ANNIVERSARY_TW020_FULL_NAME + "】";
+      const prefix = "【十二周年#20】";
       for (let w = 1; w <= 13; w++) {
         getTw020WeekTasks(w).forEach((task) => {
           if (!task) {
@@ -121885,72 +122250,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           });
         });
       }
-      let changed = false;
-      Object.keys(items).forEach((k) => {
-        if (k.indexOf("deepTime:") === 0) {
-          return;
-        }
-        if (!desiredKeys.has(k)) {
-          const doneId = items[k];
-          if (doneId) {
-            state.done = state.done.filter((d) => d.id !== doneId);
-          }
-          delete items[k];
-          changed = true;
-        }
-      });
-      const ts = habitDateToCompletedAt(selectedDoneDate || formatDateInputValue(new Date()));
-      desiredKeys.forEach((syncKey) => {
-        if (items[syncKey]) {
-          return;
-        }
-        const newId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-        let text = "";
-        let weekNum = 0;
-        let taskId = "";
-        let subId = null;
-        let kind = "main";
-        const mainM = /^main:(\d+):(.+)$/.exec(syncKey);
-        if (mainM) {
-          kind = "main";
-          weekNum = Number(mainM[1]);
-          taskId = mainM[2];
-          const t = getTw020WeekTasks(weekNum).find((x) => x.id === taskId);
-          const mainT = t && String(t.text || "").trim() ? t.text : "（任务）";
-          text = prefix + buildAnniversaryWeekLabelTw020(weekNum) + " · " + mainT;
-        } else {
-          const subM = /^sub:(\d+):([^:]+):(.+)$/.exec(syncKey);
-          if (!subM) {
-            return;
-          }
-          kind = "sub";
-          weekNum = Number(subM[1]);
-          taskId = subM[2];
-          subId = subM[3];
-          const t = getTw020WeekTasks(weekNum).find((x) => x.id === taskId);
-          const st = t && t.subs ? t.subs.find((s) => s.id === subId) : null;
-          const mainT = t && String(t.text || "").trim() ? t.text : "（任务）";
-          const subT = st && String(st.text || "").trim() ? st.text : "（子任务）";
-          text = prefix + buildAnniversaryWeekLabelTw020(weekNum) + " · " + mainT + " › " + subT;
-        }
-        state.done.unshift({
-          id: newId,
-          text,
-          createdAt: ts,
-          completedAt: ts,
-          anniversaryTwMeta: {
-            module: "tw020",
-            syncKey,
-            weekNum,
-            taskId,
-            subId,
-            kind
-          }
-        });
-        items[syncKey] = newId;
-        changed = true;
-      });
-      if (changed) {
+      if (syncAnniversaryModuleDoneDesired("tw020", items, desiredKeys, prefix, getTw020WeekTasks, buildAnniversaryWeekLabelTw020)) {
         saveState();
       }
     }
@@ -121976,72 +122276,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           });
         });
       }
-      let changed = false;
-      Object.keys(items).forEach((k) => {
-        if (k.indexOf("deepTime:") === 0) {
-          return;
-        }
-        if (!desiredKeys.has(k)) {
-          const doneId = items[k];
-          if (doneId) {
-            state.done = state.done.filter((d) => d.id !== doneId);
-          }
-          delete items[k];
-          changed = true;
-        }
-      });
-      const ts = habitDateToCompletedAt(selectedDoneDate || formatDateInputValue(new Date()));
-      desiredKeys.forEach((syncKey) => {
-        if (items[syncKey]) {
-          return;
-        }
-        const newId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-        let text = "";
-        let weekNum = 0;
-        let taskId = "";
-        let subId = null;
-        let kind = "main";
-        const mainM = /^main:(\d+):(.+)$/.exec(syncKey);
-        if (mainM) {
-          kind = "main";
-          weekNum = Number(mainM[1]);
-          taskId = mainM[2];
-          const t = getTw021WeekTasks(weekNum).find((x) => x.id === taskId);
-          const mainT = t && String(t.text || "").trim() ? t.text : "（任务）";
-          text = prefix + buildAnniversaryWeekLabelTw021(weekNum) + " · " + mainT;
-        } else {
-          const subM = /^sub:(\d+):([^:]+):(.+)$/.exec(syncKey);
-          if (!subM) {
-            return;
-          }
-          kind = "sub";
-          weekNum = Number(subM[1]);
-          taskId = subM[2];
-          subId = subM[3];
-          const t = getTw021WeekTasks(weekNum).find((x) => x.id === taskId);
-          const st = t && t.subs ? t.subs.find((s) => s.id === subId) : null;
-          const mainT = t && String(t.text || "").trim() ? t.text : "（任务）";
-          const subT = st && String(st.text || "").trim() ? st.text : "（子任务）";
-          text = prefix + buildAnniversaryWeekLabelTw021(weekNum) + " · " + mainT + " › " + subT;
-        }
-        state.done.unshift({
-          id: newId,
-          text,
-          createdAt: ts,
-          completedAt: ts,
-          anniversaryTwMeta: {
-            module: "tw021",
-            syncKey,
-            weekNum,
-            taskId,
-            subId,
-            kind
-          }
-        });
-        items[syncKey] = newId;
-        changed = true;
-      });
-      if (changed) {
+      if (syncAnniversaryModuleDoneDesired("tw021", items, desiredKeys, prefix, getTw021WeekTasks, buildAnniversaryWeekLabelTw021)) {
         saveState();
       }
     }
@@ -122067,72 +122302,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           });
         });
       }
-      let changed = false;
-      Object.keys(items).forEach((k) => {
-        if (k.indexOf("deepTime:") === 0) {
-          return;
-        }
-        if (!desiredKeys.has(k)) {
-          const doneId = items[k];
-          if (doneId) {
-            state.done = state.done.filter((d) => d.id !== doneId);
-          }
-          delete items[k];
-          changed = true;
-        }
-      });
-      const ts = habitDateToCompletedAt(selectedDoneDate || formatDateInputValue(new Date()));
-      desiredKeys.forEach((syncKey) => {
-        if (items[syncKey]) {
-          return;
-        }
-        const newId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-        let text = "";
-        let weekNum = 0;
-        let taskId = "";
-        let subId = null;
-        let kind = "main";
-        const mainM = /^main:(\d+):(.+)$/.exec(syncKey);
-        if (mainM) {
-          kind = "main";
-          weekNum = Number(mainM[1]);
-          taskId = mainM[2];
-          const t = getTw022WeekTasks(weekNum).find((x) => x.id === taskId);
-          const mainT = t && String(t.text || "").trim() ? t.text : "（任务）";
-          text = prefix + buildAnniversaryWeekLabelTw022(weekNum) + " · " + mainT;
-        } else {
-          const subM = /^sub:(\d+):([^:]+):(.+)$/.exec(syncKey);
-          if (!subM) {
-            return;
-          }
-          kind = "sub";
-          weekNum = Number(subM[1]);
-          taskId = subM[2];
-          subId = subM[3];
-          const t = getTw022WeekTasks(weekNum).find((x) => x.id === taskId);
-          const st = t && t.subs ? t.subs.find((s) => s.id === subId) : null;
-          const mainT = t && String(t.text || "").trim() ? t.text : "（任务）";
-          const subT = st && String(st.text || "").trim() ? st.text : "（子任务）";
-          text = prefix + buildAnniversaryWeekLabelTw022(weekNum) + " · " + mainT + " › " + subT;
-        }
-        state.done.unshift({
-          id: newId,
-          text,
-          createdAt: ts,
-          completedAt: ts,
-          anniversaryTwMeta: {
-            module: "tw022",
-            syncKey,
-            weekNum,
-            taskId,
-            subId,
-            kind
-          }
-        });
-        items[syncKey] = newId;
-        changed = true;
-      });
-      if (changed) {
+      if (syncAnniversaryModuleDoneDesired("tw022", items, desiredKeys, prefix, getTw022WeekTasks, buildAnniversaryWeekLabelTw022)) {
         saveState();
       }
     }
@@ -125426,8 +125596,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const anyDone = chapters.some((c) => c.done);
 
       if (allDone) {
+        const wasCompleted = book.status === "completed";
         book.status = "completed";
-        book.completedAt = Date.now();
+        if (!(Number(book.completedAt) > 0)) {
+          book.completedAt = wasCompleted && Number(book.createdAt) > 0 ? Number(book.createdAt) : Date.now();
+        }
         return "completed";
       }
       if (anyDone) {
@@ -125507,7 +125680,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!book) return;
       book.status = status;
       if (status === "completed") {
-        book.completedAt = Date.now();
+        if (!(Number(book.completedAt) > 0)) {
+          book.completedAt = Date.now();
+        }
       } else {
         delete book.completedAt;
       }
@@ -125770,6 +125945,53 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
+    function formatReadingPlanCompletedDateInputValue(book) {
+      const n = Number(book && book.completedAt);
+      if (!(n > 0)) return "";
+      return formatIsoDate(new Date(n));
+    }
+
+    function setReadingPlanBookCompletedDate(bookId, dateStr) {
+      const book = getReadingPlanBooks().find(function (b) {
+        return b.id === bookId;
+      });
+      if (!book || book.status !== "completed") return;
+      const key = String(dateStr || "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return;
+      const next =
+        typeof habitDateToNoonCompletedAt === "function"
+          ? habitDateToNoonCompletedAt(key)
+          : habitDateToCompletedAt(key);
+      if (!(next > 0) || next === Number(book.completedAt)) return;
+      book.completedAt = next;
+      touchReadingPlanBookUpdatedAt(book);
+      saveState();
+      renderReadingPlan();
+    }
+
+    function appendReadingPlanCompletedDateRow(parentEl, book) {
+      if (!parentEl || !book || book.status !== "completed") return;
+      const row = document.createElement("div");
+      row.className = "reading-plan-item-completed-date";
+      const label = document.createElement("span");
+      label.className = "reading-plan-item-completed-date__label";
+      label.textContent = "读完";
+      const input = document.createElement("input");
+      input.type = "date";
+      input.className = "reading-plan-item-completed-date__input done-filter";
+      input.value = formatReadingPlanCompletedDateInputValue(book);
+      input.setAttribute("aria-label", "阅读完成日期");
+      input.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+      });
+      input.addEventListener("change", function () {
+        setReadingPlanBookCompletedDate(book.id, input.value);
+      });
+      row.appendChild(label);
+      row.appendChild(input);
+      parentEl.appendChild(row);
+    }
+
     function appendReadingPlanChapterTextEl(cLi, book, chapter) {
       const txt = document.createElement("span");
       txt.className = "reading-plan-chapter-text";
@@ -125877,6 +126099,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         problemEl.className = "reading-plan-item-problem";
         syncReadingPlanProblemDisplay(problemEl, book.targetProblem);
         titleBlock.appendChild(problemEl);
+        appendReadingPlanCompletedDateRow(titleBlock, book);
 
         const toolbar = document.createElement("div");
         toolbar.className = "reading-plan-item-toolbar";
@@ -131163,7 +131386,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const ref = ensureAnniversaryDoneModuleRef(moduleKey);
       const items = ref.items;
       const desiredKeys = new Set();
-      const prefix = num === 20 ? "【" + ANNIVERSARY_TW020_FULL_NAME + "】" : "【十二周年#" + num + "】";
+      const prefix = "【十二周年#" + num + "】";
       for (let w = 1; w <= 13; w++) {
         getAnniversaryTwWeekTasks(moduleKey, w).forEach(function (task) {
           if (!task) return;
@@ -131173,72 +131396,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           });
         });
       }
-      let changed = false;
-      Object.keys(items).forEach(function (k) {
-        if (k.indexOf("deepTime:") === 0) return;
-        if (!desiredKeys.has(k)) {
-          const doneId = items[k];
-          if (doneId) state.done = state.done.filter(function (d) {
-            return d.id !== doneId;
-          });
-          delete items[k];
-          changed = true;
-        }
-      });
-      const ts = habitDateToCompletedAt(selectedDoneDate || formatDateInputValue(new Date()));
-      desiredKeys.forEach(function (syncKey) {
-        if (items[syncKey]) return;
-        const newId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-        let text = "";
-        let weekNum = 0;
-        let taskId = "";
-        let subId = null;
-        let kind = "main";
-        const mainM = /^main:(d+):(.+)$/.exec(syncKey);
-        if (mainM) {
-          kind = "main";
-          weekNum = Number(mainM[1]);
-          taskId = mainM[2];
-          const t = getAnniversaryTwWeekTasks(moduleKey, weekNum).find(function (x) {
-            return x.id === taskId;
-          });
-          const mainT = t && String(t.text || "").trim() ? t.text : "（任务）";
-          text = prefix + buildAnniversaryWeekLabelForModule(moduleKey, weekNum) + " · " + mainT;
-        } else {
-          const subM = /^sub:(d+):([^:]+):(.+)$/.exec(syncKey);
-          if (!subM) return;
-          kind = "sub";
-          weekNum = Number(subM[1]);
-          taskId = subM[2];
-          subId = subM[3];
-          const t = getAnniversaryTwWeekTasks(moduleKey, weekNum).find(function (x) {
-            return x.id === taskId;
-          });
-          const st = t && t.subs ? t.subs.find(function (s) {
-            return s.id === subId;
-          }) : null;
-          const mainT = t && String(t.text || "").trim() ? t.text : "（任务）";
-          const subT = st && String(st.text || "").trim() ? st.text : "（子任务）";
-          text = prefix + buildAnniversaryWeekLabelForModule(moduleKey, weekNum) + " · " + mainT + " › " + subT;
-        }
-        state.done.unshift({
-          id: newId,
-          text: text,
-          createdAt: ts,
-          completedAt: ts,
-          anniversaryTwMeta: {
-            module: moduleKey,
-            syncKey: syncKey,
-            weekNum: weekNum,
-            taskId: taskId,
-            subId: subId,
-            kind: kind
-          }
-        });
-        items[syncKey] = newId;
-        changed = true;
-      });
-      if (changed) saveState();
+      if (syncAnniversaryModuleDoneDesired(
+        moduleKey,
+        items,
+        desiredKeys,
+        prefix,
+        function (weekNum) { return getAnniversaryTwWeekTasks(moduleKey, weekNum); },
+        function (weekNum) { return buildAnniversaryWeekLabelForModule(moduleKey, weekNum); }
+      )) {
+        saveState();
+      }
     }
 
     /** 十二周年子 Tab 下：第12周截止倒数进度条（冲刺横幅下半样式） */
@@ -134497,10 +134664,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const t0 = beginCloudSyncPerf();
       try {
         const forceAll = Boolean(opts && opts.forceAll);
+        /** 先修同步误打到「今天」的镜像，再看签名；否则已脏数据会因签名未变而永不清理 */
+        const repaired = repairAnniversaryDoneMirrorsAfterCloud();
         const sig = getAnniversaryDoneSyncSignature();
         if (!forceAll && sig && sig === lastAnniversaryDoneSyncSig) {
           bumpHeavyModuleSliceCounter("anniversaryDoneSyncSkippedCount");
-          return false;
+          if (repaired) {
+            lastAnniversaryDoneSyncSig = getAnniversaryDoneSyncSignature();
+            saveState();
+          }
+          return repaired;
         }
         bumpHeavyModuleSliceCounter("anniversaryDoneSyncPassCount");
         function runOneScan(fn) {
@@ -134541,6 +134714,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           syncAnniversaryDeepTimeDoneList("tw022", "022");
         });
         lastAnniversaryDoneSyncSig = getAnniversaryDoneSyncSignature();
+        if (repaired) saveState();
         return true;
       } finally {
         addCloudSyncPerf(null, "anniversaryDoneSyncMs", t0);
