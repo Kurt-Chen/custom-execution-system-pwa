@@ -21359,6 +21359,12 @@
       vertical-align: baseline;
     }
 
+    #forgeModule .forge-task-card .forge-task-text:has(> .forge-task-text-cn) > .forge-task-watch-countdown {
+      display: inline-flex;
+      margin-left: 1ch;
+      vertical-align: baseline;
+    }
+
     /* Forge 任务卡：累计数后的「备注」折叠说明（腹肌轮等）
        面板挂在 .forge-task-card 下（非 top 内），避免桌面三列 grid 只占左列 */
     #forgeModule .forge-task-card .forge-task-remark-disclosure {
@@ -21655,7 +21661,7 @@
       /* Mind 手机端：累计次数/分钟仍写入数据，卡片上先不显示 */
       #forgeModule #forgeMindCardBody .forge-task-lifetime-total,
       #forgeModule #forgeMindCardBody .forge-task-lifetime-minutes,
-      #forgeModule #forgeMindCardBody .forge-task-watch-countdown {
+      #forgeModule .forge-task-watch-countdown {
         display: none !important;
       }
 
@@ -79484,7 +79490,7 @@
                   </div>
 
                 </div>
-                <div class="forge-task-row forge-task-card forge-task-card--body" data-forge-wp-goal-sync="true">
+                <div class="forge-task-row forge-task-card forge-task-card--body" data-forge-wp-goal-sync="true" data-forge-wp-row-key="平板支撑">
 
                   <div class="forge-task-card-top">
 
@@ -87829,7 +87835,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260902d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260902e";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -88832,7 +88838,11 @@
       rolloverMs: 0,
       weeklyPlanUiRenderCount: 0,
       weeklyPlanUiSkippedCount: 0,
-      weeklyPlanUiRenderMs: 0
+      weeklyPlanUiRenderMs: 0,
+      hygienePassCount: 0,
+      hygieneSkippedCount: 0,
+      persistFlushCount: 0,
+      persistDeferredCount: 0
     };
 
     function isCloudSyncPerfEnabled() {
@@ -106123,9 +106133,19 @@
         .forEach(syncForgeCcArtDetailsDailyMinShortfall);
     }
 
-    /** Mind · Psycho-Cybernetics：绿色累计分钟后挂「智能手表倒计时」（手机端 CSS 隐藏） */
+    /** 需要桌面「智能手表倒计时」胶囊：Psycho-Cybernetics 全卡 + 平板支撑 */
+    function rowWantsForgeWatchCountdown(row) {
+      if (!row) return false;
+      if (row.closest("#forgeMindPanelPc")) return true;
+      const hint = String(row.getAttribute("data-forge-wp-row-key") || "");
+      if (/平板支撑/.test(hint)) return true;
+      const text = row.querySelector(".forge-task-text");
+      return !!(text && /平板支撑/.test(String(text.textContent || "")));
+    }
+
+    /** 绿色累计分钟 / Body 终身累计后挂「智能手表倒计时」（手机端 CSS 隐藏） */
     function placeForgeMindWatchCountdownCapsule(row, titleWrap, lifeEl, lifeMinEl) {
-      if (!row || !titleWrap || !row.closest("#forgeMindPanelPc")) {
+      if (!row || !titleWrap || !rowWantsForgeWatchCountdown(row)) {
         const leftover = row && row.querySelector(":scope .forge-task-watch-countdown");
         if (leftover) leftover.remove();
         return;
@@ -106140,12 +106160,14 @@
       const minVisible = !!(lifeMinEl && !lifeMinEl.classList.contains("forge-task-lifetime-minutes--hide"));
       const lifeVisible = !!(lifeEl && !lifeEl.classList.contains("forge-task-lifetime-total--hide"));
       const taskText = titleWrap.querySelector(".forge-task-text");
-      const anchor = minVisible ? lifeMinEl : lifeVisible ? lifeEl : taskText;
+      const cn = taskText && taskText.querySelector(":scope > .forge-task-text-cn");
+      const anchor = minVisible ? lifeMinEl : lifeVisible ? lifeEl : cn || taskText;
       if (!anchor) {
         if (watchEl.parentNode !== titleWrap) titleWrap.appendChild(watchEl);
         return;
       }
-      if (watchEl.parentNode !== titleWrap || watchEl.previousElementSibling !== anchor) {
+      const expectedParent = anchor.parentNode;
+      if (watchEl.parentNode !== expectedParent || watchEl.previousElementSibling !== anchor) {
         anchor.insertAdjacentElement("afterend", watchEl);
       }
     }
