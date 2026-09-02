@@ -40266,12 +40266,35 @@
 
     /* 称体重·测体脂：标题旁晨间流程胶囊 */
     #habitRoutineModule [data-habit-key="weightAndBodyFat"] .habit-en-title-capsule.habit-en-title-capsule--wakeup-scale {
+      margin-left: 0.5ch;
+      vertical-align: baseline;
+      color: #0f766e;
+      background: #f0fdfa;
+      border-color: rgba(13, 148, 136, 0.28);
+      font-weight: 700;
+    }
+
+    /* 称体重：每周减1斤（普通说明胶囊，与晨间流程同组） */
+    #habitRoutineModule [data-habit-key="weightAndBodyFat"] .habit-en-title-capsule.habit-en-title-capsule--lose-1jin {
       margin-left: 1ch;
       vertical-align: baseline;
       color: #0f766e;
       background: #f0fdfa;
       border-color: rgba(13, 148, 136, 0.28);
       font-weight: 700;
+    }
+
+    /* 称体重：上周均值（显眼统计；手机 --desktop-only 隐藏） */
+    #habitRoutineModule [data-habit-key="weightAndBodyFat"] .habit-en-title-capsule.habit-en-title-capsule--weight-week-avg {
+      margin-left: 0.45ch;
+      vertical-align: baseline;
+      color: #fff;
+      background: #059669;
+      border-color: rgba(4, 120, 87, 0.55);
+      font-size: 12px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      padding: 3px 10px;
     }
 
     /* 牙线：品牌提醒胶囊 */
@@ -45534,6 +45557,12 @@
         flex: 0 0 auto;
         order: 10;
         margin-left: 0;
+      }
+
+      /* 称体重上周均值：留在次数右侧，不跟说明胶囊推到最右 */
+      #habitRoutineModule .habit-en-row .submodule-title > .habit-en-title-capsule--weight-week-avg {
+        order: 3;
+        margin-left: 0.45ch;
       }
 
       #habitRoutineModule .habit-en-row [class*="-title-wrap"] {
@@ -74424,7 +74453,7 @@
                     <div class="habit-health-weight-head">
                       <div class="habit-health-weight-titles">
                         <div class="habit-health-weight-title-wrap">
-                          <h3 class="submodule-title">称体重·测体脂<span class="habit-en-title-capsule habit-en-title-capsule--wakeup-scale" aria-label="起床后先尿尿再上体脂秤">起床→尿尿→上体脂秤</span></h3>
+                          <h3 class="submodule-title">称体重·测体脂<span class="habit-en-title-capsule habit-en-title-capsule--desktop-only habit-en-title-capsule--weight-week-avg" aria-label="上周称重均值">上周均值：—</span><span class="habit-en-title-capsule habit-en-title-capsule--lose-1jin" aria-label="每周减1斤">每周减1斤</span><span class="habit-en-title-capsule habit-en-title-capsule--wakeup-scale" aria-label="起床后先尿尿再上体脂秤">起床→尿尿→上体脂秤</span></h3>
                         </div>
                       </div>
                     </div>
@@ -97917,6 +97946,46 @@
         if (Number.isFinite(n) && n > 0) return n;
       }
       return null;
+    }
+
+    /** 上周（周一至周日）有体重斤数的日期均值；无数据返回 null */
+    function getWeightBodyFatLastWeekAverageJin() {
+      const thisMonday = getHabitEnWeekMonday(new Date());
+      const lastMonday = new Date(
+        thisMonday.getFullYear(),
+        thisMonday.getMonth(),
+        thisMonday.getDate() - 7
+      );
+      let sum = 0;
+      let n = 0;
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(lastMonday.getFullYear(), lastMonday.getMonth(), lastMonday.getDate() + i);
+        const dk = formatDateInputValue(d);
+        const day = state.habitCheckins && state.habitCheckins[dk];
+        const jin = getHabitWeightJinFromValue(day && day.weightAndBodyFat);
+        if (jin == null) continue;
+        sum += jin;
+        n += 1;
+      }
+      if (!n) return null;
+      return sum / n;
+    }
+
+    /** 称体重标题：上周均值胶囊（仅桌面显示，贴终身次数右侧） */
+    function syncWeightLastWeekAvgCapsule(card) {
+      if (!card) return;
+      const cap = card.querySelector(".habit-en-title-capsule--weight-week-avg");
+      if (!cap) return;
+      const avg = getWeightBodyFatLastWeekAverageJin();
+      const label = avg == null ? "—" : formatHabitWeekWeightLabel(avg);
+      cap.textContent = "上周均值：" + label;
+      cap.setAttribute("aria-label", avg == null ? "上周称重均值：无数据" : "上周称重均值 " + label + " 斤");
+      const titleEl = getHabitCardTitleElementForLifetimeCount(card);
+      if (!titleEl || !titleEl.contains(cap)) return;
+      const lifeEl = titleEl.querySelector(":scope > .habit-title-lifetime-num");
+      if (lifeEl && cap.previousElementSibling !== lifeEl) {
+        lifeEl.insertAdjacentElement("afterend", cap);
+      }
     }
 
     /** Done 条目 completedAt 落在同一天时，补历史打卡时刻 */
@@ -135905,6 +135974,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (el.classList.contains("habit-title-daily-min")) return false;
       if (el.classList.contains("habit-title-lifetime-minutes")) return false;
       if (el.classList.contains("habit-en-title-capsule--daily-30min")) return false;
+      if (el.classList.contains("habit-en-title-capsule--weight-week-avg")) return false;
       if (el.classList.contains("habit-en-experiment-lifetime-ratio")) return false;
       return (
         el.classList.contains("habit-en-title-capsule") ||
@@ -136554,6 +136624,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           }
           ensureAndUpdateHabitTitleDailyMin(card, key, todayKey);
           syncHabitStaticDailyStatCapsule(card, key, todayKey);
+          if (key === "weightAndBodyFat") {
+            syncWeightLastWeekAvgCapsule(card);
+          }
         }
         const dayData = state.habitCheckins[todayKey] || {};
         const checked = isHabitCheckedOnDate(todayKey, key);
