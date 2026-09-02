@@ -87897,7 +87897,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260902h";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260902i";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -88790,6 +88790,10 @@
     let weeklyPlanDnD = null;
     /** 周计划子步骤展开态（仅内存，刷新后默认折叠） */
     let weeklyPlanMicroExpandedIds = new Set();
+    /** My Done 已结束时段：用户展开后记住，冲刺刷新 / render 重建不得立刻折回（仅内存） */
+    let donePastBlockExpandedKeys = new Set();
+    /** My Done 任务行正文展开（仅内存） */
+    let doneTextExpandedIds = new Set();
     /** Closed List 当日条目拖拽：{ dragId } */
     let ageGoalsEditMode = false;
     let closedListCompleteAnimIds = new Set();
@@ -105357,6 +105361,7 @@
       const journal = li.querySelector(".done-interstitial-journal");
       if (!journal) return;
       li.classList.add("done-text-expanded");
+      if (idStr) doneTextExpandedIds.add(idStr);
       const bodyEl = li.closest(".done-time-block-body");
       if (bodyEl) {
         requestAnimationFrame(function () {
@@ -115691,6 +115696,36 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       updateDoneSleepCountdownBarDom();
     }
 
+    function getDonePastBlockExpandKey(blockKey, dateKey) {
+      const date =
+        dateKey ||
+        (typeof selectedDoneDate !== "undefined" && selectedDoneDate
+          ? selectedDoneDate
+          : "") ||
+        "";
+      return String(date) + ":" + String(blockKey || "");
+    }
+
+    function isDonePastBlockUserExpanded(blockKey, dateKey) {
+      return donePastBlockExpandedKeys.has(getDonePastBlockExpandKey(blockKey, dateKey));
+    }
+
+    function setDonePastBlockUserExpanded(blockKey, dateKey, expanded) {
+      const key = getDonePastBlockExpandKey(blockKey, dateKey);
+      if (!key || key === ":") return;
+      if (expanded) donePastBlockExpandedKeys.add(key);
+      else donePastBlockExpandedKeys.delete(key);
+    }
+
+    /** 已结束时段：按用户记忆恢复展开，避免 apply sprint 层时被清回默认折叠 */
+    function applyDonePastBlockExpandedClass(blockLi, blockKey) {
+      if (!blockLi) return;
+      const want = isDonePastBlockUserExpanded(blockKey);
+      blockLi.classList.toggle("done-time-block--past-expanded", want);
+      const head = blockLi.querySelector(".done-time-block-head");
+      if (head) head.setAttribute("aria-expanded", want ? "true" : "false");
+    }
+
     /** 当日已结束时段：点击标题行切换展开（仅 #doneList、sprint-past；历史日期不打 sprint 类，不受影响） */
     function ensureDonePastFoldClickSetup() {
       const ul = document.getElementById("doneList");
@@ -115703,6 +115738,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (!li || !li.classList.contains("done-time-block--sprint-past")) return;
         ev.preventDefault();
         const expanded = li.classList.toggle("done-time-block--past-expanded");
+        const blockKey = li.getAttribute("data-done-block-key") || "";
+        setDonePastBlockUserExpanded(blockKey, selectedDoneDate, expanded);
         head.setAttribute("aria-expanded", expanded ? "true" : "false");
         if (typeof syncAllDoneTimeBlockRowHeights === "function") {
           syncAllDoneTimeBlockRowHeights(ul);
@@ -115763,10 +115800,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         blockLi.classList.add("done-time-block--sprint-future");
       } else if (phase === "past") {
         blockLi.classList.add("done-time-block--sprint-past");
-        const headPast = body.querySelector(".done-time-block-head");
-        if (headPast) {
-          headPast.setAttribute("aria-expanded", "false");
-        }
+        applyDonePastBlockExpandedClass(blockLi, block && block.key);
       } else {
         blockLi.classList.add("done-time-block--sprint-current");
         blockLi.setAttribute("data-done-block-start-min", String(sm));
@@ -117654,6 +117688,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         li.classList.add("done");
         li.classList.add("timeline-item");
         li.setAttribute("data-done-id", String(task.id || ""));
+        if (task.id && doneTextExpandedIds.has(String(task.id))) {
+          li.classList.add("done-text-expanded");
+        }
         if (task.kind === "timeReflection") {
           li.classList.add("timeline-item--reminder");
           li.classList.add("done-time-block-item--reminder");
@@ -118021,6 +118058,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           if (ev.target.closest(".actions")) return;
           if (ev.target.closest(".done-interstitial-journal")) return;
           li.classList.toggle("done-text-expanded");
+          const textExpanded = li.classList.contains("done-text-expanded");
+          if (task.id) {
+            if (textExpanded) doneTextExpandedIds.add(String(task.id));
+            else doneTextExpandedIds.delete(String(task.id));
+          }
           const bodyEl = li.closest(".done-time-block-body");
           if (bodyEl && !(doneRowOpts && doneRowOpts.timeBlockFlexLayout)) {
             const timeListEl = bodyEl.querySelector(".done-time-block-time-list");
@@ -130027,8 +130069,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function bindAnniversaryTwWeekHeadMobileTap(headEl, weekToggleBtn) {
-      headEl.addEventListener("click", function () {
+      headEl.addEventListener("click", function (e) {
         if (!window.matchMedia("(max-width: 640px)").matches) {
+          return;
+        }
+        if (e.target.closest && e.target.closest("button")) {
           return;
         }
         weekToggleBtn.click();
