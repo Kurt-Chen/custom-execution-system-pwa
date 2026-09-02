@@ -40284,13 +40284,13 @@
       font-weight: 700;
     }
 
-    /* 称体重：上周均值（显眼统计；手机 --desktop-only 隐藏） */
+    /* 称体重：上周均值（显眼统计；琥珀色与绿色打卡区分；手机 --desktop-only 隐藏） */
     #habitRoutineModule [data-habit-key="weightAndBodyFat"] .habit-en-title-capsule.habit-en-title-capsule--weight-week-avg {
       margin-left: 0.45ch;
       vertical-align: baseline;
       color: #fff;
-      background: #059669;
-      border-color: rgba(4, 120, 87, 0.55);
+      background: #d97706;
+      border-color: rgba(180, 83, 9, 0.55);
       font-size: 12px;
       font-weight: 800;
       font-variant-numeric: tabular-nums;
@@ -47117,6 +47117,26 @@
       overflow: hidden;
     }
 
+    /* 称体重周日格：未打卡显示「本周均值」（琥珀字，区别于体重数字） */
+    #habitRoutineModule .habit-en-week-bar--metric .habit-en-week-cell--week-avg-pending {
+      color: #b45309;
+      background: #fffbeb;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+    }
+
+    #habitRoutineModule .habit-en-week-bar--metric .habit-en-week-cell--week-avg-pending.habit-en-week-cell--today {
+      color: #b45309;
+      background: #fef3c7;
+    }
+
+    /* 称体重周日格：打卡后显示「均值：xx」 */
+    #habitRoutineModule .habit-en-week-bar--metric .habit-en-week-cell--week-avg {
+      font-size: 10px;
+      letter-spacing: -0.04em;
+    }
+
     /* 英语习惯：过去周格显示 词/min，当天格仍放次数+减一次 */
     #habitRoutineModule .habit-en-week-bar--english-qty .habit-en-week-cell:not(.habit-en-week-cell--today) {
       padding: 0 1px;
@@ -47313,6 +47333,11 @@
         font-size: 12px;
       }
 
+      #habitRoutineModule #habitHabitsBundle .habit-en-week-bar--metric .habit-en-week-cell--week-avg,
+      #habitRoutineModule #habitHabitsBundle .habit-en-week-bar--metric .habit-en-week-cell--week-avg-pending {
+        font-size: 10px;
+      }
+
       /* 周打卡条：七格与卡片内容区等宽，左右与其它卡片对齐 */
       #habitRoutineModule #habitHabitsBundle .habit-en-row .habit-en-week-bar {
         width: 100%;
@@ -47376,6 +47401,13 @@
       #habitRoutineModule #habitHabitsBundle .habit-en-week-stat-capsule {
         font-size: 11px;
         padding: 0 5px;
+      }
+
+      #habitRoutineModule .habit-en-week-bar--metric .habit-en-week-cell--week-avg,
+      #habitRoutineModule .habit-en-week-bar--metric .habit-en-week-cell--week-avg-pending,
+      #habitRoutineModule #habitHabitsBundle .habit-en-week-bar--metric .habit-en-week-cell--week-avg,
+      #habitRoutineModule #habitHabitsBundle .habit-en-week-bar--metric .habit-en-week-cell--week-avg-pending {
+        font-size: 10px;
       }
 
       #habitRoutineModule .habit-en-week-cell--has-punch-meta,
@@ -47666,6 +47698,11 @@
         min-height: 28px;
         height: 28px;
         font-size: 11px;
+      }
+
+      #habitRoutineModule .habit-en-week-bar--metric .habit-en-week-cell--week-avg,
+      #habitRoutineModule .habit-en-week-bar--metric .habit-en-week-cell--week-avg-pending {
+        font-size: 10px;
       }
 
       #habitRoutineModule .habit-en-row > .habit-en-week-bar {
@@ -97948,18 +97985,13 @@
       return null;
     }
 
-    /** 上周（周一至周日）有体重斤数的日期均值；无数据返回 null */
-    function getWeightBodyFatLastWeekAverageJin() {
-      const thisMonday = getHabitEnWeekMonday(new Date());
-      const lastMonday = new Date(
-        thisMonday.getFullYear(),
-        thisMonday.getMonth(),
-        thisMonday.getDate() - 7
-      );
+    /** 指定周（周一至周日）有体重斤数的日期均值；无数据返回 null */
+    function getWeightBodyFatWeekAverageJin(weekMonday) {
+      if (!weekMonday) return null;
       let sum = 0;
       let n = 0;
       for (let i = 0; i < 7; i++) {
-        const d = new Date(lastMonday.getFullYear(), lastMonday.getMonth(), lastMonday.getDate() + i);
+        const d = new Date(weekMonday.getFullYear(), weekMonday.getMonth(), weekMonday.getDate() + i);
         const dk = formatDateInputValue(d);
         const day = state.habitCheckins && state.habitCheckins[dk];
         const jin = getHabitWeightJinFromValue(day && day.weightAndBodyFat);
@@ -97969,6 +98001,17 @@
       }
       if (!n) return null;
       return sum / n;
+    }
+
+    /** 上周（周一至周日）有体重斤数的日期均值；无数据返回 null */
+    function getWeightBodyFatLastWeekAverageJin() {
+      const thisMonday = getHabitEnWeekMonday(new Date());
+      const lastMonday = new Date(
+        thisMonday.getFullYear(),
+        thisMonday.getMonth(),
+        thisMonday.getDate() - 7
+      );
+      return getWeightBodyFatWeekAverageJin(lastMonday);
     }
 
     /** 称体重标题：上周均值胶囊（仅桌面显示，贴终身次数右侧） */
@@ -135421,6 +135464,26 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           cellLabel = formatHabitWeekWeightLabel(getHabitWeightJinFromValue(hv));
           if (cellLabel) tip = dk + " · " + cellLabel + " 斤";
         }
+        if (isHabitWeekWeightKey(habitKey) && i === 6) {
+          const thisWeekAvg = getWeightBodyFatWeekAverageJin(weekMonday);
+          const avgLabel = thisWeekAvg == null ? "—" : formatHabitWeekWeightLabel(thisWeekAvg);
+          if (done) {
+            cell.classList.add("habit-en-week-cell--week-avg");
+            cellLabel = "均值：" + avgLabel;
+            const dayW = formatHabitWeekWeightLabel(
+              getHabitWeightJinFromValue((state.habitCheckins[dk] || {})[habitKey])
+            );
+            tip =
+              dk +
+              (dayW ? " · " + dayW + " 斤" : " · 已打卡") +
+              " · 本周均值 " +
+              avgLabel;
+          } else {
+            cell.classList.add("habit-en-week-cell--week-avg-pending");
+            cellLabel = "本周均值";
+            tip = dk + " · 本周均值" + (thisWeekAvg == null ? "" : " " + avgLabel + " 斤");
+          }
+        }
         cell.title = tip;
         if (isToday) {
           if (done && isHabitWaterKey(habitKey) && !cellLabel) {
@@ -135442,7 +135505,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             cell.textContent = cellLabel || "✓";
           }
         } else {
-          cell.textContent = "";
+          cell.textContent = cellLabel || "";
         }
         row.appendChild(cell);
       }
