@@ -21318,6 +21318,24 @@
       vertical-align: baseline;
     }
 
+    /* Mind · Psycho-Cybernetics：绿色累计分钟后「智能手表倒计时」（桌面；手机见 max-width:767） */
+    #forgeModule .forge-task-watch-countdown {
+      display: inline-flex;
+      align-items: center;
+      margin-left: 1ch;
+      padding: 2px 8px 2px 7px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.25;
+      color: #1d4ed8;
+      background: #eff6ff;
+      border: 1px solid rgba(37, 99, 235, 0.28);
+      white-space: nowrap;
+      pointer-events: none;
+      vertical-align: baseline;
+    }
+
     /* Forge 全系：×累计紧挨主标题左对齐，间隔 1ch（手机端累计仍隐藏，见 max-width:767） */
     #forgeModule .forge-task-card .forge-task-card-title-wrap {
       display: block;
@@ -21636,7 +21654,8 @@
     @media (max-width: 767px) {
       /* Mind 手机端：累计次数/分钟仍写入数据，卡片上先不显示 */
       #forgeModule #forgeMindCardBody .forge-task-lifetime-total,
-      #forgeModule #forgeMindCardBody .forge-task-lifetime-minutes {
+      #forgeModule #forgeMindCardBody .forge-task-lifetime-minutes,
+      #forgeModule #forgeMindCardBody .forge-task-watch-countdown {
         display: none !important;
       }
 
@@ -84879,6 +84898,10 @@
                   <span class="values-zh">长期主义 · 无限游戏 · 复利思维</span>
                   <span class="mission-en"><em>(Long-Termism · Infinite Game · Compounding Mindset)</em></span>
                 </li>
+                <li>
+                  <span class="values-zh">真实地活 · 自由地选 · 尽情地体验</span>
+                  <span class="mission-en"><em>(Live Authentically · Choose Freely · Experience Fully)</em></span>
+                </li>
               </ul>
             </div>
           </section>
@@ -87806,7 +87829,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260901g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260902d";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -88656,6 +88679,9 @@
     /** Purpose & Values 顶栏子 Tab：用于快捷跳转到 Extreme Agency 等面板 */
     let activatePurposeSubTab = null;
     let activePrimaryModuleKey = "dynamic";
+    /** 周计划 / 十二周年 → Done 镜像：签名没变则跳过全量扫描 */
+    let lastWeeklyPlanDoneSyncSig = "";
+    let lastAnniversaryDoneSyncSig = "";
 
     let selectedDoneDate = "";
     let selectedClosedListDate = "";
@@ -88699,7 +88725,10 @@
     let cloudSyncTxnInFlight = false;
     let cloudSyncTxnQueued = null;
     let cloudSyncSafetyPullTimer = null;
+    let cloudSyncPendingRetryTimer = null;
     let cloudSyncLastPullAt = 0;
+    /** 切到后台的时刻：用来区分「短暂切应用」和「久置后重开」 */
+    let cloudSyncHiddenAt = 0;
     /** 后台错过 5 分钟安全网时记一笔，回前台立刻补拉 */
     let cloudSyncSafetyPullDue = false;
     let cloudSyncInitInFlight = false;
@@ -88733,22 +88762,29 @@
     let renderDepth = 0;
     let renderSuppressCloudUntil = 0;
     let uiRebuildSnapGen = 0;
-    /** 用户正在编辑时推迟全量 render，避免 innerHTML 重建清空输入 */
+    /** 用户正在编辑或展开操作菜单时推迟全量 render，避免后台同步拆掉当前操作 */
     let renderDeferredWhileEditing = false;
     /** 向后衡量保存后：本轮 render 保持刚写入的周期键，避免立刻跳到下一期导致表单被清空 */
     let backwardMeasureHoldPeriodAfterSave = null;
     let renderWhenEditingEndsTimer = null;
     const RENDER_WHEN_EDITING_POLL_MS = 400;
-    /** 全量 durable 写入最小间隔（防写风暴）；5 分钟改为安全网 Pull，不再当作唯一 Push 触发 */
-    const CLOUD_SYNC_FULL_PUSH_MIN_INTERVAL_MS = 20000;
-    const CLOUD_SYNC_FULL_PUSH_IDLE_MS = 20000;
+    /**
+     * 同步策略：可以慢一点，但不能同步错。
+     * 同机连用只走 pulse（今日增量）；全量 v2 留给冷启动 / 久置回前台 / 空闲落盘。
+     */
+    const CLOUD_SYNC_FULL_PUSH_MIN_INTERVAL_MS = 3 * 60 * 1000;
+    const CLOUD_SYNC_FULL_PUSH_IDLE_MS = 2 * 60 * 1000;
     /** 本地改动后后台 Push 防抖（只延迟 Firebase，不阻塞 UI） */
     const CLOUD_SYNC_PUSH_DEBOUNCE_MS = 2000;
     const CLOUD_SYNC_SAFETY_PULL_INTERVAL_MS = 5 * 60 * 1000;
-    /** 回前台补拉最短间隔，避免切应用连打；5 分钟安全网仍是硬上限 */
-    const CLOUD_SYNC_FOREGROUND_PULL_MIN_MS = 12000;
-    /** 本地连写时若刚拉过云，跳过 Pull，只做 Batch Push */
-    const CLOUD_SYNC_LOCAL_EDIT_SKIP_PULL_MS = 45000;
+    /** 短暂切应用：不到这个间隔不拉全房间，只补 pulse */
+    const CLOUD_SYNC_FOREGROUND_PULL_MIN_MS = 90 * 1000;
+    /** 藏后台超过此时长视为「久置」，回前台做增量对齐 */
+    const CLOUD_SYNC_LONG_IDLE_MS = 3 * 60 * 1000;
+    /** 本机连写时若刚拉过云，跳过 Pull，只推 pulse */
+    const CLOUD_SYNC_LOCAL_EDIT_SKIP_PULL_MS = 3 * 60 * 1000;
+    /** 有未上传本地改动时，后台自动重试（断网不丢） */
+    const CLOUD_SYNC_PENDING_RETRY_MS = 45 * 1000;
     /**
      * 只读性能探针：默认开启。关闭：localStorage.setItem('todo-app-cloud-sync-perf-enabled-v1','0')
      * 或 setCloudSyncPerfEnabled(false)。不改变同步结果，只计数/计时。
@@ -89106,32 +89142,40 @@
           if (hasCloudSyncPendingUpload()) {
             scheduleCloudSyncPush();
           }
-          const pendingHash = serializeStateForCloud();
-          if (pendingHash && pendingHash !== cloudSyncLastHash) {
-            scheduleCloudSyncPush();
-          }
         }
       });
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "hidden") {
+          cloudSyncHiddenAt = Date.now();
           flushCloudSyncPulseImmediate();
           return;
         }
+        const hiddenMs = cloudSyncHiddenAt > 0 ? Date.now() - cloudSyncHiddenAt : 0;
+        cloudSyncHiddenAt = 0;
         refresh();
         refreshCloudSyncPulseFromServer();
-        requestCloudSyncSafetyPull("foreground");
+        if (hiddenMs >= CLOUD_SYNC_LONG_IDLE_MS) {
+          requestCloudSyncSafetyPull("foreground-long");
+          if (hasCloudSyncPendingUpload()) {
+            scheduleCloudSyncFullPushDeferred();
+          }
+        } else {
+          requestCloudSyncSafetyPull("foreground");
+        }
         if (!cloudSyncReady || !cloudSyncRef || cloudSyncSuppressPush) return;
-        const pendingHash = serializeStateForCloud();
-        if (pendingHash && pendingHash !== cloudSyncLastHash) {
+        if (hasCloudSyncPendingUpload()) {
           scheduleCloudSyncPush();
         }
       });
       window.addEventListener("pagehide", function () {
+        if (!cloudSyncHiddenAt) cloudSyncHiddenAt = Date.now();
         flushCloudSyncPulseImmediate();
       });
       window.addEventListener("pageshow", function () {
         refreshCloudSyncPulseFromServer();
-        requestCloudSyncSafetyPull("foreground");
+        const hiddenMs = cloudSyncHiddenAt > 0 ? Date.now() - cloudSyncHiddenAt : 0;
+        cloudSyncHiddenAt = 0;
+        requestCloudSyncSafetyPull(hiddenMs >= CLOUD_SYNC_LONG_IDLE_MS ? "foreground-long" : "foreground");
       });
       window.addEventListener("offline", refresh);
       refresh();
@@ -89421,11 +89465,11 @@
           return;
         }
         materializePayloadDoneForMerge(payload);
-        absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
+        const absorbed = absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
         if (ua > 0) setCloudSyncCursor(ua);
         markCloudSyncSuccess(ua);
         cloudSyncLastErrorMsg = "";
-        scheduleCloudSyncRenderDebounced();
+        if (absorbed) scheduleCloudSyncRenderDebounced();
         restoreCloudSyncConnectedBadgeUnlessError();
       } catch (err) {
         noteCloudSyncHistoryMergeFailure(err, "core Delta");
@@ -91443,6 +91487,10 @@
         pulseNode.state.readingPlan.books.length > 0;
       const pulseHasMoveBreak =
         pulseNode.state && pulseNode.state.moveBreakDay && typeof pulseNode.state.moveBreakDay === "object";
+      /* 本机刚写出的 pulse 回声：数据已在本地，不再整页刷新 */
+      if (pulseNode.updatedBy && pulseNode.updatedBy === cloudSyncClientId) {
+        return true;
+      }
       if (pulseHasHabit || pulseHasForge || pulseHasDeadline || pulseHasReadingPlan || pulseHasMoveBreak) {
         if (!shouldSkipCloudUiRender()) render();
       } else {
@@ -91491,14 +91539,91 @@
       });
     }
 
-    /** 云同步触发的重绘：只防重入与短间隔连刷，不再用整包/计数指纹 stringify */
+    /** 操作菜单所在宿主的稳定键：展开态只活在 DOM 里，全量重绘后靠这个还原 */
+    function computeUiActionChromeKey(wrap) {
+      if (!wrap || typeof wrap.closest !== "function") return "";
+      const host = wrap.closest(
+        "[data-closed-list-id], [data-done-id], [data-id], [data-task-id], [data-item-id], [data-habit-key], [data-done-block-key], li, .lane-task-card, .tw020-task-block, .weekly-plan-micro-item, .daily-win-modern-card, .forge-task-card"
+      );
+      if (!host) return "";
+      let idPart = "";
+      if (host.dataset && host.dataset.closedListId) idPart = "cl:" + host.dataset.closedListId;
+      else if (host.getAttribute("data-done-id")) idPart = "done:" + host.getAttribute("data-done-id");
+      else if (host.dataset && host.dataset.taskId) idPart = "tid:" + host.dataset.taskId;
+      else if (host.dataset && host.dataset.id) idPart = "id:" + host.dataset.id;
+      else if (host.getAttribute("data-item-id")) idPart = "item:" + host.getAttribute("data-item-id");
+      else if (host.getAttribute("data-habit-key")) idPart = "habit:" + host.getAttribute("data-habit-key");
+      else if (host.getAttribute("data-done-block-key")) {
+        idPart = "block:" + host.getAttribute("data-done-block-key");
+      } else {
+        return "";
+      }
+      const wraps = host.querySelectorAll(".manual-item-actions-wrap");
+      let idx = 0;
+      for (let i = 0; i < wraps.length; i++) {
+        if (wraps[i] === wrap) {
+          idx = i;
+          break;
+        }
+      }
+      return idPart + "|w" + String(idx);
+    }
+
+    function captureUiActionChromeSnapshot() {
+      const keys = [];
+      document.querySelectorAll(".manual-item-actions-wrap.is-expanded").forEach(function (w) {
+        const key = computeUiActionChromeKey(w);
+        if (key) keys.push(key);
+      });
+      const deadlineOpen = Boolean(
+        document.querySelector(
+          ".manual-item-actions-wrap.is-deadline-picking, .app-extreme-deadline-popover:not([hidden])"
+        )
+      );
+      return { actionKeys: keys, deadlineOpen: deadlineOpen };
+    }
+
+    function restoreUiActionChromeSnapshot(snap) {
+      if (!snap || !snap.actionKeys || !snap.actionKeys.length) return;
+      const want = new Set(snap.actionKeys);
+      document.querySelectorAll(".manual-item-actions-wrap").forEach(function (w) {
+        const key = computeUiActionChromeKey(w);
+        if (!key || !want.has(key)) return;
+        w.classList.add("is-expanded");
+        const mb = w.querySelector(".manual-item-more-btn");
+        if (mb) mb.setAttribute("aria-expanded", "true");
+      });
+    }
+
+    /** 云同步触发的重绘：操作中不刷界面；其余只防重入与短间隔连刷 */
     function shouldSkipCloudUiRender() {
       if (renderDepth > 0) return true;
+      if (typeof isAppUiBusyForBackgroundRefresh === "function" && isAppUiBusyForBackgroundRefresh()) {
+        markBackgroundUiRenderDeferred();
+        return true;
+      }
       if (Date.now() < renderSuppressCloudUntil) return true;
       if (lastCloudUiRenderAt > 0 && Date.now() - lastCloudUiRenderAt < CLOUD_UI_RENDER_MIN_INTERVAL_MS) {
         return true;
       }
       return false;
+    }
+
+    /** 后台已合并数据，等展开菜单/编辑结束后再刷一次界面 */
+    function markBackgroundUiRenderDeferred() {
+      renderDeferredWhileEditing = true;
+      if (typeof scheduleRenderWhenEditingEnds === "function") {
+        scheduleRenderWhenEditingEnds();
+      }
+    }
+
+    /** 定时器/跨日等后台入口：操作中不拆列表，只记账等空闲再刷 */
+    function renderUnlessBackgroundBusy() {
+      if (typeof isAppUiBusyForBackgroundRefresh === "function" && isAppUiBusyForBackgroundRefresh()) {
+        markBackgroundUiRenderDeferred();
+        return;
+      }
+      render();
     }
 
     /** 重建进度条期间关掉 width 过渡；双 rAF 等宽度落地后再恢复 */
@@ -96194,7 +96319,13 @@
         syncAllWeeklyPlanDoneLists({ forceAll: true });
         setCloudSyncHashFromCurrentState();
         const r = persistStateToLocalStorage();
-        if (!skipRender) render();
+        if (!skipRender) {
+          if (shouldSkipCloudUiRender()) {
+            /* 操作中只落盘，界面等菜单收起后再刷 */
+          } else {
+            render();
+          }
+        }
         return r;
       } finally {
         cloudSyncSuppressPush = false;
@@ -96533,6 +96664,18 @@
       }, CLOUD_SYNC_SAFETY_PULL_INTERVAL_MS);
     }
 
+    /** 断网或写入失败后：本地改动已 mark pending，在线时后台重试，不打扰操作 */
+    function ensureCloudSyncPendingRetryTimer() {
+      if (cloudSyncPendingRetryTimer) return;
+      cloudSyncPendingRetryTimer = window.setInterval(function () {
+        if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+        if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+        if (!cloudSyncReady || !cloudSyncRef || cloudSyncSuppressPush) return;
+        if (!hasCloudSyncPendingUpload()) return;
+        scheduleCloudSyncPush();
+      }, CLOUD_SYNC_PENDING_RETRY_MS);
+    }
+
     /**
      * 5 分钟内必须与云端对齐：后台错过则记 due，回前台立刻补拉。
      * 实时 pulse 仍走快路径；这里保证最慢不超过安全网间隔。
@@ -96554,14 +96697,15 @@
         cloudSyncSafetyPullDue ||
         cloudSyncLastPullAt <= 0 ||
         now - cloudSyncLastPullAt >= CLOUD_SYNC_SAFETY_PULL_INTERVAL_MS;
+      const dueByLongIdle = why === "foreground-long";
       const dueByForeground =
         why === "foreground" &&
         (cloudSyncLastPullAt <= 0 || now - cloudSyncLastPullAt >= CLOUD_SYNC_FOREGROUND_PULL_MIN_MS);
-      if (!dueByTimer && !dueByForeground) return;
+      if (!dueByTimer && !dueByForeground && !dueByLongIdle) return;
       cloudSyncSafetyPullDue = false;
       void runCloudSyncTransaction({
         mode: "incremental",
-        reason: dueByTimer && why !== "foreground" ? "safety-pull" : why
+        reason: dueByLongIdle ? "foreground-long" : dueByTimer && why !== "foreground" ? "safety-pull" : why
       });
     }
 
@@ -96612,8 +96756,10 @@
             const ua = coerceCloudUpdatedAt(payload.updatedAt);
             if (payload.updatedBy !== cloudSyncClientId) {
               materializePayloadDoneForMerge(payload);
-              absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
-              scheduleCloudSyncRenderDebounced();
+              const absorbed = absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, {
+                skipRender: true
+              });
+              if (absorbed) scheduleCloudSyncRenderDebounced();
             }
             if (ua > 0) setCloudSyncCursor(ua);
             if (mode === "full" && !payload.doneOmitted) {
@@ -96718,6 +96864,7 @@
         }
         attachCloudSyncListeners();
         ensureCloudSyncSafetyPullTimer();
+        ensureCloudSyncPendingRetryTimer();
         window.setTimeout(function () {
           void runCloudSyncTransaction({
             mode: isCloudSyncLastSyncAtMissing() ? "full" : "incremental",
@@ -105870,6 +106017,9 @@
         if (node.nodeType === 1 && node.classList && node.classList.contains("forge-task-lifetime-minutes")) {
           continue;
         }
+        if (node.nodeType === 1 && node.classList && node.classList.contains("forge-task-watch-countdown")) {
+          continue;
+        }
         if (node.nodeType === 1 && node.classList && node.classList.contains("forge-task-remark-disclosure")) {
           continue;
         }
@@ -105971,6 +106121,33 @@
       document
         .querySelectorAll("#forgeModule details.forge-cc-art-details[data-forge-cc-art]")
         .forEach(syncForgeCcArtDetailsDailyMinShortfall);
+    }
+
+    /** Mind · Psycho-Cybernetics：绿色累计分钟后挂「智能手表倒计时」（手机端 CSS 隐藏） */
+    function placeForgeMindWatchCountdownCapsule(row, titleWrap, lifeEl, lifeMinEl) {
+      if (!row || !titleWrap || !row.closest("#forgeMindPanelPc")) {
+        const leftover = row && row.querySelector(":scope .forge-task-watch-countdown");
+        if (leftover) leftover.remove();
+        return;
+      }
+      let watchEl = row.querySelector(":scope .forge-task-watch-countdown");
+      if (!watchEl) {
+        watchEl = document.createElement("span");
+        watchEl.className = "forge-task-watch-countdown";
+        watchEl.setAttribute("aria-label", "智能手表倒计时");
+        watchEl.textContent = "智能手表倒计时";
+      }
+      const minVisible = !!(lifeMinEl && !lifeMinEl.classList.contains("forge-task-lifetime-minutes--hide"));
+      const lifeVisible = !!(lifeEl && !lifeEl.classList.contains("forge-task-lifetime-total--hide"));
+      const taskText = titleWrap.querySelector(".forge-task-text");
+      const anchor = minVisible ? lifeMinEl : lifeVisible ? lifeEl : taskText;
+      if (!anchor) {
+        if (watchEl.parentNode !== titleWrap) titleWrap.appendChild(watchEl);
+        return;
+      }
+      if (watchEl.parentNode !== titleWrap || watchEl.previousElementSibling !== anchor) {
+        anchor.insertAdjacentElement("afterend", watchEl);
+      }
     }
 
     /** Mind：×累计紧挨主标题；Body/性表现：中文+×累计第一行、英文第二行；日/周进度在卡头中列（桌面） */
@@ -106082,6 +106259,7 @@
         lifeEl.classList.add("forge-task-lifetime-total--hide");
         hideForgeTaskLifetimeMinutes();
         row.classList.remove("forge-task-card--daily-min-shortfall");
+        placeForgeMindWatchCountdownCapsule(row, titleWrap, lifeEl, lifeMinEl);
         return;
       }
 
@@ -106178,6 +106356,7 @@
 
       const ccArt = row.closest(".forge-cc-art-details");
       if (ccArt) syncForgeCcArtDetailsDailyMinShortfall(ccArt);
+      placeForgeMindWatchCountdownCapsule(row, titleWrap, lifeEl, lifeMinEl);
     }
 
     /** 周条所在周：与顶栏所选日同一周（无则日历今天），周一为周首 */
@@ -121309,17 +121488,59 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return changed;
     }
 
-    /** 按周计划实际勾选状态，对齐所有周的 weeklyPlanDoneRef 与 My Done 镜像（每次直接扫描，不做 snapshot skip） */
+    /** 周计划完成态签名：勾选没变就不扫 My Done 镜像 */
+    function getWeeklyPlanDoneSyncSignature() {
+      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") return "";
+      const parts = [];
+      Object.keys(state.weeklyPlan).forEach(function (weekKey) {
+        const tasks = getWeeklyPlanTasksForWeekKey(weekKey);
+        parts.push(weekKey);
+        tasks.forEach(function (t) {
+          if (!t) return;
+          parts.push(
+            t.id,
+            isWeeklyPlanMainComplete(t) ? "1" : "0",
+            String(t.completedAt || "")
+          );
+          (t.microTasks || []).forEach(function (m) {
+            if (!m) return;
+            parts.push(m.id, m.done ? "1" : "0", String(m.completedAt || ""));
+          });
+        });
+        const ref = state.weeklyPlanDoneRef && state.weeklyPlanDoneRef[weekKey];
+        const items = ref && ref.items ? ref.items : {};
+        Object.keys(items).forEach(function (k) {
+          parts.push(k, items[k] || "");
+        });
+      });
+      const suppress = state.weeklyPlanDoneSuppress && typeof state.weeklyPlanDoneSuppress === "object"
+        ? Object.keys(state.weeklyPlanDoneSuppress).join(",")
+        : "";
+      parts.push("sup", suppress);
+      return parts.join("|");
+    }
+
+    /** 按周计划勾选对齐 My Done 镜像；签名相同则跳过（习惯打卡等不应扫全部周） */
     function syncAllWeeklyPlanDoneLists(opts) {
       const t0 = beginCloudSyncPerf();
       try {
+        const forceAll = Boolean(opts && opts.forceAll);
+        const sig = getWeeklyPlanDoneSyncSignature();
+        if (!forceAll && sig && sig === lastWeeklyPlanDoneSyncSig) {
+          bumpHeavyModuleSliceCounter("weeklyPlanDoneSyncSkippedCount");
+          return false;
+        }
         bumpHeavyModuleSliceCounter("weeklyPlanDoneSyncPassCount");
-        if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
+        if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
+          lastWeeklyPlanDoneSyncSig = sig;
+          return false;
+        }
         let changed = false;
         Object.keys(state.weeklyPlan).forEach(function (weekKey) {
           bumpHeavyModuleSliceCounter("weeklyPlanDoneSyncScanCount");
           if (syncWeeklyPlanDoneListForWeek(weekKey)) changed = true;
         });
+        lastWeeklyPlanDoneSyncSig = getWeeklyPlanDoneSyncSignature();
         if (changed) saveState();
         return changed;
       } finally {
@@ -133316,11 +133537,25 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return isAppUiFieldEditingInProgress();
     }
 
+    /** ⋯ 展开 / 截止日期弹层：后台同步不得拆掉，本地点击删除/保存仍可立刻 render */
+    function isAppUiTransientChromeOpen() {
+      if (document.querySelector(".manual-item-actions-wrap.is-expanded")) return true;
+      if (document.querySelector(".manual-item-actions-wrap.is-deadline-picking")) return true;
+      if (document.querySelector(".app-extreme-deadline-popover:not([hidden])")) return true;
+      return false;
+    }
+
+    function isAppUiBusyForBackgroundRefresh() {
+      if (isAppUiEditingInProgress()) return true;
+      if (document.querySelector("[data-manual-editing=\"1\"]")) return true;
+      return isAppUiTransientChromeOpen();
+    }
+
     function scheduleRenderWhenEditingEnds() {
       if (renderWhenEditingEndsTimer) clearTimeout(renderWhenEditingEndsTimer);
       renderWhenEditingEndsTimer = setTimeout(function () {
         renderWhenEditingEndsTimer = null;
-        if (isAppUiEditingInProgress()) {
+        if (isAppUiBusyForBackgroundRefresh()) {
           scheduleRenderWhenEditingEnds();
           return;
         }
@@ -133329,6 +133564,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           render();
         }
       }, RENDER_WHEN_EDITING_POLL_MS);
+    }
+
+    /** 底栏全屏焦点时，只重绘当前主模块的列表 DOM；合并/卫生仍全量跑 */
+    function isPrimaryModulePaintNeeded(moduleKey) {
+      if (!document.body.classList.contains("primary-module-fullscreen")) return true;
+      return activePrimaryModuleKey === moduleKey;
     }
 
     function render(force) {
@@ -133344,6 +133585,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       try {
       beginUiRebuildSnap();
       const uiScrollSnap = captureUiScrollSnapshot();
+      const uiActionChromeSnap = captureUiActionChromeSnapshot();
+      const paintDynamic = isPrimaryModulePaintNeeded("dynamic");
+      const paintHabit = isPrimaryModulePaintNeeded("habit");
+      const paintForge = isPrimaryModulePaintNeeded("forge");
+      const paintGoals = isPrimaryModulePaintNeeded("goals");
+      const paintPurpose = isPrimaryModulePaintNeeded("purpose");
       lastCloudUiRenderAt = Date.now();
       renderDeferredWhileEditing = false;
       if (renderWhenEditingEndsTimer) {
@@ -133360,7 +133607,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       updatePrimaryModuleHeaderDateText();
       syncForgeHeaderDateToSelectedDone();
       // Purpose · My Values：英文部分去掉包裹括号（例如 "(Health ...)" -> "Health ..."）
-      if (purposeValuesSection) {
+      if (paintPurpose && purposeValuesSection) {
         purposeValuesSection.querySelectorAll(".mission-en em").forEach((em) => {
           const t = String(em.textContent || "");
           em.textContent = t.replace(/^\(/, "").replace(/\)$/, "");
@@ -133397,47 +133644,57 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       doneList.classList.remove("timeline-list");
       doneList.classList.add("done-time-block-list", "app-done-time-timeline");
-      const filteredDoneTasksRaw = state.done.filter((task) =>
-        doneTaskMatchesFilterDate(task, selectedDoneDate)
-      );
-      const filteredDoneTasks = dedupeDoneTasksForDisplay(filteredDoneTasksRaw);
-      const filteredDoneTasksForStats = filteredDoneTasks.filter(isDoneCountedAsDayProduction);
-      const filteredMemoItems = state.memo.slice();
       const baseDailyWinDate = getDailyWinTodayDateKey();
-      const filteredDailyWinTodayTasks = getDailyWinTasksForDate(baseDailyWinDate);
-      const filteredDailyWinTasks = filteredDailyWinTodayTasks;
+      let filteredDoneTasks = [];
+      let filteredDoneTasksForStats = [];
+      let filteredMemoItems = [];
+      let filteredDailyWinTasks = [];
+      if (paintDynamic) {
+        const filteredDoneTasksRaw = state.done.filter((task) =>
+          doneTaskMatchesFilterDate(task, selectedDoneDate)
+        );
+        filteredDoneTasks = dedupeDoneTasksForDisplay(filteredDoneTasksRaw);
+        filteredDoneTasksForStats = filteredDoneTasks.filter(isDoneCountedAsDayProduction);
+        filteredMemoItems = state.memo.slice();
+      }
+      if (paintHabit) {
+        filteredDailyWinTasks = getDailyWinTasksForDate(baseDailyWinDate);
+      }
       if (ensureStopDoingPinnedOrder()) {
         saveState();
       }
-      renderList(stopDoingList, state.stopDoing, "stopDoing");
-      renderList(notToDoList, state.notToDo, "notToDo");
-      if (hatersDoubtersLogList) {
-        renderList(hatersDoubtersLogList, Array.isArray(state.hatersDoubtersLog) ? state.hatersDoubtersLog : [], "hatersDoubtersLog");
+      if (paintDynamic) {
+        renderList(stopDoingList, state.stopDoing, "stopDoing");
+        renderList(notToDoList, state.notToDo, "notToDo");
+        if (hatersDoubtersLogList) {
+          renderList(hatersDoubtersLogList, Array.isArray(state.hatersDoubtersLog) ? state.hatersDoubtersLog : [], "hatersDoubtersLog");
+        }
+        if (hatersDoubtersEmpty) {
+          const n = Array.isArray(state.hatersDoubtersLog) ? state.hatersDoubtersLog.length : 0;
+          hatersDoubtersEmpty.style.display = n ? "none" : "block";
+        }
+        renderList(memoList, filteredMemoItems, "memo");
+        renderClosedListPanel();
+        renderList(doneList, filteredDoneTasks, "done");
+        ensureDonePastFoldClickSetup();
+        if (typeof renderDoneSleepCountdownBar === "function") {
+          renderDoneSleepCountdownBar();
+        }
       }
-      if (hatersDoubtersEmpty) {
-        const n = Array.isArray(state.hatersDoubtersLog) ? state.hatersDoubtersLog.length : 0;
-        hatersDoubtersEmpty.style.display = n ? "none" : "block";
-      }
-      renderList(memoList, filteredMemoItems, "memo");
-      renderClosedListPanel();
-      renderList(doneList, filteredDoneTasks, "done");
-      renderList(dailyWinList, filteredDailyWinTasks, "dailyWin");
-      ensureDonePastFoldClickSetup();
       ensureDoneTimeBlockSprintTicker();
-      if (typeof renderDoneSleepCountdownBar === "function") {
-        renderDoneSleepCountdownBar();
-      }
-      /* 习惯勾选紧跟 Done 列表：避免后续战报/燃料等抛错导致「Done 有、按钮空」 */
-      try {
-        renderHabitCheckins();
-      } catch (habitRenderErr) {
-        console.warn("[习惯] renderHabitCheckins 失败:", habitRenderErr);
+      if (paintHabit) {
+        renderList(dailyWinList, filteredDailyWinTasks, "dailyWin");
+        try {
+          renderHabitCheckins();
+        } catch (habitRenderErr) {
+          console.warn("[习惯] renderHabitCheckins 失败:", habitRenderErr);
+        }
       }
 
-      if (stopDoingCount) stopDoingCount.textContent = state.stopDoing.length;
-      if (notToDoCount) notToDoCount.textContent = state.notToDo.length;
-      memoCount.textContent = filteredMemoItems.length;
-      try {
+      if (paintDynamic && stopDoingCount) stopDoingCount.textContent = state.stopDoing.length;
+      if (paintDynamic && notToDoCount) notToDoCount.textContent = state.notToDo.length;
+      if (paintDynamic) memoCount.textContent = filteredMemoItems.length;
+      if (paintDynamic) try {
         renderDoneOutcomeDayStats(doneOutcomeDayStats, filteredDoneTasksForStats);
         renderDoneDayStats(doneDayStats, filteredDoneTasksForStats);
         if (typeof renderDoneVdIndexHome === "function") {
@@ -133452,7 +133709,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } catch (doneStatsErr) {
         console.warn("[My Done] 统计/战报渲染失败:", doneStatsErr);
       }
-      if (doneListTitleCount) {
+      if (paintDynamic && doneListTitleCount) {
         const n = filteredDoneTasksForStats.length;
         const dayLabel = formatDoneListDayCountLabel(selectedDoneDate);
         doneListTitleCount.setAttribute("aria-label", dayLabel + " " + n + " 项");
@@ -133483,19 +133740,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           doneCountInline.setAttribute("title", fullLabel);
         }
       }
-      dailyWinCount.textContent = filteredDailyWinTasks.length;
-      if (dailyWinDateFilter) {
+      if (paintHabit) dailyWinCount.textContent = filteredDailyWinTasks.length;
+      if (paintHabit && dailyWinDateFilter) {
         dailyWinDateFilter.value = selectedDailyWinDate;
       }
-      if (dailyWinList) {
+      if (paintHabit && dailyWinList) {
         dailyWinList.classList.remove("daily-win-list--tomorrow");
       }
-      stopDoingEmpty.style.display = state.stopDoing.length ? "none" : "block";
-      notToDoEmpty.style.display = state.notToDo.length ? "none" : "block";
-      memoEmpty.style.display = filteredMemoItems.length ? "none" : "block";
-      doneEmpty.style.display = filteredDoneTasks.length ? "none" : "block";
-      dailyWinEmpty.style.display = (filteredDailyWinTasks.length || isDailyWinModernMode()) ? "none" : "block";
-      if (stampDailyThreeWinsDoneBtn) {
+      if (paintDynamic) {
+        stopDoingEmpty.style.display = state.stopDoing.length ? "none" : "block";
+        notToDoEmpty.style.display = state.notToDo.length ? "none" : "block";
+        memoEmpty.style.display = filteredMemoItems.length ? "none" : "block";
+        doneEmpty.style.display = filteredDoneTasks.length ? "none" : "block";
+      }
+      if (paintHabit) dailyWinEmpty.style.display = (filteredDailyWinTasks.length || isDailyWinModernMode()) ? "none" : "block";
+      if (paintHabit && stampDailyThreeWinsDoneBtn) {
         const stampDateKey = baseDailyWinDate;
         const stampCount = countDailyWinEntriesForDate(stampDateKey);
         const stampHasDone = hasHabitDoneEntry("dailyThreeWins", stampDateKey);
@@ -133506,48 +133765,56 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           stampCount < 3 || (stampHasDone && !stampSuppressed);
         stampDailyThreeWinsDoneBtn.textContent = stampSuppressed ? "重新记入 My Done" : "记入 My Done";
       }
-      try {
-        renderBackwardMeasure();
-      } catch (bmErr) {
-        console.warn("[向后衡量] 渲染失败:", bmErr);
-      }
-      try {
-        renderSuccessCriteria();
-      } catch (scErr) {
-        console.warn("[成功标准] 渲染失败:", scErr);
-      }
-      backwardMeasureHoldPeriodAfterSave = null;
-      try {
-        renderFuelScore();
-      } catch (fuelErr) {
-        console.warn("[油箱] 渲染失败:", fuelErr);
+      if (paintHabit) {
         try {
-          syncHabitMeasureIncompleteTabStyles();
-        } catch (syncIncErr) {
-          console.warn("[AMB] 未完成 Tab 染色失败:", syncIncErr);
+          renderBackwardMeasure();
+        } catch (bmErr) {
+          console.warn("[向后衡量] 渲染失败:", bmErr);
+        }
+        try {
+          renderSuccessCriteria();
+        } catch (scErr) {
+          console.warn("[成功标准] 渲染失败:", scErr);
+        }
+        backwardMeasureHoldPeriodAfterSave = null;
+        try {
+          renderFuelScore();
+        } catch (fuelErr) {
+          console.warn("[油箱] 渲染失败:", fuelErr);
+          try {
+            syncHabitMeasureIncompleteTabStyles();
+          } catch (syncIncErr) {
+            console.warn("[AMB] 未完成 Tab 染色失败:", syncIncErr);
+          }
+        }
+        try {
+          initHabitCategoryDesktopTabs();
+        } catch (habitTabsErr) {
+          console.warn("[习惯] initHabitCategoryDesktopTabs 失败:", habitTabsErr);
+        }
+        try {
+          initMeasureSegmentDesktopTabs();
+        } catch (measureTabsErr) {
+          console.warn("[AMB] initMeasureSegmentDesktopTabs 失败:", measureTabsErr);
         }
       }
-      try {
-        initHabitCategoryDesktopTabs();
-      } catch (habitTabsErr) {
-        console.warn("[习惯] initHabitCategoryDesktopTabs 失败:", habitTabsErr);
+      if (paintGoals) {
+        try { renderAgeGoalsCountdown(); } catch (e) { console.warn("[My Goals] renderAgeGoalsCountdown 失败:", e); }
+        try { renderMoneyGoalsCountdown(); } catch (e) { console.warn("[My Goals] renderMoneyGoalsCountdown 失败:", e); }
+        try {
+          if (typeof ensureMyGoalsCountdownFlashTicker === "function") ensureMyGoalsCountdownFlashTicker();
+        } catch (e) { console.warn("[My Goals] countdown flash 失败:", e); }
       }
-      try {
-        initMeasureSegmentDesktopTabs();
-      } catch (measureTabsErr) {
-        console.warn("[AMB] initMeasureSegmentDesktopTabs 失败:", measureTabsErr);
+      if (paintDynamic) {
+        try { renderDailyReminder(); } catch (e) { console.warn("[每日提醒] 失败:", e); }
+        try { renderWeeklyPlanUI(); } catch (e) { console.warn("[周计划] 失败:", e); }
+        try { syncClosedListPendingTitleStyles(); } catch (e) { console.warn("[封闭清单] 未完成标题强调失败:", e); }
+        try { renderKineticCountdowns(); } catch (e) { console.warn("[Kinetic倒计时] 失败:", e); }
       }
-      try { renderAgeGoalsCountdown(); } catch (e) { console.warn("[My Goals] renderAgeGoalsCountdown 失败:", e); }
-      try { renderMoneyGoalsCountdown(); } catch (e) { console.warn("[My Goals] renderMoneyGoalsCountdown 失败:", e); }
-      try {
-        if (typeof ensureMyGoalsCountdownFlashTicker === "function") ensureMyGoalsCountdownFlashTicker();
-      } catch (e) { console.warn("[My Goals] countdown flash 失败:", e); }
-      try { renderDailyReminder(); } catch (e) { console.warn("[每日提醒] 失败:", e); }
-      try { renderWeeklyPlanUI(); } catch (e) { console.warn("[周计划] 失败:", e); }
-      try { syncClosedListPendingTitleStyles(); } catch (e) { console.warn("[封闭清单] 未完成标题强调失败:", e); }
-      try { renderKineticCountdowns(); } catch (e) { console.warn("[Kinetic倒计时] 失败:", e); }
-      try { refreshAllForgeTodayTaskRowsFromDone(); } catch (e) { console.warn("[Forge] 刷新今日行失败:", e); }
-      try { renderForgeTodaysForgeList(); } catch (e) { console.warn("[Forge] 今日打卡列表渲染失败:", e); }
+      if (paintForge) {
+        try { refreshAllForgeTodayTaskRowsFromDone(); } catch (e) { console.warn("[Forge] 刷新今日行失败:", e); }
+        try { renderForgeTodaysForgeList(); } catch (e) { console.warn("[Forge] 今日打卡列表渲染失败:", e); }
+      }
       /* Phase 1：首屏只刷核心（今日/目标/习惯）；重模块 idle 后再刷 */
       if (isBootFirstRenderPass) {
         isBootFirstRenderPass = false;
@@ -133558,8 +133825,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       syncExtremeDeadlineChipsInDocument();
       requestAnimationFrame(fitResponsiveSingleLineSlogans);
       restoreUiScrollSnapshot(uiScrollSnap);
+      restoreUiActionChromeSnapshot(uiActionChromeSnap);
       requestAnimationFrame(function () {
         restoreUiScrollSnapshot(uiScrollSnap);
+        restoreUiActionChromeSnapshot(uiActionChromeSnap);
       });
       endUiRebuildSnap();
       } finally {
@@ -133871,10 +134140,51 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       };
     }
 
-    /** 十二周年主/子任务与深度时间 → My Done（每次直接扫描，不做 snapshot skip） */
+    function appendAnniversaryModuleDoneSig(parts, moduleKey) {
+      const mod =
+        typeof getAnniversaryTwStateModule === "function"
+          ? getAnniversaryTwStateModule(moduleKey)
+          : state[anniversaryTwStateKeyFromModuleKey(moduleKey)];
+      if (!mod || !mod.weeks || typeof mod.weeks !== "object") return;
+      parts.push(moduleKey);
+      Object.keys(mod.weeks).forEach(function (wk) {
+        const arr = Array.isArray(mod.weeks[wk]) ? mod.weeks[wk] : [];
+        arr.forEach(function (t) {
+          if (!t) return;
+          parts.push(t.id, t.done ? "1" : "0");
+          (t.subs || []).forEach(function (s) {
+            if (!s) return;
+            parts.push(s.id, s.done ? "1" : "0");
+          });
+        });
+      });
+    }
+
+    function getAnniversaryDoneSyncSignature() {
+      const parts = [];
+      ["tw020", "tw021", "tw022"].forEach(function (k) {
+        appendAnniversaryModuleDoneSig(parts, k);
+      });
+      const dyn =
+        state.anniversaryTwRegistry && Array.isArray(state.anniversaryTwRegistry.dynamicKeys)
+          ? state.anniversaryTwRegistry.dynamicKeys
+          : [];
+      dyn.forEach(function (moduleKey) {
+        appendAnniversaryModuleDoneSig(parts, moduleKey);
+      });
+      return parts.join("|");
+    }
+
+    /** 十二周年 → My Done：完成态签名没变则跳过全量扫描 */
     function syncAllAnniversaryDoneLists(opts) {
       const t0 = beginCloudSyncPerf();
       try {
+        const forceAll = Boolean(opts && opts.forceAll);
+        const sig = getAnniversaryDoneSyncSignature();
+        if (!forceAll && sig && sig === lastAnniversaryDoneSyncSig) {
+          bumpHeavyModuleSliceCounter("anniversaryDoneSyncSkippedCount");
+          return false;
+        }
         bumpHeavyModuleSliceCounter("anniversaryDoneSyncPassCount");
         function runOneScan(fn) {
           bumpHeavyModuleSliceCounter("anniversaryDoneSyncScanCount");
@@ -133913,6 +134223,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         runOneScan(function () {
           syncAnniversaryDeepTimeDoneList("tw022", "022");
         });
+        lastAnniversaryDoneSyncSig = getAnniversaryDoneSyncSignature();
         return true;
       } finally {
         addCloudSyncPerf(null, "anniversaryDoneSyncMs", t0);
@@ -133942,7 +134253,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return;
       }
       didHeavyWork = true;
-      if (dirty.rule100) {
+      const paintHabitHeavy = typeof isPrimaryModulePaintNeeded === "function" ? isPrimaryModulePaintNeeded("habit") : true;
+      const paintDynamicHeavy = typeof isPrimaryModulePaintNeeded === "function" ? isPrimaryModulePaintNeeded("dynamic") : true;
+      const paintForgeHeavy = typeof isPrimaryModulePaintNeeded === "function" ? isPrimaryModulePaintNeeded("forge") : true;
+      if (dirty.rule100 && paintHabitHeavy) {
         bumpHeavyModuleSliceCounter("renderHeavyRule100Count");
         try {
           renderRuleOf100();
@@ -133950,7 +134264,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           console.warn("[Rule of 100] renderRuleOf100 失败:", rule100Err);
         }
       }
-      if (dirty.life4000) {
+      if (dirty.life4000 && paintHabitHeavy) {
         bumpHeavyModuleSliceCounter("renderHeavyLife4000Count");
         try {
           renderLife4000Weeks();
@@ -133958,12 +134272,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           console.warn("[人生进度表] renderLife4000Weeks 失败:", life4000Err);
         }
       }
-      try { renderProjectTasks(); } catch (e) { console.warn("[项目] renderProjectTasks 失败:", e); }
-      if (dirty.trash) {
+      if (paintHabitHeavy) {
+        try { renderProjectTasks(); } catch (e) { console.warn("[项目] renderProjectTasks 失败:", e); }
+      }
+      if (dirty.trash && paintDynamicHeavy) {
         bumpHeavyModuleSliceCounter("renderHeavyTrashCount");
         try { renderTrash(); } catch (e) { console.warn("[回收站] 失败:", e); }
       }
-      if (dirty.anniversary) {
+      if (dirty.anniversary && paintDynamicHeavy) {
         bumpHeavyModuleSliceCounter("renderHeavyAnniversaryCount");
         try {
           ensureAnniversaryTwArchivePass();
@@ -134004,12 +134320,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } catch (lunarErr) {
         console.warn("[农历提示] 刷新失败:", lunarErr);
       }
-      if (dirty.forgeMins) {
+      if (dirty.forgeMins && paintForgeHeavy) {
         bumpHeavyModuleSliceCounter("renderHeavyForgeMinsCount");
         renderForgeDailyMinRows();
         renderForgeWeeklyMinRows();
       }
-      lastHeavyModuleDepSnapshot = nextSnap;
+      /* 焦点外跳过的切片不能写入 nextSnap，否则切回该模块时会被当成已刷过 */
+      const paintedSnap = Object.assign({}, nextSnap);
+      function keepHeavySlicePending(sliceKey, skipped) {
+        if (!skipped) return;
+        paintedSnap[sliceKey] = lastHeavyModuleDepSnapshot ? lastHeavyModuleDepSnapshot[sliceKey] : "";
+      }
+      keepHeavySlicePending("rule100", dirty.rule100 && !paintHabitHeavy);
+      keepHeavySlicePending("life4000", dirty.life4000 && !paintHabitHeavy);
+      keepHeavySlicePending("trash", dirty.trash && !paintDynamicHeavy);
+      keepHeavySlicePending("anniversary", dirty.anniversary && !paintDynamicHeavy);
+      keepHeavySlicePending("forgeMins", dirty.forgeMins && !paintForgeHeavy);
+      lastHeavyModuleDepSnapshot = paintedSnap;
       } finally {
         if (didHeavyWork) {
           addCloudSyncPerf("renderHeavyModulesCount", "renderHeavyModulesMs", t0);
@@ -136720,9 +137047,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       };
       const afterPaint = function () {
         if (typeof requestIdleCallback === "function") {
-          requestIdleCallback(start, { timeout: 900 });
+          requestIdleCallback(start, { timeout: 1600 });
         } else {
-          window.setTimeout(start, 60);
+          window.setTimeout(start, 200);
         }
       };
       if (typeof requestAnimationFrame === "function") {
@@ -136790,13 +137117,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (document.visibilityState !== "visible") return;
       if (tickClosedListDayRollover()) {
         saveState();
-        render();
+        renderUnlessBackgroundBusy();
       }
     });
     window.setInterval(function () {
       if (tickClosedListDayRollover()) {
         saveState();
-        render();
+        renderUnlessBackgroundBusy();
       }
     }, 60000);
     initCloudSyncMobileOfflineHint();
@@ -136894,7 +137221,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         ensureAgeGoalMilestonePromptsForToday() ||
         ensureAnniversaryTw020PromptsForToday()
       ) {
-        render();
+        renderUnlessBackgroundBusy();
       }
     }, 60000);
 
@@ -136911,7 +137238,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         ensureAgeGoalMilestonePromptsForToday() ||
         ensureAnniversaryTw020PromptsForToday()
       ) {
-        render();
+        renderUnlessBackgroundBusy();
       }
     });
 
@@ -138827,6 +139154,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           continue;
         }
         if (node.nodeType === 1 && node.classList && node.classList.contains("forge-task-lifetime-minutes")) {
+          continue;
+        }
+        if (node.nodeType === 1 && node.classList && node.classList.contains("forge-task-watch-countdown")) {
           continue;
         }
         if (node.nodeType === 1 && node.classList && node.classList.contains("forge-task-remark-disclosure")) {
@@ -141540,7 +141870,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       function () {
         if (!renderDeferredWhileEditing) return;
         setTimeout(function () {
-          if (!renderDeferredWhileEditing || isAppUiEditingInProgress()) return;
+          if (!renderDeferredWhileEditing || isAppUiBusyForBackgroundRefresh()) return;
           renderDeferredWhileEditing = false;
           if (renderWhenEditingEndsTimer) {
             clearTimeout(renderWhenEditingEndsTimer);
