@@ -3128,7 +3128,7 @@
     }
 
     .done-vd-index-rules-marquee__track.is-running {
-      animation: done-vd-index-rules-marquee-rtl var(--marquee-duration, 24s) linear 2 forwards;
+      animation: done-vd-index-rules-marquee-rtl var(--marquee-duration, 16s) linear 2 forwards;
     }
 
     .done-vd-index-rules-marquee__track--chips {
@@ -3295,7 +3295,7 @@
     }
 
     .done-vd-desire-marquee__track.is-running {
-      animation: done-vd-index-rules-marquee-rtl var(--marquee-duration, 16s) linear 1 forwards;
+      animation: done-vd-index-rules-marquee-rtl var(--marquee-duration, 10s) linear 1 forwards;
     }
 
     .done-vd-desire-marquee__chip {
@@ -26421,7 +26421,7 @@
       will-change: transform;
     }
     .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__track.is-running {
-      animation: done-input-slogan-marquee-rtl var(--marquee-duration, 16s) linear
+      animation: done-input-slogan-marquee-rtl var(--marquee-duration, 12s) linear
         var(--marquee-passes, 3) forwards;
     }
     .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__item {
@@ -27679,7 +27679,7 @@
       #doneList.done-time-block-list
         li.done-time-block--sprint-current
         .done-sprint-reminder-marquee__track.is-running {
-        animation: done-sprint-reminder-marquee-rtl var(--marquee-duration, 24s) linear 2 forwards;
+        animation: done-sprint-reminder-marquee-rtl var(--marquee-duration, 16s) linear 2 forwards;
       }
 
       @keyframes done-sprint-reminder-marquee-rtl {
@@ -27763,7 +27763,7 @@
       #doneList.done-time-block-list
         li.done-time-block--sprint-current
         .done-sprint-formula-marquee__track.is-running {
-        animation: done-sprint-reminder-marquee-rtl var(--marquee-duration, 24s) linear 2 forwards;
+        animation: done-sprint-reminder-marquee-rtl var(--marquee-duration, 16s) linear 2 forwards;
       }
       #doneList.done-time-block-list
         li.done-time-block--sprint-current
@@ -30167,7 +30167,7 @@
       will-change: transform;
     }
     ul.app-done-time-timeline .done-sprint-finish-close-loop-marquee__track.is-running {
-      animation: done-sprint-finish-close-loop-marquee-rtl var(--marquee-duration, 24s) linear infinite;
+      animation: done-sprint-finish-close-loop-marquee-rtl var(--marquee-duration, 16s) linear infinite;
     }
     ul.app-done-time-timeline .done-sprint-finish-close-loop-marquee__chip {
       display: inline-flex;
@@ -30266,7 +30266,7 @@
       will-change: transform;
     }
     ul.app-done-time-timeline .done-sprint-finish-rough-start-marquee__track.is-running {
-      animation: done-sprint-finish-close-loop-marquee-rtl var(--marquee-duration, 24s) linear infinite;
+      animation: done-sprint-finish-close-loop-marquee-rtl var(--marquee-duration, 16s) linear infinite;
     }
     ul.app-done-time-timeline .done-sprint-finish-rough-start-marquee__chip {
       display: inline-flex;
@@ -87814,10 +87814,16 @@
     }
 
     function flushStatePersistQueue() {
+      try {
+        flushLocalPersistedState("queue");
+      } catch (_flushErr) {}
       return statePersistQueue;
     }
 
     function getPersistedStateJsonFromCache() {
+      try {
+        flushLocalPersistedState("read-cache");
+      } catch (_flushReadErr) {}
       if (_stateJsonCache != null && String(_stateJsonCache).length) return _stateJsonCache;
       return localStorage.getItem(STORAGE_KEY);
     }
@@ -87835,7 +87841,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260902e";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260902f";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -88292,6 +88298,9 @@
     }
 
     function lockApp(reason) {
+      try {
+        flushLocalPersistedState("lock");
+      } catch (_lockFlushErr) {}
       const savedPassword = localStorage.getItem(AUTH_PASSWORD_KEY) || "";
       if (!savedPassword) return;
       isAppUnlocked = false;
@@ -88688,6 +88697,28 @@
     /** 周计划 / 十二周年 → Done 镜像：签名没变则跳过全量扫描 */
     let lastWeeklyPlanDoneSyncSig = "";
     let lastAnniversaryDoneSyncSig = "";
+    /** 卫生扫描脏标记：saveState / 云合并后才跑，纯重绘跳过 */
+    let stateHygieneDirty = true;
+    /** null = 全部切片脏；否则按 key 决定 render 是否重建该列表 */
+    let uiPaintDirty = null;
+    let localPersistDirty = false;
+    let localPersistTimer = null;
+    const LOCAL_PERSIST_DEBOUNCE_MS = 400;
+    const UI_PAINT_SLICE_KEYS = [
+      "stopDoing",
+      "notToDo",
+      "haters",
+      "memo",
+      "closedList",
+      "done",
+      "dailyWin",
+      "habit",
+      "goals",
+      "weeklyPlan",
+      "kinetic",
+      "forge",
+      "purpose"
+    ];
 
     let selectedDoneDate = "";
     let selectedClosedListDate = "";
@@ -89157,6 +89188,9 @@
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "hidden") {
           cloudSyncHiddenAt = Date.now();
+          try {
+            flushLocalPersistedState("hidden");
+          } catch (_hidFlushErr) {}
           flushCloudSyncPulseImmediate();
           return;
         }
@@ -89179,7 +89213,15 @@
       });
       window.addEventListener("pagehide", function () {
         if (!cloudSyncHiddenAt) cloudSyncHiddenAt = Date.now();
+        try {
+          flushLocalPersistedState("pagehide");
+        } catch (_phFlushErr) {}
         flushCloudSyncPulseImmediate();
+      });
+      window.addEventListener("beforeunload", function () {
+        try {
+          flushLocalPersistedState("beforeunload");
+        } catch (_buFlushErr) {}
       });
       window.addEventListener("pageshow", function () {
         refreshCloudSyncPulseFromServer();
@@ -91465,6 +91507,8 @@
         clearCloudSyncLifetimeEnforceSides();
       }
       sanityCheckForgeAndHabitLifetimeAfterSync(lifetimeBefore, "pulse 合并");
+      markStateHygieneDirty();
+      markAllUiPaintSlicesDirty();
       setCloudSyncHashFromCurrentState();
       scheduleCloudSyncPersistDebounced();
       const pulseHasHabit =
@@ -94120,8 +94164,8 @@
     }
 
     /** 今日交互类保存：IndexedDB 立即写入并刷新 UI；Firebase 走 1–3s 后台防抖 */
-    function saveStateWithCloudPulseImmediate() {
-      saveState();
+    function saveStateWithCloudPulseImmediate(opts) {
+      saveState(opts);
     }
 
     /**
@@ -94158,7 +94202,7 @@
 
     /** 习惯打卡保存后：本地+pulse，并立即同步完成态 UI */
     function saveStateAfterHabitCheckin() {
-      saveStateWithCloudPulseImmediate();
+      saveStateWithCloudPulseImmediate({ lists: ["habit", "dailyWin", "done"] });
       finalizeHabitCheckinUiAfterPunch();
     }
 
@@ -96315,6 +96359,8 @@
       setCloudSyncLifetimeEnforceSides(localEnforce, remoteEnforce);
       try {
         state = merged;
+        markStateHygieneDirty();
+        markAllUiPaintSlicesDirty();
         migrateForgeMindMetaRowKeysIfNeeded._done = false;
         normalizeDoneListJournalFieldsInState();
         normalizeDoneOutcomeKindsInState();
@@ -97001,6 +97047,86 @@
       return runDataRetentionPass({ skipDoneHygiene: true });
     }
 
+    function createAllDirtyUiPaintMap() {
+      const o = {};
+      UI_PAINT_SLICE_KEYS.forEach(function (k) {
+        o[k] = true;
+      });
+      return o;
+    }
+
+    function markAllUiPaintSlicesDirty() {
+      uiPaintDirty = null;
+    }
+
+    function markUiPaintSlicesDirty(names) {
+      if (!names || !names.length) {
+        markAllUiPaintSlicesDirty();
+        return;
+      }
+      if (uiPaintDirty == null) uiPaintDirty = createAllDirtyUiPaintMap();
+      names.forEach(function (n) {
+        if (n) uiPaintDirty[n] = true;
+      });
+    }
+
+    function isUiPaintSliceDirty(name) {
+      if (uiPaintDirty == null) return true;
+      return Boolean(uiPaintDirty[name]);
+    }
+
+    function clearUiPaintSlice(name) {
+      if (uiPaintDirty == null) uiPaintDirty = createAllDirtyUiPaintMap();
+      uiPaintDirty[name] = false;
+    }
+
+    function markStateHygieneDirty() {
+      stateHygieneDirty = true;
+    }
+
+    function uiPaintSlicesForListName(listName) {
+      if (listName === "done") return ["done", "weeklyPlan", "closedList", "habit", "forge"];
+      if (listName === "closedList") return ["closedList", "done", "weeklyPlan"];
+      if (listName === "memo") return ["memo", "done"];
+      if (listName === "dailyWin") return ["dailyWin", "habit", "done"];
+      if (listName === "stopDoing") return ["stopDoing"];
+      if (listName === "notToDo") return ["notToDo"];
+      if (listName === "hatersDoubtersLog") return ["haters"];
+      return null;
+    }
+
+    /** 关页 / 锁屏 / 读缓存前：把未落盘的 state 立刻 stringify */
+    function flushLocalPersistedState(reason) {
+      if (localPersistTimer) {
+        clearTimeout(localPersistTimer);
+        localPersistTimer = null;
+      }
+      if (!localPersistDirty && reason !== "force") return;
+      localPersistDirty = false;
+      try {
+        persistStateToLocalStorage();
+        if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.persistFlushCount += 1;
+      } catch (flushErr) {
+        localPersistDirty = true;
+        throw flushErr;
+      }
+    }
+
+    function scheduleLocalPersistFlush() {
+      localPersistDirty = true;
+      if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.persistDeferredCount += 1;
+      if (localPersistTimer) return;
+      localPersistTimer = setTimeout(function () {
+        localPersistTimer = null;
+        try {
+          flushLocalPersistedState("debounce");
+        } catch (persistFlushErr) {
+          localPersistDirty = true;
+          console.warn("[存储] 延迟落盘失败:", persistFlushErr);
+        }
+      }, LOCAL_PERSIST_DEBOUNCE_MS);
+    }
+
     function persistStateToLocalStorage(explicitJson) {
       const t0 = beginCloudSyncPerf();
       try {
@@ -97090,34 +97216,22 @@
       }
     }
 
-    function saveState() {
+    /**
+     * @param {{ fromHygiene?: boolean, lists?: string[] }} [opts]
+     * lists：只脏这些 UI 切片；省略则全脏。fromHygiene：不再把卫生标脏（避免同轮循环）。
+     */
+    function saveState(opts) {
       const t0 = beginCloudSyncPerf();
+      opts = opts && typeof opts === "object" ? opts : {};
       try {
-      try {
-        const r = persistStateToLocalStorage();
-        if (r.quotaRelief) {
-          console.warn("本地存储曾接近上限，已自动清理部分垃圾箱/历史 My Done。");
+        if (!opts.fromHygiene) markStateHygieneDirty();
+        if (opts.lists) markUiPaintSlicesDirty(opts.lists);
+        else if (!opts.fromHygiene) markAllUiPaintSlicesDirty();
+        scheduleLocalPersistFlush();
+        if (!cloudSyncSuppressPush) {
+          markCloudSyncPendingUpload();
+          scheduleCloudSyncPush();
         }
-        if (r.persistPromise) {
-          r.persistPromise.catch(function (asyncErr) {
-            if (isStorageQuotaExceededError(asyncErr)) {
-              console.error("存储已满，无法保存:", asyncErr);
-              setCloudSyncError(asyncErr, "本地存储空间不足，无法保存本机数据");
-            }
-          });
-        }
-      } catch (err) {
-        if (isStorageQuotaExceededError(err)) {
-          console.error("本地存储已满，无法保存:", err);
-          setCloudSyncError(err, "本地存储空间不足，无法保存本机数据");
-          return;
-        }
-        throw err;
-      }
-      if (!cloudSyncSuppressPush) {
-        markCloudSyncPendingUpload();
-        scheduleCloudSyncPush();
-      }
       } finally {
         addCloudSyncPerf("saveStateCount", "saveStateMs", t0);
       }
@@ -101229,8 +101343,9 @@
         });
       }
       closedListInput.value = "";
-      saveState();
+      saveState({ lists: ["closedList"] });
       renderClosedListPanel();
+      clearUiPaintSlice("closedList");
       closedListInput.focus();
     }
 
@@ -101288,7 +101403,7 @@
         }
       }
       if (dailyWinInput) dailyWinInput.value = "";
-      saveState();
+      saveState({ lists: ["dailyWin", "habit", "done"] });
       render();
       if (dailyWinInput) dailyWinInput.focus();
     }
@@ -101725,12 +101840,12 @@
         if (moEarly && moEarly.kind === "weeklyPlan") {
           applyWeeklyPlanCompletionFromMirror(moEarly, Boolean(item.completed), item.completedAt);
           syncAllWeeklyPlanMirrorsForWeek(moEarly.weekKey);
-          saveStateWithCloudPulseImmediate();
+          saveStateWithCloudPulseImmediate({ lists: ["closedList", "done", "weeklyPlan"] });
           render();
         } else if (moEarly && moEarly.kind === "anniversaryTw") {
           applyAnniversaryCompletionFromMirror(moEarly, Boolean(item.completed));
           syncAllAnniversaryMirrorsForTask(moEarly.module, moEarly.taskId);
-          saveStateWithCloudPulseImmediate();
+          saveStateWithCloudPulseImmediate({ lists: ["closedList", "done", "weeklyPlan"] });
           render();
         }
         return;
@@ -101743,6 +101858,7 @@
         closedListCompleteAnimIds.add(id);
         window.setTimeout(() => {
           closedListCompleteAnimIds.delete(id);
+          markUiPaintSlicesDirty(["closedList"]);
           render();
         }, 750);
         syncClosedListToDone(item);
@@ -101759,7 +101875,7 @@
         applyAnniversaryCompletionFromMirror(mo, Boolean(checked));
         syncAllAnniversaryMirrorsForTask(mo.module, mo.taskId);
       }
-      saveStateWithCloudPulseImmediate();
+      saveStateWithCloudPulseImmediate({ lists: ["closedList", "done", "weeklyPlan"] });
       render();
     }
 
@@ -101774,7 +101890,7 @@
         delete item.completedAt;
         removeMemoDoneCopy(item.id);
       }
-      saveState();
+      saveState({ lists: ["memo", "done"] });
       render();
     }
 
@@ -105270,7 +105386,7 @@
         manualDone: true
       });
       doneManualInput.value = "";
-      saveState();
+      saveState({ lists: ["done"] });
       flushDoneComposerRender();
       doneManualInput.focus();
     }
@@ -107835,7 +107951,7 @@
         const dk = getDailyWinItemDateKey(task);
         if (dk) refreshDailyWinCheckin(dk);
       }
-      saveState();
+      saveState({ lists: uiPaintSlicesForListName(listName) });
       render();
     }
 
@@ -107874,7 +107990,7 @@
       } else {
         return;
       }
-      saveState();
+      saveState({ lists: uiPaintSlicesForListName(listName) });
       render();
     }
 
@@ -108834,10 +108950,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
     }
 
-    /** 终点线跑马灯共用时长：与「粗糙地开始」同一公式（len * 0.4，16–90s） */
+    /** 终点线跑马灯共用时长：与「粗糙地开始」同一公式（len * 0.28，11–64s） */
     function sprintFinishLineMarqueeDurationSecForText(text) {
       const len = String(text || "").length;
-      return Math.max(16, Math.min(90, Math.round(len * 0.4)));
+      return Math.max(11, Math.min(64, Math.round(len * 0.28)));
     }
 
     function sprintFinishRoughStartMarqueeDurationSec() {
@@ -108881,17 +108997,109 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const pxPerSec = roughTravel / Math.max(1, roughDur);
       if (!(pxPerSec > 1)) return fallback;
       /* 上限 180s：长文案（顶栏公式、钟点提醒）仍跟绿胶囊同一像素速度，不被 90s 截快 */
-      return Math.max(8, Math.min(180, travel / pxPerSec));
+      return Math.max(6, Math.min(180, travel / pxPerSec));
     }
 
-    /** 当前冲刺共用：把轨道单遍时长改成与绿胶囊同一像素速度 */
-    function applySprintMarqueeSpeedMatchingRoughStart(track, fallbackSec) {
-      const fallback = Math.max(1, Number(fallbackSec) || 16);
+    /**
+     * 当前冲刺共用：把轨道单遍时长改成与绿胶囊同一像素速度。
+     * speedMul>1 再加快（Victory/Defeat、冲刺顶栏长文）。
+     */
+    function applySprintMarqueeSpeedMatchingRoughStart(track, fallbackSec, speedMul) {
+      const fallback = Math.max(1, Number(fallbackSec) || 11);
       if (!track) return fallback;
-      const matched = measureSprintFinishMarqueePassSecMatchingRoughStart(track, fallback);
+      const mul = Number(speedMul) > 0 ? Number(speedMul) : 1;
+      let matched = measureSprintFinishMarqueePassSecMatchingRoughStart(track, fallback);
       if (!(matched > 0)) return fallback;
+      matched = Math.max(5, matched / mul);
       track.style.setProperty("--marquee-duration", String(matched) + "s");
       return matched;
+    }
+
+    /**
+     * 输入条 / V/D / 冲刺顶栏：同一准点不要一起滚。
+     * 小时冲刺终点线（粗糙地开始 / 整点任务）不参与，仍按自己的钟点播。
+     */
+    const HOME_MARQUEE_STAGGER_LANES = ["slogan", "vd", "reminder"];
+    let homeMarqueeStaggerClaimTick = 0;
+    let homeMarqueeStaggerClaimLane = "";
+    let homeMarqueeStaggerIdleSince = 0;
+    const homeMarqueeStaggerPending = { slogan: "", vd: "", reminder: "", at: 0 };
+
+    function isHomeMarqueeStaggerLanePlaying(lane) {
+      if (lane === "slogan") {
+        return (
+          typeof doneInputSloganMarqueeState !== "undefined" &&
+          doneInputSloganMarqueeState.phase === "playing"
+        );
+      }
+      if (lane === "vd") {
+        return (
+          (typeof vdIndexRulesMarqueeState !== "undefined" &&
+            vdIndexRulesMarqueeState.phase === "playing") ||
+          (typeof vdDesireMarqueeState !== "undefined" && vdDesireMarqueeState.phase === "playing")
+        );
+      }
+      if (lane === "reminder") {
+        return (
+          typeof sprintReminderMarqueeState !== "undefined" &&
+          sprintReminderMarqueeState.phase === "playing"
+        );
+      }
+      return false;
+    }
+
+    function isAnyOtherHomeMarqueeStaggerPlaying(selfLane) {
+      for (let i = 0; i < HOME_MARQUEE_STAGGER_LANES.length; i++) {
+        const lane = HOME_MARQUEE_STAGGER_LANES[i];
+        if (lane === selfLane) continue;
+        if (isHomeMarqueeStaggerLanePlaying(lane)) return true;
+      }
+      return false;
+    }
+
+    function homeMarqueeStaggerTurnLane() {
+      const min = new Date().getMinutes();
+      return HOME_MARQUEE_STAGGER_LANES[Math.floor(min / 5) % HOME_MARQUEE_STAGGER_LANES.length];
+    }
+
+    function rememberHomeMarqueeStaggerPending(lane, slotKey) {
+      if (!lane || !slotKey) return;
+      homeMarqueeStaggerPending[lane] = String(slotKey);
+      homeMarqueeStaggerPending.at = Date.now();
+    }
+
+    function takeHomeMarqueeStaggerPending(lane, liveSlotKey) {
+      const live = String(liveSlotKey || "");
+      if (live) return live;
+      const pending = String(homeMarqueeStaggerPending[lane] || "");
+      if (!pending) return "";
+      if (Date.now() - (homeMarqueeStaggerPending.at || 0) > 4.5 * 60 * 1000) {
+        homeMarqueeStaggerPending[lane] = "";
+        return "";
+      }
+      return pending;
+    }
+
+    function clearHomeMarqueeStaggerPending(lane) {
+      if (lane) homeMarqueeStaggerPending[lane] = "";
+    }
+
+    /** 完整播完再让下一条；同秒只允许一条开播，并轮转优先权 */
+    function tryClaimHomeMarqueeStaggerStart(lane) {
+      if (isAnyOtherHomeMarqueeStaggerPlaying(lane)) return false;
+      const now = Date.now();
+      if (homeMarqueeStaggerClaimTick === now && homeMarqueeStaggerClaimLane !== lane) {
+        return false;
+      }
+      const turn = homeMarqueeStaggerTurnLane();
+      if (turn !== lane && !isHomeMarqueeStaggerLanePlaying(lane)) {
+        if (!homeMarqueeStaggerIdleSince) homeMarqueeStaggerIdleSince = now;
+        if (now - homeMarqueeStaggerIdleSince < 800) return false;
+      }
+      homeMarqueeStaggerClaimTick = now;
+      homeMarqueeStaggerClaimLane = lane;
+      homeMarqueeStaggerIdleSince = 0;
+      return true;
     }
 
     function mountSprintFinishRoughStartMarqueeOverlay(hostEl, totalDurationSec, elapsedSecOpt) {
@@ -112247,8 +112455,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function vdIndexRulesMarqueeDurationSec(itemOrText) {
       const item = itemOrText && typeof itemOrText === "object" ? itemOrText : null;
       const text = item ? String(item.text || "") : String(itemOrText || "");
-      const base = Math.max(16, Math.min(90, Math.round(text.length * 0.4)));
-      if (item && item.kind === "formula") return Math.max(22, base);
+      const base = Math.max(11, Math.min(56, Math.round(text.length * 0.26)));
+      if (item && item.kind === "formula") return Math.max(14, base);
       return base;
     }
 
@@ -112317,7 +112525,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!reduceMotion) {
         void track.offsetWidth;
         if (!(givenTotal > 0)) {
-          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec);
+          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1.45);
         }
         track.classList.add("is-running");
       }
@@ -112437,15 +112645,24 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
 
         if (vdIndexRulesMarqueeState.phase === "playing") return;
-        const slotKey = getVdIndexRulesMarqueeClockSlotKey(new Date());
+        const liveSlot = getVdIndexRulesMarqueeClockSlotKey(new Date());
+        const slotKey = takeHomeMarqueeStaggerPending("vd-rules", liveSlot);
         if (!slotKey) return;
-        if (slotKey === readVdIndexRulesMarqueeLastSlotKey()) return;
+        if (slotKey === readVdIndexRulesMarqueeLastSlotKey()) {
+          clearHomeMarqueeStaggerPending("vd-rules");
+          return;
+        }
+        if (!tryClaimHomeMarqueeStaggerStart("vd")) {
+          rememberHomeMarqueeStaggerPending("vd-rules", slotKey);
+          return;
+        }
         const item = pickNextVdIndexRulesMarqueeItem();
         if (!item) return;
         if (!startVdIndexRulesMarqueePlay(item)) {
           vdIndexRulesMarqueeState.queue.unshift(item.id);
           return;
         }
+        clearHomeMarqueeStaggerPending("vd-rules");
         writeVdIndexRulesMarqueeLastSlotKey(slotKey);
       } finally {
         vdIndexRulesMarqueeSyncing = false;
@@ -112539,7 +112756,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         item && item.kind === "pair"
           ? String(item.lhs || "") + String(item.rhs || "")
           : String((item && item.text) || "");
-      return Math.max(12, Math.min(48, Math.round(text.length * 0.28)));
+      return Math.max(12, Math.min(32, Math.round(text.length * 0.18)));
     }
 
     function clearVdDesireMarqueeFinishTimer() {
@@ -112602,7 +112819,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!reduceMotion) {
         void track.offsetWidth;
         if (!(givenTotal > 0)) {
-          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec);
+          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1.45);
         }
         track.classList.add("is-running");
       }
@@ -112700,11 +112917,20 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         if (vdDesireMarqueeState.phase === "playing") return;
         if (host.classList.contains("is-vd-rules-marquee-playing")) return;
-        const slotKey = getVdDesireMarqueeClockSlotKey(new Date());
+        const liveSlot = getVdDesireMarqueeClockSlotKey(new Date());
+        const slotKey = takeHomeMarqueeStaggerPending("vd-desire", liveSlot);
         if (!slotKey) return;
-        if (slotKey === readVdDesireMarqueeLastSlotKey()) return;
+        if (slotKey === readVdDesireMarqueeLastSlotKey()) {
+          clearHomeMarqueeStaggerPending("vd-desire");
+          return;
+        }
+        if (!tryClaimHomeMarqueeStaggerStart("vd")) {
+          rememberHomeMarqueeStaggerPending("vd-desire", slotKey);
+          return;
+        }
         const item = pickVdDesireMarqueeItem(new Date());
         if (!startVdDesireMarqueePlay(item)) return;
+        clearHomeMarqueeStaggerPending("vd-desire");
         writeVdDesireMarqueeLastSlotKey(slotKey);
         const ui = typeof ensureDoneUi === "function" ? ensureDoneUi() : null;
         if (ui) {
@@ -113770,8 +113996,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function sprintReminderMarqueeDurationSec(text) {
       const len = String(text || "").length;
-      /* 字数兜底；真正速度在挂轨后按终点线「粗糙地开始」像素速度校准 */
-      return Math.max(16, Math.min(90, Math.round(len * 0.4)));
+      /* 字数兜底；真正速度在挂轨后按终点线「粗糙地开始」像素速度再加快 */
+      return Math.max(11, Math.min(56, Math.round(len * 0.26)));
     }
 
     /**
@@ -113828,7 +114054,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!reduceMotion) {
         void track.offsetWidth;
         if (!(givenTotal > 0)) {
-          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec);
+          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1.45);
         }
         track.classList.add("is-running");
       }
@@ -114085,9 +114311,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         ) {
           return;
         }
-        const slotKey = getSprintReminderMarqueeClockSlotKey(new Date());
+        const liveSlot = getSprintReminderMarqueeClockSlotKey(new Date());
+        const slotKey = takeHomeMarqueeStaggerPending("reminder", liveSlot);
         if (!slotKey) return;
-        if (slotKey === readSprintReminderMarqueeLastSlotKey()) return;
+        if (slotKey === readSprintReminderMarqueeLastSlotKey()) {
+          clearHomeMarqueeStaggerPending("reminder");
+          return;
+        }
+        if (!tryClaimHomeMarqueeStaggerStart("reminder")) {
+          rememberHomeMarqueeStaggerPending("reminder", slotKey);
+          return;
+        }
         const item = pickNextSprintReminderMarqueeItem(pool);
         if (!item) return;
         if (!startSprintReminderMarqueePlay(item)) {
@@ -114095,6 +114329,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           sprintReminderMarqueeState.queue.unshift(item.id);
           return;
         }
+        clearHomeMarqueeStaggerPending("reminder");
         writeSprintReminderMarqueeLastSlotKey(slotKey);
       } finally {
         sprintReminderMarqueeSyncing = false;
@@ -119484,7 +119719,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!reduceMotion) {
         void track.offsetWidth;
         if (!(givenTotal > 0) && typeof applySprintMarqueeSpeedMatchingRoughStart === "function") {
-          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec);
+          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1.2);
         }
         track.classList.add("is-running");
       }
@@ -119597,12 +119832,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           }
         }
         if (doneInputSloganMarqueeState.phase === "playing") return;
-        const slotKey = getDoneInputSloganMarqueeClockSlotKey(new Date());
+        const liveSlot = getDoneInputSloganMarqueeClockSlotKey(new Date());
+        const slotKey = takeHomeMarqueeStaggerPending("slogan", liveSlot);
         if (!slotKey) return;
-        if (slotKey === readDoneInputSloganMarqueeLastSlotKey()) return;
+        if (slotKey === readDoneInputSloganMarqueeLastSlotKey()) {
+          clearHomeMarqueeStaggerPending("slogan");
+          return;
+        }
         if (!isDoneInputSloganMarqueeHostReady()) return;
+        if (!tryClaimHomeMarqueeStaggerStart("slogan")) {
+          rememberHomeMarqueeStaggerPending("slogan", slotKey);
+          return;
+        }
         const item = pickDoneInputSloganMarqueeItem(new Date());
         if (!startDoneInputSloganMarqueePlay(item)) return;
+        clearHomeMarqueeStaggerPending("slogan");
         writeDoneInputSloganMarqueeLastSlotKey(slotKey);
       } finally {
         doneInputSloganMarqueeSyncing = false;
@@ -120321,11 +120565,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const start = new Date(getWeeklyPlanViewSprintStartKey() + "T12:00:00");
       start.setDate(start.getDate() + deltaSprints * WEEKLY_PLAN_SPRINT_DAYS);
       setWeeklyPlanViewSprintStart(formatDateInputValue(start));
+      markUiPaintSlicesDirty(["weeklyPlan"]);
       render();
     }
 
     function goWeeklyPlanCurrentSprint() {
       setWeeklyPlanViewSprintStart(getCurrentWeeklyPlanSprintStartKey());
+      markUiPaintSlicesDirty(["weeklyPlan"]);
       render();
     }
 
@@ -122783,7 +123029,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       state.weeklyPlan[k] = tasks;
       noteCloudSyncWeeklyPlanPulseWeekKey(k);
-      saveState();
+      saveState({ lists: ["weeklyPlan", "done", "closedList"] });
     }
 
     /** 周计划结构/完成态变更：本地持久化后立即 pulse，减少跨端漏同步 */
@@ -133594,6 +133840,39 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return activePrimaryModuleKey === moduleKey;
     }
 
+    /** 卫生/镜像：仅 state 变脏时跑；内部 saveState 不再标卫生脏、也不全量标 UI */
+    function runStateHygieneIfDirty() {
+      if (!stateHygieneDirty) {
+        if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.hygieneSkippedCount += 1;
+        return false;
+      }
+      if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.hygienePassCount += 1;
+      let doneHygieneChanged = refreshAllDailyWinCheckins();
+      if (repairDoneListCompletedAtFromHabitMeta()) doneHygieneChanged = true;
+      if (refreshLife4000DoneEntryTexts()) doneHygieneChanged = true;
+      if (dedupeClosedListWeeklyPlanMirrorsInState()) doneHygieneChanged = true;
+      if (pruneRedundantDoneEntriesInState()) doneHygieneChanged = true;
+      if (repairWeeklyPlanDoneListTimestampsInState()) doneHygieneChanged = true;
+      if (repairWeeklyPlanCompletionFromEvidence()) doneHygieneChanged = true;
+      rolloverWeeklyPlanIncompleteToCurrentWeek();
+      syncAllWeeklyPlanDoneLists();
+      if (syncLife4000WeeklyToDone()) doneHygieneChanged = true;
+      ensureAnniversaryTwRegistry();
+      syncAllAnniversaryDoneLists();
+      ensureTimeReflectionPromptsForToday();
+      ensureAgeGoalMilestonePromptsForToday();
+      ensureAnniversaryTw020PromptsForToday();
+      if (ensureStopDoingPinnedOrder()) doneHygieneChanged = true;
+      if (doneHygieneChanged) {
+        saveState({
+          fromHygiene: true,
+          lists: ["done", "closedList", "weeklyPlan", "habit", "dailyWin"]
+        });
+      }
+      stateHygieneDirty = false;
+      return doneHygieneChanged;
+    }
+
     function render(force) {
       if (renderDepth > 0) return;
       const t0 = beginCloudSyncPerf();
@@ -133635,24 +133914,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           em.textContent = t.replace(/^\(/, "").replace(/\)$/, "");
         });
       }
-      let doneHygieneChanged = refreshAllDailyWinCheckins();
-      if (repairDoneListCompletedAtFromHabitMeta()) doneHygieneChanged = true;
-      if (refreshLife4000DoneEntryTexts()) doneHygieneChanged = true;
-      if (dedupeClosedListWeeklyPlanMirrorsInState()) doneHygieneChanged = true;
-      if (pruneRedundantDoneEntriesInState()) doneHygieneChanged = true;
-      if (repairWeeklyPlanDoneListTimestampsInState()) doneHygieneChanged = true;
-      if (doneHygieneChanged) saveState();
-      if (repairWeeklyPlanCompletionFromEvidence()) doneHygieneChanged = true;
-      rolloverWeeklyPlanIncompleteToCurrentWeek();
-      syncAllWeeklyPlanDoneLists();
-      if (syncLife4000WeeklyToDone()) {
-        saveState();
-      }
-      ensureAnniversaryTwRegistry();
-      syncAllAnniversaryDoneLists();
-      ensureTimeReflectionPromptsForToday();
-      ensureAgeGoalMilestonePromptsForToday();
-      ensureAnniversaryTw020PromptsForToday();
+      runStateHygieneIfDirty();
       const anniversaryTw020TitleEl = document.getElementById("anniversaryTw020Title");
       if (anniversaryTw020TitleEl) {
         const l1 = anniversaryTw020TitleEl.querySelector(".anniversary-tw020-heading-l1");
@@ -133671,23 +133933,44 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       let filteredDoneTasksForStats = [];
       let filteredMemoItems = [];
       let filteredDailyWinTasks = [];
-      if (paintDynamic) {
+      const paintDoneSlice = paintDynamic && isUiPaintSliceDirty("done");
+      const paintMemoSlice = paintDynamic && isUiPaintSliceDirty("memo");
+      const paintStopSlice = paintDynamic && isUiPaintSliceDirty("stopDoing");
+      const paintNotToDoSlice = paintDynamic && isUiPaintSliceDirty("notToDo");
+      const paintHatersSlice = paintDynamic && isUiPaintSliceDirty("haters");
+      const paintClosedSlice = paintDynamic && isUiPaintSliceDirty("closedList");
+      const paintWeeklySlice = paintDynamic && isUiPaintSliceDirty("weeklyPlan");
+      const paintKineticSlice = paintDynamic && isUiPaintSliceDirty("kinetic");
+      const paintHabitSlice = paintHabit && (isUiPaintSliceDirty("habit") || isUiPaintSliceDirty("dailyWin"));
+      const paintGoalsSlice = paintGoals && isUiPaintSliceDirty("goals");
+      const paintForgeSlice = paintForge && isUiPaintSliceDirty("forge");
+      const paintPurposeSlice = paintPurpose && isUiPaintSliceDirty("purpose");
+      if (paintDoneSlice) {
         const filteredDoneTasksRaw = state.done.filter((task) =>
           doneTaskMatchesFilterDate(task, selectedDoneDate)
         );
         filteredDoneTasks = dedupeDoneTasksForDisplay(filteredDoneTasksRaw);
         filteredDoneTasksForStats = filteredDoneTasks.filter(isDoneCountedAsDayProduction);
+      }
+      if (paintMemoSlice) {
         filteredMemoItems = state.memo.slice();
       }
-      if (paintHabit) {
+      if (paintHabitSlice) {
         filteredDailyWinTasks = getDailyWinTasksForDate(baseDailyWinDate);
       }
-      if (ensureStopDoingPinnedOrder()) {
-        saveState();
-      }
-      if (paintDynamic) {
+      if (paintStopSlice) {
         renderList(stopDoingList, state.stopDoing, "stopDoing");
+        if (stopDoingCount) stopDoingCount.textContent = state.stopDoing.length;
+        stopDoingEmpty.style.display = state.stopDoing.length ? "none" : "block";
+        clearUiPaintSlice("stopDoing");
+      }
+      if (paintNotToDoSlice) {
         renderList(notToDoList, state.notToDo, "notToDo");
+        if (notToDoCount) notToDoCount.textContent = state.notToDo.length;
+        notToDoEmpty.style.display = state.notToDo.length ? "none" : "block";
+        clearUiPaintSlice("notToDo");
+      }
+      if (paintHatersSlice) {
         if (hatersDoubtersLogList) {
           renderList(hatersDoubtersLogList, Array.isArray(state.hatersDoubtersLog) ? state.hatersDoubtersLog : [], "hatersDoubtersLog");
         }
@@ -133695,99 +133978,101 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           const n = Array.isArray(state.hatersDoubtersLog) ? state.hatersDoubtersLog.length : 0;
           hatersDoubtersEmpty.style.display = n ? "none" : "block";
         }
+        clearUiPaintSlice("haters");
+      }
+      if (paintMemoSlice) {
         renderList(memoList, filteredMemoItems, "memo");
+        memoCount.textContent = filteredMemoItems.length;
+        memoEmpty.style.display = filteredMemoItems.length ? "none" : "block";
+        clearUiPaintSlice("memo");
+      }
+      if (paintClosedSlice) {
         renderClosedListPanel();
+        try { syncClosedListPendingTitleStyles(); } catch (e) { console.warn("[封闭清单] 未完成标题强调失败:", e); }
+        clearUiPaintSlice("closedList");
+      }
+      if (paintDoneSlice) {
         renderList(doneList, filteredDoneTasks, "done");
         ensureDonePastFoldClickSetup();
         if (typeof renderDoneSleepCountdownBar === "function") {
           renderDoneSleepCountdownBar();
         }
+        try {
+          renderDoneOutcomeDayStats(doneOutcomeDayStats, filteredDoneTasksForStats);
+          renderDoneDayStats(doneDayStats, filteredDoneTasksForStats);
+          if (typeof renderDoneVdIndexHome === "function") {
+            renderDoneVdIndexHome(filteredDoneTasksForStats);
+          }
+          if (typeof renderDoneMoveHourlySlogan === "function") {
+            renderDoneMoveHourlySlogan();
+          }
+          if (typeof renderDoneDailyDecisionReport === "function") {
+            renderDoneDailyDecisionReport(filteredDoneTasksForStats);
+          }
+        } catch (doneStatsErr) {
+          console.warn("[My Done] 统计/战报渲染失败:", doneStatsErr);
+        }
+        if (doneListTitleCount) {
+          const n = filteredDoneTasksForStats.length;
+          const dayLabel = formatDoneListDayCountLabel(selectedDoneDate);
+          doneListTitleCount.setAttribute("aria-label", dayLabel + " " + n + " 项");
+          doneListTitleCount.replaceChildren();
+          doneListTitleCount.append(document.createTextNode("（"));
+          doneListTitleCount.append(document.createTextNode(dayLabel + " "));
+          const titleNum = document.createElement("span");
+          titleNum.className = "done-list-count-num";
+          titleNum.textContent = String(n);
+          doneListTitleCount.append(titleNum);
+          doneListTitleCount.append(document.createTextNode(" 项）"));
+          if (doneCountInline) {
+            doneCountInline.replaceChildren();
+            const inlinePrefix = document.createElement("span");
+            inlinePrefix.className = "kinetic-done-count-inline__prefix";
+            inlinePrefix.textContent = dayLabel + " ";
+            doneCountInline.append(inlinePrefix);
+            const inlineNum = document.createElement("span");
+            inlineNum.className = "done-list-count-num";
+            inlineNum.textContent = String(n);
+            doneCountInline.append(inlineNum);
+            const inlineSuffix = document.createElement("span");
+            inlineSuffix.className = "kinetic-done-count-inline__suffix";
+            inlineSuffix.textContent = " 项";
+            doneCountInline.append(inlineSuffix);
+            const fullLabel = dayLabel + " " + n + " 项";
+            doneCountInline.setAttribute("aria-label", fullLabel);
+            doneCountInline.setAttribute("title", fullLabel);
+          }
+        }
+        doneEmpty.style.display = filteredDoneTasks.length ? "none" : "block";
+        clearUiPaintSlice("done");
       }
       ensureDoneTimeBlockSprintTicker();
-      if (paintHabit) {
+      if (paintHabitSlice) {
         renderList(dailyWinList, filteredDailyWinTasks, "dailyWin");
         try {
           renderHabitCheckins();
         } catch (habitRenderErr) {
           console.warn("[习惯] renderHabitCheckins 失败:", habitRenderErr);
         }
-      }
-
-      if (paintDynamic && stopDoingCount) stopDoingCount.textContent = state.stopDoing.length;
-      if (paintDynamic && notToDoCount) notToDoCount.textContent = state.notToDo.length;
-      if (paintDynamic) memoCount.textContent = filteredMemoItems.length;
-      if (paintDynamic) try {
-        renderDoneOutcomeDayStats(doneOutcomeDayStats, filteredDoneTasksForStats);
-        renderDoneDayStats(doneDayStats, filteredDoneTasksForStats);
-        if (typeof renderDoneVdIndexHome === "function") {
-          renderDoneVdIndexHome(filteredDoneTasksForStats);
+        dailyWinCount.textContent = filteredDailyWinTasks.length;
+        if (dailyWinDateFilter) {
+          dailyWinDateFilter.value = selectedDailyWinDate;
         }
-        if (typeof renderDoneMoveHourlySlogan === "function") {
-          renderDoneMoveHourlySlogan();
+        if (dailyWinList) {
+          dailyWinList.classList.remove("daily-win-list--tomorrow");
         }
-        if (typeof renderDoneDailyDecisionReport === "function") {
-          renderDoneDailyDecisionReport(filteredDoneTasksForStats);
+        dailyWinEmpty.style.display = (filteredDailyWinTasks.length || isDailyWinModernMode()) ? "none" : "block";
+        if (stampDailyThreeWinsDoneBtn) {
+          const stampDateKey = baseDailyWinDate;
+          const stampCount = countDailyWinEntriesForDate(stampDateKey);
+          const stampHasDone = hasHabitDoneEntry("dailyThreeWins", stampDateKey);
+          const stampSuppressed = Boolean(
+            state.habitCheckins[stampDateKey] && state.habitCheckins[stampDateKey].dailyThreeWinsDoneSuppressed
+          );
+          stampDailyThreeWinsDoneBtn.hidden =
+            stampCount < 3 || (stampHasDone && !stampSuppressed);
+          stampDailyThreeWinsDoneBtn.textContent = stampSuppressed ? "重新记入 My Done" : "记入 My Done";
         }
-      } catch (doneStatsErr) {
-        console.warn("[My Done] 统计/战报渲染失败:", doneStatsErr);
-      }
-      if (paintDynamic && doneListTitleCount) {
-        const n = filteredDoneTasksForStats.length;
-        const dayLabel = formatDoneListDayCountLabel(selectedDoneDate);
-        doneListTitleCount.setAttribute("aria-label", dayLabel + " " + n + " 项");
-        doneListTitleCount.replaceChildren();
-        doneListTitleCount.append(document.createTextNode("（"));
-        doneListTitleCount.append(document.createTextNode(dayLabel + " "));
-        const titleNum = document.createElement("span");
-        titleNum.className = "done-list-count-num";
-        titleNum.textContent = String(n);
-        doneListTitleCount.append(titleNum);
-        doneListTitleCount.append(document.createTextNode(" 项）"));
-        if (doneCountInline) {
-          doneCountInline.replaceChildren();
-          const inlinePrefix = document.createElement("span");
-          inlinePrefix.className = "kinetic-done-count-inline__prefix";
-          inlinePrefix.textContent = dayLabel + " ";
-          doneCountInline.append(inlinePrefix);
-          const inlineNum = document.createElement("span");
-          inlineNum.className = "done-list-count-num";
-          inlineNum.textContent = String(n);
-          doneCountInline.append(inlineNum);
-          const inlineSuffix = document.createElement("span");
-          inlineSuffix.className = "kinetic-done-count-inline__suffix";
-          inlineSuffix.textContent = " 项";
-          doneCountInline.append(inlineSuffix);
-          const fullLabel = dayLabel + " " + n + " 项";
-          doneCountInline.setAttribute("aria-label", fullLabel);
-          doneCountInline.setAttribute("title", fullLabel);
-        }
-      }
-      if (paintHabit) dailyWinCount.textContent = filteredDailyWinTasks.length;
-      if (paintHabit && dailyWinDateFilter) {
-        dailyWinDateFilter.value = selectedDailyWinDate;
-      }
-      if (paintHabit && dailyWinList) {
-        dailyWinList.classList.remove("daily-win-list--tomorrow");
-      }
-      if (paintDynamic) {
-        stopDoingEmpty.style.display = state.stopDoing.length ? "none" : "block";
-        notToDoEmpty.style.display = state.notToDo.length ? "none" : "block";
-        memoEmpty.style.display = filteredMemoItems.length ? "none" : "block";
-        doneEmpty.style.display = filteredDoneTasks.length ? "none" : "block";
-      }
-      if (paintHabit) dailyWinEmpty.style.display = (filteredDailyWinTasks.length || isDailyWinModernMode()) ? "none" : "block";
-      if (paintHabit && stampDailyThreeWinsDoneBtn) {
-        const stampDateKey = baseDailyWinDate;
-        const stampCount = countDailyWinEntriesForDate(stampDateKey);
-        const stampHasDone = hasHabitDoneEntry("dailyThreeWins", stampDateKey);
-        const stampSuppressed = Boolean(
-          state.habitCheckins[stampDateKey] && state.habitCheckins[stampDateKey].dailyThreeWinsDoneSuppressed
-        );
-        stampDailyThreeWinsDoneBtn.hidden =
-          stampCount < 3 || (stampHasDone && !stampSuppressed);
-        stampDailyThreeWinsDoneBtn.textContent = stampSuppressed ? "重新记入 My Done" : "记入 My Done";
-      }
-      if (paintHabit) {
         try {
           renderBackwardMeasure();
         } catch (bmErr) {
@@ -133819,23 +134104,33 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         } catch (measureTabsErr) {
           console.warn("[AMB] initMeasureSegmentDesktopTabs 失败:", measureTabsErr);
         }
+        clearUiPaintSlice("habit");
+        clearUiPaintSlice("dailyWin");
       }
-      if (paintGoals) {
+      if (paintGoalsSlice) {
         try { renderAgeGoalsCountdown(); } catch (e) { console.warn("[My Goals] renderAgeGoalsCountdown 失败:", e); }
         try { renderMoneyGoalsCountdown(); } catch (e) { console.warn("[My Goals] renderMoneyGoalsCountdown 失败:", e); }
         try {
           if (typeof ensureMyGoalsCountdownFlashTicker === "function") ensureMyGoalsCountdownFlashTicker();
         } catch (e) { console.warn("[My Goals] countdown flash 失败:", e); }
+        clearUiPaintSlice("goals");
       }
-      if (paintDynamic) {
-        try { renderDailyReminder(); } catch (e) { console.warn("[每日提醒] 失败:", e); }
+      if (paintWeeklySlice) {
         try { renderWeeklyPlanUI(); } catch (e) { console.warn("[周计划] 失败:", e); }
-        try { syncClosedListPendingTitleStyles(); } catch (e) { console.warn("[封闭清单] 未完成标题强调失败:", e); }
-        try { renderKineticCountdowns(); } catch (e) { console.warn("[Kinetic倒计时] 失败:", e); }
+        clearUiPaintSlice("weeklyPlan");
       }
-      if (paintForge) {
+      if (paintKineticSlice) {
+        try { renderDailyReminder(); } catch (e) { console.warn("[每日提醒] 失败:", e); }
+        try { renderKineticCountdowns(); } catch (e) { console.warn("[Kinetic倒计时] 失败:", e); }
+        clearUiPaintSlice("kinetic");
+      }
+      if (paintForgeSlice) {
         try { refreshAllForgeTodayTaskRowsFromDone(); } catch (e) { console.warn("[Forge] 刷新今日行失败:", e); }
         try { renderForgeTodaysForgeList(); } catch (e) { console.warn("[Forge] 今日打卡列表渲染失败:", e); }
+        clearUiPaintSlice("forge");
+      }
+      if (paintPurposeSlice) {
+        clearUiPaintSlice("purpose");
       }
       /* Phase 1：首屏只刷核心（今日/目标/习惯）；重模块 idle 后再刷 */
       if (isBootFirstRenderPass) {
@@ -136897,6 +137192,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const v = event.target.value;
         if (!v) return;
         setWeeklyPlanViewSprintStart(getSprintStartKeyForDate(new Date(v + "T12:00:00")));
+        markUiPaintSlicesDirty(["weeklyPlan"]);
         render();
       });
     }
@@ -137294,6 +137590,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         selectedDoneDate = formatDateInputValue(parsed);
         if (doneDateFilter) doneDateFilter.value = selectedDoneDate;
         if (kineticHeaderDateInput) kineticHeaderDateInput.value = selectedDoneDate;
+        markUiPaintSlicesDirty(["done"]);
         render();
         return true;
       };
@@ -137589,6 +137886,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function setDoneFilterDate(date) {
       selectedDoneDate = formatDateInputValue(date);
       doneDateFilter.value = selectedDoneDate;
+      markUiPaintSlicesDirty(["done"]);
       render();
     }
 
@@ -137868,6 +138166,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     doneDateFilter.addEventListener("change", (event) => {
       selectedDoneDate = event.target.value || formatDateInputValue(new Date());
       if (kineticHeaderDateInput) kineticHeaderDateInput.value = selectedDoneDate;
+      markUiPaintSlicesDirty(["done"]);
       render();
     });
 
@@ -137875,6 +138174,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       kineticHeaderDateInput.addEventListener("change", (event) => {
         selectedDoneDate = event.target.value || formatDateInputValue(new Date());
         doneDateFilter.value = selectedDoneDate;
+        markUiPaintSlicesDirty(["done"]);
         render();
       });
     }
@@ -141418,6 +141718,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (typeof ensureMyGoalsCountdownFlashTicker === "function") ensureMyGoalsCountdownFlashTicker();
       } else if (typeof stopMyGoalsCountdownFlashTicker === "function") {
         stopMyGoalsCountdownFlashTicker();
+      }
+      /* 切模块时只脏当前模块切片，避免漏标导致隐藏页回来是旧 DOM */
+      if (activePrimaryModuleKey === "dynamic") {
+        markUiPaintSlicesDirty(["done", "closedList", "weeklyPlan", "memo", "stopDoing", "notToDo", "haters", "kinetic"]);
+      } else if (activePrimaryModuleKey === "habit") {
+        markUiPaintSlicesDirty(["habit", "dailyWin"]);
+      } else if (activePrimaryModuleKey === "forge") {
+        markUiPaintSlicesDirty(["forge"]);
+      } else if (activePrimaryModuleKey === "goals") {
+        markUiPaintSlicesDirty(["goals"]);
+      } else if (activePrimaryModuleKey === "purpose") {
+        markUiPaintSlicesDirty(["purpose"]);
       }
       /* 首屏 render() 早于底栏 init：全屏/焦点类名在后应用，须补一次 render，否则每天三赢等依赖 isDailyWinModernMode() 的 UI 会陈旧 */
       render();
