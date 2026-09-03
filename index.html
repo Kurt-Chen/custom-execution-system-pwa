@@ -13053,17 +13053,46 @@
     }
 
     .reading-plan-item-completed-date {
+      position: relative;
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       flex: 0 0 auto;
       height: 28px;
+      min-height: 28px;
+      max-height: 28px;
+      margin: 0;
+      padding: 0 8px;
+      border-radius: 999px;
+      border: 1px solid #e2e8f0;
+      background: #f8fafc;
+      box-sizing: border-box;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 26px;
+      color: #475569;
+      white-space: nowrap;
+      overflow: hidden;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .reading-plan-item-completed-date__label {
+      pointer-events: none;
+    }
+
+    .reading-plan-item-completed-date__input {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
       margin: 0;
       padding: 0;
-      font-size: 12px;
-      font-weight: 600;
-      line-height: 1;
-      color: #4b5563;
-      white-space: nowrap;
+      opacity: 0;
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      font-size: 16px;
     }
 
     .reading-plan-item .reading-plan-item-toolbar .btn-delete {
@@ -14090,7 +14119,11 @@
 
       .reading-plan-item-completed-date {
         height: 28px;
-        font-size: 11px;
+        min-height: 28px;
+        max-height: 28px;
+        padding: 0 7px;
+        font-size: 10px;
+        line-height: 26px;
       }
 
       .reading-plan-item-toolbar {
@@ -30214,7 +30247,7 @@
         font-size: 14px;
         font-weight: 800;
         font-style: normal;
-        color: #111827;
+        color: var(--sprint-finish-orange);
         letter-spacing: 0.03em;
         line-height: 1.05;
         white-space: nowrap;
@@ -32574,7 +32607,7 @@
         font-size: 14px;
         font-weight: 800;
         font-style: normal;
-        color: #111827;
+        color: var(--sprint-finish-orange);
         letter-spacing: 0.03em;
         line-height: 1.05;
         white-space: nowrap;
@@ -88305,7 +88338,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260903l";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260903m";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -90822,11 +90855,8 @@
       out.readOn = winRead || loseRead || "";
       if (winner.status !== "completed" && loser.status === "completed") {
         out.status = "completed";
-        out.completedAt = Math.max(
-          Number(winner.completedAt) || 0,
-          Number(loser.completedAt) || 0,
-          Date.now()
-        );
+        const keepAt = Math.max(Number(winner.completedAt) || 0, Number(loser.completedAt) || 0);
+        out.completedAt = keepAt > 0 ? keepAt : Date.now();
       }
       out.updatedAt = Math.max(
         Number(l.updatedAt) || 0,
@@ -126992,13 +127022,30 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function appendReadingPlanCompletedDateRow(parentEl, book) {
       if (!parentEl || !book || book.status !== "completed") return;
-      const row = document.createElement("div");
-      row.className = "reading-plan-item-completed-date";
+      const bookId = book.id;
+      const wrap = document.createElement("label");
+      wrap.className = "reading-plan-item-completed-date";
       const iso = formatReadingPlanCompletedDateInputValue(book);
       const shown = iso ? iso.replace(/-/g, "/") : "—";
-      row.textContent = "读完 " + shown;
-      row.setAttribute("aria-label", "阅读完成日期 " + shown);
-      parentEl.appendChild(row);
+      const label = document.createElement("span");
+      label.className = "reading-plan-item-completed-date__label";
+      label.textContent = "读完 " + shown;
+      wrap.setAttribute("aria-label", "阅读完成日期 " + shown + "，点击修改");
+      const input = document.createElement("input");
+      input.type = "date";
+      input.className = "reading-plan-item-completed-date__input";
+      input.value = iso;
+      input.setAttribute("aria-label", "选择阅读完成日期");
+      input.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+      });
+      input.addEventListener("change", function (ev) {
+        ev.stopPropagation();
+        setReadingPlanBookCompletedDate(bookId, input.value);
+      });
+      wrap.appendChild(label);
+      wrap.appendChild(input);
+      parentEl.appendChild(wrap);
     }
 
     function appendReadingPlanChapterTextEl(cLi, book, chapter) {
