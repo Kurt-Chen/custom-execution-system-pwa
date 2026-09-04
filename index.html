@@ -74866,7 +74866,7 @@
                     <div class="habit-health-weight-head">
                       <div class="habit-health-weight-titles">
                         <div class="habit-health-weight-title-wrap">
-                          <h3 class="submodule-title">称体重·测体脂<span class="habit-en-title-capsule habit-en-title-capsule--desktop-only habit-en-title-capsule--weight-week-avg" aria-label="上周称重均值">上周均值：—</span><span class="habit-en-title-capsule habit-en-title-capsule--lose-1jin" aria-label="-1斤/周">-1斤/周</span><span class="habit-en-title-capsule habit-en-title-capsule--wakeup-scale" aria-label="起床后先尿尿再上体脂秤">起床→尿尿→上体脂秤</span></h3>
+                          <h3 class="submodule-title">称体重·测体脂<span class="habit-en-title-capsule habit-en-title-capsule--desktop-only habit-en-title-capsule--weight-week-avg" aria-label="上周称重均值">上周均值：—</span><span class="habit-en-title-capsule habit-en-title-capsule--lose-1jin" aria-label="-1斤/周">-1斤/周</span><span class="habit-en-title-capsule habit-en-title-capsule--wakeup-scale" aria-label="起床后先尿尿再体脂秤">起床→尿尿→体脂秤</span></h3>
                         </div>
                       </div>
                     </div>
@@ -88352,7 +88352,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260903o";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260904b";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -90358,6 +90358,8 @@
           chosen.doneOmitted = true;
         }
       }
+      if (chosen && chosen.state) coerceNestedCloudListFields(chosen.state);
+      if (other && other.state) coerceNestedCloudListFields(other.state);
       return chosen;
     }
 
@@ -90801,10 +90803,69 @@
       return changed;
     }
 
+    /**
+     * Firebase RTDB 把连续数组存成 {0:…,1:…}；一旦中间有洞，val() 变成对象。
+     * 调用方若用 Array.isArray 判断，会把封闭清单/章节整表当成空列表丢掉。
+     */
+    function coerceIdRecordList(value) {
+      if (Array.isArray(value)) return value.filter(Boolean);
+      if (!value || typeof value !== "object") return [];
+      const keys = Object.keys(value);
+      if (!keys.length) return [];
+      let allNumeric = true;
+      const numericKeys = [];
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        if (!/^\d+$/.test(k)) {
+          allNumeric = false;
+          break;
+        }
+        numericKeys.push(Number(k));
+      }
+      if (allNumeric) {
+        numericKeys.sort(function (a, b) {
+          return a - b;
+        });
+        return numericKeys.map(function (n) {
+          return value[n];
+        }).filter(Boolean);
+      }
+      return keys
+        .map(function (k) {
+          return value[k];
+        })
+        .filter(function (x) {
+          return x && typeof x === "object";
+        });
+    }
+
+    /** 云端/落盘快照：把 RTDB 对象形列表纠正为数组，避免 loadState 当成空表清空 */
+    function coerceNestedCloudListFields(st) {
+      if (!st || typeof st !== "object") return st;
+      ["done", "memo", "closedList", "stopDoing", "notToDo", "dailyWin", "kineticCountdowns", "successCriteria", "trash"].forEach(
+        function (k) {
+          if (st[k] != null) st[k] = coerceIdRecordList(st[k]);
+        }
+      );
+      if (st.readingPlan && typeof st.readingPlan === "object") {
+        st.readingPlan.books = coerceIdRecordList(st.readingPlan.books);
+        st.readingPlan.books.forEach(function (b) {
+          if (!b || typeof b !== "object") return;
+          b.chapters = coerceIdRecordList(b.chapters);
+        });
+      }
+      if (st.weeklyPlan && typeof st.weeklyPlan === "object") {
+        Object.keys(st.weeklyPlan).forEach(function (wk) {
+          st.weeklyPlan[wk] = coerceIdRecordList(st.weeklyPlan[wk]);
+        });
+      }
+      return st;
+    }
+
     /** 阅读计划 pulse 合并：同 id 书目合并章节列表，避免手机端空 chapters 覆盖桌面端完整数据 */
-    function mergeReadingPlanChaptersForSync(locChapters, remChapters) {
-      const loc = Array.isArray(locChapters) ? locChapters : [];
-      const rem = Array.isArray(remChapters) ? remChapters : [];
+    function mergeReadingPlanChaptersForSync(locChapters, remChapters, tombstones) {
+      const loc = coerceIdRecordList(locChapters);
+      const rem = coerceIdRecordList(remChapters);
       const byId = new Map();
       function ingest(ch) {
         if (!ch || typeof ch !== "object" || ch.id == null) return;
@@ -90824,10 +90885,15 @@
       }
       rem.forEach(ingest);
       loc.forEach(ingest);
-      return Array.from(byId.values());
+      const ts = tombstones && typeof tombstones === "object" ? tombstones : null;
+      return Array.from(byId.values()).filter(function (ch) {
+        if (!ch || ch.id == null) return false;
+        if (ts && Object.prototype.hasOwnProperty.call(ts, String(ch.id))) return false;
+        return true;
+      });
     }
 
-    function mergeReadingPlanOneBookForSync(L, R, preferLocalOnTie) {
+    function mergeReadingPlanOneBookForSync(L, R, preferLocalOnTie, tombstones) {
       const l = L && typeof L === "object" ? L : null;
       const r = R && typeof R === "object" ? R : null;
       if (!l && !r) return null;
@@ -90847,9 +90913,9 @@
         winner = preferLocalOnTie ? l : r;
         loser = preferLocalOnTie ? r : l;
       }
-      const locCh = Array.isArray(l.chapters) ? l.chapters : [];
-      const remCh = Array.isArray(r.chapters) ? r.chapters : [];
-      const mergedChapters = mergeReadingPlanChaptersForSync(locCh, remCh);
+      const locCh = coerceIdRecordList(l.chapters);
+      const remCh = coerceIdRecordList(r.chapters);
+      const mergedChapters = mergeReadingPlanChaptersForSync(locCh, remCh, tombstones);
       const out = normalizeReadingPlanBook(Object.assign({}, winner, { chapters: mergedChapters }));
       if (!out) return normalizeReadingPlanBook(loser);
       if (!String(out.title || "").trim() && loser.title) {
@@ -90882,9 +90948,9 @@
       return out;
     }
 
-    function mergeReadingPlanBooksForSync(localArr, remoteArr) {
-      const loc = Array.isArray(localArr) ? localArr : [];
-      const rem = Array.isArray(remoteArr) ? remoteArr : [];
+    function mergeReadingPlanBooksForSync(localArr, remoteArr, tombstones) {
+      const loc = coerceIdRecordList(localArr);
+      const rem = coerceIdRecordList(remoteArr);
       const mapLoc = new Map(
         loc
           .filter(function (x) {
@@ -90906,7 +90972,7 @@
       const ids = new Set(Array.from(mapLoc.keys()).concat(Array.from(mapRem.keys())));
       const merged = [];
       ids.forEach(function (id) {
-        const book = mergeReadingPlanOneBookForSync(mapLoc.get(id), mapRem.get(id), true);
+        const book = mergeReadingPlanOneBookForSync(mapLoc.get(id), mapRem.get(id), true, tombstones);
         if (book) merged.push(book);
       });
       merged.sort(function (a, b) {
@@ -90921,7 +90987,7 @@
       const ts =
         state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
       const merged = omitTombstonedIdRecords(
-        mergeReadingPlanBooksForSync(state.readingPlan.books, books),
+        mergeReadingPlanBooksForSync(state.readingPlan.books, books, ts),
         ts
       );
       const normalized = merged.map(normalizeReadingPlanBook).filter(Boolean);
@@ -91108,20 +91174,20 @@
         next[sk] = Object.assign({}, p, n, { weeks: mergedWeeks, weekGoals: mergedGoals });
       });
       if (!next.weeklyPlan && prev.weeklyPlan) next.weeklyPlan = prev.weeklyPlan;
-      if (
-        !(Array.isArray(next.closedList) && next.closedList.length) &&
-        Array.isArray(prev.closedList) &&
-        prev.closedList.length
-      ) {
-        next.closedList = prev.closedList;
+      /* 两侧都有清单时必须并集：旧逻辑「next 非空就整包用 next」会把后写入的瘦快照盖掉新加条目/章节 */
+      if (prev.closedList || next.closedList) {
+        next.closedList = mergeClosedListArraysForSync(prev.closedList, next.closedList);
       }
       if (
-        !(next.readingPlan && Array.isArray(next.readingPlan.books) && next.readingPlan.books.length) &&
-        prev.readingPlan &&
-        Array.isArray(prev.readingPlan.books) &&
-        prev.readingPlan.books.length
+        (prev.readingPlan && prev.readingPlan.books) ||
+        (next.readingPlan && next.readingPlan.books)
       ) {
-        next.readingPlan = prev.readingPlan;
+        next.readingPlan = {
+          books: mergeReadingPlanBooksForSync(
+            prev.readingPlan && prev.readingPlan.books,
+            next.readingPlan && next.readingPlan.books
+          )
+        };
       }
       if (next.moveBreakDay || prev.moveBreakDay) {
         next.moveBreakDay = mergeMoveBreakDayForSync(prev.moveBreakDay, next.moveBreakDay);
@@ -91812,13 +91878,8 @@
       if (state.habitCheckins && typeof state.habitCheckins === "object") {
         if (state.habitCheckins[todayKey] && typeof state.habitCheckins[todayKey] === "object") {
           pulseState.habitCheckins[todayKey] = state.habitCheckins[todayKey];
-        } else if (
-          doneToday.some(function (t) {
-            return t && t.habitMeta && t.habitMeta.date === todayKey;
-          })
-        ) {
-          pulseState.habitCheckins[todayKey] = {};
         }
+        /* 不再写入空的今日对象：他端若整包套用会把「有日期无勾选」当成未打卡快照 */
       }
       const forgePulse = buildCloudSyncForgePulseSlice();
       if (forgePulse) pulseState.forge = forgePulse;
@@ -92505,16 +92566,18 @@
         .child("pulse")
         .once("value")
         .then(function (snap) {
+          /* 等云端上一帧读回后再拍本机快照，避免把刚添加的条目/章节漏出 pulse */
+          const livePulse = buildCloudSyncPulsePayload();
           const prevNode = snap && typeof snap.val === "function" ? snap.val() : null;
           const prevState = prevNode && prevNode.state && typeof prevNode.state === "object" ? prevNode.state : null;
-          const merged = mergeStickyCloudSyncPulseState(prevState, pulseState);
+          const merged = mergeStickyCloudSyncPulseState(prevState, livePulse);
           try {
             applyStickyMergedPulseToLocal(merged);
           } catch (_stickyLocalErr) {}
           return writePulse(merged);
         })
         .catch(function () {
-          return writePulse(pulseState);
+          return writePulse(buildCloudSyncPulsePayload());
         });
     }
 
@@ -93294,9 +93357,26 @@
       return out;
     }
 
+    function pickLaterClosedListAssignmentSide(L, R, out) {
+      if (!L || !R || !out || out.completed) return out;
+      const lDay =
+        typeof getClosedListItemAssignmentDateKey === "function" ? getClosedListItemAssignmentDateKey(L) : null;
+      const rDay =
+        typeof getClosedListItemAssignmentDateKey === "function" ? getClosedListItemAssignmentDateKey(R) : null;
+      if (!lDay || !rDay || lDay === rDay) return out;
+      const later = lDay > rDay ? L : R;
+      if (later.createdAt != null) out.createdAt = later.createdAt;
+      const dl = typeof normalizeDeadlineAtMs === "function" ? normalizeDeadlineAtMs(later.deadlineAt) : later.deadlineAt;
+      if (dl != null) out.deadlineAt = dl;
+      else delete out.deadlineAt;
+      const u = Math.max(Number(out.updatedAt) || 0, Number(later.updatedAt) || 0);
+      if (u > 0) out.updatedAt = u;
+      return out;
+    }
+
     function mergeClosedListArraysForSync(localArr, remoteArr) {
-      const loc = Array.isArray(localArr) ? localArr : [];
-      const rem = Array.isArray(remoteArr) ? remoteArr : [];
+      const loc = coerceIdRecordList(localArr);
+      const rem = coerceIdRecordList(remoteArr);
       const merged = mergeIdRecordArraysPreferLocalOnTie(loc, rem);
       const mapLoc = new Map(
         loc
@@ -93333,6 +93413,7 @@
             out = Object.assign({}, out);
             applyDeadlineMergeToItem(out, dlPick);
             fillClosedListMergedItemFromSides(out, L, R);
+            pickLaterClosedListAssignmentSide(L, R, out);
             const u = Math.max(revBump, Number(out.updatedAt) || 0, Number(dlPick.deadlineUpdatedAt) || 0);
             if (u > 0) out.updatedAt = u;
           }
@@ -93908,6 +93989,10 @@
             return false;
           }
           state.readingPlan.books.unshift(normalized);
+          clearSyncTombstone(normalized.id);
+          coerceIdRecordList(normalized.chapters).forEach(function (ch) {
+            if (ch && ch.id != null) clearSyncTombstone(ch.id);
+          });
           okRemoveTrash();
           saveState();
           render();
@@ -93935,6 +94020,7 @@
             return false;
           }
           book.chapters.push(normalized);
+          clearSyncTombstone(normalized.id);
           okRemoveTrash();
           saveState();
           render();
@@ -94728,6 +94814,9 @@
     /** 习惯打卡保存后：本地+pulse，并立即同步完成态 UI */
     function saveStateAfterHabitCheckin() {
       saveStateWithCloudPulseImmediate({ lists: ["habit", "dailyWin", "done"] });
+      try {
+        flushLocalPersistedState("force");
+      } catch (_habitFlushErr) {}
       finalizeHabitCheckinUiAfterPunch();
     }
 
@@ -96380,7 +96469,7 @@
         : [];
       base.readingPlan = {
         books: omitTombstonedIdRecords(
-          mergeReadingPlanBooksForSync(localReadingBooks, remoteReadingBooks),
+          mergeReadingPlanBooksForSync(localReadingBooks, remoteReadingBooks, ts),
           ts
         )
       };
@@ -96888,10 +96977,52 @@
       const lifetimeBefore = captureCloudSyncLifetimeSnapshot(state);
       const localEnforce = opts && opts.lifetimeEnforceLocal ? opts.lifetimeEnforceLocal : null;
       const remoteEnforce = opts && opts.lifetimeEnforceRemote ? opts.lifetimeEnforceRemote : null;
+      let liveHcSnap = null;
+      let liveDoneSnap = null;
+      try {
+        liveHcSnap = JSON.parse(JSON.stringify(state.habitCheckins || {}));
+      } catch (_liveHcErr) {
+        liveHcSnap = state.habitCheckins && typeof state.habitCheckins === "object" ? state.habitCheckins : {};
+      }
+      try {
+        liveDoneSnap = Array.isArray(state.done) ? state.done.slice() : [];
+      } catch (_liveDoneErr) {
+        liveDoneSnap = Array.isArray(state.done) ? state.done : [];
+      }
       cloudSyncApplyingRemote = true;
       cloudSyncSuppressPush = true;
       setCloudSyncLifetimeEnforceSides(localEnforce, remoteEnforce);
       try {
+        /* 异步拉云期间本机可能又加了清单/章节/打卡：写入前再并一次，避免旧 merged 盖掉刚写入的数据 */
+        try {
+          merged.closedList = mergeClosedListArraysForSync(state.closedList, merged.closedList);
+          const locBooks = state.readingPlan && state.readingPlan.books;
+          const remBooks = merged.readingPlan && merged.readingPlan.books;
+          if (locBooks || remBooks) {
+            if (!merged.readingPlan || typeof merged.readingPlan !== "object") {
+              merged.readingPlan = { books: [] };
+            }
+            merged.readingPlan.books = mergeReadingPlanBooksForSync(
+              locBooks,
+              remBooks,
+              state.syncTombstones
+            );
+          }
+          merged.habitCheckins = mergeHabitCheckinsForSync(state.habitCheckins, merged.habitCheckins);
+          const tsLive =
+            state.syncTombstones && typeof state.syncTombstones === "object"
+              ? state.syncTombstones
+              : {};
+          merged.done = omitTombstonedIdRecords(
+            mergeDoneArraysForSync(
+              Array.isArray(state.done) ? state.done : [],
+              Array.isArray(merged.done) ? merged.done : [],
+              false
+            ),
+            tsLive
+          );
+        } catch (_reviveLists) {}
+        coerceNestedCloudListFields(merged);
         state = merged;
         markStateHygieneDirty();
         markAllUiPaintSlicesDirty();
@@ -96900,6 +97031,22 @@
         normalizeDoneOutcomeKindsInState();
         repairDoneListCompletedAtFromHabitMeta();
         reconcileDerivedCheckinsFromDoneAfterLoad();
+        /* reconcile 可能按裁过的 Done 重建：把写入前本机已打卡再并回来 */
+        try {
+          if (liveHcSnap) {
+            state.habitCheckins = mergeHabitCheckinsForSync(liveHcSnap, state.habitCheckins);
+          }
+          if (liveDoneSnap && liveDoneSnap.length) {
+            const tsAfter =
+              state.syncTombstones && typeof state.syncTombstones === "object"
+                ? state.syncTombstones
+                : {};
+            state.done = omitTombstonedIdRecords(
+              mergeDoneArraysForSync(liveDoneSnap, state.done, false),
+              tsAfter
+            );
+          }
+        } catch (_reviveHcAfter) {}
         enforceCloudSyncLifetimeMaxFromSides(localEnforce, remoteEnforce);
         sanityCheckForgeAndHabitLifetimeAfterSync(lifetimeBefore, "整包合并");
         if (reconcileWeeklyPlanTasksToDeadlineWeeks()) {
@@ -97045,6 +97192,41 @@
       if (st.habitCheckins && typeof st.habitCheckins === "object") {
         n += Object.keys(st.habitCheckins).length;
       }
+      const books =
+        st.readingPlan && Array.isArray(st.readingPlan.books) ? st.readingPlan.books : coerceIdRecordList(st.readingPlan && st.readingPlan.books);
+      n += books.length;
+      books.forEach(function (b) {
+        n += coerceIdRecordList(b && b.chapters).length;
+      });
+      return n;
+    }
+
+    function countClosedListRecordsInState(st) {
+      return coerceIdRecordList(st && st.closedList).length;
+    }
+
+    function countReadingPlanChaptersInState(st) {
+      const books =
+        st && st.readingPlan ? coerceIdRecordList(st.readingPlan.books) : [];
+      let n = 0;
+      books.forEach(function (b) {
+        n += coerceIdRecordList(b && b.chapters).length;
+      });
+      return n;
+    }
+
+    /** 已勾选习惯槽位数（同一日多个习惯分别计）；「少不覆盖多」不能只数日期个数 */
+    function countHabitCheckinMarksInState(st) {
+      const hc = st && st.habitCheckins && typeof st.habitCheckins === "object" ? st.habitCheckins : {};
+      let n = 0;
+      Object.keys(hc).forEach(function (dateStr) {
+        const day = hc[dateStr];
+        if (!day || typeof day !== "object") return;
+        Object.keys(day).forEach(function (habitKey) {
+          if (habitKey === "dailyThreeWinsDoneSuppressed") return;
+          if (isHabitCheckinValueChecked(day[habitKey])) n += 1;
+        });
+      });
       return n;
     }
 
@@ -97057,7 +97239,12 @@
       if (!remoteState || typeof remoteState !== "object") return false;
       const localN = countBusinessRecordsInState(state);
       const remoteN = countBusinessRecordsInState(remoteState);
-      if (localN === 0 || remoteN >= localN) return false;
+      const fewerClosed = countClosedListRecordsInState(state) > countClosedListRecordsInState(remoteState);
+      const fewerChapters = countReadingPlanChaptersInState(state) > countReadingPlanChaptersInState(remoteState);
+      const fewerHabitMarks =
+        countHabitCheckinMarksInState(state) > countHabitCheckinMarksInState(remoteState);
+      if (localN === 0) return false;
+      if (remoteN >= localN && !fewerClosed && !fewerChapters && !fewerHabitMarks) return false;
       let localSnapForEnforce = null;
       try {
         localSnapForEnforce = JSON.parse(JSON.stringify(state));
@@ -97111,8 +97298,22 @@
       } catch (_hcSnapErr) {
         localHcSnap = state.habitCheckins && typeof state.habitCheckins === "object" ? state.habitCheckins : {};
       }
+      let toApplyRaw = remoteRaw;
+      try {
+        const toApply = JSON.parse(remoteRaw);
+        toApply.habitCheckins = mergeHabitCheckinsForSync(localHcSnap, toApply.habitCheckins);
+        toApply.done = omitTombstonedIdRecords(
+          mergeDoneArraysForSync(
+            Array.isArray(state.done) ? state.done : [],
+            Array.isArray(toApply.done) ? toApply.done : [],
+            false
+          ),
+          state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {}
+        );
+        toApplyRaw = JSON.stringify(toApply);
+      } catch (_preMergeErr) {}
       cloudSyncApplyingRemote = true;
-      const persistRes = applyStateJsonToLocalStorage(remoteRaw);
+      const persistRes = applyStateJsonToLocalStorage(toApplyRaw);
       if (!persistRes.ok) {
         cloudSyncApplyingRemote = false;
         return false;
@@ -97126,17 +97327,9 @@
       }
       /* 整包写入后：本机已打卡不得被远端未打卡盖掉，并补回对应 Done 行 */
       if (localHcSnap && typeof localHcSnap === "object") {
-        const mergedHc = mergeHabitCheckinsForSync(localHcSnap, state.habitCheckins);
-        try {
-          if (JSON.stringify(state.habitCheckins || {}) !== JSON.stringify(mergedHc || {})) {
-            state.habitCheckins = mergedHc;
-            reconcileDerivedCheckinsFromDoneAfterLoad();
-            persistStateToLocalStorage();
-          }
-        } catch (_hcKeepErr) {
-          state.habitCheckins = mergedHc;
-          reconcileDerivedCheckinsFromDoneAfterLoad();
-        }
+        state.habitCheckins = mergeHabitCheckinsForSync(localHcSnap, state.habitCheckins);
+        reconcileDerivedCheckinsFromDoneAfterLoad();
+        persistStateToLocalStorage();
       }
       if (reconcileWeeklyPlanTasksToDeadlineWeeks()) {
         saveState();
@@ -97740,7 +97933,9 @@
       } catch (_e) {
         return { ok: false, localPersisted: false };
       }
-      if (!parsed || !Array.isArray(parsed.done)) return { ok: false, localPersisted: false };
+      if (!parsed) return { ok: false, localPersisted: false };
+      coerceNestedCloudListFields(parsed);
+      if (!Array.isArray(parsed.done)) return { ok: false, localPersisted: false };
       state = parsed;
       try {
         const r = persistStateToLocalStorage();
@@ -97774,11 +97969,20 @@
       }
     }
 
+    /** 封闭清单/章节等关键写入：立刻落盘，避免 400ms 防抖窗口内被云合并或关页冲掉 */
+    function persistCriticalLocalState(lists) {
+      saveState({ lists: lists });
+      try {
+        flushLocalPersistedState("force");
+      } catch (_critPersist) {}
+    }
+
     function loadState() {
       const raw = getPersistedStateJsonFromCache();
       if (!raw) return;
       try {
         const data = JSON.parse(raw);
+        coerceNestedCloudListFields(data);
         if (Array.isArray(data.done)) {
           state = data;
           if (!Array.isArray(state.stopDoing)) {
@@ -97874,7 +98078,7 @@
             state.memo = [];
           }
           if (!Array.isArray(state.closedList)) {
-            state.closedList = [];
+            state.closedList = coerceIdRecordList(state.closedList);
           }
           if (!Array.isArray(state.trash)) {
             state.trash = [];
@@ -97925,10 +98129,7 @@
           if (!state.readingPlan || typeof state.readingPlan !== "object") {
             state.readingPlan = { books: [] };
           }
-          if (!Array.isArray(state.readingPlan.books)) {
-            state.readingPlan.books = [];
-          }
-          state.readingPlan.books = state.readingPlan.books
+          state.readingPlan.books = coerceIdRecordList(state.readingPlan.books)
             .map(normalizeReadingPlanBook)
             .filter(Boolean);
           if (
@@ -100135,6 +100336,10 @@
       if (!state.habitCheckins[dateStr]) state.habitCheckins[dateStr] = {};
       const prev = state.habitCheckins[dateStr][habitKey];
       const rows = getHabitDoneRowsForDay(habitKey, dateStr);
+      /* Done 被裁成近期分片或尚未补回时，禁止用「0 行」把已打卡写成未打卡 */
+      if (rows.length === 0 && isHabitCheckinValueChecked(prev)) {
+        return;
+      }
       let rebuilt = false;
       if (habitKey === "weightAndBodyFat") {
         if (rows.length === 0) {
@@ -100899,7 +101104,11 @@
       repairInflatedHabitNumericCheckins();
       dailyWinDates.forEach(function (dateStr) {
         if (!state.habitCheckins[dateStr]) state.habitCheckins[dateStr] = {};
-        state.habitCheckins[dateStr].dailyThreeWins = countDailyWinEntriesForDate(dateStr) >= 3;
+        const fromCount = countDailyWinEntriesForDate(dateStr) >= 3;
+        state.habitCheckins[dateStr].dailyThreeWins = mergeHabitCheckinValueForSync(
+          state.habitCheckins[dateStr].dailyThreeWins,
+          fromCount
+        );
       });
       if (state.ruleOf100 && typeof state.ruleOf100 === "object") {
         const dayCheckins = {};
@@ -101998,14 +102207,14 @@
     function createClosedListItem(text, dateStr, miniStepOpt) {
       const ms = String(miniStepOpt || "").trim();
       const subSteps = ms ? [ms] : [];
-      return {
+      return stampEntityRevision({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: text.trim(),
         miniStep: ms,
         subSteps: subSteps,
         avoidance: 3,
         createdAt: habitDateToCompletedAt(dateStr)
-      };
+      });
     }
 
     function parseClosedListInput(raw) {
@@ -102069,7 +102278,7 @@
         });
       }
       closedListInput.value = "";
-      saveState({ lists: ["closedList"] });
+      persistCriticalLocalState(["closedList"]);
       renderClosedListPanel();
       clearUiPaintSlice("closedList");
       closedListInput.focus();
@@ -122300,15 +122509,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           item.deadlineAt = habitDateToCompletedAt(todayKey);
         }
         if (typeof item.listOrder === "number") delete item.listOrder;
+        stampEntityRevision(item);
         changed = true;
       });
       return changed;
     }
 
-    /** 同一日历日内跳过重复扫描；检测到换日时做一次结转（配合定时器与 Page Visibility） */
+    /** 云合并可能把结转日期打回过去；每次都扫描，已是今天则内部早退 */
     function tickClosedListDayRollover() {
       const todayKey = formatDateInputValue(new Date());
-      if (closedListRolloverAnchorDate === todayKey) return false;
       closedListRolloverAnchorDate = todayKey;
       return rolloverIncompleteClosedListPastDaysToToday();
     }
@@ -124508,19 +124717,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         promoteDl != null
           ? formatDateInputValue(new Date(promoteDl))
           : selectedClosedListDate;
+      const existingMirror = state.closedList.find(function (it) {
+        const mo = it && it.mirrorOf;
+        return mo && mo.kind === "weeklyPlan" && mo.id === task.id;
+      });
+      if (existingMirror) {
+        existingMirror.createdAt = habitDateToCompletedAt(dateStr);
+        if (promoteDl != null) existingMirror.deadlineAt = promoteDl;
+        stampEntityRevision(existingMirror);
+        persistCriticalLocalState(["closedList"]);
+        setWeeklyPlanShell("closed");
+        render();
+        return;
+      }
       const sameDay = getClosedListItemsVisibleForViewDate(dateStr);
       if (sameDay.length >= CLOSED_LIST_DAY_MAX_ITEMS) {
         alert("Closed List 每天最多 " + CLOSED_LIST_DAY_MAX_ITEMS + " 条，请先删除一条再加入。");
         return;
       }
-      if (
-        sameDay.some((it) => String(it.text || "").trim() === lineText) ||
-        state.closedList.some(function (it) {
-          const mo = it && it.mirrorOf;
-          return mo && mo.kind === "weeklyPlan" && mo.id === task.id;
-        })
-      ) {
-        alert("已与封闭清单建立同步（同一 Sprint 任务仅保留一条镜像）。");
+      if (sameDay.some((it) => String(it.text || "").trim() === lineText)) {
+        setWeeklyPlanShell("closed");
+        render();
         return;
       }
       const li = createClosedListItem(lineText, dateStr, "");
@@ -124532,7 +124749,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         syncClosedListToDone(li);
       }
       state.closedList.unshift(li);
-      saveState();
+      persistCriticalLocalState(["closedList"]);
       setWeeklyPlanShell("closed");
       render();
     }
@@ -124762,18 +124979,28 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         promoteDl != null
           ? formatDateInputValue(new Date(promoteDl))
           : selectedClosedListDate;
+      const existingAnnMirror = state.closedList.find(function (it) {
+        return anniversaryMirrorMatchesTarget(it && it.mirrorOf, module, task.id, subId || null);
+      });
+      if (existingAnnMirror) {
+        existingAnnMirror.createdAt = habitDateToCompletedAt(dateStr);
+        if (promoteDl != null) existingAnnMirror.deadlineAt = promoteDl;
+        stampEntityRevision(existingAnnMirror);
+        persistCriticalLocalState(["closedList"]);
+        if (typeof activateKineticTab === "function") activateKineticTab("weekly");
+        setWeeklyPlanShell("closed");
+        render();
+        return;
+      }
       const sameDay = getClosedListItemsVisibleForViewDate(dateStr);
       if (sameDay.length >= CLOSED_LIST_DAY_MAX_ITEMS) {
         alert("Closed List 每天最多 " + CLOSED_LIST_DAY_MAX_ITEMS + " 条，请先删除一条再加入。");
         return;
       }
-      if (
-        sameDay.some((it) => String(it.text || "").trim() === lineText) ||
-        state.closedList.some(function (it) {
-          return anniversaryMirrorMatchesTarget(it && it.mirrorOf, module, task.id, subId || null);
-        })
-      ) {
-        alert("已与封闭清单建立同步（同一十二周年任务仅保留一条镜像）。");
+      if (sameDay.some((it) => String(it.text || "").trim() === lineText)) {
+        if (typeof activateKineticTab === "function") activateKineticTab("weekly");
+        setWeeklyPlanShell("closed");
+        render();
         return;
       }
       const li = createClosedListItem(lineText, dateStr, "");
@@ -124787,7 +125014,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         syncClosedListToDone(li);
       }
       state.closedList.unshift(li);
-      saveState();
+      persistCriticalLocalState(["closedList"]);
       if (typeof activateKineticTab === "function") activateKineticTab("weekly");
       setWeeklyPlanShell("closed");
       render();
@@ -126497,9 +126724,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (status === "completed") {
         completedAt = Number.isFinite(Number(x.completedAt)) ? Number(x.completedAt) : createdAt;
       }
-      const chapters = Array.isArray(x.chapters)
-        ? x.chapters.map(normalizeReadingPlanChapter).filter(Boolean)
-        : [];
+      const chapters = coerceIdRecordList(x.chapters)
+        .map(normalizeReadingPlanChapter)
+        .filter(Boolean);
       const legacyChapter = String(x.chapter || "").trim();
       if (legacyChapter && !chapters.some((c) => c.text === legacyChapter)) {
         chapters.unshift({
@@ -126615,6 +126842,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           originalId: bookId,
           payload: deepCloneForTrash(book)
         });
+        recordSyncTombstone(bookId);
+        coerceIdRecordList(book.chapters).forEach(function (ch) {
+          if (ch && ch.id != null) recordSyncTombstone(ch.id);
+        });
       }
       state.readingPlan.books = books.filter((b) => b.id !== bookId);
       saveState();
@@ -126671,7 +126902,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       touchReadingPlanBookUpdatedAt(book);
       ensureWeeklyPlanUi();
       state.weeklyPlanUi.readingPlanExpandedBooks[bookId] = true;
-      saveState();
+      persistCriticalLocalState(["weeklyPlan"]);
       renderReadingPlan();
     }
 
@@ -126760,6 +126991,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           payload: deepCloneForTrash(chapter),
           meta: { bookId: bookId }
         });
+        recordSyncTombstone(chapterId);
       }
       book.chapters = book.chapters.filter((c) => c.id !== chapterId);
       touchReadingPlanBookUpdatedAt(book);
