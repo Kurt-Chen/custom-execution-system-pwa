@@ -2609,7 +2609,7 @@
       line-height: 1;
     }
 
-    /* 上半区：DON'T THINK ➫ Start ➫ Finish ➫ Sleep 跑马灯（每 10 分钟 × 两遍） */
+    /* 上半区跑马灯：封闭清单提醒 →（隔10s）→ DON'T THINK 链；:x5 5分钟重启 */
     .done-sleep-countdown.is-motto-marquee-playing .done-sleep-countdown__hud {
       visibility: hidden;
     }
@@ -2633,6 +2633,17 @@
 
     .done-sleep-countdown.is-motto-marquee-playing .done-sleep-countdown__motto-marquee-overlay {
       display: flex;
+    }
+
+    /* 封闭清单未完成提醒：醒目红底 */
+    .done-sleep-countdown.is-motto-marquee-playing--remind .done-sleep-countdown__motto-marquee-overlay {
+      background: linear-gradient(
+        90deg,
+        rgba(254, 226, 226, 0.98) 0%,
+        rgba(254, 202, 202, 0.99) 50%,
+        rgba(254, 226, 226, 0.98) 100%
+      );
+      box-shadow: inset 0 0 0 2px rgba(220, 38, 38, 0.45);
     }
 
     .done-sleep-countdown__motto-marquee {
@@ -2672,6 +2683,48 @@
     .done-sleep-countdown__motto-marquee__track.is-running {
       animation: done-sleep-countdown-motto-marquee-rtl var(--dsc-motto-duration, 10s) linear
         var(--dsc-motto-passes, 2) forwards;
+    }
+
+    .done-sleep-countdown__motto-marquee__track--closed-remind {
+      gap: 0 4px;
+      font-size: 12px;
+      font-style: normal;
+    }
+
+    .done-sleep-countdown__motto-marquee__remind-lead {
+      display: inline-flex;
+      align-items: center;
+      flex-shrink: 0;
+      margin: 0 2px 0 0;
+      padding: 2px 10px;
+      border-radius: 999px;
+      border: 1px solid #fb7185;
+      background: #fff;
+      color: #be123c;
+      font-weight: 900;
+      font-size: 11px;
+      line-height: 1.2;
+      white-space: nowrap;
+      box-shadow: 0 1px 4px rgba(190, 18, 60, 0.2);
+    }
+
+    .done-sleep-countdown__motto-marquee__remind-text {
+      color: #9f1239;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .done-sleep-countdown__motto-marquee__remind-task {
+      color: #be123c;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .done-sleep-countdown__motto-marquee__remind-arrow {
+      color: #9f1239;
+      font-weight: 800;
+      margin: 0 2px;
+      white-space: nowrap;
     }
 
     /* 5分钟重启 essay：浅字 + restart 胶囊，塞进上半高度 */
@@ -2909,6 +2962,15 @@
 
       .done-sleep-countdown__motto-marquee__track--essay {
         font-size: 10px;
+      }
+
+      .done-sleep-countdown__motto-marquee__track--closed-remind {
+        font-size: 10px;
+      }
+
+      .done-sleep-countdown__motto-marquee__remind-lead {
+        font-size: 9px;
+        padding: 1px 8px;
       }
 
       .done-sleep-countdown__motto-marquee__pill {
@@ -89098,7 +89160,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260904u";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260904v";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -117400,19 +117462,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       };
     }
 
-    /** 上半跑马灯：尾数 0 → DON'T THINK 链×2；尾数 5 → 5分钟重启×1 */
+    /** 上半跑马灯：:x0 先封闭清单提醒（与 TSF 同遍数）→ 隔 10s → DON'T THINK；:x5 → 5分钟重启×1 */
     const SLEEP_COUNTDOWN_MOTTO_MARQUEE_PASSES = 2;
     const SLEEP_COUNTDOWN_MOTTO_MARQUEE_PASS_SEC = 10;
     const SLEEP_COUNTDOWN_RESTART_MARQUEE_PASSES = 1;
+    const SLEEP_COUNTDOWN_CLOSED_REMIND_GAP_MS = 10000;
     const SLEEP_COUNTDOWN_MOTTO_MARQUEE_SLOT_KEY =
-      "done-sleep-countdown-motto-marquee-last-slot-v2";
+      "done-sleep-countdown-motto-marquee-last-slot-v3";
     let doneSleepCountdownMottoMarqueeSyncing = false;
     let doneSleepCountdownMottoMarqueeState = {
       phase: "idle",
       lastSlotKey: "",
       playToken: 0,
       playEndsAt: 0,
-      finishTimerId: null
+      finishTimerId: null,
+      gapTimerId: null,
+      queue: [],
+      currentKind: ""
     };
 
     function clearDoneSleepCountdownMottoMarqueeFinishTimer() {
@@ -117422,25 +117488,81 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
+    function clearDoneSleepCountdownMottoMarqueeGapTimer() {
+      if (doneSleepCountdownMottoMarqueeState.gapTimerId) {
+        clearTimeout(doneSleepCountdownMottoMarqueeState.gapTimerId);
+        doneSleepCountdownMottoMarqueeState.gapTimerId = null;
+      }
+    }
+
     function clearDoneSleepCountdownMottoMarqueeOverlay(hostEl) {
       const host = hostEl || document.getElementById("doneSleepCountdownBar");
       if (!host) return;
       host.classList.remove("is-motto-marquee-playing");
+      host.classList.remove("is-motto-marquee-playing--remind");
       const overlay = host.querySelector(".done-sleep-countdown__motto-marquee-overlay");
       if (overlay) overlay.replaceChildren();
     }
 
-    function finishDoneSleepCountdownMottoMarquee(playToken) {
-      if (
-        playToken != null &&
-        playToken !== doneSleepCountdownMottoMarqueeState.playToken
-      ) {
-        return;
-      }
+    function resetDoneSleepCountdownMottoMarqueeIdle() {
       clearDoneSleepCountdownMottoMarqueeFinishTimer();
+      clearDoneSleepCountdownMottoMarqueeGapTimer();
       clearDoneSleepCountdownMottoMarqueeOverlay();
       doneSleepCountdownMottoMarqueeState.phase = "idle";
       doneSleepCountdownMottoMarqueeState.playEndsAt = 0;
+      doneSleepCountdownMottoMarqueeState.queue = [];
+      doneSleepCountdownMottoMarqueeState.currentKind = "";
+    }
+
+    /** 今日封闭清单未完成标题（与睡眠 pending 计数同源） */
+    function getTodayClosedListUnfinishedTitles() {
+      const todayKey = formatDateInputValue(new Date());
+      const items =
+        typeof getClosedListItemsVisibleForViewDate === "function"
+          ? getClosedListItemsVisibleForViewDate(todayKey)
+          : [];
+      const titles = [];
+      (Array.isArray(items) ? items : []).forEach(function (item) {
+        if (!item) return;
+        if (
+          typeof isClosedListItemEffectivelyComplete === "function" &&
+          isClosedListItemEffectivelyComplete(item)
+        ) {
+          return;
+        }
+        const t = String(item.text || "").trim();
+        if (t) titles.push(t);
+      });
+      return titles;
+    }
+
+    function appendDoneSleepCountdownClosedRemindTrack(track) {
+      if (!track) return "";
+      const titles = getTodayClosedListUnfinishedTitles();
+      const n = titles.length;
+      const lead = document.createElement("span");
+      lead.className = "done-sleep-countdown__motto-marquee__remind-lead";
+      lead.textContent = "🔒 提醒";
+      track.appendChild(lead);
+      const head = document.createElement("span");
+      head.className = "done-sleep-countdown__motto-marquee__remind-text";
+      head.textContent =
+        "：必须完成才能睡觉！还剩 " + String(n) + " 项" + (n ? " · " : "");
+      track.appendChild(head);
+      for (let i = 0; i < titles.length; i++) {
+        if (i > 0) {
+          const arrow = document.createElement("span");
+          arrow.className = "done-sleep-countdown__motto-marquee__remind-arrow";
+          arrow.setAttribute("aria-hidden", "true");
+          arrow.textContent = "➫";
+          track.appendChild(arrow);
+        }
+        const task = document.createElement("span");
+        task.className = "done-sleep-countdown__motto-marquee__remind-task";
+        task.textContent = titles[i];
+        track.appendChild(task);
+      }
+      return head.textContent + titles.join(" ➫ ");
     }
 
     function appendDoneSleepCountdownMottoMarqueeTrack(track) {
@@ -117500,7 +117622,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function getDoneSleepCountdownMottoMarqueeSlotKey(dateOpt) {
       const d = dateOpt instanceof Date ? dateOpt : new Date();
       const min = d.getMinutes();
-      /* :x0 → TSF 胶囊；:x5 → 5分钟重启 */
+      /* :x0 → 提醒+TSF；:x5 → 5分钟重启 */
       if (min % 10 !== 0 && min % 10 !== 5) return "";
       const y = d.getFullYear();
       const mo = String(d.getMonth() + 1).padStart(2, "0");
@@ -117514,7 +117636,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const d = dateOpt instanceof Date ? dateOpt : new Date();
       const min = d.getMinutes();
       if (min % 10 === 5) return "restart";
-      if (min % 10 === 0) return "tsf";
+      if (min % 10 === 0) return "tsf-slot";
       return "";
     }
 
@@ -117542,13 +117664,66 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
+    function scheduleDoneSleepCountdownMottoMarqueeGapThenNext(host) {
+      clearDoneSleepCountdownMottoMarqueeGapTimer();
+      doneSleepCountdownMottoMarqueeState.phase = "gap";
+      clearDoneSleepCountdownMottoMarqueeOverlay(host);
+      const gapMs = Math.max(0, Number(SLEEP_COUNTDOWN_CLOSED_REMIND_GAP_MS) || 10000);
+      const token = doneSleepCountdownMottoMarqueeState.playToken;
+      doneSleepCountdownMottoMarqueeState.gapTimerId = window.setTimeout(function () {
+        doneSleepCountdownMottoMarqueeState.gapTimerId = null;
+        if (token !== doneSleepCountdownMottoMarqueeState.playToken) return;
+        const next = doneSleepCountdownMottoMarqueeState.queue.shift();
+        if (!next) {
+          resetDoneSleepCountdownMottoMarqueeIdle();
+          return;
+        }
+        const liveHost = document.getElementById("doneSleepCountdownBar");
+        if (!liveHost || liveHost.hidden) {
+          resetDoneSleepCountdownMottoMarqueeIdle();
+          return;
+        }
+        startDoneSleepCountdownMottoMarqueePlay(liveHost, next);
+      }, gapMs);
+    }
+
+    function finishDoneSleepCountdownMottoMarquee(playToken) {
+      if (
+        playToken != null &&
+        playToken !== doneSleepCountdownMottoMarqueeState.playToken
+      ) {
+        return;
+      }
+      clearDoneSleepCountdownMottoMarqueeFinishTimer();
+      const host = document.getElementById("doneSleepCountdownBar");
+      const next = doneSleepCountdownMottoMarqueeState.queue[0];
+      if (next && host && !host.hidden) {
+        /* 提醒与 TSF 之间留 10 秒，露出已过/仅剩 */
+        scheduleDoneSleepCountdownMottoMarqueeGapThenNext(host);
+        return;
+      }
+      resetDoneSleepCountdownMottoMarqueeIdle();
+    }
+
     function startDoneSleepCountdownMottoMarqueePlay(host, kindOpt) {
       if (!host || host.hidden) return false;
       const overlay = host.querySelector(".done-sleep-countdown__motto-marquee-overlay");
       if (!overlay) return false;
-      const kind = kindOpt === "restart" ? "restart" : "tsf";
+      const kind =
+        kindOpt === "restart"
+          ? "restart"
+          : kindOpt === "closed-remind"
+            ? "closed-remind"
+            : "tsf";
+      if (kind === "closed-remind" && getTodayClosedListUnfinishedTitles().length === 0) {
+        return false;
+      }
+      clearDoneSleepCountdownMottoMarqueeFinishTimer();
       clearDoneSleepCountdownMottoMarqueeOverlay(host);
       host.classList.add("is-motto-marquee-playing");
+      if (kind === "closed-remind") {
+        host.classList.add("is-motto-marquee-playing--remind");
+      }
       const viewport = document.createElement("span");
       viewport.className = "done-sleep-countdown__motto-marquee";
       const track = document.createElement("span");
@@ -117568,6 +117743,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           typeof doneInputSloganMarqueeDurationSec === "function"
             ? doneInputSloganMarqueeDurationSec(fullText)
             : Math.max(28, Math.min(70, Math.round(String(fullText).length * 0.35)));
+      } else if (kind === "closed-remind") {
+        track.classList.add("done-sleep-countdown__motto-marquee__track--closed-remind");
+        const remindText = appendDoneSleepCountdownClosedRemindTrack(track);
+        /* 与 DON'T THINK 同遍数 */
+        passes = Math.max(1, Number(SLEEP_COUNTDOWN_MOTTO_MARQUEE_PASSES) || 2);
+        passSec =
+          typeof doneInputSloganMarqueeDurationSec === "function"
+            ? Math.max(
+                8,
+                Math.min(36, doneInputSloganMarqueeDurationSec(remindText) * 0.55)
+              )
+            : Math.max(8, Math.min(36, Math.round(String(remindText).length * 0.28)));
       } else {
         appendDoneSleepCountdownMottoMarqueeTrack(track);
         passes = Math.max(1, Number(SLEEP_COUNTDOWN_MOTTO_MARQUEE_PASSES) || 2);
@@ -117583,10 +117770,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const durationSec = reduceMotion ? Math.min(4, passSec) : passSec * passes;
       const playMs = durationSec * 1000;
       doneSleepCountdownMottoMarqueeState.phase = "playing";
+      doneSleepCountdownMottoMarqueeState.currentKind = kind;
       doneSleepCountdownMottoMarqueeState.playToken += 1;
       const token = doneSleepCountdownMottoMarqueeState.playToken;
       doneSleepCountdownMottoMarqueeState.playEndsAt = Date.now() + playMs;
-      clearDoneSleepCountdownMottoMarqueeFinishTimer();
       if (!reduceMotion) {
         void track.offsetWidth;
         track.classList.add("is-running");
@@ -117597,6 +117784,20 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return true;
     }
 
+    /** :x0 有未完成 → 先提醒再 TSF；无未完成 → 只播 TSF */
+    function beginDoneSleepCountdownMottoMarqueeSlot(host, slotKind) {
+      doneSleepCountdownMottoMarqueeState.queue = [];
+      if (slotKind === "restart") {
+        return startDoneSleepCountdownMottoMarqueePlay(host, "restart");
+      }
+      const titles = getTodayClosedListUnfinishedTitles();
+      if (titles.length > 0) {
+        doneSleepCountdownMottoMarqueeState.queue.push("tsf");
+        return startDoneSleepCountdownMottoMarqueePlay(host, "closed-remind");
+      }
+      return startDoneSleepCountdownMottoMarqueePlay(host, "tsf");
+    }
+
     /** 由 updateDoneSleepCountdownBarDom 调用；纯 UI，不 saveState */
     function syncDoneSleepCountdownMottoMarquee(hostOpt) {
       if (doneSleepCountdownMottoMarqueeSyncing) return;
@@ -117604,10 +117805,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       try {
         const host = hostOpt || document.getElementById("doneSleepCountdownBar");
         if (!host || host.hidden) {
-          if (doneSleepCountdownMottoMarqueeState.phase === "playing") {
-            finishDoneSleepCountdownMottoMarquee(
-              doneSleepCountdownMottoMarqueeState.playToken
-            );
+          if (doneSleepCountdownMottoMarqueeState.phase !== "idle") {
+            resetDoneSleepCountdownMottoMarqueeIdle();
           }
           return;
         }
@@ -117620,12 +117819,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           }
           return;
         }
+        if (doneSleepCountdownMottoMarqueeState.phase === "gap") {
+          return;
+        }
         const slotKey = getDoneSleepCountdownMottoMarqueeSlotKey(new Date());
         if (!slotKey) return;
         if (slotKey === readDoneSleepCountdownMottoMarqueeLastSlotKey()) return;
         const kind = pickDoneSleepCountdownMottoMarqueeKind(new Date());
         if (!kind) return;
-        if (!startDoneSleepCountdownMottoMarqueePlay(host, kind)) return;
+        if (!beginDoneSleepCountdownMottoMarqueeSlot(host, kind)) return;
         writeDoneSleepCountdownMottoMarqueeLastSlotKey(slotKey);
       } finally {
         doneSleepCountdownMottoMarqueeSyncing = false;
@@ -117648,7 +117850,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return host;
       }
       host.dataset.sleepCountdownBuilt = "8";
-      finishDoneSleepCountdownMottoMarquee(doneSleepCountdownMottoMarqueeState.playToken);
+      resetDoneSleepCountdownMottoMarqueeIdle();
       host.replaceChildren();
 
       const bar = document.createElement("div");
