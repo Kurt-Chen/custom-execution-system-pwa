@@ -9597,8 +9597,36 @@
 
     #habitRoutineModule .amb-gain-footer-total {
       margin-right: auto;
+      display: inline-flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
       font-size: 12px;
-      color: #7a7a7a;
+      color: #64748b;
+    }
+
+    /* A.M.B 累计条数：对齐 Body「N次打卡」实心绿胶囊 */
+    #habitRoutineModule .amb-gain-footer-lifetime {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 24px;
+      padding: 2px 10px;
+      border-radius: 999px;
+      background: #16a34a;
+      border: 1px solid #15803d;
+      color: #ffffff;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.2;
+      white-space: nowrap;
+      box-sizing: border-box;
+    }
+
+    #habitRoutineModule .amb-gain-footer-period {
+      color: #64748b;
+      font-weight: 600;
+      white-space: nowrap;
     }
 
     #habitRoutineModule .amb-gain-save {
@@ -10026,8 +10054,20 @@
 
     #habitRoutineModule .daily-win-modern-footer--today .daily-win-modern-footer-total {
       margin-right: auto;
-      color: #1d9e75;
-      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 24px;
+      padding: 2px 10px;
+      border-radius: 999px;
+      background: #16a34a;
+      border: 1px solid #15803d;
+      color: #ffffff;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.2;
+      white-space: nowrap;
+      box-sizing: border-box;
     }
 
     /* 每天三赢左栏底部：加粗 Work = Output，字号跟栏宽走，避免溢出 */
@@ -89172,7 +89212,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260904x";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260904y";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -92110,6 +92150,12 @@
       }
       if (typeof syncSprintFinishHourTaskMarquee === "function") {
         syncSprintFinishHourTaskMarquee();
+      }
+      /* 保存后取消「编辑中推迟 render」，避免随后的后台重绘用旧快照盖掉刚写入的周任务 */
+      renderDeferredWhileEditing = false;
+      if (renderWhenEditingEndsTimer) {
+        clearTimeout(renderWhenEditingEndsTimer);
+        renderWhenEditingEndsTimer = null;
       }
     }
 
@@ -95594,9 +95640,12 @@
       pushCloudSyncPulseOnly();
     }
 
-    /** 今日交互类保存：IndexedDB 立即写入并刷新 UI；Firebase 走 1–3s 后台防抖 */
+    /** 今日交互类保存：IndexedDB 立即写入；Firebase 走 1–3s 后台防抖 */
     function saveStateWithCloudPulseImmediate(opts) {
       saveState(opts);
+      try {
+        flushLocalPersistedState("force");
+      } catch (_pulseFlushErr) {}
     }
 
     /**
@@ -95947,6 +95996,84 @@
         ...a,
         quoteApp: mergeIdRecordArraysPreferLocalOnTie(qa, qb)
       };
+    }
+
+    /** A.M.B / 向后衡量：按周期键并集，同键取 updatedAt 较新；平局保留条目更多的一侧（本机优先） */
+    function mergeBackwardMeasurePeriodEntryForSync(locRaw, remRaw) {
+      const hasLoc = locRaw && typeof locRaw === "object";
+      const hasRem = remRaw && typeof remRaw === "object";
+      if (!hasLoc && !hasRem) return { items: [], text: "", updatedAt: 0 };
+      if (!hasLoc) {
+        const rOnly = normalizeBackwardMeasurePeriodEntry(remRaw);
+        return {
+          items: rOnly.items,
+          text: serializeBackwardMeasureItems(rOnly.items),
+          updatedAt: rOnly.updatedAt || 0
+        };
+      }
+      if (!hasRem) {
+        const lOnly = normalizeBackwardMeasurePeriodEntry(locRaw);
+        return {
+          items: lOnly.items,
+          text: serializeBackwardMeasureItems(lOnly.items),
+          updatedAt: lOnly.updatedAt || 0
+        };
+      }
+      const l = normalizeBackwardMeasurePeriodEntry(locRaw);
+      const r = normalizeBackwardMeasurePeriodEntry(remRaw);
+      const lAt = l.updatedAt || 0;
+      const rAt = r.updatedAt || 0;
+      let pick = l;
+      if (rAt > lAt) pick = r;
+      else if (rAt === lAt) {
+        const lN = l.items.filter(function (it) {
+          return String(it.text || "").trim();
+        }).length;
+        const rN = r.items.filter(function (it) {
+          return String(it.text || "").trim();
+        }).length;
+        if (rN > lN) pick = r;
+      }
+      return {
+        items: pick.items,
+        text: serializeBackwardMeasureItems(pick.items),
+        updatedAt: Math.max(lAt, rAt)
+      };
+    }
+
+    function mergeBackwardMeasureKindStoreForSync(locStore, remStore) {
+      const lo = locStore && typeof locStore === "object" ? locStore : {};
+      const ro = remStore && typeof remStore === "object" ? remStore : {};
+      const out = {};
+      const keys = new Set(Object.keys(lo).concat(Object.keys(ro)));
+      keys.forEach(function (pk) {
+        out[pk] = mergeBackwardMeasurePeriodEntryForSync(lo[pk], ro[pk]);
+      });
+      return out;
+    }
+
+    function mergeBackwardMeasureForSync(loc, rem) {
+      const kinds = ["weekly", "monthly", "quarterly", "sprint3", "thinkDay"];
+      const lo = loc && typeof loc === "object" ? loc : {};
+      const ro = rem && typeof rem === "object" ? rem : {};
+      const out = {};
+      kinds.forEach(function (kind) {
+        out[kind] = mergeBackwardMeasureKindStoreForSync(lo[kind], ro[kind]);
+      });
+      return out;
+    }
+
+    function mergeBackwardMeasurePeriodKeysForSync(loc, rem) {
+      const lo = loc && typeof loc === "object" ? loc : {};
+      const ro = rem && typeof rem === "object" ? rem : {};
+      const keys = ["weekly", "monthly", "quarterly", "sprint3"];
+      const out = {};
+      keys.forEach(function (k) {
+        const a = typeof lo[k] === "string" ? lo[k] : "";
+        const b = typeof ro[k] === "string" ? ro[k] : "";
+        out[k] = a || b;
+      });
+      return out;
     }
 
     /** 十二周年 TW020/021/022：按周、按任务 id 深合并；字段冲突时 preferRemote=true 取远端（与 serverNewer 一致），否则取本机；仅在一端出现的任务保留。 */
@@ -96580,7 +96707,15 @@
       const id = (typeof l.id === "string" && l.id) || (typeof r.id === "string" && r.id) || newTw020Id();
       const rt = typeof r.text === "string" ? r.text : "";
       const lt = typeof l.text === "string" ? l.text : "";
-      const text = rt !== lt ? (preferRemote ? rt : lt) : lt;
+      const rU = Number(r.updatedAt) || 0;
+      const lU = Number(l.updatedAt) || 0;
+      let text = lt;
+      if (rt !== lt) {
+        if (rU > lU) text = rt || lt;
+        else if (lU > rU) text = lt || rt;
+        else if (preferRemote) text = rt || lt;
+        else text = lt || rt;
+      }
       const rDone = Boolean(r.done);
       const lDone = Boolean(l.done);
       const done = rDone !== lDone ? (preferRemote ? rDone : lDone) : lDone;
@@ -96588,7 +96723,7 @@
       const dlPick = mergeDeadlineFieldsForSync(l, r, !preferRemote);
       const out = { id: id, text: text, subs: subs, done: done };
       applyDeadlineMergeToItem(out, dlPick);
-      const u = Math.max(Number(l.updatedAt) || 0, Number(r.updatedAt) || 0, Number(dlPick.deadlineUpdatedAt) || 0);
+      const u = Math.max(lU, rU, Number(dlPick.deadlineUpdatedAt) || 0);
       if (u > 0) out.updatedAt = u;
       return out;
     }
@@ -97432,14 +97567,6 @@
           remoteState.goalWhys && typeof remoteState.goalWhys === "object"
             ? remoteState.goalWhys
             : {};
-        base.backwardMeasure =
-          remoteState.backwardMeasure && typeof remoteState.backwardMeasure === "object"
-            ? remoteState.backwardMeasure
-            : {};
-        base.backwardMeasurePeriod =
-          remoteState.backwardMeasurePeriod && typeof remoteState.backwardMeasurePeriod === "object"
-            ? remoteState.backwardMeasurePeriod
-            : {};
         base.timeReflectionDismissed =
           remoteState.timeReflectionDismissed &&
           typeof remoteState.timeReflectionDismissed === "object"
@@ -97461,6 +97588,16 @@
           };
         }
       }
+
+      /* 向后衡量：始终按周期键并集合并，禁止 serverNewer 整包覆盖冲掉本机刚写入的收获 */
+      base.backwardMeasure = mergeBackwardMeasureForSync(
+        state.backwardMeasure,
+        remoteState.backwardMeasure
+      );
+      base.backwardMeasurePeriod = mergeBackwardMeasurePeriodKeysForSync(
+        state.backwardMeasurePeriod,
+        remoteState.backwardMeasurePeriod
+      );
 
       setCloudSyncLifetimeEnforceSides(state, remoteState);
       try {
@@ -97840,6 +97977,49 @@
               false
             ),
             tsLive
+          );
+          merged.dailyWin = omitTombstonedIdRecords(
+            mergeIdRecordArraysPreferLocalOnTie(
+              Array.isArray(state.dailyWin) ? state.dailyWin : [],
+              Array.isArray(merged.dailyWin) ? merged.dailyWin : []
+            ),
+            tsLive
+          );
+          merged.dailyWinTomorrowRef = mergeDailyWinTomorrowRefForSync(
+            state.dailyWinTomorrowRef,
+            merged.dailyWinTomorrowRef
+          );
+          merged.weeklyPlan = mergeWeeklyPlanBucketsForSync(
+            state.weeklyPlan,
+            merged.weeklyPlan,
+            false,
+            tsLive
+          );
+          merged.anniversaryTw020 = mergeAnniversaryTw020ModuleForSync(
+            state.anniversaryTw020,
+            merged.anniversaryTw020,
+            false,
+            tsLive
+          );
+          merged.anniversaryTw021 = mergeAnniversaryTwAnchorModuleForSync(
+            state.anniversaryTw021,
+            merged.anniversaryTw021,
+            false,
+            tsLive
+          );
+          merged.anniversaryTw022 = mergeAnniversaryTwAnchorModuleForSync(
+            state.anniversaryTw022,
+            merged.anniversaryTw022,
+            false,
+            tsLive
+          );
+          merged.backwardMeasure = mergeBackwardMeasureForSync(
+            state.backwardMeasure,
+            merged.backwardMeasure
+          );
+          merged.backwardMeasurePeriod = mergeBackwardMeasurePeriodKeysForSync(
+            state.backwardMeasurePeriod,
+            merged.backwardMeasurePeriod
           );
         } catch (_reviveLists) {}
         coerceNestedCloudListFields(merged);
@@ -103272,8 +103452,40 @@
       }
       if (dailyWinInput) dailyWinInput.value = "";
       saveState({ lists: ["dailyWin", "habit", "done"] });
-      render();
-      if (dailyWinInput) dailyWinInput.focus();
+      flushComposerSaveRender();
+    }
+
+    /**
+     * 每天三赢 / 十二周年添加框：保存后立刻刷盘并强制 render。
+     * 与 flushDoneComposerRender 同因——失焦后推迟的 render 会拆掉按钮/输入，
+     * 表现为点「记录/添加」后内容消失、state 未写入或未刷新。
+     */
+    function flushComposerSaveRender() {
+      try {
+        const ae = document.activeElement;
+        if (
+          ae &&
+          ae !== document.body &&
+          typeof ae.blur === "function" &&
+          (ae.classList.contains("daily-win-modern-pending-input") ||
+            ae.closest(".tw020-week-actions") ||
+            ae.classList.contains("weekly-plan-main-title-input") ||
+            ae.classList.contains("weekly-plan-micro-text") ||
+            ae.closest(".anniversary-tw-task-card") ||
+            ae.closest(".tw020-task-block"))
+        ) {
+          ae.blur();
+        }
+      } catch (_composerBlurErr) {}
+      renderDeferredWhileEditing = false;
+      if (renderWhenEditingEndsTimer) {
+        clearTimeout(renderWhenEditingEndsTimer);
+        renderWhenEditingEndsTimer = null;
+      }
+      try {
+        flushLocalPersistedState("force");
+      } catch (_composerFlushErr) {}
+      render(true);
     }
 
     /** 每天三赢「记录」：拦住 form 默认提交，避免整页刷新把未落盘输入清掉 */
@@ -120930,8 +121142,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return state.dailyWin.length;
     }
 
+    /** 重绘前暂存未提交的每天三赢输入，避免失焦后的推迟 render 把草稿清掉 */
+    function captureDailyWinPendingDrafts(ul) {
+      if (!ul) return [];
+      const out = [];
+      ul.querySelectorAll(".daily-win-modern-pending-input").forEach(function (inp) {
+        out.push(String(inp.value || ""));
+      });
+      return out;
+    }
+
     function renderDailyWinModernList(ul, tasks, mode, targetDateKey, opts) {
       const appendOnly = Boolean(opts && opts.appendOnly);
+      const pendingDrafts = Array.isArray(opts && opts.pendingDrafts) ? opts.pendingDrafts : [];
       const isTomorrowMode = mode === "tomorrow";
       const ordered = tasks
         .slice()
@@ -121001,6 +121224,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
 
       const pendingInputs = [];
+      let pendingDraftIdx = 0;
       for (let nextIndex = ordered.length + 1; nextIndex <= 3; nextIndex++) {
         const pending = document.createElement("li");
         pending.className =
@@ -121022,6 +121246,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const inputMain = document.createElement("input");
         inputMain.className = "daily-win-modern-pending-input";
         inputMain.type = "text";
+        if (pendingDraftIdx < pendingDrafts.length) {
+          inputMain.value = pendingDrafts[pendingDraftIdx] || "";
+        }
+        pendingDraftIdx += 1;
         pendingInputs.push(inputMain);
 
         content.appendChild(title);
@@ -121047,12 +121275,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           inp.addEventListener("input", syncSaveEnabled);
         });
         syncSaveEnabled();
-        saveBtn.addEventListener("click", function () {
+        /** pointerdown 先于 blur 后的推迟 render，避免按钮被拆掉或读到空值 */
+        let dailyWinCommitLock = false;
+        const commitDailyWinFromPending = function () {
+          if (dailyWinCommitLock || saveBtn.disabled) return;
           const texts = pendingInputs.map(function (inp) {
             return String(inp.value || "").trim();
           });
           if (texts.some(function (t) { return !t; })) return;
+          dailyWinCommitLock = true;
+          pendingInputs.forEach(function (inp) {
+            inp.value = "";
+          });
           addDailyWin(isTomorrowMode ? { forTomorrow: true, texts: texts } : { forceToday: true, texts: texts });
+        };
+        saveBtn.addEventListener("pointerdown", function (ev) {
+          if (ev.pointerType === "mouse" && ev.button !== 0) return;
+          commitDailyWinFromPending();
+        });
+        saveBtn.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          commitDailyWinFromPending();
         });
       }
 
@@ -122840,11 +123083,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         renderDoneTimeBlockTimeline(ul, ordered, "done");
         return;
       }
+      let dailyWinPendingDrafts = null;
+      let dailyWinTomorrowPendingDrafts = null;
+      if (listName === "dailyWin" && isDailyWinModernMode()) {
+        dailyWinPendingDrafts = captureDailyWinPendingDrafts(ul);
+        dailyWinTomorrowPendingDrafts = captureDailyWinPendingDrafts(dailyWinTomorrowList);
+      }
       ul.innerHTML = "";
       let ordered = tasks;
       if (listName === "dailyWin" && isDailyWinModernMode()) {
         const todayKey = getDailyWinTodayDateKey();
-        renderDailyWinModernList(ul, tasks, "today", todayKey);
+        renderDailyWinModernList(ul, tasks, "today", todayKey, {
+          pendingDrafts: dailyWinPendingDrafts
+        });
         if (dailyWinTomorrowList) {
           dailyWinTomorrowList.innerHTML = "";
           const tomorrowKey = getDailyWinPresetTomorrowKey();
@@ -122852,7 +123103,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             dailyWinTomorrowList,
             getDailyWinTomorrowRefList(tomorrowKey),
             "tomorrow",
-            tomorrowKey
+            tomorrowKey,
+            { pendingDrafts: dailyWinTomorrowPendingDrafts }
           );
         }
         return;
@@ -126489,15 +126741,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (rt && typeof rt.closest === "function" && wrap.contains(rt)) {
           return;
         }
-        window.requestAnimationFrame(() => {
-          window.setTimeout(() => {
-            const ae = document.activeElement;
-            if (ae && wrap.contains(ae)) {
-              return;
-            }
-            commitAnniversaryTitleSave();
-          }, 0);
-        });
+        /* 先同步落盘再等焦点落点：推迟 render 不会用旧标题盖掉刚改的文案 */
+        const pendingValue = String(textInput.value || "");
+        window.setTimeout(() => {
+          const ae = document.activeElement;
+          if (ae && wrap.contains(ae)) {
+            return;
+          }
+          if (String(textInput.value || "") === "" && pendingValue) {
+            textInput.value = pendingValue;
+          }
+          commitAnniversaryTitleSave();
+        }, 0);
       });
 
       const moreBtn = document.createElement("button");
@@ -130437,11 +130692,24 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const addInp = document.createElement("input");
       addInp.type = "text";
       addInp.placeholder = "让「问题/困难/挑战」比你的「脑容量」小➠分解";
+      let anniversaryAddLock = false;
+      const commitAnniversaryAdd = function () {
+        if (anniversaryAddLock) return;
+        const raw = addInp.value;
+        if (!String(raw || "").trim()) return;
+        anniversaryAddLock = true;
+        addInp.value = "";
+        try {
+          onAddTask(raw);
+        } finally {
+          anniversaryAddLock = false;
+        }
+        flushComposerSaveRender();
+      };
       addInp.addEventListener("keydown", function (ev) {
         if (ev.key === "Enter") {
           ev.preventDefault();
-          onAddTask(addInp.value);
-          addInp.value = "";
+          commitAnniversaryAdd();
         }
       });
       const addBtn = document.createElement("button");
@@ -130451,9 +130719,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       addBtn.style.padding = "5px 12px";
       addBtn.style.fontSize = "12px";
       addBtn.style.borderRadius = "8px";
-      addBtn.addEventListener("click", function () {
-        onAddTask(addInp.value);
-        addInp.value = "";
+      addBtn.addEventListener("pointerdown", function (ev) {
+        if (ev.pointerType === "mouse" && ev.button !== 0) return;
+        commitAnniversaryAdd();
+      });
+      addBtn.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        commitAnniversaryAdd();
       });
       addRow.appendChild(addInp);
       addRow.appendChild(addBtn);
@@ -130563,7 +130835,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         id: newTw020Id(),
         text: t,
         subs: [],
-        done: false
+        done: false,
+        updatedAt: Date.now()
       });
       const newTask = state.anniversaryTw020.weeks[key][state.anniversaryTw020.weeks[key].length - 1];
       saveStateAfterAnniversaryWeekChange("tw020", weekNum);
@@ -130576,6 +130849,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return;
       }
       task.text = String(text || "").trim();
+      task.updatedAt = Date.now();
       syncAllAnniversaryMirrorsForTask("tw020", taskId);
       saveStateAfterAnniversaryWeekChange("tw020", weekNum);
     }
@@ -133684,7 +133958,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         id: newTw020Id(),
         text: t,
         subs: [],
-        done: false
+        done: false,
+        updatedAt: Date.now()
       });
       const newTask = state.anniversaryTw021.weeks[key][state.anniversaryTw021.weeks[key].length - 1];
       saveStateAfterAnniversaryWeekChange("tw021", weekNum);
@@ -133697,6 +133972,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return;
       }
       task.text = String(text || "").trim();
+      task.updatedAt = Date.now();
       syncAllAnniversaryMirrorsForTask("tw021", taskId);
       saveStateAfterAnniversaryWeekChange("tw021", weekNum);
     }
@@ -133811,7 +134087,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const mod = getAnniversaryTwStateModule(moduleKey);
       const key = String(weekNum);
       if (!Array.isArray(mod.weeks[key])) mod.weeks[key] = [];
-      mod.weeks[key].push({ id: newTw020Id(), text: t, subs: [], done: false });
+      mod.weeks[key].push({ id: newTw020Id(), text: t, subs: [], done: false, updatedAt: Date.now() });
       const newTask = mod.weeks[key][mod.weeks[key].length - 1];
       saveStateAfterAnniversaryWeekChange(moduleKey, weekNum);
       afterAnniversaryTwTaskAdded(moduleKey, weekNum, newTask);
@@ -133823,6 +134099,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
       if (!task) return;
       task.text = String(text || "").trim();
+      task.updatedAt = Date.now();
       syncAllAnniversaryMirrorsForTask(moduleKey, taskId);
       saveStateAfterAnniversaryWeekChange(moduleKey, weekNum);
     }
@@ -134662,7 +134939,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         id: newTw020Id(),
         text: t,
         subs: [],
-        done: false
+        done: false,
+        updatedAt: Date.now()
       });
       const newTask = state.anniversaryTw022.weeks[key][state.anniversaryTw022.weeks[key].length - 1];
       saveStateAfterAnniversaryWeekChange("tw022", weekNum);
@@ -134675,6 +134953,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return;
       }
       task.text = String(text || "").trim();
+      task.updatedAt = Date.now();
       syncAllAnniversaryMirrorsForTask("tw022", taskId);
       saveStateAfterAnniversaryWeekChange("tw022", weekNum);
     }
@@ -135745,6 +136024,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return "已记录 " + periodCount + " 条 · 累计 " + lifetimeCount + " 条";
     }
 
+    /** A.M.B 页脚：当次条数 + 累计绿胶囊（四格共用） */
+    function appendAmbGainFooterTotal(parentEl, periodCount, lifetimeCount) {
+      const total = document.createElement("span");
+      total.className = "amb-gain-footer-total";
+      total.setAttribute("aria-label", formatAmbGainFooterTotal(periodCount, lifetimeCount));
+      const period = document.createElement("span");
+      period.className = "amb-gain-footer-period";
+      period.textContent = "已记录 " + periodCount + " 条";
+      const lifetime = document.createElement("span");
+      lifetime.className = "amb-gain-footer-lifetime";
+      lifetime.textContent = "累计 " + lifetimeCount + " 条";
+      total.appendChild(period);
+      total.appendChild(lifetime);
+      parentEl.appendChild(total);
+      return total;
+    }
+
     function persistAmbGainItems(kind, key, items) {
       ensureBackwardMeasureState();
       if (!state.backwardMeasure[kind] || typeof state.backwardMeasure[kind] !== "object") {
@@ -135768,7 +136064,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
       }
       saveState();
-      render();
+      render(true);
       renderAmbGainList(kind, true);
     }
 
@@ -135841,10 +136137,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         const roFooter = document.createElement("li");
         roFooter.className = "amb-gain-footer";
-        const roTotal = document.createElement("span");
-        roTotal.className = "amb-gain-footer-total";
-        roTotal.textContent = formatAmbGainFooterTotal(saved.length, lifetimeCount);
-        roFooter.appendChild(roTotal);
+        appendAmbGainFooterTotal(roFooter, saved.length, lifetimeCount);
         listEl.appendChild(roFooter);
         return;
       }
@@ -135922,16 +136215,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         });
       });
       syncEnabled();
-      saveBtn.addEventListener("click", function () {
+      let ambSaveLock = false;
+      const commitAmbSave = function () {
+        if (ambSaveLock || saveBtn.disabled) return;
         const extras = pendingInputs
           .map(function (inp) {
             return String(inp.value || "").trim();
           })
           .filter(Boolean);
         if (!extras.length) return;
+        ambSaveLock = true;
         ambGainPendingCount[kind] = 0;
         ambGainPendingDrafts[kind] = [];
-        saveBtn.blur();
+        try {
+          saveBtn.blur();
+        } catch (_ambBlur) {}
         persistAmbGainItems(
           kind,
           key,
@@ -135941,8 +136239,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             })
           )
         );
+      };
+      saveBtn.addEventListener("pointerdown", function (ev) {
+        if (ev.pointerType === "mouse" && ev.button !== 0) return;
+        commitAmbSave();
       });
-      footer.appendChild(total);
+      saveBtn.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        commitAmbSave();
+      });
       footer.appendChild(addBtn);
       footer.appendChild(saveBtn);
       listEl.appendChild(footer);
@@ -139748,6 +140053,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       weeklyPlanAddForm.addEventListener("submit", (event) => {
         event.preventDefault();
         addWeeklyPlanTask();
+      });
+    }
+    if (addWeeklyPlanTaskBtn) {
+      let weeklyPlanAddLock = false;
+      const commitWeeklyPlanAddFromPointer = function () {
+        if (weeklyPlanAddLock) return;
+        weeklyPlanAddLock = true;
+        try {
+          addWeeklyPlanTask();
+        } finally {
+          weeklyPlanAddLock = false;
+        }
+      };
+      addWeeklyPlanTaskBtn.addEventListener("pointerdown", function (ev) {
+        if (ev.pointerType === "mouse" && ev.button !== 0) return;
+        /* 先于失焦后的推迟 render，避免输入被拆掉后 submit 读到空值 */
+        commitWeeklyPlanAddFromPointer();
       });
     }
     if (weeklyPlanAddForm && weeklyPlanTaskInput) {
