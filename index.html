@@ -89098,7 +89098,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260904t";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260904u";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -121476,6 +121476,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     const DONE_INPUT_SLOGAN_ESSAY_PASSES = 1;
     const DONE_INPUT_SLOGAN_ACT_PASSES = 2;
     const DONE_INPUT_SLOGAN_MARQUEE_SLOT_STORAGE_KEY = "done-input-slogan-marquee-last-slot-v2";
+    const DONE_INPUT_SLOGAN_ESSAY_CURSOR_KEY = "done-input-slogan-essay-cursor-v1";
     let doneInputSloganMarqueeSyncing = false;
     let doneInputSloganMarqueeState = {
       phase: "idle",
@@ -121565,10 +121566,46 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       };
     }
 
-    /** 尾号 0（不含 :00）：:10/:20/:30/:40/:50 每次只滚一段，essay 轮流，只滚一遍。 */
+    /** 尾号 0（不含 :00）：:10/:20/:30/:40/:50 每次一段；按 session 游标顺序轮流，避免末尾项很难轮到。 */
     function getDoneInputSloganEssayItems() {
       const p = doneInputSloganSeg;
       return [
+        {
+          id: "go-for-no",
+          kind: "essay",
+          passes: 1,
+          segments: [
+            p("pill", "Go for NO", "title"),
+            p("plain", " —— 不要追求"),
+            p("emph", "被接受", "easy"),
+            p("plain", "，主动追求"),
+            p("emph", "被拒绝", "hard"),
+            p("plain", "。→ "),
+            p("emph", "消除对拒绝的恐惧", "signal"),
+            p("plain", "，"),
+            p("emph", "提高行动量", "scale"),
+            p("plain", "。")
+          ]
+        },
+        {
+          id: "go-for-stupid",
+          kind: "essay",
+          passes: 1,
+          segments: [
+            p("pill", "Go for Stupid", "title"),
+            p("plain", " —— 不要追求显得"),
+            p("emph", "聪明", "easy"),
+            p("plain", "，允许自己提出"),
+            p("emph", "“愚蠢”的问题", "hard"),
+            p("plain", "、做看起来"),
+            p("emph", "笨拙的尝试", "war"),
+            p("plain", "。→ "),
+            p("emph", "消除对丢脸的恐惧", "signal"),
+            p("plain", "，"),
+            p("emph", "提高探索量", "scale"),
+            p("plain", "。")
+          ]
+        },
         {
           id: "shadow-war",
           kind: "essay",
@@ -121827,42 +121864,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             p("pill", "资源编排（orchestration）", "orch"),
             p("plain", "。")
           ]
-        },
-        {
-          id: "go-for-no",
-          kind: "essay",
-          passes: 1,
-          segments: [
-            p("pill", "Go for NO", "title"),
-            p("plain", " —— 不要追求"),
-            p("emph", "被接受", "easy"),
-            p("plain", "，主动追求"),
-            p("emph", "被拒绝", "hard"),
-            p("plain", "。→ "),
-            p("emph", "消除对拒绝的恐惧", "signal"),
-            p("plain", "，"),
-            p("emph", "提高行动量", "scale"),
-            p("plain", "。")
-          ]
-        },
-        {
-          id: "go-for-stupid",
-          kind: "essay",
-          passes: 1,
-          segments: [
-            p("pill", "Go for Stupid", "title"),
-            p("plain", " —— 不要追求显得"),
-            p("emph", "聪明", "easy"),
-            p("plain", "，允许自己提出"),
-            p("emph", "“愚蠢”的问题", "hard"),
-            p("plain", "、做看起来"),
-            p("emph", "笨拙的尝试", "war"),
-            p("plain", "。→ "),
-            p("emph", "消除对丢脸的恐惧", "signal"),
-            p("plain", "，"),
-            p("emph", "提高探索量", "scale"),
-            p("plain", "。")
-          ]
         }
       ];
     }
@@ -121898,6 +121899,34 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return y + "-" + mo + "-" + day + "T" + h + ":" + mm;
     }
 
+    function peekDoneInputSloganEssayCursor() {
+      try {
+        return Math.max(
+          0,
+          parseInt(sessionStorage.getItem(DONE_INPUT_SLOGAN_ESSAY_CURSOR_KEY) || "0", 10) || 0
+        );
+      } catch (err) {
+        return 0;
+      }
+    }
+
+    function advanceDoneInputSloganEssayCursor() {
+      const essays = getDoneInputSloganEssayItems();
+      const n = essays.length || 1;
+      const next = (peekDoneInputSloganEssayCursor() + 1) % n;
+      try {
+        sessionStorage.setItem(DONE_INPUT_SLOGAN_ESSAY_CURSOR_KEY, String(next));
+      } catch (err) {
+        /* ignore */
+      }
+    }
+
+    function pickDoneInputSloganEssayItem() {
+      const essays = getDoneInputSloganEssayItems();
+      if (!essays.length) return null;
+      return essays[peekDoneInputSloganEssayCursor() % essays.length] || essays[0];
+    }
+
     function pickDoneInputSloganMarqueeItem(dateOpt) {
       const d = dateOpt instanceof Date ? dateOpt : new Date();
       const min = d.getMinutes();
@@ -121906,11 +121935,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       if (min % 10 !== 0) return null;
       if (min === 0) return getDoneInputSloganHourlyRestartItem();
-      const essays = getDoneInputSloganEssayItems();
-      if (!essays.length) return null;
-      /* :10/:20/:30/:40/:50 对 essay 取余轮流。带小时取余，段数以后再变也不连播 */
-      const slot = d.getHours() * 5 + Math.floor(min / 10) - 1;
-      return essays[slot % essays.length] || essays[0];
+      /* :10/:20/:30/:40/:50 → session 游标顺序轮流（Go for NO / Stupid 已置顶） */
+      return pickDoneInputSloganEssayItem();
     }
 
     function queryDoneInputSloganMarqueeHost() {
@@ -122198,6 +122224,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         const item = pickDoneInputSloganMarqueeItem(new Date());
         if (!startDoneInputSloganMarqueePlay(item)) return;
+        /* essay 槽播成功后再推进游标，避免输入中占槽却跳过某条 */
+        const min = new Date().getMinutes();
+        if (min % 10 === 0 && min !== 0) {
+          advanceDoneInputSloganEssayCursor();
+        }
         clearHomeMarqueeStaggerPending("slogan");
         writeDoneInputSloganMarqueeLastSlotKey(slotKey);
       } finally {
