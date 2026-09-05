@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20260905b";
+const CACHE_NAME = "exec-system-pwa-v20260905e";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -10,7 +10,8 @@ const APP_SHELL = [
   "./icons/forge-heaven-hell.png",
   "./icons/silva-mind-control-7-practices.png",
   "./icons/psycho-cybernetics-core-practices.png",
-  "./icons/psycho-cybernetics-core-practices-full.png"
+  "./icons/psycho-cybernetics-core-practices-full.png",
+  "./icons/done-focus-badge.png"
 ];
 
 self.addEventListener("install", (event) => {
