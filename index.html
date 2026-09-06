@@ -2766,6 +2766,17 @@
       --dsc-remind-face: linear-gradient(180deg, #fffbeb 0%, #fef3c7 42%, #fde68a 78%, #fcd34d 100%);
     }
 
+    /* 已完成任务：绿胶囊 + 划线 + ✅（覆盖 task 色环） */
+    .done-sleep-countdown__motto-marquee__remind-pill.done-sleep-countdown__motto-marquee__remind-pill--done {
+      --dsc-remind-ink: #166534;
+      --dsc-remind-edge: #16a34a;
+      --dsc-remind-edge-soft: rgba(22, 163, 74, 0.28);
+      --dsc-remind-face: linear-gradient(180deg, #f0fdf4 0%, #dcfce7 42%, #bbf7d0 78%, #86efac 100%);
+      text-decoration: line-through;
+      text-decoration-thickness: 2px;
+      text-decoration-color: #166534;
+    }
+
     .done-sleep-countdown__motto-marquee__remind-lead {
       display: none;
     }
@@ -118121,56 +118132,91 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       doneSleepCountdownMottoMarqueeState.currentKind = "";
     }
 
-    /** 今日封闭清单未完成标题（与睡眠 pending 计数同源） */
-    function getTodayClosedListUnfinishedTitles() {
+    /** 今日封闭清单跑马灯条目（含已完成；与 pending 同源可见范围） */
+    function getTodayClosedListMarqueeEntries() {
       const todayKey = formatDateInputValue(new Date());
       const items =
         typeof getClosedListItemsVisibleForViewDate === "function"
           ? getClosedListItemsVisibleForViewDate(todayKey)
           : [];
-      const titles = [];
+      const entries = [];
       (Array.isArray(items) ? items : []).forEach(function (item) {
         if (!item) return;
-        if (
-          typeof isClosedListItemEffectivelyComplete === "function" &&
-          isClosedListItemEffectivelyComplete(item)
-        ) {
-          return;
-        }
         const t = String(item.text || "").trim();
-        if (t) titles.push(t);
+        if (!t) return;
+        const done =
+          typeof isClosedListItemEffectivelyComplete === "function" &&
+          isClosedListItemEffectivelyComplete(item);
+        entries.push({ text: t, done: !!done });
       });
-      return titles;
+      return entries;
+    }
+
+    /** 今日封闭清单未完成标题（与睡眠 pending 计数同源） */
+    function getTodayClosedListUnfinishedTitles() {
+      return getTodayClosedListMarqueeEntries()
+        .filter(function (e) {
+          return e && !e.done;
+        })
+        .map(function (e) {
+          return e.text;
+        });
     }
 
     function appendDoneSleepCountdownClosedRemindTrack(track) {
       if (!track) return "";
-      const titles = getTodayClosedListUnfinishedTitles();
-      const n = titles.length;
-      function makePill(mod, text) {
+      const entries = getTodayClosedListMarqueeEntries();
+      const unfinished = entries.filter(function (e) {
+        return e && !e.done;
+      });
+      const n = unfinished.length;
+      const allDone = entries.length > 0 && n === 0;
+      function makePill(mod, text, extraClassOpt) {
         const el = document.createElement("span");
         el.className =
           "done-sleep-countdown__motto-marquee__remind-pill done-sleep-countdown__motto-marquee__remind-pill--" +
           mod;
+        if (extraClassOpt) el.classList.add(extraClassOpt);
         el.textContent = text;
         return el;
       }
       track.appendChild(makePill("lead", "🔒 提醒"));
-      track.appendChild(makePill("must", "必须完成才能睡觉"));
-      track.appendChild(makePill("count", "还剩 " + String(n) + " 项"));
-      for (let i = 0; i < titles.length; i++) {
+      track.appendChild(
+        makePill(
+          "must",
+          allDone ? "今日封闭清单已全部完成" : "必须完成才能睡觉",
+          allDone ? "done-sleep-countdown__motto-marquee__remind-pill--done" : ""
+        )
+      );
+      track.appendChild(
+        makePill("count", allDone ? "还剩 0 项 · 全部完成" : "还剩 " + String(n) + " 项")
+      );
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i];
         const arrow = document.createElement("span");
         arrow.className = "done-sleep-countdown__motto-marquee__remind-arrow";
         arrow.setAttribute("aria-hidden", "true");
         arrow.textContent = "➫";
         track.appendChild(arrow);
-        track.appendChild(makePill("task" + String(i % 4), titles[i]));
+        const label = entry.done ? "✅ " + entry.text : entry.text;
+        track.appendChild(
+          makePill(
+            "task" + String(i % 4),
+            label,
+            entry.done ? "done-sleep-countdown__motto-marquee__remind-pill--done" : ""
+          )
+        );
       }
+      const titleBits = entries.map(function (e) {
+        return e.done ? "✅ " + e.text : e.text;
+      });
       return (
-        "提醒 必须完成才能睡觉 还剩 " +
+        "提醒 " +
+        (allDone ? "今日封闭清单已全部完成" : "必须完成才能睡觉") +
+        " 还剩 " +
         String(n) +
         " 项 " +
-        titles.join(" ➫ ")
+        titleBits.join(" ➫ ")
       );
     }
 
@@ -118325,7 +118371,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           : kindOpt === "closed-remind"
             ? "closed-remind"
             : "tsf";
-      if (kind === "closed-remind" && getTodayClosedListUnfinishedTitles().length === 0) {
+      /* 无今日封闭清单项才跳过；已全部完成仍滚动展示（划线 + ✅） */
+      if (kind === "closed-remind" && getTodayClosedListMarqueeEntries().length === 0) {
         return false;
       }
       clearDoneSleepCountdownMottoMarqueeFinishTimer();
@@ -118394,14 +118441,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return true;
     }
 
-    /** :x0 有未完成 → 先提醒再 TSF；无未完成 → 只播 TSF */
+    /** :x0 有封闭清单项 → 先提醒（含已完成划线）再 TSF；无项 → 只播 TSF */
     function beginDoneSleepCountdownMottoMarqueeSlot(host, slotKind) {
       doneSleepCountdownMottoMarqueeState.queue = [];
       if (slotKind === "restart") {
         return startDoneSleepCountdownMottoMarqueePlay(host, "restart");
       }
-      const titles = getTodayClosedListUnfinishedTitles();
-      if (titles.length > 0) {
+      const entries = getTodayClosedListMarqueeEntries();
+      if (entries.length > 0) {
         doneSleepCountdownMottoMarqueeState.queue.push("tsf");
         return startDoneSleepCountdownMottoMarqueePlay(host, "closed-remind");
       }
