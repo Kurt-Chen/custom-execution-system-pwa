@@ -2766,15 +2766,21 @@
       --dsc-remind-face: linear-gradient(180deg, #fffbeb 0%, #fef3c7 42%, #fde68a 78%, #fcd34d 100%);
     }
 
-    /* 已完成任务：绿胶囊 + 划线 + ✅（覆盖 task 色环） */
+    /* 已完成任务：绿胶囊；划线只打在文案上，✅ 不划 */
     .done-sleep-countdown__motto-marquee__remind-pill.done-sleep-countdown__motto-marquee__remind-pill--done {
       --dsc-remind-ink: #166534;
       --dsc-remind-edge: #16a34a;
       --dsc-remind-edge-soft: rgba(22, 163, 74, 0.28);
       --dsc-remind-face: linear-gradient(180deg, #f0fdf4 0%, #dcfce7 42%, #bbf7d0 78%, #86efac 100%);
+    }
+    .done-sleep-countdown__motto-marquee__remind-pill--done .done-sleep-countdown__motto-marquee__remind-task-text {
       text-decoration: line-through;
       text-decoration-thickness: 2px;
       text-decoration-color: #166534;
+    }
+    .done-sleep-countdown__motto-marquee__remind-mark {
+      text-decoration: none;
+      flex-shrink: 0;
     }
 
     .done-sleep-countdown__motto-marquee__remind-lead {
@@ -31751,10 +31757,17 @@
       color: #9d174d;
     }
     ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__task.is-done {
+      opacity: 0.78;
+    }
+    /* 划线只打在任务文案上，✅ / ☐ 不划 */
+    ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__task.is-done .done-sprint-finish-hour-task-marquee__task-text {
       text-decoration: line-through;
       text-decoration-thickness: 2px;
       text-decoration-color: currentColor;
-      opacity: 0.78;
+    }
+    ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__task-mark {
+      text-decoration: none;
+      flex-shrink: 0;
     }
     @media (prefers-reduced-motion: reduce) {
       ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__track {
@@ -112195,13 +112208,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       };
     }
 
-    /** 小时冲刺条任务名纯文本（已完成前缀 ✅，供时长估算） */
+    /** 小时冲刺条任务名纯文本（✅ / ☐ 前缀，供时长估算） */
     function formatSprintHourTaskItemsPlainText(taskItems) {
       return (Array.isArray(taskItems) ? taskItems : [])
         .map(function (it) {
           const text = String((it && it.text) || "").trim();
           if (!text) return "";
-          return (it && it.done ? "✅ " : "") + text;
+          return (it && it.done ? "✅ " : "☐ ") + text;
         })
         .filter(Boolean)
         .join(" · ");
@@ -113058,7 +113071,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       track.appendChild(pill);
     }
 
-    /** 封闭清单 / 十二周周任务：已完成项前缀 ✅ + 删除线 */
+    /** 封闭清单 / 十二周周任务：✅/☐ 前缀；划线只打在文案上 */
     function appendSprintHourTaskItemSegments(track, kind, taskItems) {
       if (!track || !Array.isArray(taskItems) || !taskItems.length) return;
       const bodyKind = kind === "anniversary" ? "anniversary" : "closed";
@@ -113075,12 +113088,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           sep.textContent = " · ";
           track.appendChild(sep);
         }
+        const done = !!(item && item.done);
         const span = document.createElement("span");
         span.className =
           "done-sprint-finish-hour-task-marquee__task done-sprint-finish-hour-task-marquee__body done-sprint-finish-hour-task-marquee__body--" +
           bodyKind +
-          (item && item.done ? " is-done" : "");
-        span.textContent = (item && item.done ? "✅ " : "") + text;
+          (done ? " is-done" : "");
+        const mark = document.createElement("span");
+        mark.className = "done-sprint-finish-hour-task-marquee__task-mark";
+        mark.setAttribute("aria-hidden", "true");
+        mark.textContent = done ? "✅" : "☐";
+        const label = document.createElement("span");
+        label.className = "done-sprint-finish-hour-task-marquee__task-text";
+        label.textContent = text;
+        span.appendChild(mark);
+        span.appendChild(document.createTextNode(" "));
+        span.appendChild(label);
         track.appendChild(span);
         emitted += 1;
       }
@@ -118182,11 +118205,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       track.appendChild(makePill("lead", "🔒 提醒"));
       track.appendChild(
-        makePill(
-          "must",
-          allDone ? "今日封闭清单已全部完成" : "必须完成才能睡觉",
-          allDone ? "done-sleep-countdown__motto-marquee__remind-pill--done" : ""
-        )
+        makePill("must", allDone ? "今日封闭清单已全部完成" : "必须完成才能睡觉")
       );
       track.appendChild(
         makePill("count", allDone ? "还剩 0 项 · 全部完成" : "还剩 " + String(n) + " 项")
@@ -118198,17 +118217,25 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         arrow.setAttribute("aria-hidden", "true");
         arrow.textContent = "➫";
         track.appendChild(arrow);
-        const label = entry.done ? "✅ " + entry.text : entry.text;
-        track.appendChild(
-          makePill(
-            "task" + String(i % 4),
-            label,
-            entry.done ? "done-sleep-countdown__motto-marquee__remind-pill--done" : ""
-          )
+        const pill = makePill(
+          "task" + String(i % 4),
+          "",
+          entry.done ? "done-sleep-countdown__motto-marquee__remind-pill--done" : ""
         );
+        const mark = document.createElement("span");
+        mark.className = "done-sleep-countdown__motto-marquee__remind-mark";
+        mark.setAttribute("aria-hidden", "true");
+        mark.textContent = entry.done ? "✅" : "☐";
+        const label = document.createElement("span");
+        label.className = "done-sleep-countdown__motto-marquee__remind-task-text";
+        label.textContent = entry.text;
+        pill.appendChild(mark);
+        pill.appendChild(document.createTextNode(" "));
+        pill.appendChild(label);
+        track.appendChild(pill);
       }
       const titleBits = entries.map(function (e) {
-        return e.done ? "✅ " + e.text : e.text;
+        return (e.done ? "✅ " : "☐ ") + e.text;
       });
       return (
         "提醒 " +
