@@ -90118,7 +90118,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260907m";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260908a";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -90985,11 +90985,6 @@
      * 不可用 lists 推断（普通 ClosedList 与周年镜像同为 closedList+done）。
      */
     let stateHygieneDomains = null;
-    /**
-     * 待跑卫生域：null = 全量；["donePrune"] = 仅 Done 去重。
-     * 不可仅凭 lists 推断（周年镜像也用 closedList+done）。
-     */
-    let stateHygieneDomains = null;
     /** null = 全部切片脏；否则按 key 决定 render 是否重建该列表 */
     let uiPaintDirty = null;
     /**
@@ -91175,7 +91170,9 @@
       hygienePassCount: 0,
       hygieneSkippedCount: 0,
       persistFlushCount: 0,
-      persistDeferredCount: 0
+      persistDeferredCount: 0,
+      hygieneMs: 0,
+      stallTraceCount: 0
     };
 
     function isCloudSyncPerfEnabled() {
@@ -91220,9 +91217,270 @@
           bytesField: "stringifyBytes",
           bytesLastField: "stringifyBytesLast"
         });
+        uiStallNoteStringify(cloudSyncPerfNow() - t0, bytes);
       }
       return s;
     }
+
+    function cloudSyncPerfJsonParse(text) {
+      const t0 = beginCloudSyncPerf();
+      const v = JSON.parse(text);
+      if (t0 != null) uiStallNoteParse(cloudSyncPerfNow() - t0);
+      return v;
+    }
+
+    const UI_STALL_THRESHOLD_MS = 1000;
+    const UI_STALL_TRACE_LIMIT = 20;
+    const UI_STALL_STORAGE_KEY = "todo-app-ui-stall-traces-v1";
+    const UI_STALL_TRIGGER_RANK = {
+      cloudPull: 0,
+      cloudPush: 1,
+      cloudMerge: 2,
+      localSaveRender: 3,
+      unknown: 4
+    };
+    let uiStallChain = null;
+    let uiStallTraces = [];
+    let uiStallFinishTimer = null;
+    let uiStallIdleTimer = null;
+    let uiStallMergeDepth = 0;
+    let uiStallLongTaskObserver = null;
+
+    function uiStallLoadPersistedTraces() {
+      try {
+        const raw = sessionStorage.getItem(UI_STALL_STORAGE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) uiStallTraces = parsed.slice(-UI_STALL_TRACE_LIMIT);
+      } catch (_e) {}
+    }
+
+    function uiStallPersistTraces() {
+      try {
+        sessionStorage.setItem(UI_STALL_STORAGE_KEY, JSON.stringify(uiStallTraces));
+      } catch (_e) {}
+    }
+
+    function uiStallEnsureLongTaskObserver() {
+      if (uiStallLongTaskObserver || typeof PerformanceObserver !== "function") return;
+      try {
+        uiStallLongTaskObserver = new PerformanceObserver(function (list) {
+          if (!isCloudSyncPerfEnabled()) return;
+          list.getEntries().forEach(function (e) {
+            const d = Number(e && e.duration) || 0;
+            if (!uiStallChain) return;
+            uiStallChain.longTaskCount += 1;
+            if (d > uiStallChain.longTaskMaxMs) uiStallChain.longTaskMaxMs = d;
+          });
+        });
+        uiStallLongTaskObserver.observe({ type: "longtask", buffered: true });
+      } catch (_obsErr) {
+        uiStallLongTaskObserver = null;
+      }
+    }
+
+    function uiStallEmptyChain(trigger) {
+      return {
+        traceId: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+        trigger: trigger || "unknown",
+        t0: cloudSyncPerfNow(),
+        networkWaitMs: 0,
+        parseMs: 0,
+        stringifyMs: 0,
+        stringifyBytes: 0,
+        mergeMs: 0,
+        hygieneMs: 0,
+        hygieneDomain: "",
+        renderMs: 0,
+        renderScrollChromeMs: 0,
+        renderDoneTimelineMs: 0,
+        renderOtherSlicesMs: 0,
+        renderHeavyMs: 0,
+        persistMs: 0,
+        renderCount: 0,
+        dirtySlices: [],
+        markAll: false,
+        doneCount: 0,
+        longTaskMaxMs: 0,
+        longTaskCount: 0
+      };
+    }
+
+    function uiStallBegin(trigger) {
+      if (!isCloudSyncPerfEnabled()) return;
+      uiStallEnsureLongTaskObserver();
+      const next = trigger || "unknown";
+      if (!uiStallChain) {
+        uiStallChain = uiStallEmptyChain(next);
+        uiStallArmIdleSeal();
+        return;
+      }
+      const curRank = UI_STALL_TRIGGER_RANK[uiStallChain.trigger];
+      const nextRank = UI_STALL_TRIGGER_RANK[next];
+      if (curRank == null || (nextRank != null && nextRank < curRank)) {
+        uiStallChain.trigger = next;
+      }
+      uiStallArmIdleSeal();
+    }
+
+    function uiStallAddMs(field, ms) {
+      if (!uiStallChain || !isCloudSyncPerfEnabled()) return;
+      const n = Number(ms);
+      if (!Number.isFinite(n) || n <= 0) return;
+      uiStallChain[field] = (uiStallChain[field] || 0) + n;
+    }
+
+    function uiStallNoteNetwork(ms) {
+      uiStallAddMs("networkWaitMs", ms);
+    }
+    function uiStallNoteParse(ms) {
+      uiStallAddMs("parseMs", ms);
+    }
+    function uiStallNoteStringify(ms, bytes) {
+      uiStallAddMs("stringifyMs", ms);
+      if (uiStallChain && bytes != null) uiStallChain.stringifyBytes = bytes;
+    }
+    function uiStallNoteMerge(ms) {
+      uiStallAddMs("mergeMs", ms);
+    }
+    function uiStallNoteHygiene(ms, domain) {
+      uiStallAddMs("hygieneMs", ms);
+      if (uiStallChain && domain) uiStallChain.hygieneDomain = domain;
+    }
+    function uiStallNotePersist(ms) {
+      uiStallAddMs("persistMs", ms);
+    }
+
+    function uiStallNoteRenderParts(parts) {
+      if (!uiStallChain || !isCloudSyncPerfEnabled() || !parts) return;
+      uiStallAddMs("renderMs", parts.renderMs);
+      uiStallAddMs("renderScrollChromeMs", parts.scrollChromeMs);
+      uiStallAddMs("renderDoneTimelineMs", parts.doneTimelineMs);
+      uiStallAddMs("renderOtherSlicesMs", parts.otherSlicesMs);
+      uiStallAddMs("renderHeavyMs", parts.heavyMs);
+      uiStallChain.renderCount += 1;
+      if (parts.dirtySlices) uiStallChain.dirtySlices = parts.dirtySlices;
+      if (parts.markAll) uiStallChain.markAll = true;
+      if (parts.doneCount != null) uiStallChain.doneCount = parts.doneCount;
+    }
+
+    function uiStallListDirtySlices() {
+      if (uiPaintDirty == null) return UI_PAINT_SLICE_KEYS.slice();
+      return UI_PAINT_SLICE_KEYS.filter(function (k) {
+        return uiPaintDirty[k];
+      });
+    }
+
+    function uiStallWrapMerge(fn) {
+      uiStallBegin("cloudMerge");
+      const outer = uiStallMergeDepth === 0;
+      const t0 = outer ? beginCloudSyncPerf() : null;
+      uiStallMergeDepth += 1;
+      try {
+        return fn();
+      } finally {
+        uiStallMergeDepth -= 1;
+        if (outer && t0 != null) uiStallNoteMerge(cloudSyncPerfNow() - t0);
+      }
+    }
+
+    function uiStallArmIdleSeal() {
+      if (uiStallIdleTimer) clearTimeout(uiStallIdleTimer);
+      uiStallIdleTimer = setTimeout(function () {
+        uiStallIdleTimer = null;
+        uiStallSeal();
+      }, 2500);
+    }
+
+    function uiStallFinishSoon() {
+      /* 稍晚于 LOCAL_PERSIST_DEBOUNCE(400ms)，让同链 persist 还能记上 */
+      if (uiStallFinishTimer) clearTimeout(uiStallFinishTimer);
+      uiStallFinishTimer = setTimeout(function () {
+        uiStallFinishTimer = null;
+        uiStallSeal();
+      }, 700);
+    }
+
+    function uiStallSeal() {
+      if (uiStallFinishTimer) {
+        clearTimeout(uiStallFinishTimer);
+        uiStallFinishTimer = null;
+      }
+      if (uiStallIdleTimer) {
+        clearTimeout(uiStallIdleTimer);
+        uiStallIdleTimer = null;
+      }
+      const chain = uiStallChain;
+      uiStallChain = null;
+      if (!chain || !isCloudSyncPerfEnabled()) return;
+      const totalMs = Math.round((cloudSyncPerfNow() - chain.t0) * 100) / 100;
+      if (totalMs < UI_STALL_THRESHOLD_MS) return;
+      const trace = {
+        traceId: chain.traceId,
+        trigger: chain.trigger || "unknown",
+        totalMs: totalMs,
+        networkWaitMs: Math.round(chain.networkWaitMs * 100) / 100,
+        parseMs: Math.round(chain.parseMs * 100) / 100,
+        stringifyMs: Math.round(chain.stringifyMs * 100) / 100,
+        mergeMs: Math.round(chain.mergeMs * 100) / 100,
+        hygieneMs: Math.round(chain.hygieneMs * 100) / 100,
+        hygieneDomain: chain.hygieneDomain || "",
+        renderMs: Math.round(chain.renderMs * 100) / 100,
+        render: {
+          scrollChromeMs: Math.round(chain.renderScrollChromeMs * 100) / 100,
+          doneTimelineMs: Math.round(chain.renderDoneTimelineMs * 100) / 100,
+          otherSlicesMs: Math.round(chain.renderOtherSlicesMs * 100) / 100,
+          heavyModulesMs: Math.round(chain.renderHeavyMs * 100) / 100
+        },
+        persistMs: Math.round(chain.persistMs * 100) / 100,
+        stringifyBytes: chain.stringifyBytes || 0,
+        renderCount: chain.renderCount,
+        dirtySlices: chain.dirtySlices || [],
+        markAll: Boolean(chain.markAll),
+        doneCount: chain.doneCount || 0,
+        longTaskMaxMs: Math.round(chain.longTaskMaxMs * 100) / 100,
+        longTaskCount: chain.longTaskCount || 0,
+        at: Date.now()
+      };
+      uiStallTraces.push(trace);
+      if (uiStallTraces.length > UI_STALL_TRACE_LIMIT) {
+        uiStallTraces = uiStallTraces.slice(-UI_STALL_TRACE_LIMIT);
+      }
+      if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.stallTraceCount += 1;
+      uiStallPersistTraces();
+      try {
+        console.warn(
+          "[stall " +
+            trace.totalMs +
+            "ms] trigger=" +
+            trace.trigger +
+            " id=" +
+            trace.traceId +
+            " network=" +
+            trace.networkWaitMs +
+            " merge=" +
+            trace.mergeMs +
+            " hygiene=" +
+            trace.hygieneMs +
+            "(" +
+            (trace.hygieneDomain || "-") +
+            ") render=" +
+            trace.renderMs +
+            " (done=" +
+            trace.render.doneTimelineMs +
+            " heavy=" +
+            trace.render.heavyModulesMs +
+            ") persist=" +
+            trace.persistMs
+        );
+      } catch (_logErr) {}
+    }
+
+    function getLastUiStallTraces() {
+      return uiStallTraces.slice();
+    }
+
+    uiStallLoadPersistedTraces();
 
     function resetCloudSyncPerfCounters() {
       Object.keys(cloudSyncPerfCounters).forEach(function (k) {
@@ -91284,12 +91542,17 @@
         rolloverMs: Math.round(c.rolloverMs * 100) / 100,
         weeklyPlanUiRenderCount: c.weeklyPlanUiRenderCount,
         weeklyPlanUiSkippedCount: c.weeklyPlanUiSkippedCount,
-        weeklyPlanUiRenderMs: Math.round(c.weeklyPlanUiRenderMs * 100) / 100
+        weeklyPlanUiRenderMs: Math.round(c.weeklyPlanUiRenderMs * 100) / 100,
+        hygienePassCount: c.hygienePassCount,
+        hygieneSkippedCount: c.hygieneSkippedCount,
+        hygieneMs: Math.round(c.hygieneMs * 100) / 100,
+        stallTraceCount: c.stallTraceCount
       };
     }
 
     window.resetCloudSyncPerfCounters = resetCloudSyncPerfCounters;
     window.getCloudSyncPerfSnapshot = snapshotCloudSyncPerf;
+    window.getLastUiStallTraces = getLastUiStallTraces;
     window.setCloudSyncPerfEnabled = function setCloudSyncPerfEnabled(on) {
       try {
         localStorage.setItem(CLOUD_SYNC_PERF_ENABLED_KEY, on ? "1" : "0");
@@ -91688,6 +91951,9 @@
      */
     async function fetchCloudSyncRoomDataPartial(opts) {
       if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.cloudPullCount += 1;
+      uiStallBegin("cloudPull");
+      const stallNetT0 = beginCloudSyncPerf();
+      try {
       if (!cloudSyncRoomRef) {
         throw new Error("Firebase ref 无效");
       }
@@ -91751,6 +92017,10 @@
             }
           : null
       };
+      } finally {
+        if (stallNetT0 != null) uiStallNoteNetwork(cloudSyncPerfNow() - stallNetT0);
+        uiStallArmIdleSeal();
+      }
     }
 
     function getCloudSyncLastHistoryMergeAt() {
@@ -93730,6 +94000,7 @@
     }
 
     function mergeCloudSyncPulseIntoState(pulseState) {
+      return uiStallWrapMerge(function () {
       if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.cloudMergeCount += 1;
       if (!pulseState || typeof pulseState !== "object") return false;
       let changed = false;
@@ -93846,6 +94117,7 @@
         cloudSyncSuppressPush = false;
       }
       return changed;
+      });
     }
 
     function applyCloudSyncPulseFromRoom(pulseNode) {
@@ -94250,6 +94522,8 @@
         return Promise.resolve(null);
       }
       if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.cloudPushCount += 1;
+      uiStallBegin("cloudPush");
+      const stallNetT0 = beginCloudSyncPerf();
       cloudSyncFullPushInFlight = true;
       /* 房间已有 v2 时必须写 v2/core：只写 legacy 会被「有 meta 优先读 core」的端永久忽略 */
       const useV2 = cloudSyncRoomHasV2Meta || isCloudPayloadTooLarge(uploadState);
@@ -94270,6 +94544,8 @@
         })
         .finally(function () {
           cloudSyncFullPushInFlight = false;
+          if (stallNetT0 != null) uiStallNoteNetwork(cloudSyncPerfNow() - stallNetT0);
+          uiStallArmIdleSeal();
         });
     }
 
@@ -94346,11 +94622,26 @@
           return Promise.reject(new Error("pulse 无法序列化为 Firebase 数据"));
         }
         if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.cloudPushCount += 1;
-        return cloudSyncRoomRef.child("pulse").set({
+        uiStallBegin("cloudPush");
+        const stallNetT0 = beginCloudSyncPerf();
+        const pulseWrite = cloudSyncRoomRef.child("pulse").set({
           updatedAt: ts,
           updatedBy: cloudSyncClientId,
           state: safeState
         });
+        if (pulseWrite && typeof pulseWrite.then === "function") {
+          pulseWrite.then(
+            function () {
+              if (stallNetT0 != null) uiStallNoteNetwork(cloudSyncPerfNow() - stallNetT0);
+              uiStallArmIdleSeal();
+            },
+            function () {
+              if (stallNetT0 != null) uiStallNoteNetwork(cloudSyncPerfNow() - stallNetT0);
+              uiStallArmIdleSeal();
+            }
+          );
+        }
+        return pulseWrite;
       };
       return cloudSyncRoomRef
         .child("pulse")
@@ -96605,10 +96896,19 @@
       }
     }
 
-    /** 习惯打卡保存后：本地+pulse，并立即同步完成态 UI */
-    function saveStateAfterHabitCheckin() {
+    /**
+     * 习惯打卡保存后：本地+pulse，并立即同步完成态 UI。
+     * @param {{ hygieneDomains?: string[] }} [opts]
+     * 仅普通简单勾选/取消传入 hygieneDomains:["habitDone"]；默认全量 hygiene。
+     */
+    function saveStateAfterHabitCheckin(opts) {
+      opts = opts && typeof opts === "object" ? opts : {};
       /* 打卡路径只改 habitCheckins ± done（及 Rule100 Done），从不改 state.dailyWin */
-      saveStateWithCloudPulseImmediate({ lists: ["habit", "done"] });
+      const saveOpts = { lists: ["habit", "done"] };
+      if (opts.hygieneDomains && opts.hygieneDomains.length) {
+        saveOpts.hygieneDomains = opts.hygieneDomains.slice();
+      }
+      saveStateWithCloudPulseImmediate(saveOpts);
       try {
         flushLocalPersistedState("force");
       } catch (_habitFlushErr) {}
@@ -99060,6 +99360,7 @@
      * 合并云端 payload：禁止用「空远端 Done」覆盖本机；force 时整包覆盖（拉取最新）。
      */
     function applyCloudPayloadWithMerge(payload, opts) {
+      return uiStallWrapMerge(function () {
       if (!payload || !payload.state) return false;
       materializePayloadDoneForMerge(payload);
       if (!Array.isArray(payload.state.done)) return false;
@@ -99096,6 +99397,7 @@
       });
       const r = applyMergedCloudStateInMemory(merged, mergeOpts);
       return Boolean(r && r.ok);
+      });
     }
 
     /**
@@ -99202,6 +99504,7 @@
     }
 
     function applyRemoteState(remoteState, force) {
+      return uiStallWrapMerge(function () {
       if (!remoteState || typeof remoteState !== "object") return false;
       if (!Array.isArray(remoteState.done)) {
         console.warn("云同步：已忽略无效远端数据（缺少 done 数组）。");
@@ -99264,6 +99567,7 @@
       cloudSyncApplyingRemote = false;
       render();
       return true;
+      });
     }
 
     async function pullLatestStateFromCloud() {
@@ -99759,6 +100063,20 @@
       return true;
     }
 
+    /** 待跑域是否仅为 Habit Done 修复+去重（普通简单 Habit 勾选/取消） */
+    function isHygieneDomainsHabitDoneOnly(domains) {
+      if (!domains || !domains.length) return false;
+      for (let i = 0; i < domains.length; i++) {
+        if (domains[i] !== "habitDone") return false;
+      }
+      return true;
+    }
+
+    /** 已知窄域（同种可合并；异种或未知 → 升全量） */
+    function isHygieneDomainsKnownNarrowOnly(domains) {
+      return isHygieneDomainsDonePruneOnly(domains) || isHygieneDomainsHabitDoneOnly(domains);
+    }
+
     /**
      * @param {string[]|null|undefined} [domainsOpt]
      * 省略/空 = 全量 hygiene；已是全量时不会被窄域降级；窄域遇上全量请求则升为全量。
@@ -99780,7 +100098,7 @@
       nextNarrow.forEach(function (d) {
         if (merged.indexOf(d) === -1) merged.push(d);
       });
-      stateHygieneDomains = isHygieneDomainsDonePruneOnly(merged) ? merged : null;
+      stateHygieneDomains = isHygieneDomainsKnownNarrowOnly(merged) ? merged : null;
     }
 
     /**
@@ -99900,6 +100218,7 @@
       }
       } finally {
         addCloudSyncPerf("persistCount", "persistMs", t0);
+        if (t0 != null) uiStallNotePersist(cloudSyncPerfNow() - t0);
       }
     }
 
@@ -99910,7 +100229,7 @@
       if (!json) return { ok: false, localPersisted: false };
       let parsed = null;
       try {
-        parsed = JSON.parse(json);
+        parsed = isCloudSyncPerfEnabled() ? cloudSyncPerfJsonParse(json) : JSON.parse(json);
       } catch (_e) {
         return { ok: false, localPersisted: false };
       }
@@ -99946,6 +100265,10 @@
           if (saveListsTouchHeavyModules(opts.lists)) markHeavyModulesDepDirty();
         } else if (!opts.fromHygiene) {
           markAllUiPaintSlicesDirty();
+        }
+        /* 只观测：非 hygiene 写入计为 localSaveRender 链起点 */
+        if (!opts.fromHygiene && isCloudSyncPerfEnabled()) {
+          uiStallBegin("localSaveRender");
         }
         scheduleLocalPersistFlush();
         if (!cloudSyncSuppressPush) {
@@ -104136,7 +104459,8 @@
         day[habitKey] = nextObj;
         removeLastHabitStampFromDone(habitKey, todayKey);
       }
-      saveStateAfterHabitCheckin();
+      /* 普通简单 Habit 减一次/取消：窄 hygiene；体重/数值/备注/信件等上面分支仍全量 */
+      saveStateAfterHabitCheckin({ hygieneDomains: ["habitDone"] });
     }
 
     function toggleHabitCheckin(habitKey) {
@@ -104189,7 +104513,12 @@
       state.habitCheckins[dateKey][habitKey] = next;
       syncHabitToDone(habitKey, dateKey, nextTimes);
       bumpRule100LinkedForEntrepreneurHabitIfNeeded(habitKey);
-      saveStateAfterHabitCheckin();
+      /* 可能联动 Rule100 的创业习惯仍全量 hygiene，避免误伤；其余普通简单勾选走 habitDone */
+      if (ENTREPRENEUR_HABIT_RULE100_NAME_HINTS[habitKey]) {
+        saveStateAfterHabitCheckin();
+      } else {
+        saveStateAfterHabitCheckin({ hygieneDomains: ["habitDone"] });
+      }
     }
 
     function toggleWeightBodyFatCheckin() {
@@ -138631,6 +138960,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.hygienePassCount += 1;
       const domains = stateHygieneDomains;
+      const stallHygT0 = beginCloudSyncPerf();
+      let stallDomain = "full";
+      if (isHygieneDomainsDonePruneOnly(domains)) stallDomain = "donePrune";
+      else if (isHygieneDomainsHabitDoneOnly(domains)) stallDomain = "habitDone";
+      try {
       /* 普通无 mirrorOf ClosedList：只 Done 去重，其余扫描跳过 */
       if (isHygieneDomainsDonePruneOnly(domains)) {
         const pruned = pruneRedundantDoneEntriesInState();
@@ -138643,6 +138977,20 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         stateHygieneDirty = false;
         stateHygieneDomains = null;
         return pruned;
+      }
+      /* 普通简单 Habit 勾选/取消：只 habitMeta completedAt 修复 + Done 去重 */
+      if (isHygieneDomainsHabitDoneOnly(domains)) {
+        let habitChanged = repairDoneListCompletedAtFromHabitMeta();
+        if (pruneRedundantDoneEntriesInState()) habitChanged = true;
+        if (habitChanged) {
+          saveState({
+            fromHygiene: true,
+            lists: ["habit", "done"]
+          });
+        }
+        stateHygieneDirty = false;
+        stateHygieneDomains = null;
+        return habitChanged;
       }
       let doneHygieneChanged = refreshAllDailyWinCheckins();
       if (repairDoneListCompletedAtFromHabitMeta()) doneHygieneChanged = true;
@@ -138669,6 +139017,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       stateHygieneDirty = false;
       stateHygieneDomains = null;
       return doneHygieneChanged;
+      } finally {
+        if (stallHygT0 != null) {
+          addCloudSyncPerf(null, "hygieneMs", stallHygT0);
+          uiStallNoteHygiene(cloudSyncPerfNow() - stallHygT0, stallDomain);
+        }
+      }
     }
 
     function render(force) {
@@ -138681,10 +139035,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       renderDepth += 1;
       renderSuppressCloudUntil = Date.now() + CLOUD_UI_RENDER_MIN_INTERVAL_MS;
+      const stallMarkAll = uiPaintDirty == null;
+      const stallDirtySlices = isCloudSyncPerfEnabled() ? uiStallListDirtySlices() : [];
+      let stallScrollMs = 0;
+      let stallDoneMs = 0;
+      let stallOtherMs = 0;
+      let stallHeavyMs = 0;
+      let stallSegT0 = null;
       try {
+      stallSegT0 = beginCloudSyncPerf();
       beginUiRebuildSnap();
       const uiScrollSnap = captureUiScrollSnapshot();
       const uiActionChromeSnap = captureUiActionChromeSnapshot();
+      if (stallSegT0 != null) {
+        stallScrollMs += cloudSyncPerfNow() - stallSegT0;
+        stallSegT0 = null;
+      }
       const paintDynamic = isPrimaryModulePaintNeeded("dynamic");
       const paintHabit = isPrimaryModulePaintNeeded("habit");
       const paintForge = isPrimaryModulePaintNeeded("forge");
@@ -138745,12 +139111,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const paintGoalsSlice = paintGoals && isUiPaintSliceDirty("goals");
       const paintForgeSlice = paintForge && isUiPaintSliceDirty("forge");
       const paintPurposeSlice = paintPurpose && isUiPaintSliceDirty("purpose");
+      stallSegT0 = beginCloudSyncPerf();
       if (paintDoneSlice) {
         const filteredDoneTasksRaw = state.done.filter((task) =>
           doneTaskMatchesFilterDate(task, selectedDoneDate)
         );
         filteredDoneTasks = dedupeDoneTasksForDisplay(filteredDoneTasksRaw);
         filteredDoneTasksForStats = filteredDoneTasks.filter(isDoneCountedAsDayProduction);
+      }
+      if (stallSegT0 != null) {
+        stallDoneMs += cloudSyncPerfNow() - stallSegT0;
+        stallSegT0 = beginCloudSyncPerf();
       }
       if (paintMemoSlice) {
         filteredMemoItems = state.memo.slice();
@@ -138791,7 +139162,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         try { syncClosedListPendingTitleStyles(); } catch (e) { console.warn("[封闭清单] 未完成标题强调失败:", e); }
         clearUiPaintSlice("closedList");
       }
+      if (stallSegT0 != null) {
+        stallOtherMs += cloudSyncPerfNow() - stallSegT0;
+        stallSegT0 = null;
+      }
       if (paintDoneSlice) {
+        stallSegT0 = beginCloudSyncPerf();
         renderList(doneList, filteredDoneTasks, "done");
         ensureDonePastFoldClickSetup();
         if (typeof renderDoneSleepCountdownBar === "function") {
@@ -138845,7 +139221,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         doneEmpty.style.display = filteredDoneTasks.length ? "none" : "block";
         clearUiPaintSlice("done");
+        if (stallSegT0 != null) {
+          stallDoneMs += cloudSyncPerfNow() - stallSegT0;
+          stallSegT0 = null;
+        }
       }
+      stallSegT0 = beginCloudSyncPerf();
       ensureDoneTimeBlockSprintTicker();
       if (paintHabitSlice) {
         if (paintDailyWinDom) {
@@ -138942,12 +139323,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (paintPurposeSlice) {
         clearUiPaintSlice("purpose");
       }
+      if (stallSegT0 != null) {
+        stallOtherMs += cloudSyncPerfNow() - stallSegT0;
+        stallSegT0 = null;
+      }
       /* Phase 1：首屏只刷核心（今日/目标/习惯）；重模块 idle 后再刷 */
+      stallSegT0 = beginCloudSyncPerf();
       if (isBootFirstRenderPass) {
         isBootFirstRenderPass = false;
         scheduleRenderHeavyModulesDeferred();
       } else {
         renderHeavyModules();
+      }
+      if (stallSegT0 != null) {
+        stallHeavyMs += cloudSyncPerfNow() - stallSegT0;
+        stallSegT0 = beginCloudSyncPerf();
       }
       syncExtremeDeadlineChipsInDocument();
       requestAnimationFrame(fitResponsiveSingleLineSlogans);
@@ -138958,9 +139348,26 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         restoreUiActionChromeSnapshot(uiActionChromeSnap);
       });
       endUiRebuildSnap();
+      if (stallSegT0 != null) {
+        stallScrollMs += cloudSyncPerfNow() - stallSegT0;
+        stallSegT0 = null;
+      }
       } finally {
         renderDepth = Math.max(0, renderDepth - 1);
         addCloudSyncPerf("renderCount", "renderMs", t0);
+        if (t0 != null && isCloudSyncPerfEnabled()) {
+          uiStallNoteRenderParts({
+            renderMs: cloudSyncPerfNow() - t0,
+            scrollChromeMs: stallScrollMs,
+            doneTimelineMs: stallDoneMs,
+            otherSlicesMs: stallOtherMs,
+            heavyMs: stallHeavyMs,
+            dirtySlices: stallDirtySlices,
+            markAll: stallMarkAll,
+            doneCount: Array.isArray(state.done) ? state.done.length : 0
+          });
+          uiStallFinishSoon();
+        }
       }
     }
 
