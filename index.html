@@ -90118,7 +90118,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260907l";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260907m";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -90980,8 +90980,24 @@
     let lastAnniversaryDoneSyncSig = "";
     /** 卫生扫描脏标记：saveState / 云合并后才跑，纯重绘跳过 */
     let stateHygieneDirty = true;
+    /**
+     * 待跑 hygiene 域：null = 全量扫描；仅 ["donePrune"] 时只跑 Done 去重。
+     * 不可用 lists 推断（普通 ClosedList 与周年镜像同为 closedList+done）。
+     */
+    let stateHygieneDomains = null;
+    /**
+     * 待跑卫生域：null = 全量；["donePrune"] = 仅 Done 去重。
+     * 不可仅凭 lists 推断（周年镜像也用 closedList+done）。
+     */
+    let stateHygieneDomains = null;
     /** null = 全部切片脏；否则按 key 决定 render 是否重建该列表 */
     let uiPaintDirty = null;
+    /**
+     * Heavy 依赖脏标记：anniversary / Rule100 / life4000 / trash / forge 相关 state 变更时置位。
+     * 为 false 且日历/Done 日/归档视图未变时，renderHeavyModules 跳过指纹 JSON.stringify。
+     */
+    let heavyModulesDepDirty = true;
+    let lastHeavyModuleCheapKey = "";
     let localPersistDirty = false;
     let localPersistTimer = null;
     const LOCAL_PERSIST_DEBOUNCE_MS = 400;
@@ -91128,6 +91144,7 @@
       renderHeavyModulesCount: 0,
       renderHeavyModulesMs: 0,
       renderHeavyModulesSkippedCount: 0,
+      renderHeavyFingerprintSkipCount: 0,
       renderHeavyRule100Count: 0,
       renderHeavyLife4000Count: 0,
       renderHeavyTrashCount: 0,
@@ -91239,6 +91256,7 @@
         renderHeavyModulesCount: c.renderHeavyModulesCount,
         renderHeavyModulesMs: Math.round(c.renderHeavyModulesMs * 100) / 100,
         renderHeavyModulesSkippedCount: c.renderHeavyModulesSkippedCount,
+        renderHeavyFingerprintSkipCount: c.renderHeavyFingerprintSkipCount,
         renderHeavyRule100Count: c.renderHeavyRule100Count,
         renderHeavyLife4000Count: c.renderHeavyLife4000Count,
         renderHeavyTrashCount: c.renderHeavyTrashCount,
@@ -95518,6 +95536,7 @@
         payload: payload,
         meta: deepCloneForTrash(parts.meta) || {}
       });
+      markHeavyModulesDepDirty();
     }
 
     function trashSummaryLine(ent) {
@@ -96588,7 +96607,8 @@
 
     /** 习惯打卡保存后：本地+pulse，并立即同步完成态 UI */
     function saveStateAfterHabitCheckin() {
-      saveStateWithCloudPulseImmediate({ lists: ["habit", "dailyWin", "done"] });
+      /* 打卡路径只改 habitCheckins ± done（及 Rule100 Done），从不改 state.dailyWin */
+      saveStateWithCloudPulseImmediate({ lists: ["habit", "done"] });
       try {
         flushLocalPersistedState("force");
       } catch (_habitFlushErr) {}
@@ -99691,8 +99711,22 @@
       return o;
     }
 
+    function markHeavyModulesDepDirty() {
+      heavyModulesDepDirty = true;
+    }
+
+    /** lists 是否可能影响 heavy 指纹（done/habit/memo 等默认不影响；forge 影响） */
+    function saveListsTouchHeavyModules(lists) {
+      if (!lists || !lists.length) return true;
+      for (let i = 0; i < lists.length; i++) {
+        if (lists[i] === "forge") return true;
+      }
+      return false;
+    }
+
     function markAllUiPaintSlicesDirty() {
       uiPaintDirty = null;
+      markHeavyModulesDepDirty();
     }
 
     function markUiPaintSlicesDirty(names) {
@@ -99716,8 +99750,49 @@
       uiPaintDirty[name] = false;
     }
 
-    function markStateHygieneDirty() {
-      stateHygieneDirty = true;
+    /** 待跑域是否仅为 Done 去重（普通无 mirrorOf ClosedList 勾选） */
+    function isHygieneDomainsDonePruneOnly(domains) {
+      if (!domains || !domains.length) return false;
+      for (let i = 0; i < domains.length; i++) {
+        if (domains[i] !== "donePrune") return false;
+      }
+      return true;
+    }
+
+    /**
+     * @param {string[]|null|undefined} [domainsOpt]
+     * 省略/空 = 全量 hygiene；已是全量时不会被窄域降级；窄域遇上全量请求则升为全量。
+     */
+    function markStateHygieneDirty(domainsOpt) {
+      const nextNarrow =
+        domainsOpt && domainsOpt.length ? domainsOpt.slice() : null;
+      if (!stateHygieneDirty) {
+        stateHygieneDirty = true;
+        stateHygieneDomains = nextNarrow;
+        return;
+      }
+      if (stateHygieneDomains === null) return;
+      if (nextNarrow === null) {
+        stateHygieneDomains = null;
+        return;
+      }
+      const merged = stateHygieneDomains.slice();
+      nextNarrow.forEach(function (d) {
+        if (merged.indexOf(d) === -1) merged.push(d);
+      });
+      stateHygieneDomains = isHygieneDomainsDonePruneOnly(merged) ? merged : null;
+    }
+
+    /**
+     * 本次 lists 是否可跳过卫生标脏。
+     * 本轮仅支持纯 memo：新增未完成备忘不改 done/周计划/周年等 hygiene 域。
+     */
+    function saveListsSkipStateHygiene(lists) {
+      if (!lists || !lists.length) return false;
+      for (let i = 0; i < lists.length; i++) {
+        if (lists[i] !== "memo") return false;
+      }
+      return true;
     }
 
     function uiPaintSlicesForListName(listName) {
@@ -99862,9 +99937,16 @@
       const t0 = beginCloudSyncPerf();
       opts = opts && typeof opts === "object" ? opts : {};
       try {
-        if (!opts.fromHygiene) markStateHygieneDirty();
-        if (opts.lists) markUiPaintSlicesDirty(opts.lists);
-        else if (!opts.fromHygiene) markAllUiPaintSlicesDirty();
+        /* 纯 memo 写入不标卫生脏；memo+done 等其它 lists / 裸 save 仍走原 hygiene */
+        if (!opts.fromHygiene && !saveListsSkipStateHygiene(opts.lists)) {
+          markStateHygieneDirty(opts.hygieneDomains);
+        }
+        if (opts.lists) {
+          markUiPaintSlicesDirty(opts.lists);
+          if (saveListsTouchHeavyModules(opts.lists)) markHeavyModulesDepDirty();
+        } else if (!opts.fromHygiene) {
+          markAllUiPaintSlicesDirty();
+        }
         scheduleLocalPersistFlush();
         if (!cloudSyncSuppressPush) {
           markCloudSyncPendingUpload();
@@ -102245,6 +102327,7 @@
       const name = nameInput ? String(nameInput.value || "").trim() : entry.name;
       const uLabel = getRule100UnitLabel(entry.unit);
       syncRule100HoursToDone(actually, name || "自定义100" + uLabel, entry.hoursTotal, rk, entry.unit);
+      markHeavyModulesDepDirty();
       if (typeof bumpDoneFilterToTaskDay === "function") {
         bumpDoneFilterToTaskDay(Date.now());
       }
@@ -104213,7 +104296,8 @@
       const m = createMemo(text);
       state.memo.unshift(m);
       memoInput.value = "";
-      saveState();
+      /* 仅新增未完成备忘，不写 Done；避免裸 saveState() → markAllUiPaintSlicesDirty */
+      saveState({ lists: ["memo"] });
       render();
       memoInput.focus();
     }
@@ -104832,7 +104916,8 @@
         } else if (moEarly && moEarly.kind === "anniversaryTw") {
           applyAnniversaryCompletionFromMirror(moEarly, Boolean(item.completed));
           syncAllAnniversaryMirrorsForTask(moEarly.module, moEarly.taskId);
-          saveStateWithCloudPulseImmediate({ lists: ["closedList", "done", "weeklyPlan"] });
+          /* 周年 DOM 走 heavy 指纹；无 weeklyPlan state 变更，不必脏 weeklyPlan */
+          saveStateWithCloudPulseImmediate({ lists: ["closedList", "done"] });
           render();
         }
         return;
@@ -104862,7 +104947,17 @@
         applyAnniversaryCompletionFromMirror(mo, Boolean(checked));
         syncAllAnniversaryMirrorsForTask(mo.module, mo.taskId);
       }
-      saveStateWithCloudPulseImmediate({ lists: ["closedList", "done", "weeklyPlan"] });
+      /* 仅周计划镜像会改 weeklyPlan；普通项 / 十二周年镜像只脏 closedList+done */
+      const paintLists =
+        mo && mo.kind === "weeklyPlan"
+          ? ["closedList", "done", "weeklyPlan"]
+          : ["closedList", "done"];
+      const saveOpts = { lists: paintLists };
+      /* 仅确认无 mirrorOf 的普通项：窄 hygiene；WP/周年/任何 mirrorOf 仍全量 */
+      if (!mo) {
+        saveOpts.hygieneDomains = ["donePrune"];
+      }
+      saveStateWithCloudPulseImmediate(saveOpts);
       render();
     }
 
@@ -108339,7 +108434,11 @@
       if (silent) {
         return newDoneId;
       }
-      saveState();
+      /* 只脏源列表 + Done；避免裸 saveState() → markAllUiPaintSlicesDirty */
+      const paintLists = uiPaintSlicesForListName(listKey);
+      const lists = paintLists && paintLists.length ? paintLists.slice() : [];
+      if (lists.indexOf("done") === -1) lists.push("done");
+      saveState({ lists: lists });
       render();
       scheduleExpandAndFocusDoneJournalAssess(newDoneId);
     }
@@ -120859,13 +120958,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       delete entry.outcomeScore;
     }
 
-    /** Habit / Forge / 深度时间：固定为 Power，仅展示绿标，不参与三选一 */
+    /** Habit / Forge / 深度时间 / 清空油箱 / A.M.B.：固定为 Power（艰难选择），仅展示绿标，不参与三选一 */
     function doneTaskUsesPowerBadgeOnly(task) {
       if (!task || typeof task !== "object") return false;
       if (task.anniversaryDeepTimeMeta) return true;
       if (task.habitMeta && typeof task.habitMeta === "object") return true;
       if (task.forgeMindMeta || task.forgeBodyMeta) return true;
       if (getForgeDoneLineInfo(task)) return true;
+      if (task.fuelMeta && typeof task.fuelMeta === "object") return true;
+      if (task.backwardMeasureMeta && typeof task.backwardMeasureMeta === "object") return true;
       return false;
     }
 
@@ -127826,6 +127927,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } else {
         located.task.done = Boolean(complete);
       }
+      markHeavyModulesDepDirty();
     }
 
     /** 十二周年主/子任务 → 封闭清单（前缀【12周年】，mirrorOf 联动完成） */
@@ -138528,6 +138630,20 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return false;
       }
       if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.hygienePassCount += 1;
+      const domains = stateHygieneDomains;
+      /* 普通无 mirrorOf ClosedList：只 Done 去重，其余扫描跳过 */
+      if (isHygieneDomainsDonePruneOnly(domains)) {
+        const pruned = pruneRedundantDoneEntriesInState();
+        if (pruned) {
+          saveState({
+            fromHygiene: true,
+            lists: ["done", "closedList"]
+          });
+        }
+        stateHygieneDirty = false;
+        stateHygieneDomains = null;
+        return pruned;
+      }
       let doneHygieneChanged = refreshAllDailyWinCheckins();
       if (repairDoneListCompletedAtFromHabitMeta()) doneHygieneChanged = true;
       if (refreshLife4000DoneEntryTexts()) doneHygieneChanged = true;
@@ -138551,6 +138667,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         });
       }
       stateHygieneDirty = false;
+      stateHygieneDomains = null;
       return doneHygieneChanged;
     }
 
@@ -138622,7 +138739,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const paintClosedSlice = paintDynamic && isUiPaintSliceDirty("closedList");
       const paintWeeklySlice = paintDynamic && isUiPaintSliceDirty("weeklyPlan");
       const paintKineticSlice = paintDynamic && isUiPaintSliceDirty("kinetic");
-      const paintHabitSlice = paintHabit && (isUiPaintSliceDirty("habit") || isUiPaintSliceDirty("dailyWin"));
+      const paintHabitDom = paintHabit && isUiPaintSliceDirty("habit");
+      const paintDailyWinDom = paintHabit && isUiPaintSliceDirty("dailyWin");
+      const paintHabitSlice = paintHabitDom || paintDailyWinDom;
       const paintGoalsSlice = paintGoals && isUiPaintSliceDirty("goals");
       const paintForgeSlice = paintForge && isUiPaintSliceDirty("forge");
       const paintPurposeSlice = paintPurpose && isUiPaintSliceDirty("purpose");
@@ -138636,7 +138755,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (paintMemoSlice) {
         filteredMemoItems = state.memo.slice();
       }
-      if (paintHabitSlice) {
+      if (paintDailyWinDom) {
         filteredDailyWinTasks = getDailyWinTasksForDate(baseDailyWinDate);
       }
       if (paintStopSlice) {
@@ -138729,21 +138848,26 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       ensureDoneTimeBlockSprintTicker();
       if (paintHabitSlice) {
-        renderList(dailyWinList, filteredDailyWinTasks, "dailyWin");
-        try {
-          renderHabitCheckins();
-        } catch (habitRenderErr) {
-          console.warn("[习惯] renderHabitCheckins 失败:", habitRenderErr);
+        if (paintDailyWinDom) {
+          renderList(dailyWinList, filteredDailyWinTasks, "dailyWin");
+          dailyWinCount.textContent = filteredDailyWinTasks.length;
+          if (dailyWinDateFilter) {
+            dailyWinDateFilter.value = selectedDailyWinDate;
+          }
+          if (dailyWinList) {
+            dailyWinList.classList.remove("daily-win-list--tomorrow");
+          }
+          dailyWinEmpty.style.display = (filteredDailyWinTasks.length || isDailyWinModernMode()) ? "none" : "block";
         }
-        dailyWinCount.textContent = filteredDailyWinTasks.length;
-        if (dailyWinDateFilter) {
-          dailyWinDateFilter.value = selectedDailyWinDate;
+        if (paintHabitDom) {
+          try {
+            renderHabitCheckins();
+          } catch (habitRenderErr) {
+            console.warn("[习惯] renderHabitCheckins 失败:", habitRenderErr);
+          }
         }
-        if (dailyWinList) {
-          dailyWinList.classList.remove("daily-win-list--tomorrow");
-        }
-        dailyWinEmpty.style.display = (filteredDailyWinTasks.length || isDailyWinModernMode()) ? "none" : "block";
-        if (stampDailyThreeWinsDoneBtn) {
+        /* 记入按钮依赖三赢条数 + habitCheckins.dailyThreeWins，任一切片脏都刷新 */
+        if (stampDailyThreeWinsDoneBtn && (paintDailyWinDom || paintHabitDom)) {
           const stampDateKey = baseDailyWinDate;
           const stampCount = countDailyWinEntriesForDate(stampDateKey);
           const stampHasDone = hasHabitDoneEntry("dailyThreeWins", stampDateKey);
@@ -138754,36 +138878,41 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             stampCount < 3 || (stampHasDone && !stampSuppressed);
           stampDailyThreeWinsDoneBtn.textContent = stampSuppressed ? "重新记入 My Done" : "记入 My Done";
         }
-        try {
-          renderBackwardMeasure();
-        } catch (bmErr) {
-          console.warn("[向后衡量] 渲染失败:", bmErr);
-        }
-        try {
-          renderSuccessCriteria();
-        } catch (scErr) {
-          console.warn("[成功标准] 渲染失败:", scErr);
-        }
-        backwardMeasureHoldPeriodAfterSave = null;
-        try {
-          renderFuelScore();
-        } catch (fuelErr) {
-          console.warn("[油箱] 渲染失败:", fuelErr);
+        /* 油箱/向后衡量等与打卡无关：仅 dailyWin 脏或全量脏时重建，避免每次勾选 Habit 全刷 */
+        if (paintDailyWinDom) {
           try {
-            syncHabitMeasureIncompleteTabStyles();
-          } catch (syncIncErr) {
-            console.warn("[AMB] 未完成 Tab 染色失败:", syncIncErr);
+            renderBackwardMeasure();
+          } catch (bmErr) {
+            console.warn("[向后衡量] 渲染失败:", bmErr);
           }
-        }
-        try {
-          initHabitCategoryDesktopTabs();
-        } catch (habitTabsErr) {
-          console.warn("[习惯] initHabitCategoryDesktopTabs 失败:", habitTabsErr);
-        }
-        try {
-          initMeasureSegmentDesktopTabs();
-        } catch (measureTabsErr) {
-          console.warn("[AMB] initMeasureSegmentDesktopTabs 失败:", measureTabsErr);
+          try {
+            renderSuccessCriteria();
+          } catch (scErr) {
+            console.warn("[成功标准] 渲染失败:", scErr);
+          }
+          backwardMeasureHoldPeriodAfterSave = null;
+          try {
+            renderFuelScore();
+          } catch (fuelErr) {
+            console.warn("[油箱] 渲染失败:", fuelErr);
+            try {
+              syncHabitMeasureIncompleteTabStyles();
+            } catch (syncIncErr) {
+              console.warn("[AMB] 未完成 Tab 染色失败:", syncIncErr);
+            }
+          }
+          try {
+            initHabitCategoryDesktopTabs();
+          } catch (habitTabsErr) {
+            console.warn("[习惯] initHabitCategoryDesktopTabs 失败:", habitTabsErr);
+          }
+          try {
+            initMeasureSegmentDesktopTabs();
+          } catch (measureTabsErr) {
+            console.warn("[AMB] initMeasureSegmentDesktopTabs 失败:", measureTabsErr);
+          }
+        } else {
+          backwardMeasureHoldPeriodAfterSave = null;
         }
         clearUiPaintSlice("habit");
         clearUiPaintSlice("dailyWin");
@@ -139235,20 +139364,54 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
+    /** 日历日 / Done 筛选日 / 归档视图：不跑全量指纹也能发现 heavy 相关 UI 输入变化 */
+    function getHeavyModuleCheapKey(extras) {
+      extras = extras || {};
+      return (
+        String(extras.calendarDay || "") +
+        "\0" +
+        String(extras.selectedDoneDate || "") +
+        "\0" +
+        String(extras.anniversaryTwArchiveViewKey || "")
+      );
+    }
+
     /** 首屏延后的重模块：历史面板 / 十二周年 / Rule100 / 回收站等 */
     function renderHeavyModules(forceAll) {
       const t0 = beginCloudSyncPerf();
       let didHeavyWork = false;
       beginUiRebuildSnap();
       try {
+      const force = Boolean(forceAll);
+      const forceAnniversary = Boolean(anniversaryTwPendingScrollTarget);
       const extras = getLiveHeavyModuleRenderExtras();
+      const cheapKey = getHeavyModuleCheapKey(extras);
+      /* 无 heavy 相关 state 变更且廉价键未变：跳过 anniversary 等 JSON.stringify 指纹 */
+      if (
+        !force &&
+        !forceAnniversary &&
+        !heavyModulesDepDirty &&
+        lastHeavyModuleDepSnapshot &&
+        lastHeavyModuleCheapKey === cheapKey
+      ) {
+        bumpHeavyModuleSliceCounter("renderHeavyModulesSkippedCount");
+        bumpHeavyModuleSliceCounter("renderHeavyFingerprintSkipCount");
+        try {
+          refreshDynamicModuleLunarHints();
+        } catch (lunarErr) {
+          console.warn("[农历提示] 刷新失败:", lunarErr);
+        }
+        return;
+      }
       const nextSnap = getHeavyModuleDependencySnapshot(state, extras);
       const dirty = planHeavyModuleRenders(lastHeavyModuleDepSnapshot, nextSnap, {
-        forceAll: Boolean(forceAll),
-        forceAnniversary: Boolean(anniversaryTwPendingScrollTarget)
+        forceAll: force,
+        forceAnniversary: forceAnniversary
       });
       if (!dirty.any) {
         lastHeavyModuleDepSnapshot = nextSnap;
+        lastHeavyModuleCheapKey = cheapKey;
+        heavyModulesDepDirty = false;
         bumpHeavyModuleSliceCounter("renderHeavyModulesSkippedCount");
         try {
           refreshDynamicModuleLunarHints();
@@ -139342,6 +139505,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       keepHeavySlicePending("anniversary", dirty.anniversary && !paintDynamicHeavy);
       keepHeavySlicePending("forgeMins", dirty.forgeMins && !paintForgeHeavy);
       lastHeavyModuleDepSnapshot = paintedSnap;
+      lastHeavyModuleCheapKey = cheapKey;
+      heavyModulesDepDirty = false;
       } finally {
         if (didHeavyWork) {
           addCloudSyncPerf("renderHeavyModulesCount", "renderHeavyModulesMs", t0);
@@ -141070,7 +141235,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         if (repaired) {
           try {
-            saveState();
+            saveState({ fromHygiene: true, lists: ["habit", "done"] });
           } catch (_habitRepairSaveErr) {}
         }
       }
@@ -141079,7 +141244,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         habitWeightLifetimeRepairAppliedVer = HABIT_WEIGHT_LIFETIME_REPAIR_VER;
         if (repairWeightBodyFatCheckinsFromDone()) {
           try {
-            saveState();
+            saveState({ fromHygiene: true, lists: ["habit", "done"] });
           } catch (_habitWeightRepairSaveErr) {}
         }
       }
