@@ -90118,7 +90118,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260908a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260908b";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -90975,6 +90975,26 @@
     /** Purpose & Values 顶栏子 Tab：用于快捷跳转到 Extreme Agency 等面板 */
     let activatePurposeSubTab = null;
     let activePrimaryModuleKey = "dynamic";
+    /**
+     * 底栏一级模块是否已成功 paint 过。未 paint 过 = 首次进入必须 render。
+     * 云合并 / markAll 时 uiPaintDirty===null，仍会 needsPaint，不必清此表。
+     */
+    const primaryModulePaintedOnce = {
+      dynamic: false,
+      habit: false,
+      forge: false,
+      goals: false,
+      purpose: false
+    };
+    const PRIMARY_MODULE_PAINT_SLICES = {
+      dynamic: ["done", "closedList", "weeklyPlan", "memo", "stopDoing", "notToDo", "haters", "kinetic"],
+      habit: ["habit", "dailyWin"],
+      forge: ["forge"],
+      goals: ["goals"],
+      purpose: ["purpose"]
+    };
+    /** Life4000：上次成功刷格签名；同签名且网格已建则跳过 4000 格 class 重算 */
+    let lastLife4000PaintSig = "";
     /** 周计划 / 十二周年 → Done 镜像：签名没变则跳过全量扫描 */
     let lastWeeklyPlanDoneSyncSig = "";
     let lastAnniversaryDoneSyncSig = "";
@@ -100031,6 +100051,25 @@
     function markAllUiPaintSlicesDirty() {
       uiPaintDirty = null;
       markHeavyModulesDepDirty();
+      /* 全脏时强制下次 Life4000 可重算（云合并 / 跨天等） */
+      lastLife4000PaintSig = "";
+    }
+
+    /** 底栏切入：无脏且非首次则只做壳层显隐，跳过完整 render */
+    function primaryModuleNeedsPaint(moduleKey) {
+      const key = String(moduleKey || "");
+      if (!key) return true;
+      if (!primaryModulePaintedOnce[key]) return true;
+      if (uiPaintDirty == null) return true;
+      const slices = PRIMARY_MODULE_PAINT_SLICES[key] || [];
+      for (let i = 0; i < slices.length; i++) {
+        if (isUiPaintSliceDirty(slices[i])) return true;
+      }
+      /* habit/forge/dynamic 的 heavy 切片可能在焦点外变脏，切回时要补 paint */
+      if (heavyModulesDepDirty && (key === "habit" || key === "forge" || key === "dynamic")) {
+        return true;
+      }
+      return false;
     }
 
     function markUiPaintSlicesDirty(names) {
@@ -106691,6 +106730,36 @@
       }, ms);
     }
 
+    function getLife4000PaintSignature() {
+      ensureLife4000WeeksState();
+      const birthResolved = getLife4000ResolvedBirthDate();
+      const metrics = computeLife4000WeeksMetricsFromBirthDate(birthResolved);
+      const hasBirth = Boolean(birthResolved);
+      const day =
+        typeof formatDateInputValue === "function" ? formatDateInputValue(new Date()) : String(Date.now());
+      const birthKey = birthResolved
+        ? birthResolved.getFullYear() +
+          "-" +
+          String(birthResolved.getMonth() + 1).padStart(2, "0") +
+          "-" +
+          String(birthResolved.getDate()).padStart(2, "0")
+        : "";
+      const endKey =
+        metrics.endDate && typeof formatLife4000CnDate === "function"
+          ? formatLife4000CnDate(metrics.endDate)
+          : metrics.endDate
+            ? String(metrics.endDate.getTime())
+            : "";
+      return [
+        day,
+        birthKey,
+        hasBirth ? metrics.passed : -1,
+        hasBirth ? metrics.remaining : "",
+        hasBirth ? metrics.pct.toFixed(1) : "",
+        endKey
+      ].join("|");
+    }
+
     function renderLife4000Weeks() {
       const host = document.getElementById("life4000GridHost");
       const solarResolvedEl = document.getElementById("life4000SolarResolved");
@@ -106702,6 +106771,16 @@
       if (!host) return;
       ensureLife4000WeeksState();
       ensureLife4000GridBuilt(host);
+
+      const sig = getLife4000PaintSignature();
+      /* 同一切换里 afterActivate + heavy 可能各调一次：签名未变则直接复用 DOM */
+      if (host.dataset.life4000GridBuilt === "1" && sig && sig === lastLife4000PaintSig) {
+        if (habitLife4000WeeksPanel && habitLife4000WeeksPanel.dataset.life4000TuesdayScheduled !== "1") {
+          habitLife4000WeeksPanel.dataset.life4000TuesdayScheduled = "1";
+          scheduleLife4000TuesdayRefresh();
+        }
+        return;
+      }
 
       const fmt = getChineseCalendarFormatter();
       if (calUnavailEl) calUnavailEl.hidden = Boolean(fmt);
@@ -106757,6 +106836,8 @@
           cells[i].classList.toggle("is-passed", i < passed);
         }
       }
+
+      lastLife4000PaintSig = sig;
 
       if (habitLife4000WeeksPanel && habitLife4000WeeksPanel.dataset.life4000TuesdayScheduled !== "1") {
         habitLife4000WeeksPanel.dataset.life4000TuesdayScheduled = "1";
@@ -147098,20 +147179,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } else if (typeof stopMyGoalsCountdownFlashTicker === "function") {
         stopMyGoalsCountdownFlashTicker();
       }
-      /* 切模块时只脏当前模块切片，避免漏标导致隐藏页回来是旧 DOM */
-      if (activePrimaryModuleKey === "dynamic") {
-        markUiPaintSlicesDirty(["done", "closedList", "weeklyPlan", "memo", "stopDoing", "notToDo", "haters", "kinetic"]);
-      } else if (activePrimaryModuleKey === "habit") {
-        markUiPaintSlicesDirty(["habit", "dailyWin"]);
-      } else if (activePrimaryModuleKey === "forge") {
-        markUiPaintSlicesDirty(["forge"]);
-      } else if (activePrimaryModuleKey === "goals") {
-        markUiPaintSlicesDirty(["goals"]);
-      } else if (activePrimaryModuleKey === "purpose") {
-        markUiPaintSlicesDirty(["purpose"]);
+
+      /*
+       * 无条件 mark+render 是大模块切换重税公共根因。
+       * 仅首次进入 / 对应 slice 脏 / heavy 脏（habit|forge|dynamic）/ 全脏时才 paint。
+       * 无脏 warm 切换：只做上方 CSS 显隐 + scroll/focus。
+       */
+      const focusKey = activePrimaryModuleKey;
+      if (primaryModuleNeedsPaint(focusKey)) {
+        const slices = PRIMARY_MODULE_PAINT_SLICES[focusKey];
+        if (slices && slices.length) markUiPaintSlicesDirty(slices);
+        primaryModulePaintedOnce[focusKey] = true;
+        render();
       }
-      /* 首屏 render() 早于底栏 init：全屏/焦点类名在后应用，须补一次 render，否则每天三赢等依赖 isDailyWinModernMode() 的 UI 会陈旧 */
-      render();
     }
 
     window.ensureKineticDefaultTabVisible = ensureKineticDefaultTabVisible;

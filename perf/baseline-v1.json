@@ -1,0 +1,157 @@
+{
+  "version": "v1.1",
+  "capturedAt": "2026-09-08",
+  "appCacheHint": "exec-system-pwa-v20260908b",
+  "notes": "保护线由 run-regression-check.js 官方探针锁定。热路径三数字保留优化成果；大模块切换为同探针实测 avg/median/p90。规则：慢>20% warning；慢>40% regression；markAll / 新 stall 上 full hygiene / warm→full render → structural_regression。",
+  "thresholds": {
+    "warningPct": 20,
+    "regressionPct": 40,
+    "warningRatio": 1.2,
+    "regressionRatio": 1.4,
+    "noiseFloorMs": 5,
+    "compareField": "median",
+    "description": "判定用 measured[compareField] 相对 effectiveBaseline=max(baseline[compareField], noiseFloorMs)。默认 compareField=median（抗抖动）；changePct 仍相对 baseline.avg 展示。慢>20% warning；慢>40% regression。"
+  },
+  "structuralRules": {
+    "forbidMarkAllOnHotPaths": true,
+    "forbidFullHygieneWhenNarrowExpected": true,
+    "forbidWarmPrimaryFullRender": true,
+    "stallDomainOnlyIfNewStall": true,
+    "description": "stall hygieneDomain 仅在本轮新增 stall（通常>1s）时可信；热路径以 markAll / hygienePass(expect skip) / renderCount(warm) 为主。"
+  },
+  "paths": {
+    "addMemo": {
+      "label": "addMemo 备忘新增",
+      "category": "hot",
+      "metric": "renderMs",
+      "baseline": { "avg": 5.66, "median": 5.66, "p90": 5.66 },
+      "expect": {
+        "markAll": false,
+        "hygieneDomain": "skip|none",
+        "expectHygieneSkip": true,
+        "lists": ["memo"],
+        "forbidFullHygiene": true
+      }
+    },
+    "closedListPlainToggle": {
+      "label": "普通 ClosedList 勾选（无 mirrorOf）",
+      "category": "hot",
+      "metric": "renderMs",
+      "baseline": { "avg": 20.38, "median": 20.38, "p90": 20.38 },
+      "expect": {
+        "markAll": false,
+        "hygieneDomain": "donePrune",
+        "listsIncludes": ["closedList", "done"],
+        "forbidLists": ["weeklyPlan"],
+        "forbidFullHygiene": true
+      }
+    },
+    "habitSimpleCheckin": {
+      "label": "普通 Habit 打卡（简单戳记）",
+      "category": "hot",
+      "metric": "renderMs",
+      "baseline": { "avg": 23.36, "median": 23.36, "p90": 23.36 },
+      "expect": {
+        "markAll": false,
+        "hygieneDomain": "habitDone|skip|none",
+        "listsIncludes": ["habit", "done"],
+        "forbidFullHygiene": true
+      }
+    },
+    "habitSwitchCold": {
+      "label": "Habit 底栏切换 cold",
+      "category": "primarySwitch",
+      "metric": "totalMs",
+      "baseline": { "avg": 100.0, "median": 100.0, "p90": 120.0 },
+      "expect": { "module": "habit", "mode": "cold" }
+    },
+    "habitSwitchWarm": {
+      "label": "Habit 底栏切换 warm",
+      "category": "primarySwitch",
+      "metric": "totalMs",
+      "baseline": { "avg": 20.0, "median": 20.0, "p90": 24.0 },
+      "expect": {
+        "module": "habit",
+        "mode": "warm",
+        "warmNoFullRender": true,
+        "note": "无脏 warm 不应完整 render()；afterActivate Life4000 可单独跑"
+      }
+    },
+    "forgeSwitchCold": {
+      "label": "Forge 底栏切换 cold",
+      "category": "primarySwitch",
+      "metric": "totalMs",
+      "baseline": { "avg": 70.0, "median": 70.0, "p90": 90.0 },
+      "expect": { "module": "forge", "mode": "cold" }
+    },
+    "forgeSwitchWarm": {
+      "label": "Forge 底栏切换 warm",
+      "category": "primarySwitch",
+      "metric": "totalMs",
+      "baseline": { "avg": 2.0, "median": 2.0, "p90": 4.0 },
+      "expect": { "module": "forge", "mode": "warm", "warmNoFullRender": true }
+    },
+    "goalsSwitchCold": {
+      "label": "Goals 底栏切换 cold",
+      "category": "primarySwitch",
+      "metric": "totalMs",
+      "baseline": { "avg": 220.0, "median": 220.0, "p90": 250.0 },
+      "expect": { "module": "goals", "mode": "cold" }
+    },
+    "goalsSwitchWarm": {
+      "label": "Goals 底栏切换 warm",
+      "category": "primarySwitch",
+      "metric": "totalMs",
+      "baseline": { "avg": 10.0, "median": 10.0, "p90": 14.0 },
+      "expect": { "module": "goals", "mode": "warm", "warmNoFullRender": true }
+    },
+    "purposeSwitchCold": {
+      "label": "Purpose 底栏切换 cold",
+      "category": "primarySwitch",
+      "metric": "totalMs",
+      "baseline": { "avg": 20.0, "median": 20.0, "p90": 28.0 },
+      "expect": { "module": "purpose", "mode": "cold" }
+    },
+    "purposeSwitchWarm": {
+      "label": "Purpose 底栏切换 warm",
+      "category": "primarySwitch",
+      "metric": "totalMs",
+      "baseline": { "avg": 2.0, "median": 2.0, "p90": 4.0 },
+      "expect": { "module": "purpose", "mode": "warm", "warmNoFullRender": true }
+    },
+    "dynamicSwitchCold": {
+      "label": "Kinetic 底栏切换 cold",
+      "category": "primarySwitch",
+      "metric": "totalMs",
+      "baseline": { "avg": 55.0, "median": 55.0, "p90": 70.0 },
+      "expect": { "module": "dynamic", "mode": "cold" }
+    },
+    "dynamicSwitchWarm": {
+      "label": "Kinetic 底栏切换 warm",
+      "category": "primarySwitch",
+      "metric": "totalMs",
+      "baseline": { "avg": 3.0, "median": 3.0, "p90": 5.0 },
+      "expect": { "module": "dynamic", "mode": "warm", "warmNoFullRender": true }
+    },
+    "anniversarySwitchCold": {
+      "label": "十二周年 Kinetic 切换 cold",
+      "category": "kineticSub",
+      "metric": "totalMs",
+      "baseline": { "avg": 25.0, "median": 25.0, "p90": 32.0 },
+      "expect": {
+        "mode": "cold",
+        "forbidPrimaryFullRenderChain": true
+      }
+    },
+    "anniversarySwitchWarm": {
+      "label": "十二周年 Kinetic 切换 warm",
+      "category": "kineticSub",
+      "metric": "totalMs",
+      "baseline": { "avg": 22.0, "median": 22.0, "p90": 30.0 },
+      "expect": {
+        "mode": "warm",
+        "forbidPrimaryFullRenderChain": true
+      }
+    }
+  }
+}
