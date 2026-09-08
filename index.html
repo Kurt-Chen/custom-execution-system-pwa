@@ -5675,10 +5675,10 @@
 
     #habitRoutineModule #habitLife4000WeeksPanel .life4000-fold--meta .life4000-lead {
       display: inline-flex;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       align-items: center;
       justify-content: flex-start;
-      gap: 5px 6px;
+      gap: 5px 7px;
       width: auto;
       max-width: 100%;
       margin: 0;
@@ -5697,11 +5697,11 @@
       align-items: center;
       justify-content: center;
       margin: 0;
-      padding: 3px 9px 4px;
+      padding: 4px 11px 5px;
       box-sizing: border-box;
       border: 1px solid transparent;
       border-radius: 999px;
-      font-size: 11px;
+      font-size: 12.5px;
       font-weight: 700;
       font-style: italic;
       letter-spacing: 0;
@@ -5746,14 +5746,14 @@
         align-self: auto;
         margin-top: 0;
         flex-wrap: nowrap;
-        gap: 1px 2px;
+        gap: 2px 3px;
         max-width: 100%;
       }
 
       #habitRoutineModule #habitLife4000WeeksPanel .life4000-lead__part {
-        padding: 0 3px 1px;
-        font-size: 6px;
-        letter-spacing: -0.04em;
+        padding: 1px 4px 2px;
+        font-size: 7.5px;
+        letter-spacing: -0.03em;
         flex: 0 1 auto;
         min-width: 0;
         box-shadow:
@@ -5763,7 +5763,7 @@
       }
 
       #habitRoutineModule #habitLife4000WeeksPanel .life4000-lead__op {
-        font-size: 0.85em;
+        font-size: 0.9em;
         padding: 0;
       }
     }
@@ -6013,7 +6013,7 @@
 
     #habitRoutineModule .life4000-fold-chips {
       display: inline-flex;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       align-items: center;
       gap: 6px 10px;
       min-width: 0;
@@ -6068,7 +6068,7 @@
       #habitRoutineModule .life4000-fold-chips {
         display: inline-flex;
         flex-wrap: nowrap;
-        gap: 1px 2px;
+        gap: 2px 3px;
         max-width: 100%;
         min-width: 0;
       }
@@ -6184,11 +6184,11 @@
       align-items: center;
       justify-content: center;
       margin: 0;
-      padding: 3px 9px 4px;
+      padding: 4px 11px 5px;
       box-sizing: border-box;
       border: 1px solid transparent;
       border-radius: 999px;
-      font-size: 11px;
+      font-size: 12.5px;
       font-weight: 700;
       font-style: italic;
       letter-spacing: 0;
@@ -6228,9 +6228,9 @@
 
     @media (max-width: 767px) {
       #habitRoutineModule .life4000-v.life4000-v--chip {
-        padding: 0 3px 1px;
-        font-size: 6px;
-        letter-spacing: -0.04em;
+        padding: 1px 4px 2px;
+        font-size: 7.5px;
+        letter-spacing: -0.03em;
         flex: 0 1 auto;
         min-width: 0;
         box-shadow:
@@ -6244,12 +6244,12 @@
     @media (min-width: 768px) and (max-width: 1366px) and (pointer: coarse) {
       #habitRoutineModule #habitLife4000WeeksPanel .life4000-fold--meta .life4000-lead {
         flex-wrap: nowrap;
-        gap: 3px 4px;
+        gap: 3px 5px;
       }
 
       #habitRoutineModule #habitLife4000WeeksPanel .life4000-lead__part {
-        padding: 2px 7px 3px;
-        font-size: 10px;
+        padding: 3px 9px 4px;
+        font-size: 11.5px;
       }
 
       #habitRoutineModule .life4000-fold-chips {
@@ -6258,14 +6258,27 @@
       }
 
       #habitRoutineModule .life4000-v.life4000-v--chip {
-        padding: 2px 7px 3px;
-        font-size: 10px;
+        padding: 3px 9px 4px;
+        font-size: 11.5px;
       }
     }
 
     @media (max-width: 640px) {
       #habitRoutineModule .life4000-grid-host {
         max-width: 100%;
+      }
+    }
+
+    /*
+     * 手机：Life4000 约 4000 格。content-visibility:auto 在屏外跳过 layout/paint，
+     * 可见时仍带 layout/style/paint containment，减轻壳层 flex 重排牵连。
+     * contain-intrinsic-size 按 50:80 格阵宽高比估算，避免折叠跳动。
+     * 仅 max-width:767；桌面不变。可整段删除回滚。
+     */
+    @media (max-width: 767px) {
+      #habitRoutineModule #life4000GridHost.life4000-grid-host {
+        content-visibility: auto;
+        contain-intrinsic-size: auto 365px auto 584px;
       }
     }
 
@@ -91115,6 +91128,12 @@
     let renderDepth = 0;
     let renderSuppressCloudUntil = 0;
     let uiRebuildSnapGen = 0;
+    /**
+     * 同步窗口（cloudSyncMachineStatus==="syncing"）内：cloud 驱动的 render 只记 pending，
+     * 不反复整页刷；离开 syncing→synced/error/idle 时最多 flush 一次。
+     * 不丢 markAll / hygiene dirty；不拦截本机用户操作直接调用的 render()。
+     */
+    let cloudSyncUiRenderPending = false;
     /** 用户正在编辑或展开操作菜单时推迟全量 render，避免后台同步拆掉当前操作 */
     let renderDeferredWhileEditing = false;
     /** 向后衡量保存后：本轮 render 保持刚写入的周期键，避免立刻跳到下一期导致表单被清空 */
@@ -94205,7 +94224,7 @@
         return true;
       }
       if (pulseHasHabit || pulseHasForge || pulseHasDeadline || pulseHasReadingPlan || pulseHasMoveBreak) {
-        if (!shouldSkipCloudUiRender()) render();
+        requestCloudDrivenUiRender("immediate");
       } else {
         scheduleCloudSyncRenderDebounced();
       }
@@ -94322,6 +94341,43 @@
       return false;
     }
 
+    function noteCloudSyncUiRenderPending() {
+      cloudSyncUiRenderPending = true;
+    }
+
+    /**
+     * 同步窗口结束：若窗口内曾请求过 cloud UI 刷新，则最多整页 render 一次。
+     * 绕过 8s cloud 间隔，但仍尊重「用户正在编辑」→ 记入 editing deferred。
+     */
+    function flushCloudSyncUiRenderPending() {
+      if (!cloudSyncUiRenderPending) return;
+      cloudSyncUiRenderPending = false;
+      if (renderDepth > 0) {
+        cloudSyncUiRenderPending = true;
+        return;
+      }
+      if (typeof isAppUiBusyForBackgroundRefresh === "function" && isAppUiBusyForBackgroundRefresh()) {
+        markBackgroundUiRenderDeferred();
+        return;
+      }
+      render();
+    }
+
+    /** cloud 驱动的 UI 刷新入口：syncing 时只累计 pending */
+    function requestCloudDrivenUiRender(mode) {
+      if (cloudSyncMachineStatus === "syncing") {
+        noteCloudSyncUiRenderPending();
+        return;
+      }
+      if (mode === "immediate") {
+        if (!shouldSkipCloudUiRender()) {
+          render();
+        }
+        return;
+      }
+      scheduleCloudSyncRenderDebounced();
+    }
+
     /** 后台已合并数据，等展开菜单/编辑结束后再刷一次界面 */
     function markBackgroundUiRenderDeferred() {
       renderDeferredWhileEditing = true;
@@ -94356,9 +94412,17 @@
     }
 
     function scheduleCloudSyncRenderDebounced() {
+      if (cloudSyncMachineStatus === "syncing") {
+        noteCloudSyncUiRenderPending();
+        return;
+      }
       if (cloudSyncRenderDebounceTimer) clearTimeout(cloudSyncRenderDebounceTimer);
       cloudSyncRenderDebounceTimer = setTimeout(function () {
         cloudSyncRenderDebounceTimer = null;
+        if (cloudSyncMachineStatus === "syncing") {
+          noteCloudSyncUiRenderPending();
+          return;
+        }
         if (shouldSkipCloudUiRender()) return;
         render();
       }, CLOUD_SYNC_RENDER_DEBOUNCE_MS);
@@ -94692,12 +94756,17 @@
     }
 
     function setCloudSyncStatus(text, statusClass) {
+      const prevStatus = cloudSyncMachineStatus;
       if (statusClass === "status-syncing") cloudSyncMachineStatus = "syncing";
       else if (statusClass === "status-error") cloudSyncMachineStatus = "error";
       else if (statusClass === "status-connected") cloudSyncMachineStatus = "synced";
       else if (!statusClass) cloudSyncMachineStatus = "idle";
       cloudSyncStatusSnapshot = { text: String(text || "未同步"), statusClass: statusClass || "" };
       applyCloudSyncMobileOfflineUi();
+      /* 离开同步窗口：合并窗口内累计的 cloud UI 刷新为至多一次 render */
+      if (prevStatus === "syncing" && cloudSyncMachineStatus !== "syncing") {
+        flushCloudSyncUiRenderPending();
+      }
     }
 
     function restoreCloudSyncConnectedBadgeUnlessError() {
@@ -98935,7 +99004,8 @@
               });
             }
             if (countDoneRecordsInState(state) > localDoneBeforeUpload) {
-              render();
+              if (cloudSyncMachineStatus === "syncing") noteCloudSyncUiRenderPending();
+              else render();
             }
             nextHash = serializeStateForCloud();
             if (countDoneRecordsInState(state) === 0) {
@@ -99306,7 +99376,9 @@
         setCloudSyncHashFromCurrentState();
         const r = persistStateToLocalStorage();
         if (!skipRender) {
-          if (shouldSkipCloudUiRender()) {
+          if (cloudSyncMachineStatus === "syncing") {
+            noteCloudSyncUiRenderPending();
+          } else if (shouldSkipCloudUiRender()) {
             /* 操作中只落盘，界面等菜单收起后再刷 */
           } else {
             render();
