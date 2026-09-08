@@ -347,6 +347,16 @@
         });
       }
     } catch (_e3) {}
+    try {
+      if (typeof resetHabitCheckinsSubTabPaintForPerf === "function") {
+        resetHabitCheckinsSubTabPaintForPerf();
+      }
+    } catch (_e4) {}
+    try {
+      if (typeof resetSprintShellPaintForPerf === "function") {
+        resetSprintShellPaintForPerf();
+      }
+    } catch (_e5) {}
   }
 
   /** 切入目标模块前先离开，避免「已在目标」导致假 warm */

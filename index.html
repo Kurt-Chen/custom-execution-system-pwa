@@ -15642,6 +15642,10 @@
       padding: 0 12px 12px;
     }
 
+    .weekly-plan-task-shell-host[hidden] {
+      display: none !important;
+    }
+
     .weekly-plan-item--lane-life.weekly-plan-item {
       border-left: 3px solid #3b82f6;
     }
@@ -90966,9 +90970,10 @@
     const weeklyPlanTaskInput = document.getElementById("weeklyPlanTaskInput");
     const weeklyPlanAddForm = document.getElementById("weeklyPlanAddForm");
     const addWeeklyPlanTaskBtn = document.getElementById("addWeeklyPlanTaskBtn");
-    const weeklyPlanList = document.getElementById("weeklyPlanList");
-    const weeklyPlanEmpty = document.getElementById("weeklyPlanEmpty");
-    const weeklyPlanKanban = document.getElementById("weeklyPlanKanban");
+    /* P1.5：随当前任务壳宿主重绑（Life/Work/Open 常驻容器） */
+    let weeklyPlanList = document.getElementById("weeklyPlanList");
+    let weeklyPlanEmpty = document.getElementById("weeklyPlanEmpty");
+    let weeklyPlanKanban = document.getElementById("weeklyPlanKanban");
     const weeklyPlanSprintFooterBanner = document.getElementById("weeklyPlanSprintFooterBanner");
     const weeklyPlanKanbanFooter = document.getElementById("weeklyPlanKanbanFooter");
     const weeklyPlanViewToggle = document.getElementById("weeklyPlanViewToggle");
@@ -91099,6 +91104,23 @@
     };
     /** Life4000：上次成功刷格签名；同签名且网格已建则跳过 4000 格 class 重算 */
     let lastLife4000PaintSig = "";
+    /**
+     * Habit「习惯」子 Tab：内存级 paint/dirty（不落盘、不进 RTDB）。
+     * 已 paint 且未 dirty、且仍是同一日历日 → 再切回只做 CSS 显隐，跳过 renderHabitCheckins。
+     */
+    let habitCheckinsSubTabPaintedOnce = false;
+    let habitCheckinsSubTabDirty = true;
+    let habitCheckinsSubTabPaintDayKey = "";
+    /**
+     * Sprint 壳（Closed/Life/Work/Open）：内存级 paint/dirty（不落盘）。
+     * P1.5：Life/Work/Open 各有常驻宿主；warm 且 !dirty 只 hidden/class，不搬家 DOM。
+     */
+    const sprintShellPaintedOnce = { closed: false, life: false, work: false, open: false };
+    const sprintShellDirty = { closed: true, life: true, work: true, open: true };
+    let sprintShellListLiveOwner = "";
+    /** ISG 门禁：Closed 未 dirty 时复用上次扫描结果 */
+    let isgGateScanDirty = true;
+    let isgGateUnlockedCache = null;
     /** 周计划 / 十二周年 → Done 镜像：签名没变则跳过全量扫描 */
     let lastWeeklyPlanDoneSyncSig = "";
     let lastAnniversaryDoneSyncSig = "";
@@ -91297,6 +91319,20 @@
       weeklyPlanUiRenderCount: 0,
       weeklyPlanUiSkippedCount: 0,
       weeklyPlanUiRenderMs: 0,
+      habitCheckinsRenderCount: 0,
+      habitCheckinsRenderMs: 0,
+      habitCheckinsSkippedCount: 0,
+      sprintShellSwitchCount: 0,
+      sprintShellSwitchMs: 0,
+      sprintShellSwitchSkipCount: 0,
+      sprintShellListRebuildCount: 0,
+      sprintShellStashCount: 0,
+      sprintShellRestoreCount: 0,
+      sprintShellDomWriteCount: 0,
+      renderWeeklyPlanListCount: 0,
+      renderClosedListPanelCount: 0,
+      isgGateClosedScanCount: 0,
+      isgGateClosedScanSkipCount: 0,
       hygienePassCount: 0,
       hygieneSkippedCount: 0,
       persistFlushCount: 0,
@@ -91673,6 +91709,20 @@
         weeklyPlanUiRenderCount: c.weeklyPlanUiRenderCount,
         weeklyPlanUiSkippedCount: c.weeklyPlanUiSkippedCount,
         weeklyPlanUiRenderMs: Math.round(c.weeklyPlanUiRenderMs * 100) / 100,
+        habitCheckinsRenderCount: c.habitCheckinsRenderCount,
+        habitCheckinsRenderMs: Math.round(c.habitCheckinsRenderMs * 100) / 100,
+        habitCheckinsSkippedCount: c.habitCheckinsSkippedCount,
+        sprintShellSwitchCount: c.sprintShellSwitchCount,
+        sprintShellSwitchMs: Math.round(c.sprintShellSwitchMs * 100) / 100,
+        sprintShellSwitchSkipCount: c.sprintShellSwitchSkipCount,
+        sprintShellListRebuildCount: c.sprintShellListRebuildCount,
+        sprintShellStashCount: c.sprintShellStashCount,
+        sprintShellRestoreCount: c.sprintShellRestoreCount,
+        sprintShellDomWriteCount: c.sprintShellDomWriteCount,
+        renderWeeklyPlanListCount: c.renderWeeklyPlanListCount,
+        renderClosedListPanelCount: c.renderClosedListPanelCount,
+        isgGateClosedScanCount: c.isgGateClosedScanCount,
+        isgGateClosedScanSkipCount: c.isgGateClosedScanSkipCount,
         hygienePassCount: c.hygienePassCount,
         hygieneSkippedCount: c.hygieneSkippedCount,
         hygieneMs: Math.round(c.hygieneMs * 100) / 100,
@@ -91687,6 +91737,47 @@
       try {
         localStorage.setItem(CLOUD_SYNC_PERF_ENABLED_KEY, on ? "1" : "0");
       } catch (_e) {}
+    };
+    /** 性能探针：强制 Habit「习惯」子 Tab 下次 cold paint（仅内存） */
+    window.resetHabitCheckinsSubTabPaintForPerf = function resetHabitCheckinsSubTabPaintForPerf() {
+      habitCheckinsSubTabPaintedOnce = false;
+      habitCheckinsSubTabDirty = true;
+      habitCheckinsSubTabPaintDayKey = "";
+    };
+    window.getHabitCheckinsSubTabPaintDebug = function getHabitCheckinsSubTabPaintDebug() {
+      return {
+        paintedOnce: habitCheckinsSubTabPaintedOnce,
+        dirty: habitCheckinsSubTabDirty,
+        paintDayKey: habitCheckinsSubTabPaintDayKey,
+        needsPaint: habitCheckinsSubTabNeedsPaint()
+      };
+    };
+    /** 性能探针：强制 Sprint 各壳下次 cold paint（仅内存） */
+    window.resetSprintShellPaintForPerf = function resetSprintShellPaintForPerf() {
+      markAllSprintShellsDirty();
+      ["closed", "life", "work", "open"].forEach(function (s) {
+        sprintShellPaintedOnce[s] = false;
+      });
+      sprintShellListLiveOwner = "";
+      isgGateScanDirty = true;
+      isgGateUnlockedCache = null;
+    };
+    window.getSprintShellPaintDebug = function getSprintShellPaintDebug() {
+      const hosts = {};
+      ["life", "work", "open"].forEach(function (s) {
+        const host = document.getElementById("weeklyPlanTaskShellHost-" + s);
+        hosts[s] = Boolean(host && !host.hidden);
+      });
+      return {
+        paintedOnce: Object.assign({}, sprintShellPaintedOnce),
+        dirty: Object.assign({}, sprintShellDirty),
+        liveOwner: sprintShellListLiveOwner,
+        residentHostsVisible: hosts,
+        isgGateScanDirty: isgGateScanDirty,
+        isgGateUnlockedCache: isgGateUnlockedCache
+          ? { dayKey: isgGateUnlockedCache.dayKey, unlocked: isgGateUnlockedCache.unlocked }
+          : null
+      };
     };
     /** pulse 截止期限：待上传的周键 / 封闭清单 id / 十二周年 moduleKey→周次（构建 payload 后清空） */
     let cloudSyncPulseWeeklyPlanWeekKeys = null;
@@ -100216,6 +100307,98 @@
       markHeavyModulesDepDirty();
       /* 全脏时强制下次 Life4000 可重算（云合并 / 跨天等） */
       lastLife4000PaintSig = "";
+      markHabitCheckinsSubTabDirty();
+      markAllSprintShellsDirty();
+    }
+
+    /** Habit「习惯」子 Tab：数据变更后标脏（仅内存） */
+    function markHabitCheckinsSubTabDirty() {
+      habitCheckinsSubTabDirty = true;
+    }
+
+    /** 是否需要跑 renderHabitCheckins（首次 / dirty / 跨日历日） */
+    function habitCheckinsSubTabNeedsPaint() {
+      if (!habitCheckinsSubTabPaintedOnce) return true;
+      if (habitCheckinsSubTabDirty) return true;
+      try {
+        if (formatDateInputValue(new Date()) !== habitCheckinsSubTabPaintDayKey) return true;
+      } catch (_dayErr) {
+        return true;
+      }
+      return false;
+    }
+
+    /** renderHabitCheckins 成功后清 dirty，供 warm 切回跳过 */
+    function noteHabitCheckinsSubTabPainted() {
+      habitCheckinsSubTabPaintedOnce = true;
+      habitCheckinsSubTabDirty = false;
+      try {
+        habitCheckinsSubTabPaintDayKey = formatDateInputValue(new Date());
+      } catch (_dayErr2) {
+        habitCheckinsSubTabPaintDayKey = "";
+      }
+    }
+
+    function isSprintShellKey(shell) {
+      return shell === "closed" || shell === "life" || shell === "work" || shell === "open";
+    }
+
+    function markSprintShellDirty(shell) {
+      if (!isSprintShellKey(shell)) return;
+      sprintShellDirty[shell] = true;
+      if (shell === "closed") {
+        isgGateScanDirty = true;
+      }
+      /* P1.5：脏只标内存；常驻宿主保留 DOM，不因 dirty 清空 liveOwner */
+    }
+
+    /** Life/Work/Open 任务壳数据变更：标脏 */
+    function markSprintTaskShellsDirty() {
+      ["life", "work", "open"].forEach(function (s) {
+        markSprintShellDirty(s);
+      });
+    }
+
+    function markAllSprintShellsDirty() {
+      markSprintShellDirty("closed");
+      markSprintTaskShellsDirty();
+      isgGateScanDirty = true;
+    }
+
+    function noteSprintShellPainted(shell) {
+      if (!isSprintShellKey(shell)) return;
+      sprintShellPaintedOnce[shell] = true;
+      sprintShellDirty[shell] = false;
+    }
+
+    function sprintShellNeedsPaint(shell) {
+      if (!isSprintShellKey(shell)) return true;
+      if (!sprintShellPaintedOnce[shell]) return true;
+      return Boolean(sprintShellDirty[shell]);
+    }
+
+    function markIsgGateScanDirty() {
+      isgGateScanDirty = true;
+    }
+
+    /** Closed 完成态：未 dirty 且同日则复用缓存，避免每次壳切换全表扫描 */
+    function getIsgGateUnlockedCached() {
+      const dayKey =
+        typeof formatDateInputValue === "function" ? formatDateInputValue(new Date()) : "";
+      if (
+        !isgGateScanDirty &&
+        isgGateUnlockedCache &&
+        isgGateUnlockedCache.dayKey === dayKey &&
+        typeof isgGateUnlockedCache.unlocked === "boolean"
+      ) {
+        if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.isgGateClosedScanSkipCount += 1;
+        return isgGateUnlockedCache.unlocked;
+      }
+      const unlocked = isTodayClosedListAllComplete();
+      isgGateUnlockedCache = { dayKey: dayKey, unlocked: unlocked };
+      isgGateScanDirty = false;
+      if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.isgGateClosedScanCount += 1;
+      return unlocked;
     }
 
     /** 底栏切入：无脏且非首次则只做壳层显隐，跳过完整 render */
@@ -100241,9 +100424,21 @@
         return;
       }
       if (uiPaintDirty == null) uiPaintDirty = createAllDirtyUiPaintMap();
+      let habitTouched = false;
+      let weeklyTouched = false;
+      let closedTouched = false;
       names.forEach(function (n) {
         if (n) uiPaintDirty[n] = true;
+        if (n === "habit") habitTouched = true;
+        if (n === "weeklyPlan") weeklyTouched = true;
+        if (n === "closedList") closedTouched = true;
       });
+      if (habitTouched) markHabitCheckinsSubTabDirty();
+      if (weeklyTouched) markSprintTaskShellsDirty();
+      if (closedTouched) {
+        markSprintShellDirty("closed");
+        markIsgGateScanDirty();
+      }
     }
 
     function isUiPaintSliceDirty(name) {
@@ -100451,21 +100646,23 @@
     }
 
     /**
-     * @param {{ fromHygiene?: boolean, lists?: string[] }} [opts]
+     * @param {{ fromHygiene?: boolean, lists?: string[], skipUiPaintDirty?: boolean }} [opts]
      * lists：只脏这些 UI 切片；省略则全脏。fromHygiene：不再把卫生标脏（避免同轮循环）。
+     * skipUiPaintDirty：仅落盘/同步，不标 UI paint 脏（Sprint 纯壳切换用）。
      */
     function saveState(opts) {
       const t0 = beginCloudSyncPerf();
       opts = opts && typeof opts === "object" ? opts : {};
       try {
         /* 纯 memo 写入不标卫生脏；memo+done 等其它 lists / 裸 save 仍走原 hygiene */
-        if (!opts.fromHygiene && !saveListsSkipStateHygiene(opts.lists)) {
+        /* skipUiPaintDirty：Sprint 纯壳 UI 落盘，无业务列表变更，不标 hygiene / paint 脏 */
+        if (!opts.fromHygiene && !opts.skipUiPaintDirty && !saveListsSkipStateHygiene(opts.lists)) {
           markStateHygieneDirty(opts.hygieneDomains);
         }
         if (opts.lists) {
           markUiPaintSlicesDirty(opts.lists);
           if (saveListsTouchHeavyModules(opts.lists)) markHeavyModulesDepDirty();
-        } else if (!opts.fromHygiene) {
+        } else if (!opts.fromHygiene && !opts.skipUiPaintDirty) {
           markAllUiPaintSlicesDirty();
         }
         /* 只观测：非 hygiene 写入计为 localSaveRender 链起点 */
@@ -127700,11 +127897,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return "closed";
     }
 
-    function setWeeklyPlanShell(shell) {
+    function setWeeklyPlanShell(shell, opts) {
+      opts = opts && typeof opts === "object" ? opts : {};
       ensureWeeklyPlanUi();
       if (shell === "closed") {
+        const prevClosedDate = selectedClosedListDate;
         state.weeklyPlanUi.shell = "closed";
         resetClosedListViewToToday(true);
+        /* 切回 Closed 时若日期被重置到今天，封闭清单需重刷 */
+        if (opts.skipUiPaintDirty && selectedClosedListDate !== prevClosedDate) {
+          markSprintShellDirty("closed");
+        }
       } else if (shell === "stopDoing") {
         // 兼容旧调用：Stop Doing 已迁至始终向后衡量
         state.weeklyPlanUi.shell = "closed";
@@ -127730,9 +127933,188 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         return;
       }
-      saveState();
+      /* 纯壳切换：落盘 UI 状态但不标全量 paint 脏；其它调用方仍默认全脏以配合后续 render() */
+      if (opts.skipUiPaintDirty) {
+        saveState({ skipUiPaintDirty: true });
+      } else {
+        saveState();
+      }
       // 立刻同步 Tab 高亮 + 面板：勿仅依赖 render()（编辑中 defer 时 Life/Work 画面相同会像「点了没反应」）
       syncWeeklyPlanLaneTabsUI();
+    }
+
+    /** 仅在值变化时写 hidden，返回是否写入 */
+    function setDomHiddenIfChanged(el, hidden) {
+      if (!el) return false;
+      const next = Boolean(hidden);
+      if (el.hidden === next) return false;
+      el.hidden = next;
+      if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+      return true;
+    }
+
+    /** 仅在值变化时 toggle class，返回是否写入 */
+    function setDomClassIfChanged(el, className, on) {
+      if (!el || !className) return false;
+      const next = Boolean(on);
+      if (el.classList.contains(className) === next) return false;
+      el.classList.toggle(className, next);
+      if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+      return true;
+    }
+
+    /** P1.5：为 Life/Work/Open 各建常驻宿主（list+kanban+empty），避免 warm 节点搬家 */
+    function ensureSprintTaskShellHosts() {
+      const lanes = document.querySelector("#weeklyPlanTasksPanel .weekly-plan-lanes--single");
+      if (!lanes || lanes.dataset.shellHostsReady === "1") return;
+      const shells = ["life", "work", "open"];
+      const origList = document.getElementById("weeklyPlanList");
+      const origKanban = document.getElementById("weeklyPlanKanban");
+      const origEmpty = document.getElementById("weeklyPlanEmpty");
+      const footerHint = document.getElementById("weeklyPlanKanbanFooter");
+      shells.forEach(function (shell) {
+        const host = document.createElement("div");
+        host.id = "weeklyPlanTaskShellHost-" + shell;
+        host.className = "weekly-plan-task-shell-host";
+        host.setAttribute("data-sprint-task-shell", shell);
+        host.hidden = true;
+        if (shell === "life" && origList) {
+          host.appendChild(origList);
+          if (origKanban) host.appendChild(origKanban);
+          if (origEmpty) {
+            origEmpty.classList.add("weekly-plan-empty");
+            host.appendChild(origEmpty);
+          }
+        } else {
+          const ul = document.createElement("ul");
+          ul.className = "weekly-plan-list";
+          ul.id = "weeklyPlanList-" + shell;
+          const kan = document.createElement("div");
+          kan.className = "sprint-kanban";
+          kan.id = "weeklyPlanKanban-" + shell;
+          kan.hidden = true;
+          kan.setAttribute("aria-label", "Life/Work 看板");
+          const empty = document.createElement("div");
+          empty.className = "empty weekly-plan-empty";
+          empty.id = "weeklyPlanEmpty-" + shell;
+          empty.textContent = "暂无任务";
+          host.appendChild(ul);
+          host.appendChild(kan);
+          host.appendChild(empty);
+        }
+        lanes.appendChild(host);
+      });
+      if (footerHint) lanes.appendChild(footerHint);
+      lanes.dataset.shellHostsReady = "1";
+    }
+
+    /** 将 #weeklyPlanList / Kanban / Empty id 绑到当前壳宿主，并更新 let 引用（同壳不重复写 id） */
+    function bindSprintTaskShellDomRefs(shell) {
+      if (!isWeeklyPlanTaskShell(shell)) return;
+      ensureSprintTaskShellHosts();
+      if (sprintShellListLiveOwner === shell && weeklyPlanList && weeklyPlanKanban && weeklyPlanEmpty) {
+        return;
+      }
+      ["life", "work", "open"].forEach(function (s) {
+        const host = document.getElementById("weeklyPlanTaskShellHost-" + s);
+        if (!host) return;
+        const list = host.querySelector(".weekly-plan-list");
+        const kan = host.querySelector(".sprint-kanban");
+        const empty = host.querySelector(".weekly-plan-empty, .empty");
+        const listId = s === shell ? "weeklyPlanList" : "weeklyPlanList-" + s;
+        const kanId = s === shell ? "weeklyPlanKanban" : "weeklyPlanKanban-" + s;
+        const emptyId = s === shell ? "weeklyPlanEmpty" : "weeklyPlanEmpty-" + s;
+        if (list && list.id !== listId) {
+          list.id = listId;
+          if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+        }
+        if (kan && kan.id !== kanId) {
+          kan.id = kanId;
+          if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+        }
+        if (empty && empty.id !== emptyId) {
+          empty.id = emptyId;
+          if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+        }
+      });
+      weeklyPlanList = document.getElementById("weeklyPlanList");
+      weeklyPlanKanban = document.getElementById("weeklyPlanKanban");
+      weeklyPlanEmpty = document.getElementById("weeklyPlanEmpty");
+      sprintShellListLiveOwner = shell;
+    }
+
+    /**
+     * warm：只显隐 prev/next 宿主，不搬家节点。
+     * prev 非任务壳（如 Closed）时，确保其余任务宿主隐藏。
+     */
+    function showSprintTaskShellHost(shell, prevShell) {
+      ensureSprintTaskShellHosts();
+      if (!isWeeklyPlanTaskShell(shell)) return;
+      if (isWeeklyPlanTaskShell(prevShell) && prevShell !== shell) {
+        setDomHiddenIfChanged(
+          document.getElementById("weeklyPlanTaskShellHost-" + prevShell),
+          true
+        );
+      } else if (!isWeeklyPlanTaskShell(prevShell)) {
+        ["life", "work", "open"].forEach(function (s) {
+          if (s === shell) return;
+          setDomHiddenIfChanged(document.getElementById("weeklyPlanTaskShellHost-" + s), true);
+        });
+      }
+      setDomHiddenIfChanged(document.getElementById("weeklyPlanTaskShellHost-" + shell), false);
+      bindSprintTaskShellDomRefs(shell);
+    }
+
+    /**
+     * Sprint 顶栏壳切换后的局部 paint（P1.5）。
+     * warm + !dirty：仅 prev/next 相关 hidden/class，禁止 list rebuild / stash-restore。
+     * cold/dirty：绑定宿主后局部 renderWeeklyPlanList / renderClosedListPanel。
+     */
+    function paintWeeklyPlanAfterShellSwitch(prevShell, nextShell) {
+      const t0 = beginCloudSyncPerf();
+      try {
+        ensureSprintTaskShellHosts();
+        if (typeof syncSprintViewModeUi === "function") {
+          syncSprintViewModeUi({
+            deltaOnly: true,
+            prevShell: prevShell,
+            focusShell: nextShell
+          });
+        }
+
+        if (nextShell === "closed") {
+          if (sprintShellNeedsPaint("closed")) {
+            renderClosedListPanel();
+            noteSprintShellPainted("closed");
+            if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellListRebuildCount += 1;
+          } else if (isCloudSyncPerfEnabled()) {
+            cloudSyncPerfCounters.sprintShellSwitchSkipCount += 1;
+          }
+          return;
+        }
+
+        if (!isWeeklyPlanTaskShell(nextShell)) return;
+
+        showSprintTaskShellHost(nextShell, prevShell);
+
+        if (!sprintShellNeedsPaint(nextShell)) {
+          if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellSwitchSkipCount += 1;
+          return;
+        }
+
+        if (typeof renderWeeklyPlanChrome === "function") {
+          renderWeeklyPlanChrome();
+        }
+        renderWeeklyPlanList();
+        if (typeof syncWeeklyPlanSprintStrip === "function") {
+          syncWeeklyPlanSprintStrip();
+        }
+        noteSprintShellPainted(nextShell);
+        sprintShellListLiveOwner = nextShell;
+        if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellListRebuildCount += 1;
+      } finally {
+        addCloudSyncPerf("sprintShellSwitchCount", "sprintShellSwitchMs", t0);
+      }
     }
 
     /** 今日 Closed List 是否全部有效完成（空清单视为已解锁；未完成会流转到今天） */
@@ -127746,22 +128128,34 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /** Life/Work ISG 门禁：未完成今日 Closed List 时显示文案页；完成后自动显示真实列表（无密码） */
     function syncWeeklyPlanIsgGateUI() {
       const shell = getWeeklyPlanShell();
-      const unlocked = isTodayClosedListAllComplete();
+      const unlocked = getIsgGateUnlockedCached();
       const showGate = (shell === "life" || shell === "work") && !unlocked;
       const sec = document.getElementById("weeklyPlanSection");
-      if (sec) sec.classList.toggle("weekly-plan-shell-isg-locked", showGate);
+      setDomClassIfChanged(sec, "weekly-plan-shell-isg-locked", showGate);
       const gate = document.getElementById("weeklyPlanIsgGate");
-      if (gate) gate.hidden = !showGate;
+      setDomHiddenIfChanged(gate, !showGate);
       const lockHint = "完成今日 Closed List 后解锁";
       [weeklyPlanLaneLifeBtn, weeklyPlanLaneWorkBtn].forEach(function (btn) {
         if (!btn) return;
-        btn.classList.toggle("weekly-plan-lane-seg--isg-locked", !unlocked);
+        setDomClassIfChanged(btn, "weekly-plan-lane-seg--isg-locked", !unlocked);
         if (!unlocked) {
-          btn.setAttribute("title", lockHint);
-          btn.setAttribute("aria-description", lockHint);
+          if (btn.getAttribute("title") !== lockHint) {
+            btn.setAttribute("title", lockHint);
+            if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+          }
+          if (btn.getAttribute("aria-description") !== lockHint) {
+            btn.setAttribute("aria-description", lockHint);
+            if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+          }
         } else {
-          btn.removeAttribute("title");
-          btn.removeAttribute("aria-description");
+          if (btn.hasAttribute("title")) {
+            btn.removeAttribute("title");
+            if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+          }
+          if (btn.hasAttribute("aria-description")) {
+            btn.removeAttribute("aria-description");
+            if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+          }
         }
       });
     }
@@ -127771,22 +128165,31 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const cp = document.getElementById("weeklyPlanClosedPanel");
       const tp = document.getElementById("weeklyPlanTasksPanel");
       const rp = document.getElementById("weeklyPlanReadingPanel");
-      if (cp) cp.hidden = shell !== "closed";
-      if (tp) tp.hidden = shell === "closed";
+      setDomHiddenIfChanged(cp, shell !== "closed");
+      setDomHiddenIfChanged(tp, shell === "closed");
       // 阅读计划已迁出冲刺；若节点仍在 Habit 内则始终显示（由 Habit Tab 控制父级显隐）
-      if (rp && rp.closest("#habitReadingPlanGroup")) rp.hidden = false;
-      else if (rp) rp.hidden = true;
+      if (rp && rp.closest("#habitReadingPlanGroup")) setDomHiddenIfChanged(rp, false);
+      else if (rp) setDomHiddenIfChanged(rp, true);
       const sec = document.getElementById("weeklyPlanSection");
       if (sec) {
-        sec.classList.toggle("weekly-plan-shell-life", shell === "life");
-        sec.classList.toggle("weekly-plan-shell-work", shell === "work" || shell === "open");
-        sec.classList.toggle("weekly-plan-shell-open", shell === "open");
-        sec.classList.toggle("weekly-plan-shell-closed", shell === "closed");
-        sec.classList.remove("weekly-plan-shell-stop-doing");
-        sec.classList.remove("weekly-plan-shell-reading");
+        setDomClassIfChanged(sec, "weekly-plan-shell-life", shell === "life");
+        setDomClassIfChanged(sec, "weekly-plan-shell-work", shell === "work" || shell === "open");
+        setDomClassIfChanged(sec, "weekly-plan-shell-open", shell === "open");
+        setDomClassIfChanged(sec, "weekly-plan-shell-closed", shell === "closed");
+        if (sec.classList.contains("weekly-plan-shell-stop-doing")) {
+          sec.classList.remove("weekly-plan-shell-stop-doing");
+          if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+        }
+        if (sec.classList.contains("weekly-plan-shell-reading")) {
+          sec.classList.remove("weekly-plan-shell-reading");
+          if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+        }
+      }
+      if (isWeeklyPlanTaskShell(shell)) {
+        showSprintTaskShellHost(shell);
       }
       syncWeeklyPlanIsgGateUI();
-      syncStopDoingSubTabsUI();
+      /* Stop Doing 已迁出冲刺：壳切换不再同步其 SubTab（避免固定税） */
     }
 
     /** 桌面 ≥768px 才启用 Sprint 看板 */
@@ -127883,8 +128286,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       toggleEl.querySelectorAll(".sprint-view-toggle__btn").forEach(function (btn) {
         const m = btn.getAttribute("data-mode");
         const on = m === mode;
-        btn.classList.toggle("is-active", on);
-        btn.setAttribute("aria-pressed", on ? "true" : "false");
+        setDomClassIfChanged(btn, "is-active", on);
+        const pressed = on ? "true" : "false";
+        if (btn.getAttribute("aria-pressed") !== pressed) {
+          btn.setAttribute("aria-pressed", pressed);
+          if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+        }
       });
     }
 
@@ -128042,70 +128449,119 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
     }
 
-    function syncSprintViewModeUi() {
+    /**
+     * Sprint list/kanban 显隐同步。
+     * opts.deltaOnly + prevShell/focusShell：只更新 prev/next 相关节点；同值不写 DOM。
+     */
+    function syncSprintViewModeUi(opts) {
+      opts = opts && typeof opts === "object" ? opts : {};
+      const deltaOnly = Boolean(opts.deltaOnly);
       const desktop = isSprintKanbanDesktopEnabled();
-      const shell = getWeeklyPlanShell();
+      const shell =
+        opts.focusShell != null && opts.focusShell !== ""
+          ? opts.focusShell
+          : getWeeklyPlanShell();
+      const prevShell = opts.prevShell;
+      const touchClosed =
+        !deltaOnly || shell === "closed" || prevShell === "closed";
+      const touchTask =
+        !deltaOnly ||
+        isWeeklyPlanTaskShell(shell) ||
+        isWeeklyPlanTaskShell(prevShell);
 
-      if (closedListViewToggle) {
-        closedListViewToggle.hidden = !desktop || shell !== "closed";
+      if (touchClosed) {
+        setDomHiddenIfChanged(
+          closedListViewToggle,
+          !desktop || shell !== "closed"
+        );
+        const closedMode = desktop && shell === "closed" ? getSprintViewMode("closed") : "list";
+        if (!deltaOnly || shell === "closed" || prevShell === "closed") {
+          syncSprintViewToggleButtons(closedListViewToggle, closedMode);
+        }
+        const closedKanbanOn = closedMode === "kanban";
+        if (closedList) {
+          setDomHiddenIfChanged(closedList, closedKanbanOn);
+          setDomClassIfChanged(closedList, "sprint-view-list-hidden", closedKanbanOn);
+        }
+        if (closedListOneThingBlock) {
+          setDomClassIfChanged(
+            closedListOneThingBlock,
+            "sprint-view-list-hidden",
+            closedKanbanOn
+          );
+          if (!closedKanbanOn && closedListOneThingBlock.style.display !== "") {
+            closedListOneThingBlock.style.display = "";
+            if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+          }
+        }
+        if (closedListAddSlotBtn) {
+          setDomClassIfChanged(closedListAddSlotBtn, "sprint-view-list-hidden", closedKanbanOn);
+          if (closedKanbanOn) setDomHiddenIfChanged(closedListAddSlotBtn, true);
+        }
+        if (closedListAddActionsRow) {
+          setDomClassIfChanged(closedListAddActionsRow, "sprint-view-list-hidden", false);
+        }
+        if (closedListAddAnniversaryTwBtn) {
+          setDomClassIfChanged(
+            closedListAddAnniversaryTwBtn,
+            "sprint-view-list-hidden",
+            closedKanbanOn
+          );
+          if (closedKanbanOn) setDomHiddenIfChanged(closedListAddAnniversaryTwBtn, true);
+        }
+        if (closedListKanban) {
+          setDomHiddenIfChanged(closedListKanban, !closedKanbanOn);
+          setDomClassIfChanged(closedListKanban, "sprint-view-kanban-active", closedKanbanOn);
+        }
+        if (!closedKanbanOn) dismissSprintKanbanHintToast("closed");
+        if (closedListEmpty && closedKanbanOn && closedListEmpty.style.display !== "none") {
+          closedListEmpty.style.display = "none";
+          if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+        }
       }
-      const closedMode = desktop && shell === "closed" ? getSprintViewMode("closed") : "list";
-      syncSprintViewToggleButtons(closedListViewToggle, closedMode);
-      const closedKanbanOn = closedMode === "kanban";
-      if (closedList) {
-        closedList.hidden = closedKanbanOn;
-        closedList.classList.toggle("sprint-view-list-hidden", closedKanbanOn);
-      }
-      if (closedListOneThingBlock) {
-        closedListOneThingBlock.classList.toggle("sprint-view-list-hidden", closedKanbanOn);
-        if (!closedKanbanOn) closedListOneThingBlock.style.display = "";
-      }
-      if (closedListAddSlotBtn) {
-        closedListAddSlotBtn.classList.toggle("sprint-view-list-hidden", closedKanbanOn);
-        if (closedKanbanOn) closedListAddSlotBtn.hidden = true;
-      }
-      if (closedListAddActionsRow) {
-        closedListAddActionsRow.classList.remove("sprint-view-list-hidden");
-      }
-      if (closedListAddAnniversaryTwBtn) {
-        closedListAddAnniversaryTwBtn.classList.toggle("sprint-view-list-hidden", closedKanbanOn);
-        if (closedKanbanOn) closedListAddAnniversaryTwBtn.hidden = true;
-      }
-      if (closedListKanban) {
-        closedListKanban.hidden = !closedKanbanOn;
-        closedListKanban.classList.toggle("sprint-view-kanban-active", closedKanbanOn);
-      }
-      if (!closedKanbanOn) dismissSprintKanbanHintToast("closed");
-      if (closedListEmpty && closedKanbanOn) closedListEmpty.style.display = "none";
 
-      if (weeklyPlanViewToggle) {
-        weeklyPlanViewToggle.hidden = !desktop || !isWeeklyPlanTaskShell(shell) || shell === "open";
+      if (touchTask) {
+        setDomHiddenIfChanged(
+          weeklyPlanViewToggle,
+          !desktop || !isWeeklyPlanTaskShell(shell) || shell === "open"
+        );
+        const wpShell = isWeeklyPlanTaskShell(shell) ? shell : getWeeklyPlanAddLane();
+        const wpMode =
+          desktop && isWeeklyPlanTaskShell(shell) && shell !== "open"
+            ? getSprintViewMode(wpShell)
+            : "list";
+        syncSprintViewToggleButtons(weeklyPlanViewToggle, wpMode);
+        const wpKanbanOn = wpMode === "kanban" && isWeeklyPlanTaskShell(shell);
+        const composerShell = document.querySelector(
+          "#weeklyPlanTasksPanel .weekly-plan-lane-add-shell"
+        );
+        if (composerShell) {
+          setDomHiddenIfChanged(composerShell, wpKanbanOn);
+          setDomClassIfChanged(composerShell, "sprint-view-list-hidden", wpKanbanOn);
+        }
+        if (weeklyPlanList) {
+          setDomHiddenIfChanged(weeklyPlanList, wpKanbanOn);
+          setDomClassIfChanged(weeklyPlanList, "sprint-view-list-hidden", wpKanbanOn);
+        }
+        if (weeklyPlanSprintFooterBanner) {
+          const showFooter = isWeeklyPlanTaskShell(shell);
+          setDomHiddenIfChanged(weeklyPlanSprintFooterBanner, !showFooter);
+          setDomClassIfChanged(
+            weeklyPlanSprintFooterBanner,
+            "sprint-footer-banner--visible",
+            showFooter
+          );
+        }
+        if (weeklyPlanKanban) {
+          setDomHiddenIfChanged(weeklyPlanKanban, !wpKanbanOn);
+          setDomClassIfChanged(weeklyPlanKanban, "sprint-view-kanban-active", wpKanbanOn);
+        }
+        if (!wpKanbanOn) dismissSprintKanbanHintToast(wpShell);
+        if (weeklyPlanEmpty && wpKanbanOn && weeklyPlanEmpty.style.display !== "none") {
+          weeklyPlanEmpty.style.display = "none";
+          if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+        }
       }
-      const wpShell = isWeeklyPlanTaskShell(shell) ? shell : getWeeklyPlanAddLane();
-      const wpMode =
-        desktop && isWeeklyPlanTaskShell(shell) && shell !== "open" ? getSprintViewMode(wpShell) : "list";
-      syncSprintViewToggleButtons(weeklyPlanViewToggle, wpMode);
-      const wpKanbanOn = wpMode === "kanban" && isWeeklyPlanTaskShell(shell);
-      const composerShell = document.querySelector("#weeklyPlanTasksPanel .weekly-plan-lane-add-shell");
-      if (composerShell) {
-        composerShell.hidden = wpKanbanOn;
-        composerShell.classList.toggle("sprint-view-list-hidden", wpKanbanOn);
-      }
-      if (weeklyPlanList) {
-        weeklyPlanList.hidden = wpKanbanOn;
-        weeklyPlanList.classList.toggle("sprint-view-list-hidden", wpKanbanOn);
-      }
-      if (weeklyPlanSprintFooterBanner) {
-        const showFooter = isWeeklyPlanTaskShell(shell);
-        weeklyPlanSprintFooterBanner.hidden = !showFooter;
-        weeklyPlanSprintFooterBanner.classList.toggle("sprint-footer-banner--visible", showFooter);
-      }
-      if (weeklyPlanKanban) {
-        weeklyPlanKanban.hidden = !wpKanbanOn;
-        weeklyPlanKanban.classList.toggle("sprint-view-kanban-active", wpKanbanOn);
-      }
-      if (!wpKanbanOn) dismissSprintKanbanHintToast(wpShell);
-      if (weeklyPlanEmpty && wpKanbanOn) weeklyPlanEmpty.style.display = "none";
     }
 
     function getWeeklyPlanAddLane() {
@@ -129580,22 +130036,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function syncWeeklyPlanLaneTabsUI() {
       const shell = getWeeklyPlanShell();
-      if (weeklyPlanShellClosedBtn) {
-        weeklyPlanShellClosedBtn.classList.toggle("is-active", shell === "closed");
-        weeklyPlanShellClosedBtn.setAttribute("aria-selected", shell === "closed" ? "true" : "false");
+      function syncShellTab(btn, on) {
+        if (!btn) return;
+        setDomClassIfChanged(btn, "is-active", on);
+        const sel = on ? "true" : "false";
+        if (btn.getAttribute("aria-selected") !== sel) {
+          btn.setAttribute("aria-selected", sel);
+          if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.sprintShellDomWriteCount += 1;
+        }
       }
-      if (weeklyPlanLaneLifeBtn) {
-        weeklyPlanLaneLifeBtn.classList.toggle("is-active", shell === "life");
-        weeklyPlanLaneLifeBtn.setAttribute("aria-selected", shell === "life" ? "true" : "false");
-      }
-      if (weeklyPlanLaneWorkBtn) {
-        weeklyPlanLaneWorkBtn.classList.toggle("is-active", shell === "work");
-        weeklyPlanLaneWorkBtn.setAttribute("aria-selected", shell === "work" ? "true" : "false");
-      }
-      if (weeklyPlanLaneOpenBtn) {
-        weeklyPlanLaneOpenBtn.classList.toggle("is-active", shell === "open");
-        weeklyPlanLaneOpenBtn.setAttribute("aria-selected", shell === "open" ? "true" : "false");
-      }
+      syncShellTab(weeklyPlanShellClosedBtn, shell === "closed");
+      syncShellTab(weeklyPlanLaneLifeBtn, shell === "life");
+      syncShellTab(weeklyPlanLaneWorkBtn, shell === "work");
+      syncShellTab(weeklyPlanLaneOpenBtn, shell === "open");
       applyWeeklyPlanShellLayout();
       syncWeeklyPlanAssessAdjustCapsules();
     }
@@ -129628,18 +130081,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function renderWeeklyPlanList() {
+      if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.renderWeeklyPlanListCount += 1;
+      /* Closed 壳：不触碰任务壳常驻 DOM（warm 切换依赖保留） */
+      if (getWeeklyPlanShell() === "closed") {
+        return;
+      }
+      const sprintShell = getWeeklyPlanShell();
+      if (isWeeklyPlanTaskShell(sprintShell)) {
+        ensureSprintTaskShellHosts();
+        showSprintTaskShellHost(sprintShell);
+      }
       if (!weeklyPlanList || !weeklyPlanEmpty) {
         return;
       }
       if (dedupeWeeklyPlanTasksInStorage()) {
         saveState();
       }
-      if (getWeeklyPlanShell() === "closed") {
-        weeklyPlanList.innerHTML = "";
-        weeklyPlanEmpty.style.display = "none";
-        return;
-      }
-      const sprintShell = getWeeklyPlanShell();
       if (
         isWeeklyPlanTaskShell(sprintShell) &&
         isSprintKanbanDesktopEnabled() &&
@@ -129651,6 +130108,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         weeklyPlanList.innerHTML = "";
         weeklyPlanEmpty.style.display = "none";
         renderWeeklyPlanKanban(tasksSorted, sprintShell);
+        noteSprintShellPainted(sprintShell);
+        sprintShellListLiveOwner = sprintShell;
         return;
       }
       const viewLane =
@@ -130262,6 +130721,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
       };
       appendRows(weeklyPlanList, tasksSorted);
+      if (isWeeklyPlanTaskShell(sprintShell)) {
+        noteSprintShellPainted(sprintShell);
+        sprintShellListLiveOwner = sprintShell;
+      }
     }
 
     /**
@@ -132806,6 +133269,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     /** 仅刷新封闭清单面板（不含全页 render） */
     function renderClosedListPanel() {
+      if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.renderClosedListPanelCount += 1;
       if (!closedList) {
         syncClosedListPendingTitleStyles();
         return;
@@ -132862,6 +133326,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       syncClosedListDateNavUi(filteredClosedListItems.length);
       syncClosedListPendingTitleStyles();
+      noteSprintShellPainted("closed");
     }
 
     function appendAnniversaryTwWeekAddRow(tasksWrap, onAddTask, kanbanOn) {
@@ -141025,7 +141490,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         activateHabitRoutineSubTab("habit-group-habits");
       }
       setActiveHabitDesktopCategory(cat);
-      if (typeof renderHabitCheckins === "function") {
+      if (typeof renderHabitCheckins === "function" && habitCheckinsSubTabNeedsPaint()) {
         renderHabitCheckins();
       }
       const habitKey = habitKeyOpt ? String(habitKeyOpt).trim() : "";
@@ -141969,6 +142434,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function renderHabitCheckins() {
+      const perfT0 = beginCloudSyncPerf();
       bindWeightWeekBarViewportRelayout();
       const todayKey = formatDateInputValue(new Date());
 
@@ -142518,6 +142984,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       syncZhanZhuangMobileMinutesLayout();
       syncHabitMobileCapsuleAndTitleLayout();
       renderHabitShellChrome();
+      noteHabitCheckinsSubTabPainted();
+      addCloudSyncPerf("habitCheckinsRenderCount", "habitCheckinsRenderMs", perfT0);
     }
 
     addMemoBtn.addEventListener("click", addMemo);
@@ -142672,8 +143140,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         else if (btn.id === "weeklyPlanLaneWorkBtn") nextShell = "work";
         else if (btn.id === "weeklyPlanLaneOpenBtn") nextShell = "open";
         if (!nextShell) return;
-        setWeeklyPlanShell(nextShell);
-        render();
+        const prevShell = getWeeklyPlanShell();
+        if (prevShell === nextShell) return;
+        setWeeklyPlanShell(nextShell, { skipUiPaintDirty: true });
+        paintWeeklyPlanAfterShellSwitch(prevShell, nextShell);
       });
     }
     initReadingPlanPaneAddForms();
@@ -144751,10 +145221,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
                 setActiveHabitDesktopCategory(activeHabitDesktopCategory || "focus");
               }
               if (typeof renderHabitCheckins === "function") {
-                try {
-                  renderHabitCheckins();
-                } catch (habitErr) {
-                  console.warn("[习惯] afterActivate renderHabitCheckins 失败:", habitErr);
+                if (habitCheckinsSubTabNeedsPaint()) {
+                  try {
+                    renderHabitCheckins();
+                  } catch (habitErr) {
+                    console.warn("[习惯] afterActivate renderHabitCheckins 失败:", habitErr);
+                  }
+                } else if (isCloudSyncPerfEnabled()) {
+                  cloudSyncPerfCounters.habitCheckinsSkippedCount += 1;
                 }
               }
             }
