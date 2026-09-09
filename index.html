@@ -90226,7 +90226,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260909a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260909d";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -90795,6 +90795,19 @@
       }
 
       if (!savedPassword) {
+        try {
+          const host = String(location.hostname || "");
+          const wantPerf =
+            (host === "localhost" || host === "127.0.0.1") &&
+            new URLSearchParams(location.search).get("perf") === "1";
+          if (wantPerf) {
+            localStorage.setItem(AUTH_PASSWORD_KEY, "perf-diag-local-only");
+            localStorage.setItem(AUTH_TRUST_DEVICE_KEY, "1");
+            setAuthMode("login");
+            unlockApp();
+            return;
+          }
+        } catch (_perfUnlockSetup) {}
         setAuthMode("setup");
         if (trustDeviceInput) trustDeviceInput.checked = false;
         applyTrustDeviceUiState();
@@ -90809,6 +90822,19 @@
         unlockApp();
         return;
       }
+
+      try {
+        const host = String(location.hostname || "");
+        const wantPerf =
+          (host === "localhost" || host === "127.0.0.1") &&
+          new URLSearchParams(location.search).get("perf") === "1";
+        if (wantPerf) {
+          localStorage.setItem(AUTH_TRUST_DEVICE_KEY, "1");
+          sessionStorage.removeItem(AUTH_SESSION_LOCK_KEY);
+          unlockApp();
+          return;
+        }
+      } catch (_perfUnlockLogin) {}
 
       loginPasswordInput.focus();
     }
@@ -91357,6 +91383,270 @@
         : Date.now();
     }
 
+    /** 第三阶段 · 交互性能诊断（仅 ?perf=1 或 localStorage todo-app-perf-diag-v1=1） */
+    const PERF_DIAG_KEY = "todo-app-perf-diag-v1";
+    let perfDiagForceOn = false;
+    try {
+      perfDiagForceOn =
+        localStorage.getItem(PERF_DIAG_KEY) === "1" ||
+        new URLSearchParams(location.search).get("perf") === "1";
+    } catch (_perfBoot) {
+      perfDiagForceOn = false;
+    }
+
+    function isPerfDiagEnabled() {
+      if (perfDiagForceOn) return true;
+      try {
+        if (localStorage.getItem(PERF_DIAG_KEY) === "1") return true;
+        if (new URLSearchParams(location.search).get("perf") === "1") return true;
+      } catch (_e) {}
+      return false;
+    }
+
+    const perfIx = {
+      active: null,
+      lastReports: [],
+      renderFnMs: {},
+      renderFnCalls: {},
+      renderFnNodes: {},
+      replaceChildrenCount: 0,
+      createElementCount: 0,
+      qsCount: 0,
+      qsaCount: 0,
+      lastPersistSplit: null,
+      lastSaveSplit: null,
+      lastStateBytes: null,
+      longTasks: [],
+      renderHookDepth: 0,
+      hygieneInRender: null
+    };
+
+    function perfNow() {
+      return typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+    }
+
+    function perfRound(n) {
+      return Math.round(Number(n) * 100) / 100;
+    }
+
+    function perfLog(tag, detail) {
+      if (!isPerfDiagEnabled()) return;
+      try {
+        console.log("[PERF]", tag, detail || "");
+      } catch (_e) {}
+    }
+
+    function perfMarkLong(name, ms) {
+      if (!isPerfDiagEnabled()) return;
+      if (ms >= 50) {
+        perfIx.longTasks.push({ name: name, ms: perfRound(ms), at: Date.now() });
+        if (perfIx.longTasks.length > 80) perfIx.longTasks.shift();
+        perfLog("LONG_TASK", { name: name, ms: perfRound(ms) });
+      }
+    }
+
+    function perfBeginInteraction(kind) {
+      if (!isPerfDiagEnabled()) return null;
+      const snap = typeof snapshotCloudSyncPerf === "function" ? snapshotCloudSyncPerf() : null;
+      perfIx.active = {
+        kind: String(kind || "op"),
+        t0: perfNow(),
+        renderCount0: snap && snap.renderCount != null ? snap.renderCount : cloudSyncPerfCounters.renderCount,
+        marks: {},
+        splits: {}
+      };
+      return perfIx.active;
+    }
+
+    function perfMark(name, t0) {
+      if (!perfIx.active || t0 == null) return;
+      perfIx.active.marks[name] = perfRound(perfNow() - t0);
+    }
+
+    function perfNoteSplit(bucket, ms) {
+      if (!perfIx.active) return;
+      const k = String(bucket);
+      perfIx.active.splits[k] = (perfIx.active.splits[k] || 0) + Number(ms || 0);
+    }
+
+    function perfEndInteraction(extra) {
+      if (!perfIx.active) return null;
+      const a = perfIx.active;
+      perfIx.active = null;
+      const total = perfRound(perfNow() - a.t0);
+      const snap = typeof snapshotCloudSyncPerf === "function" ? snapshotCloudSyncPerf() : null;
+      const renderCount =
+        (snap && snap.renderCount != null ? snap.renderCount : cloudSyncPerfCounters.renderCount) -
+        a.renderCount0;
+      const report = {
+        kind: a.kind,
+        totalInteractionMs: total,
+        marks: a.marks,
+        splits: a.splits,
+        renderCount: renderCount,
+        persistSplit: perfIx.lastPersistSplit,
+        saveSplit: perfIx.lastSaveSplit,
+        extra: extra || null
+      };
+      const fullRenderCount =
+        extra && extra.fullRenderCount != null
+          ? extra.fullRenderCount
+          : a.marks.fullRenderCount != null
+            ? a.marks.fullRenderCount
+            : renderCount;
+      const patchCount =
+        extra && extra.patchCount != null
+          ? extra.patchCount
+          : a.marks.patchCount != null
+            ? a.marks.patchCount
+            : 0;
+      const persistMs =
+        a.marks.saveStateMs != null
+          ? a.marks.saveStateMs
+          : perfIx.lastSaveSplit && perfIx.lastSaveSplit.totalMs != null
+            ? perfIx.lastSaveSplit.totalMs
+            : 0;
+      report.fullRenderCount = fullRenderCount;
+      report.patchCount = patchCount;
+      perfIx.lastReports.push(report);
+      if (perfIx.lastReports.length > 80) perfIx.lastReports.shift();
+      perfLog(a.kind, {
+        stateUpdateMs: a.marks.stateUpdateMs,
+        saveStateMs: a.marks.saveStateMs,
+        localPatchMs: a.marks.localPatchMs,
+        persistMs: persistMs,
+        jsonStringifyMs:
+          a.splits.jsonStringifyMs ||
+          (perfIx.lastPersistSplit && perfIx.lastPersistSplit.jsonStringifyMs),
+        indexedDbMs:
+          a.splits.indexedDbMs || (perfIx.lastPersistSplit && perfIx.lastPersistSplit.indexedDbMs),
+        localStorageMs:
+          a.splits.localStorageMs ||
+          (perfIx.lastPersistSplit && perfIx.lastPersistSplit.localStorageMs),
+        cloudEnqueueMs: a.marks.cloudEnqueueMs || a.splits.cloudEnqueueMs,
+        cloudMergeMs: a.marks.cloudMergeMs,
+        renderMs: a.marks.renderMs,
+        renderCount: renderCount,
+        fullRenderCount: fullRenderCount,
+        patchCount: patchCount,
+        totalInteractionMs: total,
+        persistSplit: perfIx.lastPersistSplit,
+        saveSplit: perfIx.lastSaveSplit
+      });
+      return report;
+    }
+
+    function perfMeasureStateBytes() {
+      const out = { total: 0, parts: {} };
+      try {
+        Object.keys(state || {}).forEach(function (k) {
+          let n = 0;
+          try {
+            n = JSON.stringify(state[k]).length;
+          } catch (_e) {
+            n = 0;
+          }
+          out.parts[k] = n;
+          out.total += n;
+        });
+      } catch (_e2) {
+        out.error = String(_e2 && _e2.message ? _e2.message : _e2);
+      }
+      perfIx.lastStateBytes = out;
+      return out;
+    }
+
+    function perfDomHookInstall() {
+      if (!isPerfDiagEnabled()) return;
+      if (perfIx.renderHookDepth > 0) {
+        perfIx.renderHookDepth += 1;
+        return;
+      }
+      perfIx.renderHookDepth = 1;
+      perfIx.replaceChildrenCount = 0;
+      perfIx.createElementCount = 0;
+      perfIx.qsCount = 0;
+      perfIx.qsaCount = 0;
+      const doc = document;
+      if (!perfIx._origCreateElement) {
+        perfIx._origCreateElement = doc.createElement.bind(doc);
+        perfIx._origQs = doc.querySelector.bind(doc);
+        perfIx._origQsa = doc.querySelectorAll.bind(doc);
+      }
+      doc.createElement = function () {
+        perfIx.createElementCount += 1;
+        return perfIx._origCreateElement.apply(doc, arguments);
+      };
+      doc.querySelector = function () {
+        perfIx.qsCount += 1;
+        return perfIx._origQs.apply(doc, arguments);
+      };
+      doc.querySelectorAll = function () {
+        perfIx.qsaCount += 1;
+        return perfIx._origQsa.apply(doc, arguments);
+      };
+      if (!perfIx._rcPatched && typeof Element !== "undefined" && Element.prototype.replaceChildren) {
+        perfIx._rcPatched = true;
+        perfIx._origReplaceChildren = Element.prototype.replaceChildren;
+        Element.prototype.replaceChildren = function () {
+          if (perfIx.renderHookDepth > 0) perfIx.replaceChildrenCount += 1;
+          return perfIx._origReplaceChildren.apply(this, arguments);
+        };
+      }
+    }
+
+    function perfDomHookUninstall() {
+      if (perfIx.renderHookDepth <= 0) return;
+      perfIx.renderHookDepth -= 1;
+      if (perfIx.renderHookDepth > 0) return;
+      const doc = document;
+      if (perfIx._origCreateElement) doc.createElement = perfIx._origCreateElement;
+      if (perfIx._origQs) doc.querySelector = perfIx._origQs;
+      if (perfIx._origQsa) doc.querySelectorAll = perfIx._origQsa;
+    }
+
+    function perfWrapRenderFn(name, fn) {
+      return function () {
+        if (!isPerfDiagEnabled()) return fn.apply(this, arguments);
+        const t0 = perfNow();
+        const nodes0 = perfIx.createElementCount;
+        const rc0 = perfIx.replaceChildrenCount;
+        const ret = fn.apply(this, arguments);
+        const dt = perfNow() - t0;
+        perfIx.renderFnCalls[name] = (perfIx.renderFnCalls[name] || 0) + 1;
+        perfIx.renderFnMs[name] = (perfIx.renderFnMs[name] || 0) + dt;
+        const nodes = perfIx.createElementCount - nodes0;
+        perfIx.renderFnNodes[name] = (perfIx.renderFnNodes[name] || 0) + nodes;
+        perfMarkLong(name, dt);
+        if (dt >= 16) {
+          perfLog("render-fn", {
+            name: name,
+            ms: perfRound(dt),
+            createElementDelta: nodes,
+            replaceChildrenDelta: perfIx.replaceChildrenCount - rc0
+          });
+        }
+        return ret;
+      };
+    }
+
+    function perfStatsMinAvgMax(arr) {
+      if (!arr || !arr.length) return { min: 0, avg: 0, max: 0, n: 0 };
+      let min = arr[0];
+      let max = arr[0];
+      let sum = 0;
+      arr.forEach(function (v) {
+        const n = Number(v) || 0;
+        if (n < min) min = n;
+        if (n > max) max = n;
+        sum += n;
+      });
+      return { min: perfRound(min), avg: perfRound(sum / arr.length), max: perfRound(max), n: arr.length };
+    }
+
+
     function beginCloudSyncPerf() {
       if (!isCloudSyncPerfEnabled()) return null;
       return cloudSyncPerfNow();
@@ -91729,6 +92019,207 @@
         stallTraceCount: c.stallTraceCount
       };
     }
+
+    /** 第三阶段：真实 PWA 跑测入口 window.runPhase3PerfBench() */
+    async function runPhase3PerfBench(opts) {
+      opts = opts && typeof opts === "object" ? opts : {};
+      perfDiagForceOn = true;
+      try {
+        localStorage.setItem(PERF_DIAG_KEY, "1");
+      } catch (_e) {}
+      if (typeof activateKineticTab === "function") {
+        try { activateKineticTab("anniversary"); } catch (_a) {}
+      }
+      normalizeAnniversaryTw020State();
+      let weekNum = 1;
+      let tasks = getTw020WeekTasks(weekNum);
+      if (!tasks.length) {
+        addTw020Task(weekNum, "PERF_BENCH_PARENT_" + Date.now());
+        tasks = getTw020WeekTasks(weekNum);
+        render();
+      }
+      let parent = tasks[0];
+      if (!parent.subs || !parent.subs.length) {
+        addTw020SubTask(weekNum, parent.id, "PERF_BENCH_SUB_" + Date.now());
+        parent = getTw020WeekTasks(weekNum).find(function (t) { return t.id === parent.id; }) || parent;
+        render();
+      }
+      const sub = parent.subs[0];
+      const stateBytes = perfMeasureStateBytes();
+      const series = {};
+
+      async function settle() {
+        try {
+          flushLocalPersistedState("force");
+        } catch (_f) {}
+        try {
+          await (typeof statePersistQueue !== "undefined" ? statePersistQueue : Promise.resolve());
+        } catch (_q) {}
+        await new Promise(function (r) { setTimeout(r, 80); });
+      }
+
+      async function runN(name, n, fn) {
+        const totals = [];
+        const renders = [];
+        const reports = [];
+        for (let i = 0; i < n; i++) {
+          const before = perfIx.lastReports.length;
+          await fn(i);
+          await settle();
+          const rep = perfIx.lastReports[perfIx.lastReports.length - 1];
+          if (rep && perfIx.lastReports.length > before) {
+            totals.push(rep.totalInteractionMs);
+            renders.push(rep.renderCount);
+            reports.push(rep);
+          }
+        }
+        series[name] = {
+          totalMs: perfStatsMinAvgMax(totals),
+          renderCount: perfStatsMinAvgMax(renders),
+          last: reports[reports.length - 1] || null,
+          samples: reports.slice(-3)
+        };
+      }
+
+      await runN("parentCheckbox", opts.parentN || 10, async function (i) {
+        setTw020TaskDone(weekNum, parent.id, i % 2 === 0);
+      });
+      await runN("subCheckbox", opts.subN || 10, async function (i) {
+        setTw020SubDone(weekNum, parent.id, sub.id, i % 2 === 0);
+      });
+      await runN("saveParentTitle", opts.saveN || 10, async function (i) {
+        perfBeginInteraction("anniversary-parent-title-save");
+        const t0 = perfNow();
+        updateTw020TaskText(weekNum, parent.id, "PERF_TITLE_P_" + i + "_" + Date.now());
+        perfMark("stateUpdateMs", t0);
+        /* 正常链路：标题保存只 patch DOM，不 full render */
+        perfEndInteraction({ note: "title save local patch; fullRender=0" });
+      });
+      await runN("saveSubTitle", opts.saveN || 10, async function (i) {
+        perfBeginInteraction("anniversary-sub-title-save");
+        const t0 = perfNow();
+        updateTw020SubText(weekNum, parent.id, sub.id, "PERF_TITLE_S_" + i + "_" + Date.now());
+        perfMark("stateUpdateMs", t0);
+        perfEndInteraction({ note: "sub title save local patch; fullRender=0" });
+      });
+      await runN("addSub", opts.addN || 5, async function (i) {
+        perfBeginInteraction("anniversary-add-sub");
+        const t0 = perfNow();
+        addTw020SubTask(weekNum, parent.id, "PERF_ADD_SUB_" + i + "_" + Date.now());
+        perfMark("stateUpdateMs", t0);
+        /* 正常链路：局部插入子行；看板 miss 时单周面板重建，仍不 full render */
+        perfEndInteraction({ note: "add sub local insert; fullRender=0" });
+      });
+      await runN("expandCollapse", opts.expandN || 10, async function (i) {
+        const key = anniversaryTwTaskUiKey(weekNum, parent.id);
+        ensureAnniversaryTwModuleUi(state.anniversaryTw020);
+        perfBeginInteraction("anniversary-task-expand-collapse");
+        const t0 = perfNow();
+        if (i % 2 === 0) state.anniversaryTw020.ui.taskExpanded[key] = true;
+        else delete state.anniversaryTw020.ui.taskExpanded[key];
+        saveState();
+        perfMark("saveStateMs", t0);
+        perfEndInteraction({ note: "UI state only + saveState; no render" });
+      });
+
+      const createdForDelete = [];
+      for (let d = 0; d < (opts.deleteN || 5); d++) {
+        addTw020Task(weekNum, "PERF_DEL_" + d + "_" + Date.now());
+        const arr = getTw020WeekTasks(weekNum);
+        createdForDelete.push(arr[arr.length - 1].id);
+      }
+      render();
+      await settle();
+      await runN("deleteTask", createdForDelete.length, async function (i) {
+        perfBeginInteraction("anniversary-delete-task");
+        const t0 = perfNow();
+        deleteTw020Task(weekNum, createdForDelete[i]);
+        perfMark("stateUpdateMs", t0);
+        /* 正常链路：局部移除 DOM；看板/DOM miss 时单周面板重建，仍不 full render */
+        perfEndInteraction({ note: "delete local remove; fullRender=0" });
+      });
+
+      // isolate major render fn costs
+      const renderIso = {};
+      function timeFn(name, fn) {
+        if (typeof fn !== "function") return;
+        const t0 = perfNow();
+        const n0 = perfIx.createElementCount;
+        const r0 = perfIx.replaceChildrenCount;
+        perfDomHookInstall();
+        try {
+          fn();
+        } catch (e) {
+          renderIso[name] = { error: String(e && e.message ? e.message : e) };
+          perfDomHookUninstall();
+          return;
+        }
+        const ms = perfRound(perfNow() - t0);
+        const nodes = perfIx.createElementCount - n0;
+        const rc = perfIx.replaceChildrenCount - r0;
+        perfDomHookUninstall();
+        renderIso[name] = { ms: ms, createElementDelta: nodes, replaceChildrenDelta: rc };
+        perfMarkLong(name + "(isolated)", ms);
+      }
+      timeFn("render()", function () { render(true); });
+      timeFn("renderAnniversaryTw020", renderAnniversaryTw020);
+      timeFn("renderAnniversaryTw021", renderAnniversaryTw021);
+      timeFn("renderAnniversaryTw022", renderAnniversaryTw022);
+      timeFn("renderWeeklyPlanList", renderWeeklyPlanList);
+      timeFn("renderClosedListPanel", renderClosedListPanel);
+
+      const report = {
+        at: new Date().toISOString(),
+        stateBytes: stateBytes,
+        series: series,
+        renderIso: renderIso,
+        renderFnMs: Object.assign({}, perfIx.renderFnMs),
+        renderFnNodes: Object.assign({}, perfIx.renderFnNodes),
+        longTasks: perfIx.longTasks.slice(-40),
+        cloudPerf: typeof snapshotCloudSyncPerf === "function" ? snapshotCloudSyncPerf() : null,
+        notes: {
+          smallEditSavesWholeState: true,
+          expandCollapseCallsSaveState: true,
+          expandCollapseCallsRender: false,
+          hygieneInsideRender: true,
+          rolloverInsideHygiene: true
+        }
+      };
+      window.__phase3PerfReport = report;
+      perfLog("PHASE3_REPORT", report);
+      return report;
+    }
+
+    function installPhase3RenderWrappers() {
+      function wrapOne(name, getter, setter) {
+        try {
+          const fn = getter();
+          if (typeof fn !== "function" || fn.__perfWrapped) return;
+          const wrapped = perfWrapRenderFn(name, fn);
+          wrapped.__perfWrapped = true;
+          setter(wrapped);
+        } catch (_w) {}
+      }
+      wrapOne("renderAnniversaryTw020", function () { return renderAnniversaryTw020; }, function (f) { renderAnniversaryTw020 = f; });
+      wrapOne("renderAnniversaryTw021", function () { return renderAnniversaryTw021; }, function (f) { renderAnniversaryTw021 = f; });
+      wrapOne("renderAnniversaryTw022", function () { return renderAnniversaryTw022; }, function (f) { renderAnniversaryTw022 = f; });
+      wrapOne("renderAnniversaryTwAnchorModule", function () { return renderAnniversaryTwAnchorModule; }, function (f) { renderAnniversaryTwAnchorModule = f; });
+      wrapOne("renderWeeklyPlanList", function () { return renderWeeklyPlanList; }, function (f) { renderWeeklyPlanList = f; });
+      wrapOne("renderClosedListPanel", function () { return renderClosedListPanel; }, function (f) { renderClosedListPanel = f; });
+    }
+    setTimeout(installPhase3RenderWrappers, 0);
+
+    window.runPhase3PerfBench = runPhase3PerfBench;
+    window.getPhase3PerfReport = function () {
+      return window.__phase3PerfReport || null;
+    };
+    window.perfMeasureStateBytes = perfMeasureStateBytes;
+    window.setPerfDiagEnabled = function (on) {
+      perfDiagForceOn = !!on;
+      try {
+        localStorage.setItem(PERF_DIAG_KEY, on ? "1" : "0");
+      } catch (_e) {}
+    };
 
     window.resetCloudSyncPerfCounters = resetCloudSyncPerfCounters;
     window.getCloudSyncPerfSnapshot = snapshotCloudSyncPerf;
@@ -92602,8 +93093,8 @@
             const mk = "tw" + String(sk).replace(/^anniversaryTw/i, "");
             st[sk] =
               mk === "tw020"
-                ? mergeAnniversaryTw020ModuleForSync(st[sk], rem, false, annTs)
-                : mergeAnniversaryTwAnchorModuleForSync(st[sk], rem, false, annTs);
+                ? mergeAnniversaryTw020ModuleForSync(st[sk], rem, false, annTs, mk)
+                : mergeAnniversaryTwAnchorModuleForSync(st[sk], rem, false, annTs, mk);
           });
         } catch (_annEnrich) {}
       }
@@ -93351,8 +93842,8 @@
         const beforeMod = state[sk];
         const next =
           mk === "tw020"
-            ? mergeAnniversaryTw020ModuleForSync(beforeMod, rem, false, annTs)
-            : mergeAnniversaryTwAnchorModuleForSync(beforeMod, rem, false, annTs);
+            ? mergeAnniversaryTw020ModuleForSync(beforeMod, rem, false, annTs, mk)
+            : mergeAnniversaryTwAnchorModuleForSync(beforeMod, rem, false, annTs, mk);
         try {
           if (JSON.stringify(beforeMod || {}) !== JSON.stringify(next)) {
             state[sk] = next;
@@ -93522,8 +94013,18 @@
         Object.keys(twSlice.weeks).forEach(function (wk) {
           const remArr = Array.isArray(twSlice.weeks[wk]) ? twSlice.weeks[wk] : [];
           const locArr = Array.isArray(mod.weeks[wk]) ? mod.weeks[wk] : [];
-          let next = mergeTwWeekTasksForSync(remArr, locArr, true).filter(function (t) {
+          let next = mergeTwWeekTasksForSync(remArr, locArr, true, {
+            moduleKey: moduleKey,
+            weekNum: wk
+          }).filter(function (t) {
             return t && t.id != null && !Object.prototype.hasOwnProperty.call(ts, String(t.id));
+          });
+          /* 子任务 tombstone 同步剔除，避免云 pulse 把已删子任务并回 */
+          next = next.map(function (task) {
+            if (task && Array.isArray(task.subs) && task.subs.length) {
+              task.subs = omitTombstonedIdRecords(task.subs, ts);
+            }
+            return task;
           });
           try {
             if (JSON.stringify(locArr) !== JSON.stringify(next)) {
@@ -93537,7 +94038,12 @@
         });
       }
       if (twSlice.weekGoals && typeof twSlice.weekGoals === "object") {
-        const mergedGoals = mergeAnniversaryWeekGoalsForSync(mod.weekGoals, twSlice.weekGoals, true);
+        const mergedGoals = mergeAnniversaryWeekGoalsForSync(
+          mod.weekGoals,
+          twSlice.weekGoals,
+          true,
+          moduleKey
+        );
         try {
           if (JSON.stringify(mod.weekGoals || {}) !== JSON.stringify(mergedGoals)) {
             mod.weekGoals = mergedGoals;
@@ -93566,11 +94072,9 @@
       if (typeof syncSprintFinishHourTaskMarquee === "function") {
         syncSprintFinishHourTaskMarquee();
       }
-      /* 保存后取消「编辑中推迟 render」，避免随后的后台重绘用旧快照盖掉刚写入的周任务 */
-      renderDeferredWhileEditing = false;
-      if (renderWhenEditingEndsTimer) {
-        clearTimeout(renderWhenEditingEndsTimer);
-        renderWhenEditingEndsTimer = null;
+      /* Editing Shield：仍在 Edit/Create 时保留 pendingRender；解锁后由 flushTaskTitleIxPendingRender 合并刷一次 */
+      if (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) {
+        renderDeferredWhileEditing = true;
       }
     }
 
@@ -94222,6 +94726,10 @@
 
     function mergeCloudSyncPulseIntoState(pulseState) {
       return uiStallWrapMerge(function () {
+      const mergeDiagT0 =
+        typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+      const mergeLocked =
+        typeof taskTitleIxIsBusy === "function" ? taskTitleIxIsBusy() : false;
       if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.cloudMergeCount += 1;
       if (!pulseState || typeof pulseState !== "object") return false;
       let changed = false;
@@ -94337,6 +94845,15 @@
       } finally {
         cloudSyncSuppressPush = false;
       }
+      if (typeof taskTitleIxDiagLog === "function") {
+        const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+        taskTitleIxDiagLog("cloud-merge", {
+          ms: Math.round((now - mergeDiagT0) * 100) / 100,
+          changed: changed,
+          editingLock: mergeLocked,
+          willDeferRender: mergeLocked || (typeof isAppUiBusyForBackgroundRefresh === "function" && isAppUiBusyForBackgroundRefresh())
+        });
+      }
       return changed;
       });
     }
@@ -94368,6 +94885,9 @@
       }
       sanityCheckForgeAndHabitLifetimeAfterSync(lifetimeBefore, "pulse 合并");
       markStateHygieneDirty();
+      if (typeof runStateRepairAndRolloverPass === "function") {
+        runStateRepairAndRolloverPass();
+      }
       markAllUiPaintSlicesDirty();
       setCloudSyncHashFromCurrentState();
       scheduleCloudSyncPersistDebounced();
@@ -94512,6 +95032,13 @@
     /** 云同步触发的重绘：操作中不刷界面；其余只防重入与短间隔连刷 */
     function shouldSkipCloudUiRender() {
       if (renderDepth > 0) return true;
+      if (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) {
+        markBackgroundUiRenderDeferred();
+        if (typeof taskTitleIxDiagLog === "function") {
+          taskTitleIxDiagLog("cloud-ui-render-deferred", { reason: "editing-lock" });
+        }
+        return true;
+      }
       if (typeof isAppUiBusyForBackgroundRefresh === "function" && isAppUiBusyForBackgroundRefresh()) {
         markBackgroundUiRenderDeferred();
         return true;
@@ -94536,6 +95063,13 @@
       cloudSyncUiRenderPending = false;
       if (renderDepth > 0) {
         cloudSyncUiRenderPending = true;
+        return;
+      }
+      if (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) {
+        markBackgroundUiRenderDeferred();
+        if (typeof taskTitleIxDiagLog === "function") {
+          taskTitleIxDiagLog("flush-cloud-ui-deferred", { reason: "editing-lock" });
+        }
         return;
       }
       if (typeof isAppUiBusyForBackgroundRefresh === "function" && isAppUiBusyForBackgroundRefresh()) {
@@ -95765,6 +96299,16 @@
             out = Object.assign({}, out);
             applyDeadlineMergeToItem(out, dlPick);
             fillClosedListMergedItemFromSides(out, L, R);
+            if (
+              typeof taskTitleIxShieldKeepClosedListText === "function" &&
+              taskTitleIxShieldKeepClosedListText(id) &&
+              L
+            ) {
+              if (String(out.text || "") !== String(L.text || "") && typeof taskTitleIxNotePendingRemote === "function") {
+                taskTitleIxNotePendingRemote("closedList", id, out.text);
+              }
+              out.text = L.text;
+            }
             pickLaterClosedListAssignmentSide(L, R, out);
             const u = Math.max(revBump, Number(out.updatedAt) || 0, Number(dlPick.deadlineUpdatedAt) || 0);
             if (u > 0) out.updatedAt = u;
@@ -95778,6 +96322,16 @@
         }
         applyDeadlineMergeToItem(out, dlPick);
         fillClosedListMergedItemFromSides(out, L, R);
+        if (
+          typeof taskTitleIxShieldKeepClosedListText === "function" &&
+          taskTitleIxShieldKeepClosedListText(id) &&
+          L
+        ) {
+          if (String(out.text || "") !== String(L.text || "") && typeof taskTitleIxNotePendingRemote === "function") {
+            taskTitleIxNotePendingRemote("closedList", id, out.text);
+          }
+          out.text = L.text;
+        }
         const ca = [L && L.completedAt, R && R.completedAt, item.completedAt]
           .map((t) => Number(t))
           .filter((t) => Number.isFinite(t) && t > 0);
@@ -96002,7 +96556,8 @@
     /**
      * 定期清理：例行只清「已删除」垃圾箱与重复脏数据；完整历史以云端为准。
      * skipDoneHygiene：例行 persist 热路径跳过 Done/封闭清单全量扫描
-     * （仍由 render、24h 定时任务、runDataRetentionNow、配额紧急路径执行）。
+     * （仍由 hygiene、24h 定时任务、runDataRetentionNow、配额紧急路径执行；
+     *  历史 repair/rollover 见 runStateRepairAndRolloverPass，不挂普通 render）。
      * @returns {boolean} 是否改动了 state
      */
     function runDataRetentionPass(opts) {
@@ -97329,8 +97884,8 @@
       return normalizeWeeklyPlanCompletedAtMs(task.completedAt) || 0;
     }
 
-    /** 云同步：子步骤完成态按 statusAt / completedAt 取较新一侧，避免 OR 合并导致无法取消勾选 */
-    function mergeWeeklyPlanMicroDoneForSync(locMicro, remMicro, preferRemote) {
+    /** 云同步：子步骤完成态按 statusAt / completedAt 取较新一侧；标题按 updatedAt LWW，持平本机优先 */
+    function mergeWeeklyPlanMicroDoneForSync(locMicro, remMicro, preferRemote, parentTaskId) {
       const l = locMicro && locMicro.id ? locMicro : null;
       const r = remMicro && remMicro.id ? remMicro : null;
       if (!l) return r ? Object.assign({}, r) : null;
@@ -97339,31 +97894,37 @@
       const rt = getWeeklyPlanMicroStatusAt(r);
       const pickRemote = rt > lt || (rt === lt && preferRemote);
       const pick = pickRemote ? r : l;
+      const lTextU = Number(l.updatedAt) || 0;
+      const rTextU = Number(r.updatedAt) || 0;
+      let text = String((l.text != null ? l.text : "") || "");
+      const rtText = String((r.text != null ? r.text : "") || "");
+      if (rtText !== text) {
+        const shieldKeep =
+          typeof taskTitleIxShieldKeepWeeklyPlanMicroText === "function" &&
+          taskTitleIxShieldKeepWeeklyPlanMicroText(parentTaskId, l.id);
+        if (shieldKeep) {
+          if (typeof taskTitleIxNotePendingRemote === "function") {
+            taskTitleIxNotePendingRemote("wpMicro", l.id, rtText);
+          }
+        } else if (rTextU > lTextU) text = rtText || text;
+        else if (lTextU > rTextU) text = text || rtText;
+        else text = text || rtText;
+      }
       const out = Object.assign({}, l, r, {
         id: l.id,
-        text: String((pick.text != null ? pick.text : l.text) || ""),
+        text: text,
         done: Boolean(pick.done)
       });
       const at = normalizeWeeklyPlanCompletedAtMs(pick.completedAt);
       if (out.done && at) out.completedAt = at;
       else delete out.completedAt;
-      const statusAt = Math.max(lt, rt);
-      if (statusAt > 0) out.statusAt = statusAt;
+      const u = Math.max(lTextU, rTextU);
+      if (u > 0) out.updatedAt = u;
+      if (pick.statusAt != null) out.statusAt = pick.statusAt;
       return out;
     }
 
-    function mergeWeeklyPlanMainDoneForSync(locTask, remTask, preferRemote) {
-      const lDone = Boolean(locTask && locTask.mainDone);
-      const rDone = Boolean(remTask && remTask.mainDone);
-      if (lDone === rDone) return lDone;
-      const lt = getWeeklyPlanMainStatusAt(locTask);
-      const rt = getWeeklyPlanMainStatusAt(remTask);
-      if (rt > lt) return rDone;
-      if (lt > rt) return lDone;
-      return preferRemote ? rDone : lDone;
-    }
-
-    function mergeWeeklyPlanMicroTasksForSync(locMicros, remMicros, preferRemote) {
+    function mergeWeeklyPlanMicroTasksForSync(locMicros, remMicros, preferRemote, parentTaskId) {
       const L = Array.isArray(locMicros) ? locMicros : [];
       const R = Array.isArray(remMicros) ? remMicros : [];
       const map = new Map();
@@ -97376,7 +97937,7 @@
           map.set(m.id, m);
           return;
         }
-        map.set(m.id, mergeWeeklyPlanMicroDoneForSync(map.get(m.id), m, preferRemote));
+        map.set(m.id, mergeWeeklyPlanMicroDoneForSync(map.get(m.id), m, preferRemote, parentTaskId));
       });
       return Array.from(map.values());
     }
@@ -97390,14 +97951,22 @@
       const rU = Number(r.updatedAt) || 0;
       const merged = preferRemote || rU > lU ? Object.assign({}, l, r) : Object.assign({}, r, l);
       merged.id = l.id;
-      if (rU > lU || (rU === lU && preferRemote)) {
+      const shieldKeep =
+        typeof taskTitleIxShieldKeepWeeklyPlanTaskText === "function" &&
+        taskTitleIxShieldKeepWeeklyPlanTaskText(l.id);
+      if (shieldKeep) {
+        merged.text = String(l.text != null ? l.text : "");
+        if (typeof taskTitleIxNotePendingRemote === "function" && String(r.text || "") !== merged.text) {
+          taskTitleIxNotePendingRemote("wpTask", l.id, r.text);
+        }
+      } else if (rU > lU) {
         merged.text = String(r.text != null ? r.text : l.text || "");
       } else if (lU > rU) {
         merged.text = String(l.text != null ? l.text : r.text || "");
       } else {
-        merged.text = String((preferRemote ? r.text : l.text) != null ? (preferRemote ? r.text : l.text) : "");
+        merged.text = String(l.text != null ? l.text : r.text || "");
       }
-      merged.microTasks = mergeWeeklyPlanMicroTasksForSync(l.microTasks, r.microTasks, preferRemote);
+      merged.microTasks = mergeWeeklyPlanMicroTasksForSync(l.microTasks, r.microTasks, preferRemote, l.id);
       merged.microSectionExpanded = false;
       if (merged.microTasks.length > 0) {
         applyWeeklyPlanMainDoneFromMicros(merged);
@@ -97414,6 +97983,17 @@
       const u = Math.max(lU, rU, Number(dlPick.deadlineUpdatedAt) || 0);
       if (u > 0) merged.updatedAt = u;
       return normalizeWeeklyPlanTask(merged);
+    }
+
+    function mergeWeeklyPlanMainDoneForSync(locTask, remTask, preferRemote) {
+      const lDone = Boolean(locTask && locTask.mainDone);
+      const rDone = Boolean(remTask && remTask.mainDone);
+      if (lDone === rDone) return lDone;
+      const lt = getWeeklyPlanMainStatusAt(locTask);
+      const rt = getWeeklyPlanMainStatusAt(remTask);
+      if (rt > lt) return rDone;
+      if (lt > rt) return lDone;
+      return preferRemote ? rDone : lDone;
     }
 
     /** 云同步：按周、按任务 id 逐字段合并；子步骤完成态按 statusAt 取较新一侧 */
@@ -97583,25 +98163,30 @@
       return preferRemote ? b : a;
     }
 
-    function mergeTwSubsForSync(remSubs, locSubs, preferRemote) {
+    function mergeTwSubsForSync(remSubs, locSubs, preferRemote, shieldCtx) {
+      const ctx = shieldCtx && typeof shieldCtx === "object" ? shieldCtx : {};
+      const moduleKey = ctx.moduleKey || "";
+      const parentTaskId = ctx.taskId || "";
       const R = Array.isArray(remSubs) ? remSubs : [];
       const L = Array.isArray(locSubs) ? locSubs : [];
       const map = new Map();
-      R.forEach(function (s) {
-        if (!s || !s.id) return;
-        map.set(s.id, {
-          id: s.id,
-          text: typeof s.text === "string" ? s.text : "",
-          done: Boolean(s.done)
-        });
-      });
-      L.forEach(function (s) {
-        if (!s || !s.id) return;
-        const loc = {
+      function packSub(s) {
+        const out = {
           id: s.id,
           text: typeof s.text === "string" ? s.text : "",
           done: Boolean(s.done)
         };
+        const u = Number(s.updatedAt);
+        if (Number.isFinite(u) && u > 0) out.updatedAt = u;
+        return out;
+      }
+      R.forEach(function (s) {
+        if (!s || !s.id) return;
+        map.set(s.id, packSub(s));
+      });
+      L.forEach(function (s) {
+        if (!s || !s.id) return;
+        const loc = packSub(s);
         const ex = map.get(loc.id);
         if (!ex) {
           map.set(loc.id, loc);
@@ -97609,9 +98194,27 @@
         }
         const rt = ex.text;
         const lt = loc.text;
-        const text = rt !== lt ? (preferRemote ? rt : lt) : lt;
+        const rU = Number(ex.updatedAt) || 0;
+        const lU = Number(loc.updatedAt) || 0;
+        let text = lt;
+        if (rt !== lt) {
+          const shieldKeep =
+            typeof taskTitleIxShieldKeepTwSubText === "function" &&
+            taskTitleIxShieldKeepTwSubText(moduleKey, parentTaskId, loc.id);
+          if (shieldKeep) {
+            text = lt;
+            if (typeof taskTitleIxNotePendingRemote === "function") {
+              taskTitleIxNotePendingRemote("twSub", loc.id, rt);
+            }
+          } else if (rU > lU) text = rt || lt;
+          else if (lU > rU) text = lt || rt;
+          else text = lt || rt; /* 时间戳持平：本机优先，禁止 preferRemote 无条件盖字 */
+        }
         const done = Boolean(ex.done) || Boolean(loc.done);
-        map.set(loc.id, { id: loc.id, text: text, done: done });
+        const out = { id: loc.id, text: text, done: done };
+        const u = Math.max(rU, lU);
+        if (u > 0) out.updatedAt = u;
+        map.set(loc.id, out);
       });
       const order = [];
       const seen = new Set();
@@ -98198,7 +98801,9 @@
       return out;
     }
 
-    function mergeTwOneTask(remBase, locTask, preferRemote) {
+    function mergeTwOneTask(remBase, locTask, preferRemote, shieldCtx) {
+      const ctx = shieldCtx && typeof shieldCtx === "object" ? shieldCtx : {};
+      const moduleKey = ctx.moduleKey || "";
       const r = remBase || {};
       const l = locTask || {};
       const id = (typeof l.id === "string" && l.id) || (typeof r.id === "string" && r.id) || newTw020Id();
@@ -98208,15 +98813,26 @@
       const lU = Number(l.updatedAt) || 0;
       let text = lt;
       if (rt !== lt) {
-        if (rU > lU) text = rt || lt;
+        const shieldKeep =
+          typeof taskTitleIxShieldKeepTwTaskText === "function" &&
+          taskTitleIxShieldKeepTwTaskText(moduleKey, id);
+        if (shieldKeep) {
+          text = lt;
+          if (typeof taskTitleIxNotePendingRemote === "function") {
+            taskTitleIxNotePendingRemote("twTask", id, rt);
+          }
+        } else if (rU > lU) text = rt || lt;
         else if (lU > rU) text = lt || rt;
-        else if (preferRemote) text = rt || lt;
-        else text = lt || rt;
+        else text = lt || rt; /* 持平：本机优先，避免 pulse preferRemote 盖掉刚保存本地文案 */
       }
       const rDone = Boolean(r.done);
       const lDone = Boolean(l.done);
       const done = rDone !== lDone ? (preferRemote ? rDone : lDone) : lDone;
-      const subs = mergeTwSubsForSync(r.subs || [], l.subs || [], preferRemote);
+      const subs = mergeTwSubsForSync(r.subs || [], l.subs || [], preferRemote, {
+        moduleKey: moduleKey,
+        taskId: id,
+        weekNum: ctx.weekNum
+      });
       const dlPick = mergeDeadlineFieldsForSync(l, r, !preferRemote);
       const out = { id: id, text: text, subs: subs, done: done };
       applyDeadlineMergeToItem(out, dlPick);
@@ -98225,7 +98841,8 @@
       return out;
     }
 
-    function mergeTwWeekTasksForSync(remWeekArr, locWeekArr, preferRemote) {
+    function mergeTwWeekTasksForSync(remWeekArr, locWeekArr, preferRemote, shieldCtx) {
+      const ctx = shieldCtx && typeof shieldCtx === "object" ? shieldCtx : {};
       const map = new Map();
       (Array.isArray(remWeekArr) ? remWeekArr : []).forEach(function (t) {
         if (t && t.id) {
@@ -98240,7 +98857,7 @@
           map.set(loc.id, loc);
           return;
         }
-        map.set(loc.id, mergeTwOneTask(ex, loc, preferRemote));
+        map.set(loc.id, mergeTwOneTask(ex, loc, preferRemote, ctx));
       });
       const order = [];
       const seen = new Set();
@@ -98263,7 +98880,7 @@
         .filter(Boolean);
     }
 
-    function mergeTw020WeeksMapsForSync(locWeeks, remWeeks, preferRemote, tombstones) {
+    function mergeTw020WeeksMapsForSync(locWeeks, remWeeks, preferRemote, tombstones, moduleKey) {
       const ts = tombstones && typeof tombstones === "object" ? tombstones : {};
       const out = {};
       for (let w = 1; w <= 13; w++) {
@@ -98271,7 +98888,8 @@
         const merged = mergeTwWeekTasksForSync(
           (remWeeks && remWeeks[k]) || [],
           (locWeeks && locWeeks[k]) || [],
-          preferRemote
+          preferRemote,
+          { moduleKey: moduleKey || "", weekNum: k }
         );
         out[k] = omitTombstonedIdRecords(merged, ts).map(function (task) {
           if (task && Array.isArray(task.subs) && task.subs.length) {
@@ -98480,8 +99098,8 @@
       return { goal: "", criteria: "" };
     }
 
-    /** 十二周年各周目标卡：按周键并集，字段非空冲突随 preferRemote */
-    function mergeAnniversaryWeekGoalsForSync(localGoals, remoteGoals, preferRemote) {
+    /** 十二周年各周目标卡：按周键并集；编辑中字段本机优先 */
+    function mergeAnniversaryWeekGoalsForSync(localGoals, remoteGoals, preferRemote, moduleKey) {
       const lo = localGoals && typeof localGoals === "object" ? localGoals : {};
       const ro = remoteGoals && typeof remoteGoals === "object" ? remoteGoals : {};
       const out = {};
@@ -98489,10 +99107,22 @@
       keys.forEach(function (k) {
         const a = normalizeAnniversaryWeekGoalEntry(lo[k]);
         const b = normalizeAnniversaryWeekGoalEntry(ro[k]);
+        const keepGoal =
+          typeof taskTitleIxShieldKeepTwWeekGoal === "function" &&
+          taskTitleIxShieldKeepTwWeekGoal(moduleKey, k, "goal");
+        const keepCriteria =
+          typeof taskTitleIxShieldKeepTwWeekGoal === "function" &&
+          taskTitleIxShieldKeepTwWeekGoal(moduleKey, k, "criteria");
         const merged = {
-          goal: mergeTwDisjointString(a.goal, b.goal, preferRemote),
-          criteria: mergeTwDisjointString(a.criteria, b.criteria, preferRemote)
+          goal: keepGoal ? a.goal : mergeTwDisjointString(a.goal, b.goal, preferRemote),
+          criteria: keepCriteria ? a.criteria : mergeTwDisjointString(a.criteria, b.criteria, preferRemote)
         };
+        if (keepGoal && a.goal !== b.goal && typeof taskTitleIxNotePendingRemote === "function") {
+          taskTitleIxNotePendingRemote("twWeekGoal", String(moduleKey) + ":" + k + ":goal", b.goal);
+        }
+        if (keepCriteria && a.criteria !== b.criteria && typeof taskTitleIxNotePendingRemote === "function") {
+          taskTitleIxNotePendingRemote("twWeekGoal", String(moduleKey) + ":" + k + ":criteria", b.criteria);
+        }
         if (merged.goal || merged.criteria) out[k] = merged;
       });
       return out;
@@ -98511,12 +99141,13 @@
       });
     }
 
-    function mergeAnniversaryTw020ModuleForSync(localMod, remoteMod, preferRemote, tombstones) {
+    function mergeAnniversaryTw020ModuleForSync(localMod, remoteMod, preferRemote, tombstones, moduleKey) {
+      const mk = moduleKey || "tw020";
       const lo = localMod && typeof localMod === "object" ? localMod : { weeks: {}, futureStory: "" };
       const ro = remoteMod && typeof remoteMod === "object" ? remoteMod : { weeks: {}, futureStory: "" };
       return {
-        weeks: mergeTw020WeeksMapsForSync(lo.weeks || {}, ro.weeks || {}, preferRemote, tombstones),
-        weekGoals: mergeAnniversaryWeekGoalsForSync(lo.weekGoals, ro.weekGoals, preferRemote),
+        weeks: mergeTw020WeeksMapsForSync(lo.weeks || {}, ro.weeks || {}, preferRemote, tombstones, mk),
+        weekGoals: mergeAnniversaryWeekGoalsForSync(lo.weekGoals, ro.weekGoals, preferRemote, mk),
         futureStory: mergeTwDisjointString(lo.futureStory, ro.futureStory, preferRemote),
         okrWhys: mergeTwDisjointString(lo.okrWhys, ro.okrWhys, preferRemote),
         ui: mergeAnniversaryTwUiOverlay(lo.ui, ro.ui),
@@ -98617,7 +99248,8 @@
         .slice(0, ANNIVERSARY_TW_OKR_MAX_KEY_RESULTS);
     }
 
-    function mergeAnniversaryTwAnchorModuleForSync(localMod, remoteMod, preferRemote, tombstones) {
+    function mergeAnniversaryTwAnchorModuleForSync(localMod, remoteMod, preferRemote, tombstones, moduleKey) {
+      const mk = moduleKey || "tw021";
       const lo = localMod && typeof localMod === "object" ? localMod : { anchor: null, weeks: {}, futureStory: "" };
       const ro = remoteMod && typeof remoteMod === "object" ? remoteMod : { anchor: null, weeks: {}, futureStory: "" };
       const la = lo.anchor != null ? String(lo.anchor) : null;
@@ -98634,8 +99266,8 @@
       }
       return {
         anchor: anchor,
-        weeks: mergeTw020WeeksMapsForSync(lo.weeks || {}, ro.weeks || {}, preferRemote, tombstones),
-        weekGoals: mergeAnniversaryWeekGoalsForSync(lo.weekGoals, ro.weekGoals, preferRemote),
+        weeks: mergeTw020WeeksMapsForSync(lo.weeks || {}, ro.weeks || {}, preferRemote, tombstones, mk),
+        weekGoals: mergeAnniversaryWeekGoalsForSync(lo.weekGoals, ro.weekGoals, preferRemote, mk),
         futureStory: mergeTwDisjointString(lo.futureStory, ro.futureStory, preferRemote),
         okrWhys: mergeTwDisjointString(lo.okrWhys, ro.okrWhys, preferRemote),
         longTermVision: mergeTwDisjointString(lo.longTermVision, ro.longTermVision, preferRemote),
@@ -98960,19 +99592,22 @@
         state.anniversaryTw020,
         remoteState.anniversaryTw020,
         anniversaryTwPreferRemote,
-        ts
+        ts,
+        "tw020"
       );
       base.anniversaryTw021 = mergeAnniversaryTwAnchorModuleForSync(
         state.anniversaryTw021,
         remoteState.anniversaryTw021,
         anniversaryTwPreferRemote,
-        ts
+        ts,
+        "tw021"
       );
       base.anniversaryTw022 = mergeAnniversaryTwAnchorModuleForSync(
         state.anniversaryTw022,
         remoteState.anniversaryTw022,
         anniversaryTwPreferRemote,
-        ts
+        ts,
+        "tw022"
       );
 
       const regLocal = state.anniversaryTwRegistry && typeof state.anniversaryTwRegistry === "object"
@@ -99005,7 +99640,8 @@
           state[sk],
           remoteState[sk],
           anniversaryTwPreferRemote,
-          ts
+          ts,
+          moduleKey
         );
         if (!base.anniversaryDoneRef[moduleKey]) {
           base.anniversaryDoneRef[moduleKey] = { items: {} };
@@ -99497,19 +100133,22 @@
             state.anniversaryTw020,
             merged.anniversaryTw020,
             false,
-            tsLive
+            tsLive,
+            "tw020"
           );
           merged.anniversaryTw021 = mergeAnniversaryTwAnchorModuleForSync(
             state.anniversaryTw021,
             merged.anniversaryTw021,
             false,
-            tsLive
+            tsLive,
+            "tw021"
           );
           merged.anniversaryTw022 = mergeAnniversaryTwAnchorModuleForSync(
             state.anniversaryTw022,
             merged.anniversaryTw022,
             false,
-            tsLive
+            tsLive,
+            "tw022"
           );
           merged.backwardMeasure = mergeBackwardMeasureForSync(
             state.backwardMeasure,
@@ -99554,6 +100193,9 @@
         syncAllWeeklyPlanDoneLists({ forceAll: true });
         if (typeof syncAllAnniversaryDoneLists === "function") {
           syncAllAnniversaryDoneLists({ forceAll: true });
+        }
+        if (typeof runStateRepairAndRolloverPass === "function") {
+          runStateRepairAndRolloverPass();
         }
         setCloudSyncHashFromCurrentState();
         const r = persistStateToLocalStorage();
@@ -100555,24 +101197,62 @@
 
     function persistStateToLocalStorage(explicitJson) {
       const t0 = beginCloudSyncPerf();
+      const split = {
+        prepareMs: 0,
+        jsonStringifyMs: 0,
+        localStorageMs: 0,
+        indexedDbMs: 0,
+        bytes: 0,
+        usedIdb: false
+      };
       try {
+      const tPrep = perfNow();
       compactStateForLocalStorage(false);
-      let json =
-        explicitJson != null && String(explicitJson).length
-          ? String(explicitJson)
-          : cloudSyncPerfJsonStringify(state);
+      split.prepareMs = perfRound(perfNow() - tPrep);
+      let json;
+      if (explicitJson != null && String(explicitJson).length) {
+        json = String(explicitJson);
+      } else {
+        const tStr = perfNow();
+        json = cloudSyncPerfJsonStringify(state);
+        split.jsonStringifyMs = perfRound(perfNow() - tStr);
+      }
+      split.bytes = typeof json === "string" ? json.length : 0;
+      if (isPerfDiagEnabled() && split.jsonStringifyMs >= 50) {
+        perfMarkLong("JSON.stringify(state)", split.jsonStringifyMs);
+      }
+      if (perfIx.active) {
+        perfNoteSplit("jsonStringifyMs", split.jsonStringifyMs);
+        perfNoteSplit("prepareMs", split.prepareMs);
+      }
 
       function syncWriteLocalOnly() {
+        const tLs = perfNow();
         localStorage.setItem(STORAGE_KEY, json);
         _stateJsonCache = json;
         maybeWriteStateEmergencyBackup(json);
+        split.localStorageMs = perfRound(perfNow() - tLs);
+        if (perfIx.active) perfNoteSplit("localStorageMs", split.localStorageMs);
+        if (isPerfDiagEnabled()) perfMarkLong("localStorage.setItem", split.localStorageMs);
       }
 
       function enqueueIdbWrite() {
+        split.usedIdb = true;
         _stateJsonCache = json;
         statePersistQueue = statePersistQueue
           .then(function () {
+            const tIdb = perfNow();
             return writeStateJsonToBackend(json).then(function () {
+              const idbMs = perfRound(perfNow() - tIdb);
+              split.indexedDbMs = idbMs;
+              if (typeof perfIx !== "undefined") {
+                if (perfIx.active) perfNoteSplit("indexedDbMs", idbMs);
+                if (isPerfDiagEnabled()) {
+                  perfMarkLong("IndexedDB.write", idbMs);
+                  perfIx.lastPersistSplit = Object.assign({}, split);
+                  perfLog("persist-split", split);
+                }
+              }
               maybeWriteStateEmergencyBackup(json);
             });
           })
@@ -100580,6 +101260,10 @@
             console.warn("[存储] IndexedDB 写入失败，回退 localStorage:", idbErr);
             stateStorageUseIdb = false;
             syncWriteLocalOnly();
+            if (isPerfDiagEnabled()) {
+              perfIx.lastPersistSplit = Object.assign({}, split);
+              perfLog("persist-split", split);
+            }
           });
         return {
           ok: true,
@@ -100616,6 +101300,10 @@
       } finally {
         addCloudSyncPerf("persistCount", "persistMs", t0);
         if (t0 != null) uiStallNotePersist(cloudSyncPerfNow() - t0);
+        if (isPerfDiagEnabled() && !split.usedIdb) {
+          perfIx.lastPersistSplit = Object.assign({}, split);
+          perfLog("persist-split", split);
+        }
       }
     }
 
@@ -100653,7 +101341,9 @@
     function saveState(opts) {
       const t0 = beginCloudSyncPerf();
       opts = opts && typeof opts === "object" ? opts : {};
+      const saveSplit = { prepareDirtyMs: 0, persistScheduleMs: 0, cloudEnqueueMs: 0, totalMs: 0 };
       try {
+        const tPrep = perfNow();
         /* 纯 memo 写入不标卫生脏；memo+done 等其它 lists / 裸 save 仍走原 hygiene */
         /* skipUiPaintDirty：Sprint 纯壳 UI 落盘，无业务列表变更，不标 hygiene / paint 脏 */
         if (!opts.fromHygiene && !opts.skipUiPaintDirty && !saveListsSkipStateHygiene(opts.lists)) {
@@ -100665,17 +101355,31 @@
         } else if (!opts.fromHygiene && !opts.skipUiPaintDirty) {
           markAllUiPaintSlicesDirty();
         }
+        saveSplit.prepareDirtyMs = perfRound(perfNow() - tPrep);
         /* 只观测：非 hygiene 写入计为 localSaveRender 链起点 */
         if (!opts.fromHygiene && isCloudSyncPerfEnabled()) {
           uiStallBegin("localSaveRender");
         }
+        const tPers = perfNow();
         scheduleLocalPersistFlush();
+        saveSplit.persistScheduleMs = perfRound(perfNow() - tPers);
         if (!cloudSyncSuppressPush) {
+          const tCloud = perfNow();
           markCloudSyncPendingUpload();
           scheduleCloudSyncPush();
+          saveSplit.cloudEnqueueMs = perfRound(perfNow() - tCloud);
+          if (perfIx.active) {
+            perfIx.active.marks.cloudEnqueueMs = saveSplit.cloudEnqueueMs;
+            perfNoteSplit("cloudEnqueueMs", saveSplit.cloudEnqueueMs);
+          }
         }
       } finally {
         addCloudSyncPerf("saveStateCount", "saveStateMs", t0);
+        saveSplit.totalMs = t0 != null ? perfRound(perfNow() - t0) : 0;
+        if (isPerfDiagEnabled()) {
+          perfIx.lastSaveSplit = saveSplit;
+          if (saveSplit.totalMs >= 50) perfMarkLong("saveState", saveSplit.totalMs);
+        }
       }
     }
 
@@ -111861,6 +112565,7 @@
         const it = state.closedList.find((x) => x.id === id);
         if (!it) return;
         it.text = t;
+        it.updatedAt = Date.now();
       } else {
         return;
       }
@@ -111957,6 +112662,206 @@
       return String(taskTitleIx.draftValue || "").trim();
     }
 
+    /** 第二阶段 · Editing Shield：Edit/Create 期间 draft 为唯一真相，render/merge 不得覆盖 */
+    let taskTitleIxAllowRenderOnce = false;
+    let taskTitleIxPendingRemote = null;
+    let taskTitleIxDiagSession = null;
+    let taskTitleIxDiagRenderCount = 0;
+
+    function isTaskTitleIxDiagEnabled() {
+      try {
+        if (localStorage.getItem("todo-app-task-title-ix-diag-v1") === "1") return true;
+        const h = String(location.hostname || "");
+        if (h === "localhost" || h === "127.0.0.1" || h === "") return true;
+      } catch (_diagEn) {}
+      return false;
+    }
+
+    function taskTitleIxDiagLog(tag, detail) {
+      if (!isTaskTitleIxDiagEnabled()) return;
+      try {
+        console.log("[taskTitleIx-diag]", tag, detail || "");
+      } catch (_diagLog) {}
+    }
+
+    function taskTitleIxDiagBegin(kind) {
+      if (!isTaskTitleIxDiagEnabled()) return null;
+      taskTitleIxDiagRenderCount = 0;
+      taskTitleIxDiagSession = {
+        kind: String(kind || "op"),
+        t0: typeof performance !== "undefined" && performance.now ? performance.now() : Date.now(),
+        marks: {}
+      };
+      return taskTitleIxDiagSession;
+    }
+
+    function taskTitleIxDiagMark(name, t0) {
+      if (!taskTitleIxDiagSession || t0 == null) return;
+      const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+      taskTitleIxDiagSession.marks[name] = Math.round((now - t0) * 100) / 100;
+    }
+
+    function taskTitleIxDiagEnd() {
+      if (!taskTitleIxDiagSession) return;
+      const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+      const total = Math.round((now - taskTitleIxDiagSession.t0) * 100) / 100;
+      taskTitleIxDiagLog(taskTitleIxDiagSession.kind + "-done", {
+        totalMs: total,
+        marks: taskTitleIxDiagSession.marks,
+        renderCount: taskTitleIxDiagRenderCount
+      });
+      taskTitleIxDiagSession = null;
+    }
+
+    function parseTaskTitleIxShield() {
+      if (!taskTitleIx.key) return null;
+      const p = String(taskTitleIx.key).split(":");
+      const head = p[0];
+      if (head === "anniversary") {
+        return {
+          type: "anniversary",
+          module: p[1] || "",
+          weekNum: p[2] || "",
+          taskId: p[3] || "",
+          field: p[4] || "title"
+        };
+      }
+      if (head === "anniversaryCreateSub") {
+        return {
+          type: "anniversaryCreate",
+          module: p[1] || "",
+          weekNum: p[2] || "",
+          taskId: p[3] || ""
+        };
+      }
+      if (head === "weeklyPlan") {
+        return { type: "weeklyPlan", taskId: p[1] || "" };
+      }
+      if (head === "weeklyPlanMicro") {
+        return { type: "weeklyPlanMicro", taskId: p[1] || "", microId: p[2] || "" };
+      }
+      if (head === "weeklyPlanMicroCreate") {
+        return { type: "weeklyPlanMicroCreate", taskId: p[1] || "" };
+      }
+      if (head === "closedListStep") {
+        return { type: "closedListStep", taskId: p[1] || "", stepId: p[2] || "" };
+      }
+      if (head === "closedListStepCreate") {
+        return { type: "closedListStepCreate", taskId: p[1] || "" };
+      }
+      if (head === "closedList") {
+        return { type: "closedList", id: p[1] || "" };
+      }
+      if (p.length >= 2) {
+        return { type: "listItem", listName: head, id: p[1] || "" };
+      }
+      return null;
+    }
+
+    function taskTitleIxNotePendingRemote(scope, id, value) {
+      if (!taskTitleIxPendingRemote || typeof taskTitleIxPendingRemote !== "object") {
+        taskTitleIxPendingRemote = {};
+      }
+      taskTitleIxPendingRemote[String(scope) + ":" + String(id)] = value;
+      taskTitleIxDiagLog("merge-skip-editing-field", { scope: scope, id: id });
+    }
+
+    function taskTitleIxShieldKeepTwTaskText(moduleKey, taskId) {
+      const s = parseTaskTitleIxShield();
+      if (!s || s.type !== "anniversary") return false;
+      return (
+        s.module === String(moduleKey || "") &&
+        s.taskId === String(taskId || "") &&
+        s.field === "title"
+      );
+    }
+
+    function taskTitleIxShieldKeepTwSubText(moduleKey, taskId, subId) {
+      const s = parseTaskTitleIxShield();
+      if (!s || s.type !== "anniversary") return false;
+      return (
+        s.module === String(moduleKey || "") &&
+        s.taskId === String(taskId || "") &&
+        s.field === String(subId || "")
+      );
+    }
+
+    function taskTitleIxShieldKeepTwWeekGoal(moduleKey, weekNum, fieldKey) {
+      const s = parseTaskTitleIxShield();
+      if (!s || s.type !== "anniversary") return false;
+      return (
+        s.module === String(moduleKey || "") &&
+        s.taskId === "goal" &&
+        String(s.weekNum) === String(weekNum || "") &&
+        s.field === String(fieldKey || "")
+      );
+    }
+
+    function taskTitleIxShieldKeepWeeklyPlanTaskText(taskId) {
+      const s = parseTaskTitleIxShield();
+      if (!s) return false;
+      if (s.type === "weeklyPlan" && s.taskId === String(taskId || "")) return true;
+      return false;
+    }
+
+    function taskTitleIxShieldKeepWeeklyPlanMicroText(taskId, microId) {
+      const s = parseTaskTitleIxShield();
+      if (!s || s.type !== "weeklyPlanMicro") return false;
+      return s.taskId === String(taskId || "") && s.microId === String(microId || "");
+    }
+
+    function taskTitleIxShieldKeepClosedListText(id) {
+      const s = parseTaskTitleIxShield();
+      if (!s) return false;
+      if (s.type === "closedList" && s.id === String(id || "")) return true;
+      if (s.type === "listItem" && s.listName === "closedList" && s.id === String(id || "")) return true;
+      return false;
+    }
+
+    /** 编辑锁：有 key 即视为 lock；后台 render 一律合并为 pending，结束后最多刷一次 */
+    function deferRenderForTaskTitleIx(reason) {
+      renderDeferredWhileEditing = true;
+      taskTitleIxDiagLog("render-deferred", {
+        reason: reason || "lock",
+        key: taskTitleIx.key,
+        mode: taskTitleIx.mode
+      });
+      if (typeof scheduleRenderWhenEditingEnds === "function") {
+        scheduleRenderWhenEditingEnds();
+      }
+    }
+
+    function flushTaskTitleIxPendingRender(reason) {
+      if (taskTitleIxIsBusy()) {
+        deferRenderForTaskTitleIx("flush-while-busy");
+        return;
+      }
+      const need =
+        renderDeferredWhileEditing ||
+        (typeof cloudSyncUiRenderPending !== "undefined" && cloudSyncUiRenderPending);
+      if (!need) {
+        taskTitleIxDiagLog("flush-pending-render-skip", { reason: reason || "unlock" });
+        return;
+      }
+      renderDeferredWhileEditing = false;
+      if (renderWhenEditingEndsTimer) {
+        clearTimeout(renderWhenEditingEndsTimer);
+        renderWhenEditingEndsTimer = null;
+      }
+      taskTitleIxDiagLog("flush-pending-render", { reason: reason || "unlock" });
+      taskTitleIxAllowRenderOnce = true;
+      try {
+        render(true);
+      } finally {
+        taskTitleIxAllowRenderOnce = false;
+      }
+    }
+
+    function taskTitleIxUnlockAndFlush(reason) {
+      taskTitleIxPendingRemote = null;
+      flushTaskTitleIxPendingRender(reason || "unlock");
+    }
+
     /**
      * display(span) + 隐藏 input：默认 View；主动进入 Edit；保存/取消后回 View。
      */
@@ -112023,16 +112928,24 @@
           const mb = actionsWrap.querySelector(".manual-item-more-btn");
           if (mb) mb.setAttribute("aria-expanded", "false");
         }
+        taskTitleIxUnlockAndFlush("cancel-edit");
       }
 
       function commitEdit() {
         if (!taskTitleIxIsActive(key)) return false;
         const v = taskTitleIxReadDraftTrimmed();
         if (!allowEmpty && !v) return false;
+        const diag = taskTitleIxDiagBegin("save-title");
+        const tState0 =
+          typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
         if (typeof onCommit === "function") {
           const ok = onCommit(v);
-          if (ok === false) return false;
+          if (ok === false) {
+            taskTitleIxDiagSession = null;
+            return false;
+          }
         }
+        taskTitleIxDiagMark("stateUpdateMs", tState0);
         inputEl.value = v;
         syncDisplayFromInput();
         taskTitleIxEndSilent();
@@ -112042,6 +112955,11 @@
           const mb = actionsWrap.querySelector(".manual-item-more-btn");
           if (mb) mb.setAttribute("aria-expanded", "false");
         }
+        const tFlush0 =
+          typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+        taskTitleIxUnlockAndFlush("save-edit");
+        taskTitleIxDiagMark("flushRenderMs", tFlush0);
+        taskTitleIxDiagEnd();
         return true;
       }
 
@@ -112233,18 +113151,31 @@
       function cancelCreate() {
         if (taskTitleIxIsActive(key)) taskTitleIxEndSilent();
         exitCreateLocal();
+        taskTitleIxUnlockAndFlush("cancel-create");
       }
 
       function commitCreate() {
         if (!taskTitleIxIsActive(key)) return;
         const v = taskTitleIxReadDraftTrimmed();
         if (!v) return;
+        const diag = taskTitleIxDiagBegin("save-create");
+        const tState0 =
+          typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
         if (typeof onCommit === "function") {
           const ok = onCommit(v);
-          if (ok === false) return;
+          if (ok === false) {
+            taskTitleIxDiagSession = null;
+            return;
+          }
         }
+        taskTitleIxDiagMark("stateUpdateMs", tState0);
         taskTitleIxEndSilent();
         exitCreateLocal();
+        const tFlush0 =
+          typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+        taskTitleIxUnlockAndFlush("save-create");
+        taskTitleIxDiagMark("flushRenderMs", tFlush0);
+        taskTitleIxDiagEnd();
       }
 
       triggerBtn.addEventListener("click", function (ev) {
@@ -126273,12 +127204,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const start = new Date(getWeeklyPlanViewSprintStartKey() + "T12:00:00");
       start.setDate(start.getDate() + deltaSprints * WEEKLY_PLAN_SPRINT_DAYS);
       setWeeklyPlanViewSprintStart(formatDateInputValue(start));
+      if (typeof runStateRepairAndRolloverPass === "function") {
+        runStateRepairAndRolloverPass();
+      }
       markUiPaintSlicesDirty(["weeklyPlan"]);
       render();
     }
 
     function goWeeklyPlanCurrentSprint() {
       setWeeklyPlanViewSprintStart(getCurrentWeeklyPlanSprintStartKey());
+      if (typeof runStateRepairAndRolloverPass === "function") {
+        runStateRepairAndRolloverPass();
+      }
       markUiPaintSlicesDirty(["weeklyPlan"]);
       render();
     }
@@ -127242,7 +128179,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /**
      * Sprint 结束后：将所有「结束日早于今天」的 3-Day Sprint 中未完成任务并入本期（state.weeklyPlan[today]）。
      * 已完成任务保留在原 Sprint 作为记录；仅迁移 isWeeklyPlanMainComplete === false 的任务。
-     * 每次 render 直接扫描过去桶（不另做 fingerprint / snapshot skip）。
+     * 仅在启动/跨日跨 Sprint/云合并等明确时机调用（勿挂普通 render）。
      */
     function rolloverWeeklyPlanIncompleteToCurrentWeek(opts) {
       const t0 = beginCloudSyncPerf();
@@ -129923,6 +130860,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /** 十二周年周任务条：复用周计划 lane-task-card 卡片结构（不含周底添加输入行） */
     function appendAnniversaryTwSubTaskRow(subUl, opts, taskId, sub) {
       const sli = document.createElement("li");
+      sli.setAttribute("data-sub-id", String(sub.id || ""));
+      sli.setAttribute("data-task-id", String(taskId || ""));
+      if (opts && opts.module) sli.setAttribute("data-module", String(opts.module));
+      if (opts && opts.weekNum != null) sli.setAttribute("data-week-num", String(opts.weekNum));
       if (sub.done) {
         sli.classList.add("tw020-sub-done");
       }
@@ -129973,6 +130914,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const block = document.createElement("div");
       block.className = "tw020-task-block anniversary-tw-task-card";
       block.dataset.taskId = task.id;
+      block.dataset.module = String(module || "");
+      block.dataset.weekNum = String(weekNum);
       if (task.done) {
         block.classList.add("tw020-task-block-done");
       }
@@ -130141,7 +131084,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         } else {
           uiStateModule.ui.taskExpanded[taskUiKey] = true;
         }
+        perfBeginInteraction("anniversary-task-expand-collapse");
+        const tSave0 = perfNow();
         saveState();
+        perfMark("saveStateMs", tSave0);
+        perfEndInteraction({ note: "DOM class toggle + saveState(full state); no render()" });
       }
 
       toggleBtn.addEventListener("click", (ev) => {
@@ -130332,6 +131279,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const m = task.microTasks.find((x) => x.id === microId);
       if (!m) return;
       m.text = String(newText || "").trim();
+      m.updatedAt = Date.now();
       touchWeeklyPlanTaskRevision(task);
       saveWeeklyPlanTasksForWeek(tasks);
       render();
@@ -130578,6 +131526,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function renderWeeklyPlanList() {
+      if (
+        !taskTitleIxAllowRenderOnce &&
+        typeof taskTitleIxIsBusy === "function" &&
+        taskTitleIxIsBusy()
+      ) {
+        deferRenderForTaskTitleIx("renderWeeklyPlanList");
+        return;
+      }
       if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.renderWeeklyPlanListCount += 1;
       /* Closed 壳：不触碰任务壳常驻 DOM（warm 切换依赖保留） */
       if (getWeeklyPlanShell() === "closed") {
@@ -133537,6 +134493,73 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return true;
     }
 
+    /**
+     * 十二周年标题局部更新：只改当前卡/子行的 display+input，禁止 full render。
+     * @returns {boolean} 是否命中 DOM
+     */
+    function patchAnniversaryTwTitleDom(moduleKey, weekNum, taskId, subId, text) {
+      const t = String(text || "");
+      const trimmed = t.trim();
+      if (subId != null && subId !== "") {
+        const rowEl = findAnniversaryTwSubRowEl(moduleKey, weekNum, taskId, subId);
+        if (!rowEl) return false;
+        const display = rowEl.querySelector(".weekly-plan-main-title-display");
+        const input = rowEl.querySelector("input.weekly-plan-main-title-input");
+        if (display) {
+          display.textContent = t;
+          display.title = trimmed;
+        }
+        if (input && document.activeElement !== input) {
+          input.value = t;
+        } else if (input) {
+          input.value = t;
+        }
+        return true;
+      }
+      const cardEl = findAnniversaryTwTaskCardEl(moduleKey, weekNum, taskId);
+      if (!cardEl) return false;
+      const titleStack = cardEl.querySelector(".tw020-task-title-stack");
+      const scope = titleStack || cardEl;
+      const display = scope.querySelector(":scope > .weekly-plan-main-title-display, .tw020-task-title-stack > .weekly-plan-main-title-display");
+      const input = scope.querySelector(
+        ":scope > input.weekly-plan-main-title-input, .tw020-task-title-stack > input.weekly-plan-main-title-input"
+      );
+      const displayEl =
+        display ||
+        (titleStack
+          ? titleStack.querySelector(".weekly-plan-main-title-display")
+          : cardEl.querySelector(".lane-task-card-title-block .weekly-plan-main-title-display"));
+      const inputEl =
+        input ||
+        (titleStack
+          ? titleStack.querySelector("input.weekly-plan-main-title-input")
+          : cardEl.querySelector(".lane-task-card-title-block input.weekly-plan-main-title-input"));
+      if (displayEl) {
+        displayEl.textContent = t;
+        displayEl.title = trimmed;
+      }
+      if (inputEl) inputEl.value = t;
+      return true;
+    }
+
+    /** 结构变更后同步父任务进度条 + 当周进度（不重建 DOM） */
+    function patchAnniversaryTwProgressAfterStructureChange(moduleKey, weekNum, taskIdOpt) {
+      const mk = String(moduleKey || "tw020");
+      if (taskIdOpt != null && taskIdOpt !== "") {
+        const task = getAnniversaryTwWeekTasks(mk, weekNum).find(function (x) {
+          return x && x.id === taskIdOpt;
+        });
+        const cardEl = findAnniversaryTwTaskCardEl(mk, weekNum, taskIdOpt);
+        if (task && cardEl) {
+          patchAnniversaryTaskProgressDom(cardEl, getLaneTaskCardProgress(task, "anniversaryTw"));
+        }
+      }
+      const weekProg = computeAnniversaryWeekTaskProgress(getAnniversaryTwWeekTasks(mk, weekNum));
+      const mod = getAnniversaryTwStateModule(mk);
+      const bands = (mod && mod.progressBands) || ANNIVERSARY_PROGRESS_BAND_DEFAULTS;
+      patchAnniversaryWeekProgressDom(mk, weekNum, weekProg, bands);
+    }
+
     function patchAnniversaryTwAfterTaskAdded(moduleKey, weekNum, task) {
       const tasksWrap = getAnniversaryTwWeekTasksWrapEl(moduleKey, weekNum);
       if (!tasksWrap || !task) return false;
@@ -133556,13 +134579,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const block = tempWrap.firstElementChild;
       if (!block) return false;
       tasksWrap.insertBefore(block, addRow);
+      patchAnniversaryTwProgressAfterStructureChange(moduleKey, weekNum, task.id);
       return true;
     }
 
     function patchAnniversaryTwAfterSubAdded(moduleKey, weekNum, taskId, sub) {
       const tasksWrap = getAnniversaryTwWeekTasksWrapEl(moduleKey, weekNum);
       if (!tasksWrap || !sub) return false;
-      const block = tasksWrap.querySelector('[data-task-id="' + taskId + '"]');
+      const block =
+        findAnniversaryTwTaskCardEl(moduleKey, weekNum, taskId) ||
+        tasksWrap.querySelector('[data-task-id="' + taskId + '"]');
       if (!block) return false;
       const taskBody = block.querySelector(".tw020-task-body");
       const subUl = block.querySelector(".tw020-sub-list");
@@ -133576,22 +134602,100 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         toggleBtn.setAttribute("aria-expanded", "true");
         toggleBtn.setAttribute("aria-label", "收起子任务");
       }
+      patchAnniversaryTwProgressAfterStructureChange(moduleKey, weekNum, taskId);
       return true;
     }
 
     function afterAnniversaryTwTaskAdded(moduleKey, weekNum, task) {
-      if (!patchAnniversaryTwAfterTaskAdded(moduleKey, weekNum, task)) {
-        refreshAnniversaryTwWeekTasksPanel(moduleKey, weekNum);
+      if (patchAnniversaryTwAfterTaskAdded(moduleKey, weekNum, task)) return;
+      if (typeof console !== "undefined" && console.warn) {
+        console.warn("[PATCH MISS]", {
+          kind: "add-parent-task",
+          moduleKey: moduleKey,
+          weekKey: weekNum,
+          taskId: task && task.id
+        });
       }
+      /* 看板/DOM miss：单周面板重建，禁止 full render() */
+      refreshAnniversaryTwWeekTasksPanel(moduleKey, weekNum);
+      patchAnniversaryTwProgressAfterStructureChange(moduleKey, weekNum, task && task.id);
     }
 
     function afterAnniversaryTwSubAdded(moduleKey, weekNum, taskId, sub) {
       const mod = getAnniversaryTwStateModule(moduleKey);
       ensureAnniversaryTwModuleUi(mod);
       mod.ui.taskExpanded[anniversaryTwTaskUiKey(weekNum, taskId)] = true;
-      if (!patchAnniversaryTwAfterSubAdded(moduleKey, weekNum, taskId, sub)) {
-        refreshAnniversaryTwWeekTasksPanel(moduleKey, weekNum);
+      if (patchAnniversaryTwAfterSubAdded(moduleKey, weekNum, taskId, sub)) return;
+      if (typeof console !== "undefined" && console.warn) {
+        console.warn("[PATCH MISS]", {
+          kind: "add-sub-task",
+          moduleKey: moduleKey,
+          weekKey: weekNum,
+          taskId: taskId,
+          subId: sub && sub.id
+        });
       }
+      refreshAnniversaryTwWeekTasksPanel(moduleKey, weekNum);
+      patchAnniversaryTwProgressAfterStructureChange(moduleKey, weekNum, taskId);
+    }
+
+    /** 删除父任务：只移除当前任务卡 + 更新周进度；禁止 full render() */
+    function patchAnniversaryTwAfterTaskDeleted(moduleKey, weekNum, taskId) {
+      if (
+        isSprintKanbanDesktopEnabled() &&
+        getAnniversaryTwWeekViewMode(moduleKey, weekNum) === "kanban"
+      ) {
+        return false;
+      }
+      const cardEl = findAnniversaryTwTaskCardEl(moduleKey, weekNum, taskId);
+      if (!cardEl) return false;
+      if (cardEl.parentNode) cardEl.parentNode.removeChild(cardEl);
+      patchAnniversaryTwProgressAfterStructureChange(moduleKey, weekNum, null);
+      return true;
+    }
+
+    /** 删除子任务：只移除当前子行 + 更新父/周进度；禁止 full render() */
+    function patchAnniversaryTwAfterSubDeleted(moduleKey, weekNum, taskId, subId) {
+      if (
+        isSprintKanbanDesktopEnabled() &&
+        getAnniversaryTwWeekViewMode(moduleKey, weekNum) === "kanban"
+      ) {
+        return false;
+      }
+      const rowEl = findAnniversaryTwSubRowEl(moduleKey, weekNum, taskId, subId);
+      if (!rowEl) return false;
+      if (rowEl.parentNode) rowEl.parentNode.removeChild(rowEl);
+      patchAnniversaryTwProgressAfterStructureChange(moduleKey, weekNum, taskId);
+      return true;
+    }
+
+    function afterAnniversaryTwTaskDeleted(moduleKey, weekNum, taskId) {
+      if (patchAnniversaryTwAfterTaskDeleted(moduleKey, weekNum, taskId)) return;
+      if (typeof console !== "undefined" && console.warn) {
+        console.warn("[PATCH MISS]", {
+          kind: "delete-parent-task",
+          moduleKey: moduleKey,
+          weekKey: weekNum,
+          taskId: taskId
+        });
+      }
+      refreshAnniversaryTwWeekTasksPanel(moduleKey, weekNum);
+      patchAnniversaryTwProgressAfterStructureChange(moduleKey, weekNum, null);
+    }
+
+    function afterAnniversaryTwSubDeleted(moduleKey, weekNum, taskId, subId) {
+      if (patchAnniversaryTwAfterSubDeleted(moduleKey, weekNum, taskId, subId)) return;
+      if (typeof console !== "undefined" && console.warn) {
+        console.warn("[PATCH MISS]", {
+          kind: "delete-sub-task",
+          moduleKey: moduleKey,
+          weekKey: weekNum,
+          taskId: taskId,
+          subId: subId
+        });
+      }
+      refreshAnniversaryTwWeekTasksPanel(moduleKey, weekNum);
+      patchAnniversaryTwProgressAfterStructureChange(moduleKey, weekNum, taskId);
     }
 
     function createWeeklyPlanMicroItemLi(taskId, micro, index) {
@@ -133711,6 +134815,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     /** 仅刷新封闭清单面板（不含全页 render） */
     function renderClosedListPanel() {
+      if (
+        !taskTitleIxAllowRenderOnce &&
+        typeof taskTitleIxIsBusy === "function" &&
+        taskTitleIxIsBusy()
+      ) {
+        deferRenderForTaskTitleIx("renderClosedListPanel");
+        return;
+      }
       if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.renderClosedListPanelCount += 1;
       if (!closedList) {
         syncClosedListPendingTitleStyles();
@@ -133938,6 +135050,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       task.updatedAt = Date.now();
       syncAllAnniversaryMirrorsForTask("tw020", taskId);
       saveStateAfterAnniversaryWeekChange("tw020", weekNum);
+      /* 局部更新标题 DOM；禁止 full render() */
+      patchAnniversaryTwTitleDom("tw020", weekNum, taskId, null, task.text);
     }
 
     function updateTw020TaskDeadline(weekNum, taskId, msOrNull) {
@@ -133973,7 +135087,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       ensureAnniversaryTwModuleUi(state.anniversaryTw020);
       delete state.anniversaryTw020.ui.taskExpanded[anniversaryTwTaskUiKey(weekNum, taskId)];
       saveStateAfterAnniversaryWeekChange("tw020", weekNum);
-      render();
+      afterAnniversaryTwTaskDeleted("tw020", weekNum, taskId);
     }
 
     function addTw020SubTask(weekNum, taskId, text) {
@@ -134004,8 +135118,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return;
       }
       sub.text = String(text || "").trim();
+      sub.updatedAt = Date.now();
       syncAllAnniversaryMirrorsForTask("tw020", taskId);
       saveStateAfterAnniversaryWeekChange("tw020", weekNum);
+      patchAnniversaryTwTitleDom("tw020", weekNum, taskId, subId, sub.text);
     }
 
     function deleteTw020SubTask(weekNum, taskId, subId) {
@@ -134026,7 +135142,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       removeAnniversaryClosedListMirrors("tw020", weekNum, taskId, subId);
       task.subs = task.subs.filter((s) => s.id !== subId);
       saveStateAfterAnniversaryWeekChange("tw020", weekNum);
-      render();
+      afterAnniversaryTwSubDeleted("tw020", weekNum, taskId, subId);
     }
 
     function anniversaryTwModuleHasOkr(moduleKey) {
@@ -135163,32 +136279,359 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return wrap;
     }
 
-    function setTw020TaskDone(weekNum, taskId, isDone) {
-      normalizeAnniversaryTw020State();
-      const task = getTw020WeekTasks(weekNum).find((x) => x.id === taskId);
-      if (!task) {
-        return;
+    /** 十二周年：按 module/week/taskId 定位任务卡（禁止依赖 nth-child） */
+    function findAnniversaryTwTaskCardEl(moduleKey, weekNum, taskId) {
+      const root = document.getElementById("anniversaryModule");
+      if (!root || taskId == null) return null;
+      const wantModule = String(moduleKey || "");
+      const wantWeek = String(weekNum);
+      const wantTask = String(taskId);
+      const cards = root.querySelectorAll(".anniversary-tw-task-card[data-task-id]");
+      for (let i = 0; i < cards.length; i++) {
+        const el = cards[i];
+        if (el.getAttribute("data-task-id") !== wantTask) continue;
+        const dm = el.getAttribute("data-module");
+        const dw = el.getAttribute("data-week-num");
+        if (dm && dm !== wantModule) continue;
+        if (dw && dw !== wantWeek) continue;
+        return el;
       }
+      return null;
+    }
+
+    function findAnniversaryTwSubRowEl(moduleKey, weekNum, taskId, subId) {
+      const card = findAnniversaryTwTaskCardEl(moduleKey, weekNum, taskId);
+      if (!card || subId == null) return null;
+      const wantSub = String(subId);
+      const rows = card.querySelectorAll(".tw020-sub-list > li[data-sub-id]");
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i].getAttribute("data-sub-id") === wantSub) return rows[i];
+      }
+      return null;
+    }
+
+    function findAnniversaryTwWeekItemEl(moduleKey, weekNum) {
+      const root = document.getElementById("anniversaryModule");
+      if (!root) return null;
+      const wantModule = String(moduleKey || "");
+      const wantWeek = String(weekNum);
+      const items = root.querySelectorAll("li.tw020-week-item[data-tw-week]");
+      for (let i = 0; i < items.length; i++) {
+        const el = items[i];
+        if (el.getAttribute("data-tw-week") !== wantWeek) continue;
+        const dm = el.getAttribute("data-module");
+        if (dm && dm !== wantModule) continue;
+        return el;
+      }
+      /* 兼容旧 DOM：周 body id */
+      try {
+        const suffix =
+          typeof anniversaryTwSuffixFromModuleKey === "function"
+            ? anniversaryTwSuffixFromModuleKey(moduleKey)
+            : "020";
+        const body = document.getElementById("anniversary" + suffix + "WeekBody-" + wantWeek);
+        if (body) {
+          const li = body.closest("li.tw020-week-item");
+          if (li) return li;
+        }
+      } catch (_weekFindErr) {}
+      return null;
+    }
+
+    /** 局部更新父任务进度条：done/total/%/width（不重建卡片） */
+    function patchAnniversaryTaskProgressDom(cardEl, stats) {
+      if (!cardEl) return false;
+      const row = cardEl.querySelector(".lane-task-card-progress-row");
+      if (!row) return false;
+      const s = stats || { done: 0, total: 0, pct: 0 };
+      row.classList.toggle(
+        "lane-task-card-progress-row--not-started",
+        s.total > 0 && s.done === 0 && s.pct === 0
+      );
+      const label = row.querySelector(".reading-plan-item-progress-label");
+      const fill = row.querySelector(".reading-plan-item-progress-fill");
+      const pctEl = row.querySelector(".reading-plan-item-progress-pct");
+      const track = row.querySelector(".reading-plan-item-progress-track");
+      if (label) label.textContent = String(s.done) + " / " + String(s.total);
+      if (pctEl) pctEl.textContent = String(s.pct) + "%";
+      if (fill) fill.style.width = String(s.pct) + "%";
+      if (track) track.setAttribute("aria-valuenow", String(s.pct));
+      return true;
+    }
+
+    /** 局部更新子任务勾选行 */
+    function patchAnniversarySubtaskRowDom(rowEl, isDone) {
+      if (!rowEl) return false;
+      const done = Boolean(isDone);
+      rowEl.classList.toggle("tw020-sub-done", done);
+      const cb = rowEl.querySelector("input.tw020-sub-done-cb");
+      if (cb && cb.checked !== done) cb.checked = done;
+      return true;
+    }
+
+    /** 局部更新当周进度条 + 状态 chip */
+    function patchAnniversaryWeekProgressDom(moduleKey, weekNum, progress, bands) {
+      const weekItem = findAnniversaryTwWeekItemEl(moduleKey, weekNum);
+      if (!weekItem) return false;
+      const p = progress || { done: 0, total: 0, pct: 0 };
+      const fillBand = anniversaryWeekFillBandFromProgress(p, bands);
+      const chip = weekItem.querySelector(".tw020-week-status-chip");
+      if (chip) {
+        chip.dataset.tw020Chip = fillBand;
+        chip.textContent = anniversaryWeekStatusChipText(p, bands);
+      }
+      const bar = weekItem.querySelector(".tw020-week-progress");
+      if (bar) {
+        bar.setAttribute("aria-valuenow", String(p.pct));
+        bar.dataset.tw020Fill = fillBand;
+        bar.setAttribute(
+          "aria-label",
+          p.total === 0
+            ? "本周尚无任务"
+            : "本周任务完成 " + p.pct + "%，已勾选 " + p.done + " / " + p.total + " 项"
+        );
+        const fill = bar.querySelector(".tw020-week-progress-fill");
+        if (fill) fill.style.width = String(p.pct) + "%";
+      }
+      return !!(chip || bar);
+    }
+
+    /**
+     * 十二周年子任务勾选：改 state → 局部 patch DOM → 持久化；禁止 full render。
+     * 原链路曾为 setTw0xxSubDone → saveStateAfterAnniversaryWeekChange → render() 整页重建。
+     * 诊断对照：window.__anniversarySubDoneForceFullRender = true 可强制走旧 full render。
+     * @returns {{ ok: boolean, fullRender: boolean, patchCount: number, miss?: object }}
+     */
+    function applyAnniversaryTwSubDoneWithLocalPatch(moduleKey, weekNum, taskId, subId, isDone) {
+      const mk = String(moduleKey || "tw020");
+      const result = { ok: false, fullRender: false, patchCount: 0, miss: null };
+      const nowFn =
+        typeof perfNow === "function"
+          ? perfNow
+          : function () {
+              return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+            };
+      const tState0 = nowFn();
+      if (typeof normalizeAnniversaryTwModuleStateByKey === "function") {
+        normalizeAnniversaryTwModuleStateByKey(mk);
+      } else if (mk === "tw020" && typeof normalizeAnniversaryTw020State === "function") {
+        normalizeAnniversaryTw020State();
+      } else if (mk === "tw021" && typeof normalizeAnniversaryTw021State === "function") {
+        normalizeAnniversaryTw021State();
+      } else if (mk === "tw022" && typeof normalizeAnniversaryTw022State === "function") {
+        normalizeAnniversaryTw022State();
+      }
+
+      const task =
+        typeof getAnniversaryTwWeekTasks === "function"
+          ? getAnniversaryTwWeekTasks(mk, weekNum).find(function (x) {
+              return x && x.id === taskId;
+            })
+          : null;
+      if (!task || !Array.isArray(task.subs)) {
+        result.miss = { reason: "task-missing", moduleKey: mk, weekNum: weekNum, taskId: taskId, subId: subId };
+        return result;
+      }
+      const sub = task.subs.find(function (s) {
+        return s && s.id === subId;
+      });
+      if (!sub) {
+        result.miss = { reason: "sub-missing", moduleKey: mk, weekNum: weekNum, taskId: taskId, subId: subId };
+        return result;
+      }
+
+      sub.done = Boolean(isDone);
+      if (typeof syncAllAnniversaryMirrorsForTask === "function") {
+        syncAllAnniversaryMirrorsForTask(mk, taskId);
+      }
+      if (perfIx && perfIx.active) {
+        perfIx.active.marks.stateUpdateMs = Math.round((nowFn() - tState0) * 100) / 100;
+      }
+
+      const tPatch0 = nowFn();
+      const rowEl = findAnniversaryTwSubRowEl(mk, weekNum, taskId, subId);
+      const cardEl = findAnniversaryTwTaskCardEl(mk, weekNum, taskId);
+      if (!rowEl || !cardEl) {
+        if (typeof console !== "undefined" && console.warn) {
+          console.warn("[PATCH MISS]", {
+            weekKey: weekNum,
+            taskId: taskId,
+            subtaskId: subId,
+            moduleKey: mk,
+            hasRow: !!rowEl,
+            hasCard: !!cardEl
+          });
+        }
+        result.miss = {
+          reason: "dom-missing",
+          moduleKey: mk,
+          weekNum: weekNum,
+          taskId: taskId,
+          subId: subId
+        };
+        if (typeof perfLog === "function") {
+          perfLog("anniversary subtask patch failed → full render fallback", result.miss);
+        } else {
+          try {
+            console.log("[PERF] anniversary subtask patch failed → full render fallback", result.miss);
+          } catch (_pe) {}
+        }
+        const tSave0 = nowFn();
+        saveStateAfterAnniversaryWeekChange(mk, weekNum);
+        if (perfIx && perfIx.active) {
+          perfIx.active.marks.saveStateMs = Math.round((nowFn() - tSave0) * 100) / 100;
+        }
+        const tRender0 = nowFn();
+        render();
+        if (perfIx && perfIx.active) {
+          perfIx.active.marks.renderMs = Math.round((nowFn() - tRender0) * 100) / 100;
+          perfIx.active.marks.fullRenderCount = 1;
+          perfIx.active.marks.patchCount = 0;
+        }
+        result.fullRender = true;
+        result.ok = true;
+        return result;
+      }
+
+      if (patchAnniversarySubtaskRowDom(rowEl, sub.done)) result.patchCount += 1;
+      const taskProg = getLaneTaskCardProgress(task, "anniversaryTw");
+      if (patchAnniversaryTaskProgressDom(cardEl, taskProg)) result.patchCount += 1;
+
+      const weekTasks =
+        typeof getAnniversaryTwWeekTasks === "function" ? getAnniversaryTwWeekTasks(mk, weekNum) : [];
+      const weekProg = computeAnniversaryWeekTaskProgress(weekTasks);
+      const mod =
+        typeof getAnniversaryTwStateModule === "function" ? getAnniversaryTwStateModule(mk) : null;
+      const bands = (mod && mod.progressBands) || ANNIVERSARY_PROGRESS_BAND_DEFAULTS;
+      if (patchAnniversaryWeekProgressDom(mk, weekNum, weekProg, bands)) result.patchCount += 1;
+
+      if (perfIx && perfIx.active) {
+        perfIx.active.marks.localPatchMs = Math.round((nowFn() - tPatch0) * 100) / 100;
+        perfIx.active.marks.patchCount = result.patchCount;
+        perfIx.active.marks.fullRenderCount = 0;
+      }
+
+      const tSave0 = nowFn();
+      saveStateAfterAnniversaryWeekChange(mk, weekNum);
+      if (perfIx && perfIx.active) {
+        perfIx.active.marks.saveStateMs = Math.round((nowFn() - tSave0) * 100) / 100;
+      }
+      result.ok = true;
+      result.fullRender = false;
+      return result;
+    }
+
+    /** 局部更新父任务完成态（checkbox + done class） */
+    function patchAnniversaryTaskDoneDom(cardEl, isDone) {
+      if (!cardEl) return false;
+      const done = Boolean(isDone);
+      cardEl.classList.toggle("tw020-task-block-done", done);
+      const cb = cardEl.querySelector("input.tw020-task-done-cb");
+      if (cb && cb.checked !== done) cb.checked = done;
+      return true;
+    }
+
+    /**
+     * 十二周年父任务勾选：改 state → 局部 patch → 持久化；禁止 full render。
+     * @returns {{ ok: boolean, fullRender: boolean, patchCount: number, miss?: object }}
+     */
+    function applyAnniversaryTwTaskDoneWithLocalPatch(moduleKey, weekNum, taskId, isDone) {
+      const mk = String(moduleKey || "tw020");
+      const result = { ok: false, fullRender: false, patchCount: 0, miss: null };
+      if (typeof normalizeAnniversaryTwModuleStateByKey === "function") {
+        normalizeAnniversaryTwModuleStateByKey(mk);
+      } else if (mk === "tw020" && typeof normalizeAnniversaryTw020State === "function") {
+        normalizeAnniversaryTw020State();
+      } else if (mk === "tw021" && typeof normalizeAnniversaryTw021State === "function") {
+        normalizeAnniversaryTw021State();
+      } else if (mk === "tw022" && typeof normalizeAnniversaryTw022State === "function") {
+        normalizeAnniversaryTw022State();
+      }
+
+      const task =
+        typeof getAnniversaryTwWeekTasks === "function"
+          ? getAnniversaryTwWeekTasks(mk, weekNum).find(function (x) {
+              return x && x.id === taskId;
+            })
+          : null;
+      if (!task) {
+        result.miss = { reason: "task-missing", moduleKey: mk, weekNum: weekNum, taskId: taskId };
+        return result;
+      }
+
       task.done = Boolean(isDone);
-      syncAllAnniversaryMirrorsForTask("tw020", taskId);
-      saveStateAfterAnniversaryWeekChange("tw020", weekNum);
-      render();
+      if (typeof syncAllAnniversaryMirrorsForTask === "function") {
+        syncAllAnniversaryMirrorsForTask(mk, taskId);
+      }
+
+      const cardEl = findAnniversaryTwTaskCardEl(mk, weekNum, taskId);
+      if (!cardEl) {
+        if (typeof console !== "undefined" && console.warn) {
+          console.warn("[PATCH MISS]", {
+            weekKey: weekNum,
+            taskId: taskId,
+            moduleKey: mk,
+            kind: "parent-task"
+          });
+        }
+        result.miss = {
+          reason: "dom-missing",
+          moduleKey: mk,
+          weekNum: weekNum,
+          taskId: taskId
+        };
+        try {
+          console.log("[PERF] anniversary parent task patch failed → full render fallback", result.miss);
+        } catch (_pe) {}
+        saveStateAfterAnniversaryWeekChange(mk, weekNum);
+        render();
+        result.fullRender = true;
+        result.ok = true;
+        return result;
+      }
+
+      if (patchAnniversaryTaskDoneDom(cardEl, task.done)) result.patchCount += 1;
+
+      /* 有子任务时进度看子任务；无子任务时看父任务 done —— 与 getLaneTaskCardProgress 一致 */
+      const taskProg = getLaneTaskCardProgress(task, "anniversaryTw");
+      if (patchAnniversaryTaskProgressDom(cardEl, taskProg)) result.patchCount += 1;
+
+      const weekTasks =
+        typeof getAnniversaryTwWeekTasks === "function" ? getAnniversaryTwWeekTasks(mk, weekNum) : [];
+      const weekProg = computeAnniversaryWeekTaskProgress(weekTasks);
+      const mod =
+        typeof getAnniversaryTwStateModule === "function" ? getAnniversaryTwStateModule(mk) : null;
+      const bands = (mod && mod.progressBands) || ANNIVERSARY_PROGRESS_BAND_DEFAULTS;
+      if (patchAnniversaryWeekProgressDom(mk, weekNum, weekProg, bands)) result.patchCount += 1;
+
+      saveStateAfterAnniversaryWeekChange(mk, weekNum);
+      result.ok = true;
+      result.fullRender = false;
+      return result;
+    }
+
+    function setTw020TaskDone(weekNum, taskId, isDone) {
+      if (typeof perfBeginInteraction === "function") {
+        perfBeginInteraction("anniversary-parent-checkbox");
+      }
+      const applied = applyAnniversaryTwTaskDoneWithLocalPatch("tw020", weekNum, taskId, isDone);
+      if (typeof perfEndInteraction === "function") {
+        perfEndInteraction({
+          fullRenderCount: applied.fullRender ? 1 : 0,
+          patchCount: applied.patchCount || 0,
+          miss: applied.miss || null
+        });
+      }
     }
 
     function setTw020SubDone(weekNum, taskId, subId, isDone) {
-      normalizeAnniversaryTw020State();
-      const task = getTw020WeekTasks(weekNum).find((x) => x.id === taskId);
-      if (!task || !Array.isArray(task.subs)) {
-        return;
-      }
-      const sub = task.subs.find((s) => s.id === subId);
-      if (!sub) {
-        return;
-      }
-      sub.done = Boolean(isDone);
-      syncAllAnniversaryMirrorsForTask("tw020", taskId);
-      saveStateAfterAnniversaryWeekChange("tw020", weekNum);
-      render();
+      perfBeginInteraction("anniversary-subtask-checkbox");
+      const applied = applyAnniversaryTwSubDoneWithLocalPatch("tw020", weekNum, taskId, subId, isDone);
+      perfEndInteraction({
+        fullRenderCount: applied.fullRender ? 1 : 0,
+        patchCount: applied.patchCount || 0,
+        miss: applied.miss || null
+      });
     }
 
     const anniversaryFutureStoryTimers = { t020: null, t021: null, t022: null };
@@ -136670,6 +138113,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function renderAnniversaryTw020() {
+      if (
+        !taskTitleIxAllowRenderOnce &&
+        typeof taskTitleIxIsBusy === "function" &&
+        taskTitleIxIsBusy()
+      ) {
+        deferRenderForTaskTitleIx("renderAnniversaryTw020");
+        return;
+      }
       normalizeAnniversaryTw020State();
       renderAnniversaryDeepTimePanel("020");
       syncAnniversaryModuleTitleDeepTimeAccent();
@@ -136774,6 +138225,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         ensureAnniversaryTwModuleUi(state.anniversaryTw020);
         const week020Open = state.anniversaryTw020.ui.weekExpanded[String(w)] === true;
         li.setAttribute("data-tw-week", String(w));
+        li.setAttribute("data-module", "tw020");
         if (week020Open) {
           li.classList.add("tw020-week-item--expanded");
         }
@@ -136823,7 +138275,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             state.anniversaryTw020.ui.weekExpanded[String(w)] = true;
             syncAnniversaryTwWeekItemExpandedSticky(li, true);
           }
+          perfBeginInteraction("anniversary-week-expand-collapse");
+          const tSave0 = perfNow();
           saveState();
+          perfMark("saveStateMs", tSave0);
+          perfEndInteraction({ note: "DOM class toggle + saveState(full state); no render()" });
           weekToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
           weekToggle.textContent = collapsed ? "▸" : "▾";
         });
@@ -137068,6 +138524,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       task.updatedAt = Date.now();
       syncAllAnniversaryMirrorsForTask("tw021", taskId);
       saveStateAfterAnniversaryWeekChange("tw021", weekNum);
+      patchAnniversaryTwTitleDom("tw021", weekNum, taskId, null, task.text);
     }
 
     function deleteTw021Task(weekNum, taskId) {
@@ -137092,7 +138549,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       ensureAnniversaryTwModuleUi(state.anniversaryTw021);
       delete state.anniversaryTw021.ui.taskExpanded[anniversaryTwTaskUiKey(weekNum, taskId)];
       saveStateAfterAnniversaryWeekChange("tw021", weekNum);
-      render();
+      afterAnniversaryTwTaskDeleted("tw021", weekNum, taskId);
     }
 
     function addTw021SubTask(weekNum, taskId, text) {
@@ -137123,8 +138580,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return;
       }
       sub.text = String(text || "").trim();
+      sub.updatedAt = Date.now();
       syncAllAnniversaryMirrorsForTask("tw021", taskId);
       saveStateAfterAnniversaryWeekChange("tw021", weekNum);
+      patchAnniversaryTwTitleDom("tw021", weekNum, taskId, subId, sub.text);
     }
 
     function deleteTw021SubTask(weekNum, taskId, subId) {
@@ -137145,35 +138604,35 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       removeAnniversaryClosedListMirrors("tw021", weekNum, taskId, subId);
       task.subs = task.subs.filter((s) => s.id !== subId);
       saveStateAfterAnniversaryWeekChange("tw021", weekNum);
-      render();
+      afterAnniversaryTwSubDeleted("tw021", weekNum, taskId, subId);
     }
 
     function setTw021TaskDone(weekNum, taskId, isDone) {
-      normalizeAnniversaryTw021State();
-      const task = getTw021WeekTasks(weekNum).find((x) => x.id === taskId);
-      if (!task) {
-        return;
+      if (typeof perfBeginInteraction === "function") {
+        perfBeginInteraction("anniversary-parent-checkbox");
       }
-      task.done = Boolean(isDone);
-      syncAllAnniversaryMirrorsForTask("tw021", taskId);
-      saveStateAfterAnniversaryWeekChange("tw021", weekNum);
-      render();
+      const applied = applyAnniversaryTwTaskDoneWithLocalPatch("tw021", weekNum, taskId, isDone);
+      if (typeof perfEndInteraction === "function") {
+        perfEndInteraction({
+          fullRenderCount: applied.fullRender ? 1 : 0,
+          patchCount: applied.patchCount || 0,
+          miss: applied.miss || null
+        });
+      }
     }
 
     function setTw021SubDone(weekNum, taskId, subId, isDone) {
-      normalizeAnniversaryTw021State();
-      const task = getTw021WeekTasks(weekNum).find((x) => x.id === taskId);
-      if (!task || !Array.isArray(task.subs)) {
-        return;
+      if (typeof perfBeginInteraction === "function") {
+        perfBeginInteraction("anniversary-subtask-checkbox");
       }
-      const sub = task.subs.find((s) => s.id === subId);
-      if (!sub) {
-        return;
+      const applied = applyAnniversaryTwSubDoneWithLocalPatch("tw021", weekNum, taskId, subId, isDone);
+      if (typeof perfEndInteraction === "function") {
+        perfEndInteraction({
+          fullRenderCount: applied.fullRender ? 1 : 0,
+          patchCount: applied.patchCount || 0,
+          miss: applied.miss || null
+        });
       }
-      sub.done = Boolean(isDone);
-      syncAllAnniversaryMirrorsForTask("tw021", taskId);
-      saveStateAfterAnniversaryWeekChange("tw021", weekNum);
-      render();
     }
 
 
@@ -137199,6 +138658,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       task.updatedAt = Date.now();
       syncAllAnniversaryMirrorsForTask(moduleKey, taskId);
       saveStateAfterAnniversaryWeekChange(moduleKey, weekNum);
+      patchAnniversaryTwTitleDom(moduleKey, weekNum, taskId, null, task.text);
     }
 
     function deleteAnniversaryTwTask(moduleKey, weekNum, taskId) {
@@ -137227,7 +138687,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       ensureAnniversaryTwModuleUi(mod);
       delete mod.ui.taskExpanded[anniversaryTwTaskUiKey(weekNum, taskId)];
       saveStateAfterAnniversaryWeekChange(moduleKey, weekNum);
-      render();
+      afterAnniversaryTwTaskDeleted(moduleKey, weekNum, taskId);
     }
 
     function addAnniversaryTwSubTask(moduleKey, weekNum, taskId, text) {
@@ -137254,8 +138714,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
       if (!sub) return;
       sub.text = String(text || "").trim();
+      sub.updatedAt = Date.now();
       syncAllAnniversaryMirrorsForTask(moduleKey, taskId);
       saveStateAfterAnniversaryWeekChange(moduleKey, weekNum);
+      patchAnniversaryTwTitleDom(moduleKey, weekNum, taskId, subId, sub.text);
     }
 
     function deleteAnniversaryTwSubTask(moduleKey, weekNum, taskId, subId) {
@@ -137281,35 +138743,35 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return s.id !== subId;
       });
       saveStateAfterAnniversaryWeekChange(moduleKey, weekNum);
-      render();
+      afterAnniversaryTwSubDeleted(moduleKey, weekNum, taskId, subId);
     }
 
     function setAnniversaryTwTaskDone(moduleKey, weekNum, taskId, isDone) {
-      normalizeAnniversaryTwModuleStateByKey(moduleKey);
-      const task = getAnniversaryTwWeekTasks(moduleKey, weekNum).find(function (x) {
-        return x.id === taskId;
-      });
-      if (!task) return;
-      task.done = Boolean(isDone);
-      syncAllAnniversaryMirrorsForTask(moduleKey, taskId);
-      saveStateAfterAnniversaryWeekChange(moduleKey, weekNum);
-      render();
+      if (typeof perfBeginInteraction === "function") {
+        perfBeginInteraction("anniversary-parent-checkbox");
+      }
+      const applied = applyAnniversaryTwTaskDoneWithLocalPatch(moduleKey, weekNum, taskId, isDone);
+      if (typeof perfEndInteraction === "function") {
+        perfEndInteraction({
+          fullRenderCount: applied.fullRender ? 1 : 0,
+          patchCount: applied.patchCount || 0,
+          miss: applied.miss || null
+        });
+      }
     }
 
     function setAnniversaryTwSubDone(moduleKey, weekNum, taskId, subId, isDone) {
-      normalizeAnniversaryTwModuleStateByKey(moduleKey);
-      const task = getAnniversaryTwWeekTasks(moduleKey, weekNum).find(function (x) {
-        return x.id === taskId;
-      });
-      if (!task || !Array.isArray(task.subs)) return;
-      const sub = task.subs.find(function (s) {
-        return s.id === subId;
-      });
-      if (!sub) return;
-      sub.done = Boolean(isDone);
-      syncAllAnniversaryMirrorsForTask(moduleKey, taskId);
-      saveStateAfterAnniversaryWeekChange(moduleKey, weekNum);
-      render();
+      if (typeof perfBeginInteraction === "function") {
+        perfBeginInteraction("anniversary-subtask-checkbox");
+      }
+      const applied = applyAnniversaryTwSubDoneWithLocalPatch(moduleKey, weekNum, taskId, subId, isDone);
+      if (typeof perfEndInteraction === "function") {
+        perfEndInteraction({
+          fullRenderCount: applied.fullRender ? 1 : 0,
+          patchCount: applied.patchCount || 0,
+          miss: applied.miss || null
+        });
+      }
     }
 
     function syncAnniversaryTwModuleDoneList(moduleKey) {
@@ -137445,6 +138907,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function renderAnniversaryTwAnchorModule(moduleKey) {
+      if (
+        !taskTitleIxAllowRenderOnce &&
+        typeof taskTitleIxIsBusy === "function" &&
+        taskTitleIxIsBusy()
+      ) {
+        deferRenderForTaskTitleIx("renderAnniversaryTwAnchorModule:" + String(moduleKey || ""));
+        return;
+      }
       normalizeAnniversaryTwModuleStateByKey(moduleKey);
       const mod = getAnniversaryTwStateModule(moduleKey);
       const suffix = anniversaryTwSuffixFromModuleKey(moduleKey);
@@ -137611,6 +139081,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         ensureAnniversaryTwModuleUi(mod);
         const weekModOpen = mod.ui.weekExpanded[String(w)] === true;
         li.setAttribute("data-tw-week", String(w));
+        li.setAttribute("data-module", String(moduleKey));
         if (weekModOpen) {
           li.classList.add("tw020-week-item--expanded");
         }
@@ -138055,6 +139526,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       task.updatedAt = Date.now();
       syncAllAnniversaryMirrorsForTask("tw022", taskId);
       saveStateAfterAnniversaryWeekChange("tw022", weekNum);
+      patchAnniversaryTwTitleDom("tw022", weekNum, taskId, null, task.text);
     }
 
     function deleteTw022Task(weekNum, taskId) {
@@ -138079,7 +139551,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       ensureAnniversaryTwModuleUi(state.anniversaryTw022);
       delete state.anniversaryTw022.ui.taskExpanded[anniversaryTwTaskUiKey(weekNum, taskId)];
       saveStateAfterAnniversaryWeekChange("tw022", weekNum);
-      render();
+      afterAnniversaryTwTaskDeleted("tw022", weekNum, taskId);
     }
 
     function addTw022SubTask(weekNum, taskId, text) {
@@ -138110,8 +139582,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return;
       }
       sub.text = String(text || "").trim();
+      sub.updatedAt = Date.now();
       syncAllAnniversaryMirrorsForTask("tw022", taskId);
       saveStateAfterAnniversaryWeekChange("tw022", weekNum);
+      patchAnniversaryTwTitleDom("tw022", weekNum, taskId, subId, sub.text);
     }
 
     function deleteTw022SubTask(weekNum, taskId, subId) {
@@ -138132,35 +139606,35 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       removeAnniversaryClosedListMirrors("tw022", weekNum, taskId, subId);
       task.subs = task.subs.filter((s) => s.id !== subId);
       saveStateAfterAnniversaryWeekChange("tw022", weekNum);
-      render();
+      afterAnniversaryTwSubDeleted("tw022", weekNum, taskId, subId);
     }
 
     function setTw022TaskDone(weekNum, taskId, isDone) {
-      normalizeAnniversaryTw022State();
-      const task = getTw022WeekTasks(weekNum).find((x) => x.id === taskId);
-      if (!task) {
-        return;
+      if (typeof perfBeginInteraction === "function") {
+        perfBeginInteraction("anniversary-parent-checkbox");
       }
-      task.done = Boolean(isDone);
-      syncAllAnniversaryMirrorsForTask("tw022", taskId);
-      saveStateAfterAnniversaryWeekChange("tw022", weekNum);
-      render();
+      const applied = applyAnniversaryTwTaskDoneWithLocalPatch("tw022", weekNum, taskId, isDone);
+      if (typeof perfEndInteraction === "function") {
+        perfEndInteraction({
+          fullRenderCount: applied.fullRender ? 1 : 0,
+          patchCount: applied.patchCount || 0,
+          miss: applied.miss || null
+        });
+      }
     }
 
     function setTw022SubDone(weekNum, taskId, subId, isDone) {
-      normalizeAnniversaryTw022State();
-      const task = getTw022WeekTasks(weekNum).find((x) => x.id === taskId);
-      if (!task || !Array.isArray(task.subs)) {
-        return;
+      if (typeof perfBeginInteraction === "function") {
+        perfBeginInteraction("anniversary-subtask-checkbox");
       }
-      const sub = task.subs.find((s) => s.id === subId);
-      if (!sub) {
-        return;
+      const applied = applyAnniversaryTwSubDoneWithLocalPatch("tw022", weekNum, taskId, subId, isDone);
+      if (typeof perfEndInteraction === "function") {
+        perfEndInteraction({
+          fullRenderCount: applied.fullRender ? 1 : 0,
+          patchCount: applied.patchCount || 0,
+          miss: applied.miss || null
+        });
       }
-      sub.done = Boolean(isDone);
-      syncAllAnniversaryMirrorsForTask("tw022", taskId);
-      saveStateAfterAnniversaryWeekChange("tw022", weekNum);
-      render();
     }
 
     function ensureBackwardMeasureState() {
@@ -140181,6 +141655,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function isAppUiEditingInProgress() {
+      if (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) return true;
       if (ageGoalsEditMode) return true;
       return isAppUiFieldEditingInProgress();
     }
@@ -140203,12 +141678,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (renderWhenEditingEndsTimer) clearTimeout(renderWhenEditingEndsTimer);
       renderWhenEditingEndsTimer = setTimeout(function () {
         renderWhenEditingEndsTimer = null;
+        if (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) {
+          scheduleRenderWhenEditingEnds();
+          return;
+        }
         if (isAppUiBusyForBackgroundRefresh()) {
           scheduleRenderWhenEditingEnds();
           return;
         }
         if (renderDeferredWhileEditing) {
           renderDeferredWhileEditing = false;
+          if (typeof taskTitleIxDiagLog === "function") {
+            taskTitleIxDiagLog("deferred-render-fire", { via: "scheduleRenderWhenEditingEnds" });
+          }
           render();
         }
       }, RENDER_WHEN_EDITING_POLL_MS);
@@ -140218,6 +141700,36 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function isPrimaryModulePaintNeeded(moduleKey) {
       if (!document.body.classList.contains("primary-module-fullscreen")) return true;
       return activePrimaryModuleKey === moduleKey;
+    }
+
+    /**
+     * 历史修复 + Sprint rollover：禁止挂在普通 render 上。
+     * 仅启动初始化、跨日/跨 Sprint、云合并等明确时机调用。
+     * @returns {boolean} 是否改动了 state（含 rollover 内部 save）
+     */
+    function runStateRepairAndRolloverPass() {
+      let repairChanged = false;
+      if (typeof repairDoneListCompletedAtFromHabitMeta === "function") {
+        if (repairDoneListCompletedAtFromHabitMeta()) repairChanged = true;
+      }
+      if (typeof repairWeeklyPlanDoneListTimestampsInState === "function") {
+        if (repairWeeklyPlanDoneListTimestampsInState()) repairChanged = true;
+      }
+      if (typeof repairWeeklyPlanCompletionFromEvidence === "function") {
+        if (repairWeeklyPlanCompletionFromEvidence()) repairChanged = true;
+      }
+      /* rollover 内部在变更时会自行 saveState */
+      let rolled = false;
+      if (typeof rolloverWeeklyPlanIncompleteToCurrentWeek === "function") {
+        if (rolloverWeeklyPlanIncompleteToCurrentWeek()) rolled = true;
+      }
+      if (repairChanged) {
+        saveState({
+          fromHygiene: true,
+          lists: ["done", "closedList", "weeklyPlan", "habit"]
+        });
+      }
+      return repairChanged || rolled;
     }
 
     /** 卫生/镜像：仅 state 变脏时跑；内部 saveState 不再标卫生脏、也不全量标 UI */
@@ -140261,13 +141773,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return habitChanged;
       }
       let doneHygieneChanged = refreshAllDailyWinCheckins();
-      if (repairDoneListCompletedAtFromHabitMeta()) doneHygieneChanged = true;
       if (refreshLife4000DoneEntryTexts()) doneHygieneChanged = true;
       if (dedupeClosedListWeeklyPlanMirrorsInState()) doneHygieneChanged = true;
       if (pruneRedundantDoneEntriesInState()) doneHygieneChanged = true;
-      if (repairWeeklyPlanDoneListTimestampsInState()) doneHygieneChanged = true;
-      if (repairWeeklyPlanCompletionFromEvidence()) doneHygieneChanged = true;
-      rolloverWeeklyPlanIncompleteToCurrentWeek();
+      /* repair* / rolloverWeeklyPlan* 已移出 render 热路径，见 runStateRepairAndRolloverPass */
       syncAllWeeklyPlanDoneLists();
       if (syncLife4000WeeklyToDone()) doneHygieneChanged = true;
       ensureAnniversaryTwRegistry();
@@ -140296,12 +141805,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function render(force) {
       if (renderDepth > 0) return;
       const t0 = beginCloudSyncPerf();
+      if (
+        !taskTitleIxAllowRenderOnce &&
+        typeof taskTitleIxIsBusy === "function" &&
+        taskTitleIxIsBusy()
+      ) {
+        deferRenderForTaskTitleIx(force ? "render-force-blocked" : "render");
+        return;
+      }
       if (!force && isAppUiEditingInProgress()) {
         renderDeferredWhileEditing = true;
         scheduleRenderWhenEditingEnds();
         return;
       }
+      if (typeof taskTitleIxDiagRenderCount === "number") {
+        taskTitleIxDiagRenderCount += 1;
+      }
+      if (typeof taskTitleIxDiagLog === "function") {
+        taskTitleIxDiagLog("render-run", { force: !!force, depth: renderDepth });
+      }
       renderDepth += 1;
+      if (typeof perfDomHookInstall === "function") perfDomHookInstall();
       renderSuppressCloudUntil = Date.now() + CLOUD_UI_RENDER_MIN_INTERVAL_MS;
       const stallMarkAll = uiPaintDirty == null;
       const stallDirtySlices = isCloudSyncPerfEnabled() ? uiStallListDirtySlices() : [];
@@ -140346,7 +141870,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           em.textContent = t.replace(/^\(/, "").replace(/\)$/, "");
         });
       }
-      runStateHygieneIfDirty();
+      if (isPerfDiagEnabled()) {
+        const tHyg = perfNow();
+        const hygChanged = runStateHygieneIfDirty();
+        const hygMs = perfRound(perfNow() - tHyg);
+        perfIx.hygieneInRender = { ms: hygMs, changed: hygChanged };
+        if (hygMs >= 50) perfMarkLong("runStateHygieneIfDirty", hygMs);
+        perfLog("hygiene-in-render", perfIx.hygieneInRender);
+      } else {
+        runStateHygieneIfDirty();
+      }
       const anniversaryTw020TitleEl = document.getElementById("anniversaryTw020Title");
       if (anniversaryTw020TitleEl) {
         const l1 = anniversaryTw020TitleEl.querySelector(".anniversary-tw020-heading-l1");
@@ -140621,8 +142154,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         stallSegT0 = null;
       }
       } finally {
+        if (typeof perfDomHookUninstall === "function") perfDomHookUninstall();
         renderDepth = Math.max(0, renderDepth - 1);
         addCloudSyncPerf("renderCount", "renderMs", t0);
+        if (t0 != null && isPerfDiagEnabled()) {
+          const dt = perfNow() - t0;
+          perfMarkLong("render()", dt);
+          if (perfIx.active) perfIx.active.marks.renderMs = (perfIx.active.marks.renderMs || 0) + perfRound(dt);
+          perfLog("render-total", {
+            ms: perfRound(dt),
+            createElement: perfIx.createElementCount,
+            replaceChildren: perfIx.replaceChildrenCount,
+            querySelector: perfIx.qsCount,
+            querySelectorAll: perfIx.qsaCount
+          });
+        }
         if (t0 != null && isCloudSyncPerfEnabled()) {
           uiStallNoteRenderParts({
             renderMs: cloudSyncPerfNow() - t0,
@@ -143846,6 +145392,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const v = event.target.value;
         if (!v) return;
         setWeeklyPlanViewSprintStart(getSprintStartKeyForDate(new Date(v + "T12:00:00")));
+        if (typeof runStateRepairAndRolloverPass === "function") {
+          runStateRepairAndRolloverPass();
+        }
         markUiPaintSlicesDirty(["weeklyPlan"]);
         render();
       });
@@ -143979,6 +145528,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     if (tickClosedListDayRollover()) {
       saveState();
     }
+    /* 启动：历史修复 + Sprint rollover（勿等普通 render） */
+    if (typeof runStateRepairAndRolloverPass === "function") {
+      runStateRepairAndRolloverPass();
+    }
     state.dailyWin = state.dailyWin.map((item) => normalizeDailyWinRecord(item));
     selectedDoneDate = formatDateInputValue(new Date());
     ensureWeeklyPlanUi();
@@ -144089,12 +145642,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (document.visibilityState !== "visible") return;
       if (tickClosedListDayRollover()) {
         saveState();
+        if (typeof runStateRepairAndRolloverPass === "function") {
+          runStateRepairAndRolloverPass();
+        }
         renderUnlessBackgroundBusy();
       }
     });
     window.setInterval(function () {
       if (tickClosedListDayRollover()) {
         saveState();
+        if (typeof runStateRepairAndRolloverPass === "function") {
+          runStateRepairAndRolloverPass();
+        }
         renderUnlessBackgroundBusy();
       }
     }, 60000);
@@ -144540,6 +146099,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function setDoneFilterDate(date) {
       selectedDoneDate = formatDateInputValue(date);
       doneDateFilter.value = selectedDoneDate;
+      if (typeof runStateRepairAndRolloverPass === "function") {
+        runStateRepairAndRolloverPass();
+      }
       markUiPaintSlicesDirty(["done"]);
       render();
     }
@@ -144580,6 +146142,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         } finally {
           closedListDateFilterSyncing = false;
         }
+      }
+      if (typeof runStateRepairAndRolloverPass === "function") {
+        runStateRepairAndRolloverPass();
       }
       render();
     }
