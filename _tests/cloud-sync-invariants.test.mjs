@@ -1066,6 +1066,85 @@ function assertFirebaseHasOwnPropertySafe(obj, label) {
   walk(obj, "$");
 }
 
+test("sticky pulse：他端未带 Stop Doing 时不得丢掉上一份条目", function () {
+  const sticky = ctx.mergeStickyCloudSyncPulseState(
+    {
+      stopDoing: [{ id: "s1", text: "不要行动作假", createdAt: 1, updatedAt: 1 }],
+      done: [],
+      habitCheckins: {}
+    },
+    {
+      done: [{ id: "d1", text: "today", completed: true, completedAt: 2 }],
+      habitCheckins: {}
+    }
+  );
+  assertEq(ids(sticky.stopDoing), ["s1"]);
+});
+
+test("pulse 合并：他端新增 Stop Doing 条目并入本机", function () {
+  ctx.state = emptyState({
+    stopDoing: [{ id: "s1", text: "不要行动作假", createdAt: 1, updatedAt: 1 }],
+    done: []
+  });
+  ctx.mergeCloudSyncPulseIntoState({
+    stopDoing: [
+      { id: "s1", text: "不要行动作假", createdAt: 1, updatedAt: 1 },
+      { id: "s2", text: "新规则", createdAt: 2, updatedAt: 2 }
+    ],
+    done: []
+  });
+  assertEq(ids(ctx.state.stopDoing), ["s1", "s2"]);
+});
+
+test("pulse 合并：他端较新 updatedAt 覆盖本机同 id 文案", function () {
+  ctx.state = emptyState({
+    stopDoing: [{ id: "s1", text: "旧文案", createdAt: 1, updatedAt: 10 }],
+    done: []
+  });
+  ctx.mergeCloudSyncPulseIntoState({
+    stopDoing: [{ id: "s1", text: "新文案", createdAt: 1, updatedAt: 90 }],
+    done: []
+  });
+  const row = (ctx.state.stopDoing || []).find(function (x) {
+    return x && x.id === "s1";
+  });
+  assert(row, "应保留同 id 条目");
+  assertEq(row.text, "新文案");
+});
+
+test("pulse 合并：tombstone 剔除已删 Stop Doing", function () {
+  ctx.state = emptyState({
+    stopDoing: [
+      { id: "keep", text: "留", createdAt: 1, updatedAt: 1 },
+      { id: "gone", text: "删", createdAt: 1, updatedAt: 1 }
+    ],
+    syncTombstones: {},
+    done: []
+  });
+  ctx.mergeCloudSyncPulseIntoState({
+    stopDoing: [{ id: "keep", text: "留", createdAt: 1, updatedAt: 1 }],
+    syncTombstones: { gone: 2000 },
+    done: []
+  });
+  assertEq(ids(ctx.state.stopDoing), ["keep"]);
+});
+
+test("全量合并：他端新增 Stop Doing 与本机并集", function () {
+  const merged = fullMerge(
+    emptyState({
+      stopDoing: [{ id: "local", text: "本机", createdAt: 1, updatedAt: 1 }],
+      done: [{ id: "d1", text: "x", createdAt: 1 }]
+    }),
+    emptyState({
+      stopDoing: [{ id: "remote", text: "他端", createdAt: 2, updatedAt: 2 }],
+      done: [{ id: "d1", text: "x", createdAt: 1 }]
+    }),
+    50,
+    20
+  );
+  assertEq(ids(merged.stopDoing), ["local", "remote"]);
+});
+
 test("emptyMoveBreakKindByHour 是普通对象，Firebase 可调 hasOwnProperty", function () {
   const empty = ctx.emptyMoveBreakKindByHour();
   assert(empty && typeof empty === "object");

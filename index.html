@@ -90442,7 +90442,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260911f";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260911g";
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -93763,6 +93763,78 @@
       );
     }
 
+    /** Stop Doing / Restrictions pulse：浅拷贝 id 记录，避免把本机对象引用写进 Firebase */
+    function cloneSimpleIdListForPulse(arr) {
+      const items = coerceIdRecordList(arr);
+      if (!items.length) return null;
+      try {
+        return JSON.parse(JSON.stringify(items));
+      } catch (_cloneErr) {
+        return items.slice();
+      }
+    }
+
+    function simpleIdListPulseSignature(item) {
+      if (!item || item.id == null) return "";
+      return (
+        String(item.id) +
+        "\n" +
+        String(item.text || "") +
+        "\n" +
+        String(item.until || "") +
+        "\n" +
+        String(Number(item.updatedAt) || 0) +
+        "\n" +
+        String(Number(item.createdAt) || 0)
+      );
+    }
+
+    /**
+     * Stop Doing / Restrictions pulse 合并：按 id 并集 + 时间戳 LWW，并剔除 tombstone。
+     * 原先不进 pulse，他端增删改要等全量（空闲 2 分钟 + 3 分钟节流），本机容易一直停在旧列表。
+     */
+    function mergeCloudSyncSimpleIdListPulseIntoState(listKey, incomingItems) {
+      const rem = coerceIdRecordList(incomingItems);
+      if (!rem.length) return false;
+      const loc = Array.isArray(state[listKey]) ? state[listKey] : [];
+      const ts =
+        state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
+      const merged = omitTombstonedIdRecords(mergeIdRecordArraysPreferLocalOnTie(loc, rem), ts);
+      let changed = merged.length !== loc.length;
+      if (!changed) {
+        const sigMap = new Map();
+        loc.forEach(function (x) {
+          if (!x || x.id == null) return;
+          sigMap.set(String(x.id), simpleIdListPulseSignature(x));
+        });
+        for (let i = 0; i < merged.length; i++) {
+          const m = merged[i];
+          if (!m || m.id == null) continue;
+          if (sigMap.get(String(m.id)) !== simpleIdListPulseSignature(m)) {
+            changed = true;
+            break;
+          }
+        }
+      }
+      if (changed) state[listKey] = merged;
+      return changed;
+    }
+
+    function omitTombstonesFromStopDoingLists() {
+      const ts =
+        state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
+      let changed = false;
+      ["stopDoing", "notToDo"].forEach(function (k) {
+        const loc = Array.isArray(state[k]) ? state[k] : [];
+        const next = omitTombstonedIdRecords(loc, ts);
+        if (next.length !== loc.length) {
+          state[k] = next;
+          changed = true;
+        }
+      });
+      return changed;
+    }
+
     function mergeCloudSyncClosedListPulseIntoState(items) {
       if (!Array.isArray(items) || !items.length) return false;
       const merged = mergeClosedListArraysForSync(
@@ -94199,6 +94271,26 @@
       }
       if (prev.syncTombstones || next.syncTombstones) {
         next.syncTombstones = mergeSyncTombstoneMaps(prev.syncTombstones, next.syncTombstones);
+      }
+      const stickyTs =
+        next.syncTombstones && typeof next.syncTombstones === "object" ? next.syncTombstones : {};
+      if (prev.stopDoing || next.stopDoing) {
+        next.stopDoing = omitTombstonedIdRecords(
+          mergeIdRecordArraysPreferLocalOnTie(
+            coerceIdRecordList(prev.stopDoing),
+            coerceIdRecordList(next.stopDoing)
+          ),
+          stickyTs
+        );
+      }
+      if (prev.notToDo || next.notToDo) {
+        next.notToDo = omitTombstonedIdRecords(
+          mergeIdRecordArraysPreferLocalOnTie(
+            coerceIdRecordList(prev.notToDo),
+            coerceIdRecordList(next.notToDo)
+          ),
+          stickyTs
+        );
       }
       return next;
     }
@@ -94893,6 +94985,11 @@
       if (weeklyPlanPulse) pulseState.weeklyPlan = weeklyPlanPulse;
       const closedListPulse = buildCloudSyncClosedListPulseSlice();
       if (closedListPulse) pulseState.closedList = closedListPulse;
+      /* Stop Doing / Restrictions：条目少，完整快照进 pulse，避免只靠 2–3 分钟全量才同步 */
+      const stopDoingPulse = cloneSimpleIdListForPulse(state.stopDoing);
+      if (stopDoingPulse) pulseState.stopDoing = stopDoingPulse;
+      const notToDoPulse = cloneSimpleIdListForPulse(state.notToDo);
+      if (notToDoPulse) pulseState.notToDo = notToDoPulse;
       const readingPlanPulse = buildCloudSyncReadingPlanPulseSlice();
       if (readingPlanPulse) pulseState.readingPlan = { books: readingPlanPulse };
       /* 十二周年：有脏周或本机已有周任务时带完整非空周快照（对齐封闭清单/阅读计划） */
@@ -95038,6 +95135,13 @@
         if (Array.isArray(pulseState.closedList) && pulseState.closedList.length) {
           if (mergeCloudSyncClosedListPulseIntoState(pulseState.closedList)) changed = true;
         }
+        if (pulseState.stopDoing != null) {
+          if (mergeCloudSyncSimpleIdListPulseIntoState("stopDoing", pulseState.stopDoing)) changed = true;
+        }
+        if (pulseState.notToDo != null) {
+          if (mergeCloudSyncSimpleIdListPulseIntoState("notToDo", pulseState.notToDo)) changed = true;
+        }
+        if (omitTombstonesFromStopDoingLists()) changed = true;
         if (
           pulseState.readingPlan &&
           Array.isArray(pulseState.readingPlan.books) &&
@@ -95142,11 +95246,21 @@
         pulseNode.state.readingPlan.books.length > 0;
       const pulseHasMoveBreak =
         pulseNode.state && pulseNode.state.moveBreakDay && typeof pulseNode.state.moveBreakDay === "object";
+      const pulseHasStopDoing =
+        coerceIdRecordList(pulseNode.state && pulseNode.state.stopDoing).length > 0 ||
+        coerceIdRecordList(pulseNode.state && pulseNode.state.notToDo).length > 0;
       /* 本机刚写出的 pulse 回声：数据已在本地，不再整页刷新 */
       if (pulseNode.updatedBy && pulseNode.updatedBy === cloudSyncClientId) {
         return true;
       }
-      if (pulseHasHabit || pulseHasForge || pulseHasDeadline || pulseHasReadingPlan || pulseHasMoveBreak) {
+      if (
+        pulseHasHabit ||
+        pulseHasForge ||
+        pulseHasDeadline ||
+        pulseHasReadingPlan ||
+        pulseHasMoveBreak ||
+        pulseHasStopDoing
+      ) {
         requestCloudDrivenUiRender("immediate");
       } else {
         scheduleCloudSyncRenderDebounced();
@@ -95586,6 +95700,8 @@
       const hasWeeklyPlan =
         pulseState.weeklyPlan && typeof pulseState.weeklyPlan === "object" && Object.keys(pulseState.weeklyPlan).length > 0;
       const hasClosedList = Array.isArray(pulseState.closedList) && pulseState.closedList.length > 0;
+      const hasStopDoing = coerceIdRecordList(pulseState.stopDoing).length > 0;
+      const hasNotToDo = coerceIdRecordList(pulseState.notToDo).length > 0;
       const hasReadingPlan =
         pulseState.readingPlan &&
         Array.isArray(pulseState.readingPlan.books) &&
@@ -95620,6 +95736,8 @@
         !hasForge &&
         !hasWeeklyPlan &&
         !hasClosedList &&
+        !hasStopDoing &&
+        !hasNotToDo &&
         !hasReadingPlan &&
         !hasTombstones &&
         !hasAnniversaryTw &&
@@ -100337,6 +100455,20 @@
             mergeIdRecordArraysPreferLocalOnTie(
               Array.isArray(state.dailyWin) ? state.dailyWin : [],
               Array.isArray(merged.dailyWin) ? merged.dailyWin : []
+            ),
+            tsLive
+          );
+          merged.stopDoing = omitTombstonedIdRecords(
+            mergeIdRecordArraysPreferLocalOnTie(
+              coerceIdRecordList(state.stopDoing),
+              coerceIdRecordList(merged.stopDoing)
+            ),
+            tsLive
+          );
+          merged.notToDo = omitTombstonedIdRecords(
+            mergeIdRecordArraysPreferLocalOnTie(
+              coerceIdRecordList(state.notToDo),
+              coerceIdRecordList(merged.notToDo)
             ),
             tsLive
           );
@@ -112367,7 +112499,8 @@
       state[backKey].unshift({
         id: removed.id,
         text: removed.text,
-        createdAt: removed.createdAt || Date.now()
+        createdAt: removed.createdAt || Date.now(),
+        updatedAt: Date.now()
       });
 
       saveState();
@@ -112375,10 +112508,12 @@
     }
 
     function createStopNotItem(text, dateStr) {
+      const now = Date.now();
       return {
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        id: now.toString(36) + Math.random().toString(36).slice(2, 7),
         text: text.trim(),
-        createdAt: habitDateToCompletedAt(dateStr)
+        createdAt: habitDateToCompletedAt(dateStr) || now,
+        updatedAt: now
       };
     }
 
@@ -112766,6 +112901,7 @@
         const it = state[listName].find((x) => x.id === id);
         if (!it) return;
         it.text = t;
+        it.updatedAt = Date.now();
         if (listName === "notToDo" && Object.prototype.hasOwnProperty.call(it, "until")) {
           delete it.until;
         }
@@ -112773,10 +112909,12 @@
         const it = state.memo.find((x) => x.id === id);
         if (!it) return;
         it.text = t;
+        it.updatedAt = Date.now();
       } else if (listName === "hatersDoubtersLog") {
         const it = state.hatersDoubtersLog.find((x) => x.id === id);
         if (!it) return;
         it.text = t;
+        it.updatedAt = Date.now();
       } else if (listName === "successCriteria") {
         return updateSuccessCriteriaText(id, t);
       } else if (listName === "dailyWin") {
