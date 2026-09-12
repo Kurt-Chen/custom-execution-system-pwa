@@ -91469,6 +91469,8 @@
     let cloudSyncLastFullPushAt = 0;
     let cloudSyncFullPushInFlight = false;
     let cloudSyncFullPushTimer = null;
+    /** 最近一次读到的 pulse.state，供 once 失败时粘合，避免把昨日习惯/Done 冲掉 */
+    let cloudSyncStickyPulsePrevState = null;
     /** 房间曾出现 v2/meta 后，全量必须写 v2/core（勿再只写 legacy state） */
     let cloudSyncRoomHasV2Meta = false;
     let cloudSyncPersistDebounceTimer = null;
@@ -92712,6 +92714,7 @@
         } else {
           requestCloudSyncSafetyPull("foreground");
         }
+        republishCloudSyncPulseLookbackIfNeeded();
         if (!cloudSyncReady || !cloudSyncRef || cloudSyncSuppressPush) return;
         if (hasCloudSyncPendingUpload()) {
           scheduleCloudSyncPush();
@@ -95271,12 +95274,22 @@
       });
     }
 
+    function rememberCloudSyncStickyPulsePrevState(pulseState) {
+      if (!pulseState || typeof pulseState !== "object") return;
+      try {
+        cloudSyncStickyPulsePrevState = JSON.parse(JSON.stringify(pulseState));
+      } catch (_stickyCacheErr) {
+        cloudSyncStickyPulsePrevState = pulseState;
+      }
+    }
+
     function applyCloudSyncPulseFromRoom(pulseNode) {
       if (!pulseNode || !pulseNode.state) return false;
       const pu = coerceCloudUpdatedAt(pulseNode.updatedAt);
       const last = getCloudLastPulseSeen();
       /* 不再因 updatedBy===本机而整包跳过：粘合写入后本机也要吃到他端打卡 */
       if (pu > 0 && pu <= last) return false;
+      rememberCloudSyncStickyPulsePrevState(pulseNode.state);
       const lifetimeBefore = captureCloudSyncLifetimeSnapshot(state);
       let localSnap = null;
       try {
@@ -95877,15 +95890,26 @@
           /* 等云端上一帧读回后再拍本机快照，避免把刚添加的条目/章节漏出 pulse */
           const livePulse = buildCloudSyncPulsePayload();
           const prevNode = snap && typeof snap.val === "function" ? snap.val() : null;
-          const prevState = prevNode && prevNode.state && typeof prevNode.state === "object" ? prevNode.state : null;
-          const merged = mergeStickyCloudSyncPulseState(prevState, livePulse);
+          const prevState =
+            prevNode && prevNode.state && typeof prevNode.state === "object" ? prevNode.state : null;
+          if (prevState) rememberCloudSyncStickyPulsePrevState(prevState);
+          const stickyPrev = prevState || cloudSyncStickyPulsePrevState;
+          const merged = mergeStickyCloudSyncPulseState(stickyPrev, livePulse);
+          rememberCloudSyncStickyPulsePrevState(merged);
           try {
             applyStickyMergedPulseToLocal(merged);
           } catch (_stickyLocalErr) {}
           return writePulse(merged);
         })
         .catch(function () {
-          return writePulse(buildCloudSyncPulsePayload());
+          /* once 失败时仍粘合内存中的上一帧，避免只写本机 lookback 冲掉他端昨日习惯 */
+          const livePulse = buildCloudSyncPulsePayload();
+          const merged = mergeStickyCloudSyncPulseState(cloudSyncStickyPulsePrevState, livePulse);
+          rememberCloudSyncStickyPulsePrevState(merged);
+          try {
+            applyStickyMergedPulseToLocal(merged);
+          } catch (_stickyCatchErr) {}
+          return writePulse(merged);
         });
     }
 
@@ -98214,6 +98238,43 @@
           if (node) applyCloudSyncPulseFromRoom(node);
         })
         .catch(function () {});
+    }
+
+    /** 本机 lookback 窗内是否已有习惯/Done 打卡（启动时用来立刻再推 pulse，补昨日英语等） */
+    function hasCloudSyncPulseLookbackCheckinsLocally() {
+      const keys = listCloudSyncPulseLookbackDateKeys();
+      const hc = state.habitCheckins && typeof state.habitCheckins === "object" ? state.habitCheckins : null;
+      for (let i = 0; i < keys.length; i++) {
+        const dk = keys[i];
+        const day = hc && hc[dk];
+        if (day && typeof day === "object" && Object.keys(day).length) {
+          const habitKeys = Object.keys(day);
+          for (let j = 0; j < habitKeys.length; j++) {
+            if (isHabitCheckinValueChecked(day[habitKeys[j]])) return true;
+          }
+        }
+      }
+      const doneArr = Array.isArray(state.done) ? state.done : [];
+      for (let d = 0; d < doneArr.length; d++) {
+        const t = doneArr[d];
+        for (let k = 0; k < keys.length; k++) {
+          if (doneTaskMatchesFilterDate(t, keys[k])) return true;
+        }
+      }
+      return false;
+    }
+
+    /**
+     * 启动/回前台：把近几日打卡再推一次 pulse，并加速全量。
+     * 写入仍走 sticky 并集；旧/空本机不会整包覆盖他端已完成打卡。
+     */
+    function republishCloudSyncPulseLookbackIfNeeded() {
+      if (!cloudSyncReady || cloudSyncApplyingRemote || cloudSyncSuppressPush || !cloudSyncRef) {
+        return;
+      }
+      if (!hasCloudSyncPulseLookbackCheckinsLocally()) return;
+      flushCloudSyncPulseImmediate();
+      scheduleCloudSyncFullPushAfterCheckin();
     }
 
     function scheduleCloudSyncFullPushDeferred(idleMsOpt) {
@@ -101262,9 +101323,13 @@
         ensureCloudSyncSafetyPullTimer();
         ensureCloudSyncPendingRetryTimer();
         window.setTimeout(function () {
-          void runCloudSyncTransaction({
-            mode: isCloudSyncLastSyncAtMissing() ? "full" : "incremental",
-            reason: "startup"
+          Promise.resolve(
+            runCloudSyncTransaction({
+              mode: isCloudSyncLastSyncAtMissing() ? "full" : "incremental",
+              reason: "startup"
+            })
+          ).finally(function () {
+            republishCloudSyncPulseLookbackIfNeeded();
           });
         }, 0);
       } catch (err) {
