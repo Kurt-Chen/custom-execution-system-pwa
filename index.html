@@ -63632,7 +63632,7 @@
 
     #anniversaryModule .tw020-week-capsule-nav {
       display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 8px;
       width: 100%;
       min-width: 0;
@@ -63753,6 +63753,38 @@
       border-color: #f472b6;
     }
 
+    /* 复盘与衔接：第13周独立入口（框架 V1） */
+    #anniversaryModule .tw020-week13-review-mount {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: 100%;
+      min-width: 0;
+      margin: 0 0 12px;
+      padding: 10px;
+      box-sizing: border-box;
+      border: 1px dashed #f9a8d4;
+      border-radius: 12px;
+      background: #fff7fb;
+    }
+
+    #anniversaryModule .tw020-week13-review-mount__title {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 800;
+      color: #9d174d;
+    }
+
+    #anniversaryModule .tw020-week13-review-mount .tw020-week-capsule-nav {
+      grid-template-columns: minmax(0, 1fr);
+      max-width: 420px;
+    }
+
+    #anniversaryModule .tw020-week13-review-mount .anniversary-tw020-weeks {
+      max-height: none;
+      overflow: visible;
+    }
+
     #anniversaryModule .tw020-wk-current-badge {
       display: inline-flex;
       align-items: center;
@@ -63808,6 +63840,11 @@
 
       #anniversaryModule .tw020-week-capsule__mobile-label {
         display: inline;
+      }
+
+      #anniversaryModule .tw020-week13-review-mount .tw020-week-capsule-nav {
+        grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+        max-width: none;
       }
     }
 
@@ -90850,7 +90887,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260914g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260914h";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -93062,12 +93099,15 @@
       document.querySelectorAll(".module-header-cloud-sync").forEach((el) => apply(el));
     }
 
-    /** 任意视口：离线时覆盖徽章（平板宽度 >767 时原先不会显示离线，易误判为「同步坏了」） */
+    /** 任意视口：离线时覆盖徽章。Android/VPN 常误报 onLine=false，已连上 Firebase 时不盖「离线」 */
     function applyCloudSyncMobileOfflineUi() {
       const headerBadges = document.querySelectorAll(".module-header-cloud-sync");
       if (!cloudSyncStatusBadge && !cloudSyncStatusBadgeNav && !headerBadges.length) return;
-      const offline = typeof navigator !== "undefined" && navigator.onLine === false;
-      if (offline) {
+      const navSaysOffline = typeof navigator !== "undefined" && navigator.onLine === false;
+      /* 连接中或已连上时忽略 onLine 误报，避免 Android/VPN 一直盖「离线·同步已暂停」 */
+      const effectivelyOffline =
+        navSaysOffline && !cloudSyncReady && !cloudSyncInitInFlight;
+      if (effectivelyOffline) {
         const applyOffline = (el) => {
           if (!el) return;
           const headerChip = el.classList && el.classList.contains("module-header-cloud-sync");
@@ -93089,6 +93129,12 @@
 
     function initCloudSyncMobileOfflineHint() {
       const refresh = () => applyCloudSyncMobileOfflineUi();
+      /* 假离线时 online 事件可能永不触发：定时尝试重连 */
+      window.setInterval(function () {
+        if (!getCloudSyncConfig()) return;
+        if (cloudSyncReady || cloudSyncInitInFlight) return;
+        void initCloudSync();
+      }, 45000);
       window.addEventListener("online", () => {
         refresh();
         if (getCloudSyncConfig() && !cloudSyncReady && !cloudSyncInitInFlight) {
@@ -101472,10 +101518,7 @@
         window.alert("请先完成云同步配置并成功连接（角标为「已连接」）后再拉取。");
         return;
       }
-      if (typeof navigator !== "undefined" && navigator.onLine === false) {
-        window.alert("当前离线，无法从云端拉取。");
-        return;
-      }
+      /* 不因 navigator.onLine 误报拦截：已 cloudSyncReady 则直接尝试 Firebase 拉取 */
       const ok = window.confirm(
         "将从云端拉取并与本机并集合并（保留本机已有的今日完成、习惯打卡与十二周年周任务；冲突字段以云端较新为准）。\n若云端记录比本机少，不会整包覆盖本机。\n\n确定拉取？"
       );
@@ -101582,7 +101625,14 @@
       if (cloudSyncPendingRetryTimer) return;
       cloudSyncPendingRetryTimer = window.setInterval(function () {
         if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-        if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+        /* 仅在未 ready 且浏览器报离线时跳过；ready 后忽略 onLine 误报继续重试 */
+        if (
+          typeof navigator !== "undefined" &&
+          navigator.onLine === false &&
+          !cloudSyncReady
+        ) {
+          return;
+        }
         if (!cloudSyncReady || !cloudSyncRef || cloudSyncSuppressPush) return;
         if (!hasCloudSyncPendingUpload()) return;
         scheduleCloudSyncPush();
@@ -101731,10 +101781,7 @@
         localStorage.setItem(CLOUD_SYNC_ROOM_KEY, cloudSyncRoomId);
       }
       try {
-        if (typeof navigator !== "undefined" && navigator.onLine === false) {
-          setCloudSyncError(null, "当前离线，无法连接 Firebase。请联网后点击角标旁的空白或刷新页面重试。");
-          return;
-        }
+        /* Android/VPN 常误报 onLine=false；仍尝试连接，失败再走 catch */
         if (!window.firebase || !firebase.apps) {
           setCloudSyncError(null, "Firebase SDK 未加载成功");
           return;
@@ -101775,6 +101822,7 @@
         if (!cloudSyncLastErrorMsg) {
           restoreCloudSyncConnectedBadgeUnlessError();
         }
+        applyCloudSyncMobileOfflineUi();
         attachCloudSyncListeners();
         ensureCloudSyncSafetyPullTimer();
         ensureCloudSyncPendingRetryTimer();
@@ -139491,7 +139539,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const nav = document.createElement("div");
         nav.className = "tw020-week-capsule-nav";
         nav.setAttribute("role", "tablist");
-        nav.setAttribute("aria-label", "十三周导航");
+        nav.setAttribute("aria-label", "十二周导航");
         shell.appendChild(nav);
         shell.appendChild(elOl);
       }
@@ -139533,10 +139581,26 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /** 仅保留一个选中周（复用 weekExpanded，避免新持久化字段） */
+    function getAnniversaryTwSelectedWeekNum(mod, currentWk, preferredWeekOpt) {
+      ensureAnniversaryTwModuleUi(mod);
+      const pref = Math.floor(Number(preferredWeekOpt));
+      if (pref >= 1 && pref <= 12) return pref;
+      const keys = Object.keys(mod.ui.weekExpanded || {}).filter(function (k) {
+        return mod.ui.weekExpanded[k] === true;
+      });
+      if (keys.length === 1) {
+        const n = parseInt(keys[0], 10);
+        if (n >= 1 && n <= 12) return n;
+      }
+      const cur = Math.floor(Number(currentWk));
+      if (cur >= 1 && cur <= 12) return cur;
+      return 1;
+    }
+
     function setAnniversaryTwSelectedWeek(mod, weekNum) {
       ensureAnniversaryTwModuleUi(mod);
       const w = Math.floor(Number(weekNum));
-      const next = w >= 1 && w <= 13 ? w : 1;
+      const next = w >= 1 && w <= 12 ? w : 1;
       const openKeys = Object.keys(mod.ui.weekExpanded || {}).filter(function (k) {
         return mod.ui.weekExpanded[k] === true;
       });
@@ -139544,22 +139608,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       mod.ui.weekExpanded = {};
       mod.ui.weekExpanded[String(next)] = true;
       return next;
-    }
-
-    function getAnniversaryTwSelectedWeekNum(mod, currentWk, preferredWeekOpt) {
-      ensureAnniversaryTwModuleUi(mod);
-      const pref = Math.floor(Number(preferredWeekOpt));
-      if (pref >= 1 && pref <= 13) return pref;
-      const keys = Object.keys(mod.ui.weekExpanded || {}).filter(function (k) {
-        return mod.ui.weekExpanded[k] === true;
-      });
-      if (keys.length === 1) {
-        const n = parseInt(keys[0], 10);
-        if (n >= 1 && n <= 13) return n;
-      }
-      const cur = Math.floor(Number(currentWk));
-      if (cur >= 1 && cur <= 13) return cur;
-      return 1;
     }
 
     function rerenderAnniversaryTwModuleWeekUi(moduleKey) {
@@ -139573,8 +139621,160 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
+    function ensureAnniversaryTwWeek13ReviewMount(suffix) {
+      const panel = document.getElementById("anniversary" + suffix + "PhaseReview");
+      if (!panel) return null;
+      let mount = document.getElementById("anniversary" + suffix + "Week13Mount");
+      if (!mount) {
+        mount = document.createElement("div");
+        mount.id = "anniversary" + suffix + "Week13Mount";
+        mount.className = "tw020-week13-review-mount";
+        const reviewRoot = document.getElementById("anniversary" + suffix + "ReviewRoot");
+        if (reviewRoot && reviewRoot.parentNode === panel) {
+          panel.insertBefore(mount, reviewRoot);
+        } else {
+          panel.insertBefore(mount, panel.firstChild);
+        }
+      }
+      return mount;
+    }
+
     /**
-     * 渲染 13 周胶囊导航 + 仅选中周详情（复用既有 goal/tasks/patch DOM 约定）。
+     * 「复盘与衔接」内第13周独立入口 + 详情（不进顶部 1–12 导航）。
+     * 复用 goal/tasks/patch 的 data-tw-week / data-module 约定。
+     */
+    function renderAnniversaryTwWeek13InReview(opts) {
+      const o = opts || {};
+      const moduleKey = String(o.moduleKey || "tw020");
+      const suffix = String(o.suffix || "020");
+      const mod = o.mod;
+      const bands = o.bands;
+      const currentWk = Math.floor(Number(o.currentWeekIndex));
+      const hasAnchor = o.hasAnchor !== false;
+      if (!mod) return;
+      const mount = ensureAnniversaryTwWeek13ReviewMount(suffix);
+      if (!mount) return;
+
+      const w = 13;
+      const s = hasAnchor && typeof o.getWeekStart === "function" ? o.getWeekStart(w) : null;
+      const e = hasAnchor && typeof o.getWeekEnd === "function" ? o.getWeekEnd(w) : null;
+      const tasks = typeof o.getTasks === "function" ? o.getTasks(w) : [];
+      const pW = computeAnniversaryWeekTaskProgress(tasks);
+
+      mount.replaceChildren();
+      const title = document.createElement("p");
+      title.className = "tw020-week13-review-mount__title";
+      title.textContent = "第13周 · 总结与衔接（特殊周）";
+      mount.appendChild(title);
+
+      const nav = document.createElement("div");
+      nav.className = "tw020-week-capsule-nav";
+      nav.setAttribute("role", "group");
+      nav.setAttribute("aria-label", "第13周");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "tw020-week-capsule is-selected";
+      btn.setAttribute("data-tw-week", "13");
+      btn.setAttribute("data-module", moduleKey);
+      btn.setAttribute("aria-label", "第13周");
+      applyAnniversaryTwWeekCapsuleStatusClasses(btn, w, currentWk, pW, bands);
+      const num = document.createElement("span");
+      num.className = "tw020-week-capsule__num";
+      num.textContent = "13";
+      const body = document.createElement("span");
+      body.className = "tw020-week-capsule__body";
+      const range = document.createElement("span");
+      range.className = "tw020-week-capsule__range";
+      range.textContent = formatAnniversaryTwCapsuleDateRange(s, e);
+      const stats = document.createElement("span");
+      stats.className = "tw020-week-capsule__stats";
+      stats.textContent = String(pW.done) + "/" + String(pW.total) + " · " + String(pW.pct) + "%";
+      body.appendChild(range);
+      body.appendChild(stats);
+      const mobileLab = document.createElement("span");
+      mobileLab.className = "tw020-week-capsule__mobile-label";
+      mobileLab.textContent = "第13周";
+      btn.appendChild(num);
+      btn.appendChild(body);
+      btn.appendChild(mobileLab);
+      nav.appendChild(btn);
+      mount.appendChild(nav);
+
+      const ol = document.createElement("ol");
+      ol.className = "anniversary-tw020-weeks tw020-week-detail-host";
+      const li = document.createElement("li");
+      li.className = "tw020-week-item tw020-week-item--expanded tw020-summary-week";
+      if (currentWk === w) li.classList.add("tw020-current-week");
+      li.setAttribute("data-tw-week", "13");
+      li.setAttribute("data-module", moduleKey);
+
+      const weekBody = document.createElement("div");
+      weekBody.className = "tw020-week-body";
+      weekBody.id = "anniversary" + suffix + "WeekBody-13";
+
+      const head = document.createElement("div");
+      head.className = "tw020-week-head";
+      const headMain = document.createElement("div");
+      headMain.className = "tw020-week-head-main";
+      const titleLine = document.createElement("div");
+      titleLine.className = "tw020-week-title-line";
+      const lab = document.createElement("span");
+      lab.className = "tw020-wk-label";
+      lab.textContent = "第13周";
+      const r = document.createElement("span");
+      r.className = "tw020-wk-range tw020-wk-range--detail";
+      r.appendChild(
+        document.createTextNode(
+          s && e ? formatAnniversaryTwCapsuleDateRange(s, e) : "—（待定）"
+        )
+      );
+      titleLine.appendChild(lab);
+      titleLine.appendChild(r);
+      headMain.appendChild(titleLine);
+      const tag = document.createElement("span");
+      tag.className = "tw020-wk-tag";
+      tag.textContent = "总结周 · 规划下一个十二周年";
+      headMain.appendChild(tag);
+      const headMeta = document.createElement("div");
+      headMeta.className = "tw020-week-head-meta";
+      const chip = document.createElement("span");
+      chip.className = "tw020-week-status-chip";
+      chip.dataset.tw020Chip = anniversaryWeekFillBandFromProgress(pW, bands);
+      chip.textContent = anniversaryWeekStatusChipText(pW, bands);
+      headMeta.appendChild(chip);
+      head.appendChild(headMain);
+      head.appendChild(headMeta);
+
+      const progressWrap = createAnniversaryWeekProgressBarElement(pW, bands);
+      appendAnniversaryTwWeekViewBar(progressWrap, moduleKey, w);
+      const tasksWrap = document.createElement("div");
+      tasksWrap.className = "tw020-week-tasks tw020-week-tasks-panel";
+      const panelOpts =
+        typeof o.fillPanelOptsFactory === "function" ? o.fillPanelOptsFactory(w) : null;
+      if (panelOpts && typeof o.onAddTask === "function") {
+        fillAnniversaryTwWeekTasksPanel(
+          tasksWrap,
+          moduleKey,
+          w,
+          tasks,
+          panelOpts,
+          function (text) {
+            o.onAddTask(w, text);
+          }
+        );
+      }
+      weekBody.appendChild(createAnniversaryTwWeekGoalRow(moduleKey, w));
+      weekBody.appendChild(tasksWrap);
+      li.appendChild(head);
+      li.appendChild(progressWrap);
+      li.appendChild(weekBody);
+      ol.appendChild(li);
+      mount.appendChild(ol);
+    }
+
+    /**
+     * 渲染 1–12 周胶囊导航 + 仅选中周详情（复用既有 goal/tasks/patch DOM 约定）。
+     * 第13周在「复盘与衔接」独立渲染。
      * opts: { moduleKey, suffix, elOl, mod, bands, currentWeekIndex, hasAnchor,
      *   getWeekStart, getWeekEnd, getTasks, pendingFocusWeek, pendingKanbanHintWeek,
      *   fillPanelOptsFactory, onAddTask }
@@ -139597,13 +139797,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         o.pendingFocusWeek != null && o.pendingFocusWeek !== ""
           ? o.pendingFocusWeek
           : o.pendingKanbanHintWeek;
+      if (Math.floor(Number(preferred)) === 13) {
+        try {
+          activateAnniversaryTwSegmentTab(moduleKey, "review");
+        } catch (_segErr) {}
+      }
       const selectedWeek = setAnniversaryTwSelectedWeek(
         mod,
         getAnniversaryTwSelectedWeekNum(mod, currentWk, preferred)
       );
 
       shellParts.nav.replaceChildren();
-      for (let w = 1; w <= 13; w++) {
+      for (let w = 1; w <= 12; w++) {
         const s = hasAnchor && typeof o.getWeekStart === "function" ? o.getWeekStart(w) : null;
         const e = hasAnchor && typeof o.getWeekEnd === "function" ? o.getWeekEnd(w) : null;
         const tasks = typeof o.getTasks === "function" ? o.getTasks(w) : [];
@@ -139723,9 +139928,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       nextBtn.className = "tw020-week-detail-stepper__btn";
       nextBtn.textContent = "›";
       nextBtn.setAttribute("aria-label", "下一周");
-      nextBtn.disabled = w >= 13;
+      nextBtn.disabled = w >= 12;
       nextBtn.addEventListener("click", function () {
-        if (w >= 13) return;
+        if (w >= 12) return;
         setAnniversaryTwSelectedWeek(mod, w + 1);
         saveState();
         rerenderAnniversaryTwModuleWeekUi(moduleKey);
@@ -139770,6 +139975,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       li.appendChild(progressWrap);
       li.appendChild(weekBody);
       elOl.appendChild(li);
+      renderAnniversaryTwWeek13InReview(o);
     }
 
     function renderAnniversaryTw020() {
