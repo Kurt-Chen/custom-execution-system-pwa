@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20260914f";
+const CACHE_NAME = "exec-system-pwa-v20260914g";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -15,25 +15,44 @@ const APP_SHELL = [
 ];
 
 self.addEventListener("install", (event) => {
+  /* 单项 precache：避免 addAll 因某一资源失败导致整次 install 失败、手机永远装不上新 SW */
   event.waitUntil(
     caches
       .open(CACHE_NAME)
-      .then((cache) => cache.addAll(APP_SHELL))
-      .then(() => self.skipWaiting())
+      .then(function (cache) {
+        return Promise.all(
+          APP_SHELL.map(function (url) {
+            return cache.add(url).catch(function (err) {
+              console.warn("[sw] precache skip", url, err);
+            });
+          })
+        );
+      })
+      .then(function () {
+        return self.skipWaiting();
+      })
   );
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys
-          .filter((key) => key !== CACHE_NAME)
-          .map((key) => caches.delete(key))
-      )
-    )
+    caches
+      .keys()
+      .then(function (keys) {
+        return Promise.all(
+          keys
+            .filter(function (key) {
+              return key !== CACHE_NAME;
+            })
+            .map(function (key) {
+              return caches.delete(key);
+            })
+        );
+      })
+      .then(function () {
+        return self.clients.claim();
+      })
   );
-  self.clients.claim();
 });
 
 self.addEventListener("fetch", (event) => {

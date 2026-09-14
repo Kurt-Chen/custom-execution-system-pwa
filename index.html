@@ -90850,7 +90850,10 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260914f";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260914g";
+    try {
+      window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
+    } catch (_badgeWinErr) {}
     /**
      * 整点训练提醒常量须在首次 render() 之前初始化。
      * render / setInterval 会调用已提升的 renderDoneMoveHourlySlogan / fireDoneMoveHourlyReminder，
@@ -96410,6 +96413,48 @@
         setAppVersionText(short || cacheName || "unknown");
       }
       applyCacheNameLabel(APP_CACHE_NAME_FOR_BADGE);
+
+      /** 壳落后于线上：注销全部 SW + 清空 Cache Storage 后硬刷新（修手机/平板卡死旧版） */
+      async function forceClearServiceWorkerAndCachesThenReload(remoteCacheName) {
+        const reloadKey = "exec-sw-nuclear-reload:" + String(remoteCacheName || "");
+        try {
+          if (sessionStorage.getItem(reloadKey) === "1") return false;
+          sessionStorage.setItem(reloadKey, "1");
+        } catch (_ssErr) {}
+        try {
+          if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(
+              regs.map(function (reg) {
+                return reg.unregister().catch(function () {
+                  return false;
+                });
+              })
+            );
+          }
+        } catch (_unregErr) {}
+        try {
+          if (typeof caches !== "undefined" && caches.keys) {
+            const keys = await caches.keys();
+            await Promise.all(
+              keys.map(function (k) {
+                return caches.delete(k).catch(function () {
+                  return false;
+                });
+              })
+            );
+          }
+        } catch (_cacheErr) {}
+        try {
+          const u = new URL(location.href);
+          u.searchParams.set("_swbust", String(Date.now()));
+          location.replace(u.toString());
+        } catch (_locErr) {
+          location.reload();
+        }
+        return true;
+      }
+
       try {
         const swUrl = new URL("sw.js", location.href);
         swUrl.searchParams.set("ts", String(Date.now()));
@@ -96425,27 +96470,8 @@
           return;
         }
         applyCacheNameLabel(m[1]);
-        /* 壳里徽章常量落后于线上 sw.js：强制拉新 SW 并刷新（修手机端卡死旧版） */
-        if (
-          m[1] !== APP_CACHE_NAME_FOR_BADGE &&
-          typeof navigator !== "undefined" &&
-          navigator.serviceWorker
-        ) {
-          const reloadKey = "exec-sw-stale-reload:" + m[1];
-          try {
-            if (sessionStorage.getItem(reloadKey) === "1") return;
-            sessionStorage.setItem(reloadKey, "1");
-          } catch (_ssErr) {}
-          try {
-            const reg = await navigator.serviceWorker.getRegistration();
-            if (reg) {
-              await reg.update();
-              if (reg.waiting) {
-                reg.waiting.postMessage({ type: "SKIP_WAITING" });
-              }
-            }
-          } catch (_updErr) {}
-          location.reload();
+        if (m[1] !== APP_CACHE_NAME_FOR_BADGE && typeof navigator !== "undefined") {
+          await forceClearServiceWorkerAndCachesThenReload(m[1]);
         }
       } catch (_err) {
         applyCacheNameLabel(APP_CACHE_NAME_FOR_BADGE);
@@ -152135,8 +152161,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
 
       window.addEventListener("load", () => {
+        const swRegisterUrl = "./sw.js?v=" + encodeURIComponent(String(APP_CACHE_NAME_FOR_BADGE || "dev"));
         navigator.serviceWorker
-          .register("./sw.js", { updateViaCache: "none" })
+          .register(swRegisterUrl, { updateViaCache: "none" })
           .then((registration) => {
             wireServiceWorkerRegistration(registration);
           })
