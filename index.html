@@ -90906,7 +90906,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260915w";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260915x";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -95337,6 +95337,47 @@
       });
       dateKeys.forEach(function (dateStr) {
         HABIT_NUMERIC_LIFETIME_KEYS.forEach(function (habitKey) {
+          const locSlot =
+            localSt && localSt.habitCheckins && localSt.habitCheckins[dateStr]
+              ? localSt.habitCheckins[dateStr][habitKey]
+              : null;
+          const remSlot =
+            remoteSt && remoteSt.habitCheckins && remoteSt.habitCheckins[dateStr]
+              ? remoteSt.habitCheckins[dateStr][habitKey]
+              : null;
+          const curSlot =
+            st.habitCheckins && st.habitCheckins[dateStr] ? st.habitCheckins[dateStr][habitKey] : null;
+          const revL = getHabitCheckinRevisionTime(locSlot);
+          const revR = getHabitCheckinRevisionTime(remSlot);
+          const revC = getHabitCheckinRevisionTime(curSlot);
+          const bestRev = Math.max(revL, revR, revC);
+          /* 有修订戳时：保留最新修订侧，禁止再按累计 max 把减一次抬回去 */
+          if (bestRev > 0) {
+            let pick = curSlot;
+            let pickRev = revC;
+            if (revL >= pickRev) {
+              pick = locSlot;
+              pickRev = revL;
+            }
+            if (revR >= pickRev) {
+              pick = remSlot;
+              pickRev = revR;
+            }
+            if (!st.habitCheckins || typeof st.habitCheckins !== "object") st.habitCheckins = {};
+            if (!st.habitCheckins[dateStr] || typeof st.habitCheckins[dateStr] !== "object") {
+              st.habitCheckins[dateStr] = {};
+            }
+            try {
+              if (JSON.stringify(curSlot) !== JSON.stringify(pick)) {
+                st.habitCheckins[dateStr][habitKey] = pick;
+                changed = true;
+              }
+            } catch (_e) {
+              st.habitCheckins[dateStr][habitKey] = pick;
+              changed = true;
+            }
+            return;
+          }
           const target = Math.max(
             getHabitNumericDayTotalFromState(localSt, habitKey, dateStr),
             getHabitNumericDayTotalFromState(remoteSt, habitKey, dateStr),
@@ -98374,9 +98415,11 @@
 
     function mergeHabitCheckinEntrySyncScore(obj) {
       if (!obj || typeof obj !== "object") return obj === true ? 1 : 0;
+      if (obj.cleared === true) return 0;
       return Math.max(
         Number(obj.wordCount) || 0,
         Number(obj.minutes) || 0,
+        Number(obj.ml) || 0,
         Number(obj.experiments) || 0,
         Number(obj.eggs) || 0,
         Number(obj.questions) || 0,
@@ -98384,6 +98427,34 @@
         Number(obj.times) || 0,
         obj === true ? 1 : 0
       );
+    }
+
+    /** 习惯槽修订时间：减一次/清空会写 revisedAt，合并时优先较新侧，避免 max 把减次拉回 */
+    function getHabitCheckinRevisionTime(val) {
+      if (!val || typeof val !== "object") return 0;
+      const revised = Number(val.revisedAt);
+      if (Number.isFinite(revised) && revised > 0) return revised;
+      const stamp = Number(val.stampAt);
+      if (Number.isFinite(stamp) && stamp > 0) return stamp;
+      return 0;
+    }
+
+    function isHabitCheckinClearedMarker(val) {
+      return Boolean(val && typeof val === "object" && val.cleared === true);
+    }
+
+    /** 写入习惯槽时打修订戳；false/清空 → { cleared, revisedAt }，防止云端旧勾选盖掉本地减次 */
+    function stampHabitCheckinRevision(val) {
+      const now = Date.now();
+      if (val === true) return { times: 1, revisedAt: now };
+      if (val === false || val == null || isHabitCheckinClearedMarker(val)) {
+        return { cleared: true, times: 0, revisedAt: now };
+      }
+      if (typeof val !== "object") return { times: 1, revisedAt: now };
+      const out = Object.assign({}, val);
+      out.revisedAt = now;
+      delete out.cleared;
+      return out;
     }
 
     function sumSanitizedHabitNumericBatches(batches, maxPerBatch) {
@@ -98450,6 +98521,8 @@
       if (rm) out.remark = rm;
       const stampAt = Number(val.stampAt);
       if (Number.isFinite(stampAt) && stampAt > 0) out.stampAt = stampAt;
+      const revisedAt = Number(val.revisedAt);
+      if (Number.isFinite(revisedAt) && revisedAt > 0) out.revisedAt = revisedAt;
       return out;
     }
 
@@ -98458,6 +98531,7 @@
       if (val === true) return true;
       if (val === false || val == null) return false;
       if (typeof val !== "object") return Boolean(val);
+      if (isHabitCheckinClearedMarker(val)) return false;
       if (mergeHabitCheckinEntrySyncScore(val) > 0) return true;
       const w = Number(val.weightJin);
       if (Number.isFinite(w) && w > 0) return true;
@@ -98468,15 +98542,26 @@
       return false;
     }
 
-    /** 同一习惯、同一日：已打卡优先于未打卡；两端都已打卡则取累计量较大侧 */
+    /** 同一习惯、同一日：有 revisedAt 则较新侧胜出（支持减一次）；否则已打卡优先，两端都已打卡取较大累计 */
     function mergeHabitCheckinValueForSync(localVal, remoteVal) {
       if (localVal === true) localVal = { times: 1 };
       if (remoteVal === true) remoteVal = { times: 1 };
+      const revL = getHabitCheckinRevisionTime(localVal);
+      const revR = getHabitCheckinRevisionTime(remoteVal);
+      if (revL > 0 || revR > 0) {
+        if (revL !== revR) {
+          return revL > revR ? (localVal != null ? localVal : false) : (remoteVal != null ? remoteVal : false);
+        }
+      }
       const localChecked = isHabitCheckinValueChecked(localVal);
       const remoteChecked = isHabitCheckinValueChecked(remoteVal);
       if (localChecked && !remoteChecked) return localVal;
       if (remoteChecked && !localChecked) return remoteVal;
-      if (!localChecked && !remoteChecked) return false;
+      if (!localChecked && !remoteChecked) {
+        if (isHabitCheckinClearedMarker(localVal)) return localVal;
+        if (isHabitCheckinClearedMarker(remoteVal)) return remoteVal;
+        return false;
+      }
       if (typeof localVal !== "object" || typeof remoteVal !== "object") {
         return localVal != null ? localVal : remoteVal;
       }
@@ -105698,7 +105783,12 @@
           if (pruned) {
             rebuildHabitCheckinFromDoneList(habitKey, dateStr);
           } else if (fromDoneRows > 0 && (cur === false || cur == null || curFieldTotal < fromDoneRows)) {
-            rebuildHabitCheckinFromDoneList(habitKey, dateStr);
+            /* 本地已减次并打 revisedAt：勿用更高的 Done 累计把槽位抬回去 */
+            const revised =
+              cur && typeof cur === "object" ? getHabitCheckinRevisionTime(cur) : 0;
+            if (!(revised > 0 && (isHabitCheckinValueChecked(cur) || isHabitCheckinClearedMarker(cur)))) {
+              rebuildHabitCheckinFromDoneList(habitKey, dateStr);
+            }
           }
           if (!state.habitCheckins[dateStr]) return;
           const opts = getHabitNumericSanitizeOpts(habitKey);
@@ -106657,6 +106747,7 @@
         !isHabitEggsKey(habitKey) &&
         !isHabitWaterKey(habitKey) &&
         !isHabitQuestionsKey(habitKey) &&
+        !isHabitSavingsKey(habitKey) &&
         !isHabitExperimentKey(habitKey)
       ) {
         return;
@@ -106682,20 +106773,21 @@
       if (isHabitQuestionsKey(habitKey)) {
         valueKey = "questions";
       }
+      if (isHabitSavingsKey(habitKey)) {
+        valueKey = "yuan";
+      }
       if (isHabitExperimentKey(habitKey)) {
         valueKey = "experiments";
       }
       const batches = Array.isArray(cur.batches) ? cur.batches.slice() : [];
+      /* 无 batches：按 Done 删最近一次再重建，避免弹窗取消=「减一次不起作用」 */
       if (batches.length === 0) {
-        if (
-          !window.confirm(
-            "本条记录缺少分批明细，无法按次减少。是否清空今日全部累计？"
-          )
-        ) {
-          return;
-        }
-        day[habitKey] = false;
-        removeHabitFromDone(habitKey, dateKey);
+        removeLastHabitStampFromDone(habitKey, dateKey);
+        const built =
+          typeof buildHabitNumericCheckinFromDoneRows === "function"
+            ? buildHabitNumericCheckinFromDoneRows(habitKey, dateKey)
+            : null;
+        day[habitKey] = stampHabitCheckinRevision(built || false);
         saveStateAfterHabitCheckin();
         return;
       }
@@ -106705,17 +106797,17 @@
         return;
       }
       removeLastHabitStampFromDone(habitKey, dateKey);
-      const prevTotal = cur[valueKey];
-      const newTotal = prevTotal - last;
+      const prevTotal = Number(cur[valueKey]);
+      const newTotal = (Number.isFinite(prevTotal) ? prevTotal : 0) - last;
       if (newTotal < 0) {
         alert("数据不一致，已清空今日记录。");
-        day[habitKey] = false;
+        day[habitKey] = stampHabitCheckinRevision(false);
         removeHabitFromDone(habitKey, dateKey);
         saveStateAfterHabitCheckin();
         return;
       }
       if (batches.length === 0) {
-        day[habitKey] = false;
+        day[habitKey] = stampHabitCheckinRevision(false);
         saveStateAfterHabitCheckin();
         return;
       }
@@ -106728,7 +106820,9 @@
       if (isHabitExperimentKey(habitKey) && typeof cur.remark === "string" && cur.remark.trim()) {
         nextObj.remark = cur.remark.trim();
       }
-      day[habitKey] = nextObj;
+      const prevStamp = Number(cur.stampAt);
+      if (Number.isFinite(prevStamp) && prevStamp > 0) nextObj.stampAt = prevStamp;
+      day[habitKey] = stampHabitCheckinRevision(nextObj);
       saveStateAfterHabitCheckin();
     }
 
@@ -106765,7 +106859,7 @@
         const v = day[habitKey];
         const tt = getOptionalRemarkStampTimes(v);
         if (tt <= 1) {
-          day[habitKey] = false;
+          day[habitKey] = stampHabitCheckinRevision(false);
           removeHabitFromDone(habitKey, todayKey);
         } else {
           const nextTimes = tt - 1;
@@ -106774,7 +106868,7 @@
           if (rm) {
             nextObj.remark = rm;
           }
-          day[habitKey] = nextObj;
+          day[habitKey] = stampHabitCheckinRevision(nextObj);
           removeLastHabitStampFromDone(habitKey, todayKey);
         }
         saveStateAfterHabitCheckin();
@@ -106784,7 +106878,7 @@
       if (isScheduledLetterKey(habitKey)) {
         const day = state.habitCheckins[todayKey];
         if (day) {
-          day[habitKey] = false;
+          day[habitKey] = stampHabitCheckinRevision(false);
         }
         removeHabitFromDone(habitKey, todayKey);
         saveStateAfterHabitCheckin();
@@ -106795,7 +106889,7 @@
       const v = day[habitKey];
       const tt = getSimpleHabitStampTimes(v);
       if (tt <= 1) {
-        day[habitKey] = false;
+        day[habitKey] = stampHabitCheckinRevision(false);
         removeHabitFromDone(habitKey, todayKey);
       } else {
         const nextTimes = tt - 1;
@@ -106804,7 +106898,7 @@
           const stamp = Number(v.stampAt);
           if (Number.isFinite(stamp) && stamp > 0) nextObj.stampAt = stamp;
         }
-        day[habitKey] = nextObj;
+        day[habitKey] = stampHabitCheckinRevision(nextObj);
         removeLastHabitStampFromDone(habitKey, todayKey);
       }
       /* 普通简单 Habit 减一次/取消：窄 hygiene；体重/数值/备注/信件等上面分支仍全量 */
