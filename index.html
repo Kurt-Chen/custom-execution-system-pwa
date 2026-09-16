@@ -726,6 +726,16 @@
       justify-content: center;
       padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px))
         max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+      contain: layout paint;
+    }
+
+    /* 打卡弹窗打开时暂停背后跑马灯，避免点开/填数与动画抢主线程 */
+    body.is-entry-dialog-open .done-sprint-formula-marquee__track,
+    body.is-entry-dialog-open .done-sprint-reminder-marquee__track,
+    body.is-entry-dialog-open .done-input-slogan-marquee__track,
+    body.is-entry-dialog-open .habit-measure-title-marquee__track,
+    body.is-entry-dialog-open [class*="marquee__track"].is-running {
+      animation-play-state: paused !important;
     }
 
     .forge-body-checkin-dialog {
@@ -91268,7 +91278,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260916g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260916h";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -106675,6 +106685,7 @@
         habitNumericCheckinOverlay.classList.add("hidden");
         habitNumericCheckinOverlay.setAttribute("aria-hidden", "true");
       }
+      if (typeof syncEntryDialogPerfClass === "function") syncEntryDialogPerfClass();
     }
 
     function getHabitNumericInputEl(card, habitKey) {
@@ -106732,23 +106743,18 @@
     }
 
     function closeAllHabitNumericEntries(opts) {
+      hideHabitNumericDialog();
       document
         .querySelectorAll("#habitRoutineModule .habit-en-row.habit-en-numeric-entry-open")
         .forEach(function (card) {
           closeHabitNumericEntry(card, opts);
         });
-      if (isHabitNumericDialogOpen()) hideHabitNumericDialog();
     }
 
     function openHabitNumericEntry(habitKey) {
       const card = getHabitNumericCard(habitKey);
       if (!card || !habitNumericCheckinOverlay || !habitNumericCheckinInput) return;
-      document
-        .querySelectorAll("#habitRoutineModule .habit-en-row.habit-en-numeric-entry-open")
-        .forEach(function (other) {
-          if (other !== card) closeHabitNumericEntry(other);
-        });
-      card.classList.add("habit-en-numeric-entry-open");
+      /* 不用 habit-en-numeric-entry-open：给卡片加 class 会触发习惯区大量 :has() 重算 */
       habitNumericCheckinPendingKey = habitKey;
       const meta = getHabitNumericUnitMeta(habitKey);
       if (habitNumericCheckinTitle) {
@@ -106788,6 +106794,7 @@
       clearHabitNumericInputError(habitNumericCheckinInput);
       habitNumericCheckinOverlay.classList.remove("hidden");
       habitNumericCheckinOverlay.setAttribute("aria-hidden", "false");
+      if (typeof syncEntryDialogPerfClass === "function") syncEntryDialogPerfClass();
       window.requestAnimationFrame(function () {
         try {
           habitNumericCheckinInput.focus({ preventScroll: true });
@@ -107437,7 +107444,7 @@
       }
       if (isHabitNumericInputKey(habitKey)) {
         const card = getHabitNumericCard(habitKey);
-        if (card && card.classList.contains("habit-en-numeric-entry-open")) {
+        if (isHabitNumericDialogOpen() && habitNumericCheckinPendingKey === habitKey) {
           closeHabitNumericEntry(card);
           return;
         }
@@ -107490,7 +107497,7 @@
 
     function toggleWeightBodyFatCheckin() {
       const card = getHabitNumericCard("weightAndBodyFat");
-      if (card && card.classList.contains("habit-en-numeric-entry-open")) {
+      if (isHabitNumericDialogOpen() && habitNumericCheckinPendingKey === "weightAndBodyFat") {
         closeHabitNumericEntry(card);
         return;
       }
@@ -113711,6 +113718,7 @@
         forgeBodyCheckinOverlay.classList.add("hidden");
         forgeBodyCheckinOverlay.setAttribute("aria-hidden", "true");
       }
+      if (typeof syncEntryDialogPerfClass === "function") syncEntryDialogPerfClass();
     }
 
     function forgeMindPcPairFsFormatSubline(raw) {
@@ -113823,11 +113831,19 @@
       }
       forgeBodyCheckinOverlay.classList.remove("hidden");
       forgeBodyCheckinOverlay.setAttribute("aria-hidden", "false");
-      if (isMindDialogRow && forgeMindCheckinMinutesInput) {
-        forgeMindCheckinMinutesInput.focus();
-      } else {
-        forgeBodyCheckinInput.focus();
-      }
+      if (typeof syncEntryDialogPerfClass === "function") syncEntryDialogPerfClass();
+      window.requestAnimationFrame(function () {
+        try {
+          if (isMindDialogRow && forgeMindCheckinMinutesInput) {
+            forgeMindCheckinMinutesInput.focus({ preventScroll: true });
+          } else {
+            forgeBodyCheckinInput.focus({ preventScroll: true });
+          }
+        } catch (_forgeFocusErr) {
+          if (isMindDialogRow && forgeMindCheckinMinutesInput) forgeMindCheckinMinutesInput.focus();
+          else forgeBodyCheckinInput.focus();
+        }
+      });
     }
 
     function captureForgeTaskValIdleDisplays(root) {
@@ -122996,7 +123012,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /** 仅刷新色块 / 「仅剩 Xs」；与跑马灯重活分开，保证秒数每秒跳 */
     function tickDoneSprintProgressClock() {
       if (document.visibilityState && document.visibilityState !== "visible") return;
-      if (typeof isDoneListUiScrolling === "function" && isDoneListUiScrolling()) return;
+      if (typeof shouldDeferSprintTickerHeavyWork === "function" && shouldDeferSprintTickerHeavyWork()) return;
       const sec = Math.floor(Date.now() / 1000);
       if (sec === doneSprintProgressClockSec) return;
       doneSprintProgressClockSec = sec;
@@ -123439,11 +123455,51 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return doneListUiScrolling === true;
     }
 
+    function isForgeBodyCheckinDialogOpen() {
+      const el = document.getElementById("forgeBodyCheckinOverlay");
+      return !!(el && !el.classList.contains("hidden"));
+    }
+
+    function isTextEntryHot() {
+      const ae = document.activeElement;
+      if (!ae || !ae.tagName) return false;
+      const tag = ae.tagName;
+      if (tag === "TEXTAREA") return true;
+      if (ae.isContentEditable) return true;
+      if (tag !== "INPUT") return false;
+      const type = String(ae.getAttribute("type") || "text").toLowerCase();
+      return (
+        type !== "button" &&
+        type !== "submit" &&
+        type !== "checkbox" &&
+        type !== "radio" &&
+        type !== "file" &&
+        type !== "hidden" &&
+        type !== "reset" &&
+        type !== "image"
+      );
+    }
+
+    /** 弹窗 / 填数 / 滚动时暂停冲刺重活，避免点开与输入掉帧 */
+    function shouldDeferSprintTickerHeavyWork() {
+      if (isDoneListUiScrolling()) return true;
+      if (typeof isHabitNumericDialogOpen === "function" && isHabitNumericDialogOpen()) return true;
+      if (isForgeBodyCheckinDialogOpen()) return true;
+      return isTextEntryHot();
+    }
+
+    function syncEntryDialogPerfClass() {
+      const open =
+        (typeof isHabitNumericDialogOpen === "function" && isHabitNumericDialogOpen()) ||
+        isForgeBodyCheckinDialogOpen();
+      document.body.classList.toggle("is-entry-dialog-open", !!open);
+    }
+
     function tickDoneTimeBlockSprint() {
       if (doneTimeBlockSprintHeavyBusy) return;
       bindDoneListScrollPerfGuards();
-      /* 滚动中整段跳过（含跑马灯泵），结束后由 scroll idle 补进度，下一秒 tick 恢复重活 */
-      if (isDoneListUiScrolling()) {
+      /* 滚动、打卡弹窗、填数时整段跳过（含跑马灯泵） */
+      if (shouldDeferSprintTickerHeavyWork()) {
         doneTimeBlockSprintLastTickAt = Date.now();
         return;
       }
@@ -123466,7 +123522,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       ];
       let i = 0;
       function pump() {
-        if (isDoneListUiScrolling()) {
+        if (shouldDeferSprintTickerHeavyWork()) {
           doneTimeBlockSprintHeavyBusy = false;
           return;
         }
@@ -149136,7 +149192,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         card.addEventListener("pointerdown", function (ev) {
           const t = ev.target;
           if (!t || !t.closest) return;
-          if (!card.classList.contains("habit-en-numeric-entry-open")) return;
+          if (!(typeof isHabitNumericDialogOpen === "function" && isHabitNumericDialogOpen())) return;
           if (
             t.closest(".habit-en-check-btn") ||
             t.closest(".habit-en-clear-today-btn")
