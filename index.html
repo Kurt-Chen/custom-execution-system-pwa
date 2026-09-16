@@ -27814,7 +27814,7 @@
       background: #e91e8c;
       color: #fff;
       font-family: inherit;
-      font-style: normal;
+      font-style: italic;
       font-weight: 800;
       font-size: 1.1em;
       line-height: 1.15;
@@ -95728,22 +95728,21 @@
               : null;
           const curSlot =
             st.habitCheckins && st.habitCheckins[dateStr] ? st.habitCheckins[dateStr][habitKey] : null;
-          const revL = getHabitCheckinRevisionTime(locSlot);
-          const revR = getHabitCheckinRevisionTime(remSlot);
-          const revC = getHabitCheckinRevisionTime(curSlot);
-          const bestRev = Math.max(revL, revR, revC);
-          /* 有修订戳时：保留最新修订侧，禁止再按累计 max 把减一次抬回去 */
-          if (bestRev > 0) {
-            let pick = curSlot;
-            let pickRev = revC;
-            if (revL >= pickRev) {
-              pick = locSlot;
-              pickRev = revL;
-            }
-            if (revR >= pickRev) {
-              pick = remSlot;
-              pickRev = revR;
-            }
+          const pick = mergeHabitCheckinValueForSync(
+            mergeHabitCheckinValueForSync(locSlot, remSlot),
+            curSlot
+          );
+          const pickRev = getHabitCheckinRevisionTime(pick);
+          const locRev = getHabitCheckinRevisionTime(locSlot);
+          const remRev = getHabitCheckinRevisionTime(remSlot);
+          const curRev = getHabitCheckinRevisionTime(curSlot);
+          /* 成对修订戳才允许清空/减次落盘；单侧 cleared 不得盖掉已打卡后再按 max 抬回 */
+          if (
+            pickRev > 0 &&
+            locRev > 0 &&
+            remRev > 0 ||
+            (pickRev > 0 && curRev > 0 && (locRev > 0 || remRev > 0) && !isHabitCheckinValueChecked(pick))
+          ) {
             if (!st.habitCheckins || typeof st.habitCheckins !== "object") st.habitCheckins = {};
             if (!st.habitCheckins[dateStr] || typeof st.habitCheckins[dateStr] !== "object") {
               st.habitCheckins[dateStr] = {};
@@ -95757,7 +95756,7 @@
               st.habitCheckins[dateStr][habitKey] = pick;
               changed = true;
             }
-            return;
+            if (!isHabitCheckinValueChecked(pick)) return;
           }
           const target = Math.max(
             getHabitNumericDayTotalFromState(localSt, habitKey, dateStr),
@@ -98940,19 +98939,32 @@
       return false;
     }
 
-    /** 同一习惯、同一日：有 revisedAt 则较新侧胜出（支持减一次）；否则已打卡优先，两端都已打卡取较大累计 */
+    /**
+     * 同一习惯、同一日：
+     * - 已打卡优先（未打卡 / {cleared} 不得盖掉无修订戳的勾选——打卡路径不写 revisedAt）。
+     * - 仅当两侧都有修订戳时，较新侧胜出（支持「减一次 / 取消」跨设备）。
+     * - 两端都已打卡：无成对修订戳时取较大累计。
+     */
     function mergeHabitCheckinValueForSync(localVal, remoteVal) {
       if (localVal === true) localVal = { times: 1 };
       if (remoteVal === true) remoteVal = { times: 1 };
       const revL = getHabitCheckinRevisionTime(localVal);
       const revR = getHabitCheckinRevisionTime(remoteVal);
-      if (revL > 0 || revR > 0) {
-        if (revL !== revR) {
-          return revL > revR ? (localVal != null ? localVal : false) : (remoteVal != null ? remoteVal : false);
-        }
-      }
       const localChecked = isHabitCheckinValueChecked(localVal);
       const remoteChecked = isHabitCheckinValueChecked(remoteVal);
+      if (revL > 0 && revR > 0 && revL !== revR) {
+        const newer = revL > revR ? localVal : remoteVal;
+        const older = revL > revR ? remoteVal : localVal;
+        const newerChecked = revL > revR ? localChecked : remoteChecked;
+        const olderChecked = revL > revR ? remoteChecked : localChecked;
+        /* 较新侧已打卡，或两侧都未打卡：用较新修订 */
+        if (newerChecked || !olderChecked) {
+          return newer != null ? newer : false;
+        }
+        /* 较新侧是清空/减次，且旧侧已打卡：用户主动取消，允许盖掉 */
+        return newer != null ? newer : false;
+      }
+      /* 只有一侧有修订戳：未打卡不得盖掉已打卡（本机刚勾选常无 revisedAt） */
       if (localChecked && !remoteChecked) return localVal;
       if (remoteChecked && !localChecked) return remoteVal;
       if (!localChecked && !remoteChecked) {
