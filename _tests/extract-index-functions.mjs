@@ -45,6 +45,9 @@ const REQUIRED_FNS = [
   "omitTombstonedWeeklyPlanMicros",
   "weeklyPlanMicroTombstoneId",
   "mergeHabitCheckinEntrySyncScore",
+  "getHabitCheckinRevisionTime",
+  "isHabitCheckinClearedMarker",
+  "stampHabitCheckinRevision",
   "isHabitCheckinValueChecked",
   "sumSanitizedHabitNumericBatches",
   "sanitizeHabitNumericCheckinValue",
@@ -366,6 +369,8 @@ export function loadSyncFns(indexPath) {
     scheduleCloudSyncFullPushDeferred: "function scheduleCloudSyncFullPushDeferred() {}",
     persistStateToLocalStorage: "function persistStateToLocalStorage() { return { ok: true }; }",
     uiStallWrapMerge: "function uiStallWrapMerge(fn) { return fn(); }",
+    uiStallWrapMergeAsync:
+      "function uiStallWrapMergeAsync(fn) { return Promise.resolve().then(function () { return fn(); }); }",
     render: "function render() {}",
     dedupeWeeklyPlanDuplicateIdsAcrossBuckets: "function dedupeWeeklyPlanDuplicateIdsAcrossBuckets() {}",
     reconcileWeeklyPlanTasksToDeadlineWeeks: "function reconcileWeeklyPlanTasksToDeadlineWeeks() { return false; }",

@@ -45,10 +45,50 @@ function ids(arr) {
 let passed = 0;
 let failed = 0;
 const failures = [];
+const pendingAsync = [];
 
 function test(name, fn) {
+  const isAsync = fn && fn.constructor && fn.constructor.name === "AsyncFunction";
+  if (isAsync) {
+    pendingAsync.push(function () {
+      return Promise.resolve()
+        .then(function () {
+          return fn();
+        })
+        .then(
+          function () {
+            passed += 1;
+            console.log("  ok  " + name);
+          },
+          function (err) {
+            failed += 1;
+            failures.push({ name: name, err: err });
+            console.log("  FAIL " + name);
+            console.log("       " + (err && err.message ? err.message : String(err)));
+          }
+        );
+    });
+    return;
+  }
   try {
-    fn();
+    const result = fn();
+    if (result && typeof result.then === "function") {
+      pendingAsync.push(function () {
+        return Promise.resolve(result).then(
+          function () {
+            passed += 1;
+            console.log("  ok  " + name);
+          },
+          function (err) {
+            failed += 1;
+            failures.push({ name: name, err: err });
+            console.log("  FAIL " + name);
+            console.log("       " + (err && err.message ? err.message : String(err)));
+          }
+        );
+      });
+      return;
+    }
     passed += 1;
     console.log("  ok  " + name);
   } catch (err) {
@@ -204,10 +244,35 @@ test("habit 勾选 OR：一端已打卡则结果为已打卡", function () {
   assert(ctx.isHabitCheckinValueChecked(out["2026-09-01"].sleep));
 });
 
-test("空云端 Done 不能覆盖本机", function () {
+test("habit：旧 cleared+revisedAt 不得盖掉无修订戳的已打卡", function () {
+  const checked = { times: 1 };
+  const cleared = { cleared: true, times: 0, revisedAt: 9000 };
+  const out = ctx.mergeHabitCheckinValueForSync(checked, cleared);
+  assert(ctx.isHabitCheckinValueChecked(out));
+  assertEq(out.times, 1);
+});
+
+test("habit：stampAt 不算修订戳，cleared 不得盖掉带 stampAt 的勾选", function () {
+  const checked = { times: 1, stampAt: 1000 };
+  const cleared = { cleared: true, times: 0, revisedAt: 9000 };
+  assertEq(ctx.getHabitCheckinRevisionTime(checked), 0);
+  assert(ctx.getHabitCheckinRevisionTime(cleared) > 0);
+  const out = ctx.mergeHabitCheckinValueForSync(checked, cleared);
+  assert(ctx.isHabitCheckinValueChecked(out));
+});
+
+test("habit：两侧都有 revisedAt 时较新清空可盖掉旧勾选", function () {
+  const checked = { times: 1, revisedAt: 1000 };
+  const cleared = { cleared: true, times: 0, revisedAt: 9000 };
+  const out = ctx.mergeHabitCheckinValueForSync(checked, cleared);
+  assert(!ctx.isHabitCheckinValueChecked(out));
+  assert(ctx.isHabitCheckinClearedMarker(out));
+});
+
+test("空云端 Done 不能覆盖本机", async function () {
   ctx.cloudSyncLastErrorMsg = "";
   ctx.state = emptyState({ done: [{ id: "keep", text: "local", createdAt: 1 }] });
-  const ok = ctx.applyCloudPayloadWithMerge({
+  const ok = await ctx.applyCloudPayloadWithMerge({
     state: emptyState({ done: [] }),
     doneOmitted: false
   });
@@ -1180,13 +1245,15 @@ test("mergeMoveBreakDayForSync 结果不含 null 原型（避免 pulse 上报 e.
   cloned.ackedKindByHour.hasOwnProperty("5");
 });
 
-console.log("");
-if (failed) {
-  console.log("失败 " + failed + " / " + (passed + failed));
-  failures.forEach(function (f) {
-    if (f.err && f.err.stack) console.log(f.err.stack.split("\n").slice(0, 6).join("\n"));
-  });
-  process.exit(1);
-}
-console.log("全部通过 " + passed + " / " + passed);
-process.exit(0);
+Promise.all(pendingAsync.map(function (run) { return run(); })).then(function () {
+  console.log("");
+  if (failed) {
+    console.log("失败 " + failed + " / " + (passed + failed));
+    failures.forEach(function (f) {
+      if (f.err && f.err.stack) console.log(f.err.stack.split("\n").slice(0, 6).join("\n"));
+    });
+    process.exit(1);
+  }
+  console.log("全部通过 " + passed + " / " + passed);
+  process.exit(0);
+});
