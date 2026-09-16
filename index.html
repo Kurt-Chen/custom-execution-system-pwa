@@ -28022,12 +28022,12 @@
 
       .done-manual-input-wrap--done-slogan .done-manual-input-slogan__lead {
         flex: 0 0 auto;
-        font-size: 25px;
+        font-size: 28px;
       }
 
       /* FOCUS→OBSESSION 整组右移，内部 gap/样式不动 */
       .done-manual-input-wrap--done-slogan .done-manual-input-slogan__core {
-        margin-left: 24px;
+        margin-left: 36px;
       }
 
       .done-manual-input-wrap--done-slogan .done-manual-input-slogan__obsession {
@@ -28267,7 +28267,7 @@
 
       .done-manual-input-wrap--done-slogan .done-manual-input-slogan__lead {
         overflow: visible;
-        font-size: 25px;
+        font-size: 28px;
       }
 
       .done-manual-input-wrap--done-slogan .done-manual-input-slogan__obsession {
@@ -39470,7 +39470,7 @@
       }
 
       body.primary-module-fullscreen #dynamicModule.module-focus-active .kinetic-sub-done .done-toolbar-row .done-manual-input-wrap--done-slogan .done-manual-input-slogan__lead {
-        font-size: 26.25px;
+        font-size: 29px;
       }
 
       body.primary-module-fullscreen #dynamicModule.module-focus-active .kinetic-sub-done .done-toolbar-row .done-manual-input-wrap--done-slogan .done-manual-input-slogan__obsession {
@@ -93668,8 +93668,9 @@
           restoreCloudSyncConnectedBadgeUnlessError();
           return;
         }
+        await yieldToMainThread();
         materializePayloadDoneForMerge(payload);
-        const absorbed = absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
+        const absorbed = await absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
         if (ua > 0) setCloudSyncCursor(ua);
         markCloudSyncSuccess(ua);
         cloudSyncLastErrorMsg = "";
@@ -93718,7 +93719,8 @@
         rememberCloudSyncRemotePayload(payload);
         if (payload && payload.state && Array.isArray(payload.state.done) && !payload.doneOmitted) {
           const remoteAt = coerceCloudUpdatedAt(payload.updatedAt);
-          absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
+          await yieldToMainThread();
+          await absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
           if (remoteAt > 0) {
             setCloudSyncCursor(remoteAt);
           }
@@ -96446,8 +96448,9 @@
           markCloudSyncSuccess(ua);
           return;
         }
+        await yieldToMainThread();
         materializePayloadDoneForMerge(payload);
-        absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
+        await absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
         if (ua > 0) setCloudSyncCursor(ua);
         if (needDoneHistory && !payload.doneOmitted) {
           markCloudSyncHistoryMergeRan();
@@ -101163,7 +101166,7 @@
       let nextHash = serializeStateForCloud();
 
       getRemotePayloadForPushMerge()
-        .then((payload) => {
+        .then(async (payload) => {
           const lastSeen = getCloudLastSeenUpdatedAt();
           if (payload && payload.state && Array.isArray(payload.state.done)) {
             const remoteAt = coerceCloudUpdatedAt(payload.updatedAt);
@@ -101173,9 +101176,11 @@
             } catch (_locEnfSnap) {
               localSnapForEnforce = null;
             }
+            await yieldToMainThread();
             const merged = mergeLocalStateWithRemotePayloadBeforePush(payload.state, remoteAt, lastSeen);
             if (merged) {
-              applyMergedCloudStateInMemory(merged, {
+              await yieldToMainThread();
+              await applyMergedCloudStateInMemory(merged, {
                 skipRender: true,
                 lifetimeEnforceLocal: localSnapForEnforce,
                 lifetimeEnforceRemote: payload.state
@@ -101193,9 +101198,9 @@
           }
           if (remoteDoneBeforeUpload > 0 && localDoneBeforeUpload === 0) {
             if (payload && payload.state) {
-              absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
+              await absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, { skipRender: true });
             } else if (cloudSyncCachedRemotePayload) {
-              absorbCloudPayloadPreferringRemoteWhenLocalEmpty(cloudSyncCachedRemotePayload, {
+              await absorbCloudPayloadPreferringRemoteWhenLocalEmpty(cloudSyncCachedRemotePayload, {
                 skipRender: true
               });
             }
@@ -101444,7 +101449,7 @@
       }
     }
 
-    function applyMergedCloudStateInMemory(merged, opts) {
+    async function applyMergedCloudStateInMemory(merged, opts) {
       if (!merged || !Array.isArray(merged.done)) return { ok: false };
       const skipRender = Boolean(opts && opts.skipRender);
       const lifetimeBefore = captureCloudSyncLifetimeSnapshot(state);
@@ -101586,6 +101591,8 @@
           /* 不写 saveState，避免合并过程中再次 push */
         }
         reconcileMirrorDeadlinesAfterCloudMerge();
+        /* Syncing≠Blocking：repair/reconcile 后让出，再跑 Done 镜像同步 */
+        await yieldToMainThread();
         syncAllWeeklyPlanDoneLists({ forceAll: true });
         if (typeof syncAllAnniversaryDoneLists === "function") {
           syncAllAnniversaryDoneLists({ forceAll: true });
@@ -101593,8 +101600,12 @@
         if (typeof runStateRepairAndRolloverPass === "function") {
           runStateRepairAndRolloverPass();
         }
+        /* Syncing≠Blocking：Done 同步后让出，再跑 hash/persist */
+        await yieldToMainThread();
         setCloudSyncHashFromCurrentState();
         const r = persistStateToLocalStorage();
+        /* Syncing≠Blocking：persist 后让出，再决定是否 render */
+        await yieldToMainThread();
         if (!skipRender) {
           if (cloudSyncMachineStatus === "syncing") {
             noteCloudSyncUiRenderPending();
@@ -101779,19 +101790,16 @@
      * 不整包覆盖，改走并集合并（保留本机独有记录），合并后再回写云端。
      * 返回 true 表示已用合并方式处理，调用方无需再整包覆盖。
      */
-    function guardAgainstFewerRecordsOverwrite(remoteState) {
-      if (!remoteState || typeof remoteState !== "object") return Promise.resolve(false);
+    async function guardAgainstFewerRecordsOverwrite(remoteState) {
+      if (!remoteState || typeof remoteState !== "object") return false;
       const localN = countBusinessRecordsInState(state);
       const remoteN = countBusinessRecordsInState(remoteState);
       const fewerClosed = countClosedListRecordsInState(state) > countClosedListRecordsInState(remoteState);
       const fewerChapters = countReadingPlanChaptersInState(state) > countReadingPlanChaptersInState(remoteState);
       const fewerHabitMarks =
         countHabitCheckinMarksInState(state) > countHabitCheckinMarksInState(remoteState);
-      if (localN === 0) return Promise.resolve(false);
-      if (remoteN >= localN && !fewerClosed && !fewerChapters && !fewerHabitMarks) {
-        return Promise.resolve(false);
-      }
-      return (async function () {
+      if (localN === 0) return false;
+      if (remoteN >= localN && !fewerClosed && !fewerChapters && !fewerHabitMarks) return false;
       let localSnapForEnforce = null;
       try {
         localSnapForEnforce = JSON.parse(JSON.stringify(state));
@@ -101822,7 +101830,6 @@
       cloudSyncLastFullPushAt = 0;
       if (typeof scheduleCloudSyncFullPushDeferred === "function") scheduleCloudSyncFullPushDeferred();
       return true;
-      })();
     }
 
     async function applyRemoteState(remoteState, force) {
@@ -101931,8 +101938,9 @@
           window.alert("云端暂无数据，或尚未有人写入过该房间。");
           return;
         }
+        await yieldToMainThread();
         /* 并集而非整包覆盖：避免本机上午完成记录被旧 durable 快照冲掉 */
-        const applied = applyCloudPayloadWithMerge(payload, { force: false });
+        const applied = await applyCloudPayloadWithMerge(payload, { force: false });
         /* 若此前错误覆盖过本机，紧急备份可能仍保留今日完成 / 周任务 */
         const recoveredFromBackup = mergeMissingRecordsFromEmergencyBackup();
         const pulledAt = coerceCloudUpdatedAt(payload.updatedAt);
@@ -102100,8 +102108,9 @@
             rememberCloudSyncRemotePayload(payload);
             const ua = coerceCloudUpdatedAt(payload.updatedAt);
             if (payload.updatedBy !== cloudSyncClientId) {
+              await yieldToMainThread();
               materializePayloadDoneForMerge(payload);
-              const absorbed = absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, {
+              const absorbed = await absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, {
                 skipRender: true
               });
               if (absorbed) scheduleCloudSyncRenderDebounced();
@@ -102359,8 +102368,23 @@
       return false;
     }
 
-    function markAllUiPaintSlicesDirty() {
-      uiPaintDirty = null;
+    function markAllUiPaintSlicesDirty(opts) {
+      /*
+       * preserveDoneClean：裸 saveState 全脏时，若 Kinetic 已 paint 过且 done 当前干净，则勿把 Done 重新拉脏。
+       * 云合并等调用不传 opts，仍 uiPaintDirty=null（全脏含 Done）。
+       */
+      const keepDoneClean =
+        opts &&
+        opts.preserveDoneClean &&
+        primaryModulePaintedOnce.dynamic &&
+        uiPaintDirty != null &&
+        uiPaintDirty.done === false;
+      if (keepDoneClean) {
+        uiPaintDirty = createAllDirtyUiPaintMap();
+        uiPaintDirty.done = false;
+      } else {
+        uiPaintDirty = null;
+      }
       markHeavyModulesDepDirty();
       /* 全脏时强制下次 Life4000 可重算（云合并 / 跨天等） */
       lastLife4000PaintSig = "";
@@ -102640,11 +102664,16 @@
       return true;
     }
 
+    /**
+     * 列表写入对应的 UI paint 切片。
+     * 原则：只有本次可能改写 state.done（或 Done 镜像联动）时才带 "done"；
+     * 纯文案编辑勿顺带脏 Done。会改 Done 的调用方须显式把 "done" 放进 lists。
+     */
     function uiPaintSlicesForListName(listName) {
       if (listName === "done") return ["done", "weeklyPlan", "closedList", "habit", "forge"];
       if (listName === "closedList") return ["closedList", "done", "weeklyPlan"];
-      if (listName === "memo") return ["memo", "done"];
-      if (listName === "dailyWin") return ["dailyWin", "habit", "done"];
+      if (listName === "memo") return ["memo"];
+      if (listName === "dailyWin") return ["dailyWin", "habit"];
       if (listName === "stopDoing") return ["stopDoing"];
       if (listName === "notToDo") return ["notToDo"];
       if (listName === "hatersDoubtersLog") return ["haters"];
@@ -114310,7 +114339,20 @@
         const dk = getDailyWinItemDateKey(task);
         if (dk) refreshDailyWinCheckin(dk);
       }
-      saveState({ lists: uiPaintSlicesForListName(listName) });
+      let paintLists = uiPaintSlicesForListName(listName);
+      if (paintLists && paintLists.length) {
+        paintLists = paintLists.slice();
+        /* memo 删除会 removeMemoDoneCopy；dailyWin 删除会 refreshDailyWinCheckin——须显式脏 Done */
+        if (
+          (listName === "memo" || listName === "dailyWin") &&
+          paintLists.indexOf("done") === -1
+        ) {
+          paintLists.push("done");
+        }
+        saveState({ lists: paintLists });
+      } else {
+        saveState();
+      }
       render();
     }
 
@@ -114353,7 +114395,14 @@
       } else {
         return;
       }
-      saveState({ lists: uiPaintSlicesForListName(listName) });
+      let paintLists = uiPaintSlicesForListName(listName);
+      if (!paintLists || !paintLists.length) return;
+      paintLists = paintLists.slice();
+      /* 每天三赢改文案会 refreshDailyWinCheckin，可能增删 Done 行 */
+      if (listName === "dailyWin" && paintLists.indexOf("done") === -1) {
+        paintLists.push("done");
+      }
+      saveState({ lists: paintLists });
       render();
     }
 
@@ -127670,7 +127719,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const isTabletCoarse = mq && mq("(pointer: coarse)").matches;
       const isFineNarrow = isNarrow && mq && mq("(pointer: fine)").matches;
 
-      let leadSize = 20;
+      let leadSize = 28;
       let daySize = 12;
       let leadFloor = 8;
       let dayFloor = 8;
@@ -127680,8 +127729,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         leadFloor = 7.5;
         dayFloor = 7;
       } else if (isFineNarrow) {
-        /* 窄屏笔记本：HARD 按 CSS 20px 起算；大屏 ≥1367 不改此分支 */
-        leadSize = 20;
+        /* 窄屏笔记本：HARD 按 CSS 28px 起算；大屏 ≥1367 不改此分支 */
+        leadSize = 28;
         daySize = 17;
         leadFloor = 8;
         dayFloor = 8;
@@ -127695,7 +127744,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         mq("(min-width: 1367px)").matches &&
         document.body.classList.contains("primary-module-fullscreen")
       ) {
-        leadSize = 21;
+        leadSize = 29;
       }
 
       lead.style.fontSize = leadSize + "px";
