@@ -28022,7 +28022,12 @@
 
       .done-manual-input-wrap--done-slogan .done-manual-input-slogan__lead {
         flex: 0 0 auto;
-        font-size: 20px;
+        font-size: 25px;
+      }
+
+      /* FOCUS→OBSESSION 整组右移，内部 gap/样式不动 */
+      .done-manual-input-wrap--done-slogan .done-manual-input-slogan__core {
+        margin-left: 24px;
       }
 
       .done-manual-input-wrap--done-slogan .done-manual-input-slogan__obsession {
@@ -28262,7 +28267,7 @@
 
       .done-manual-input-wrap--done-slogan .done-manual-input-slogan__lead {
         overflow: visible;
-        font-size: 20px;
+        font-size: 25px;
       }
 
       .done-manual-input-wrap--done-slogan .done-manual-input-slogan__obsession {
@@ -39465,7 +39470,7 @@
       }
 
       body.primary-module-fullscreen #dynamicModule.module-focus-active .kinetic-sub-done .done-toolbar-row .done-manual-input-wrap--done-slogan .done-manual-input-slogan__lead {
-        font-size: 21px;
+        font-size: 26.25px;
       }
 
       body.primary-module-fullscreen #dynamicModule.module-focus-active .kinetic-sub-done .done-toolbar-row .done-manual-input-wrap--done-slogan .done-manual-input-slogan__obsession {
@@ -92199,6 +92204,38 @@
         : Date.now();
     }
 
+    /**
+     * Syncing ≠ Blocking：在同步重阶段之间主动让出主线程，
+     * 不改变后续步骤顺序与数据依赖，仅给浏览器处理输入/滚动的机会。
+     */
+    function yieldToMainThread() {
+      return new Promise(function (resolve) {
+        try {
+          if (typeof scheduler !== "undefined" && typeof scheduler.yield === "function") {
+            scheduler.yield().then(resolve, function () {
+              setTimeout(resolve, 0);
+            });
+            return;
+          }
+        } catch (_yieldErr) {}
+        setTimeout(resolve, 0);
+      });
+    }
+
+    /** 异步 merge 包装：与 uiStallWrapMerge 相同计数，但 await 完整完成后再记 mergeMs */
+    async function uiStallWrapMergeAsync(fn) {
+      uiStallBegin("cloudMerge");
+      const outer = uiStallMergeDepth === 0;
+      const t0 = outer ? beginCloudSyncPerf() : null;
+      uiStallMergeDepth += 1;
+      try {
+        return await fn();
+      } finally {
+        uiStallMergeDepth -= 1;
+        if (outer && t0 != null) uiStallNoteMerge(cloudSyncPerfNow() - t0);
+      }
+    }
+
     /** 第三阶段 · 交互性能诊断（仅 ?perf=1 或 localStorage todo-app-perf-diag-v1=1） */
     const PERF_DIAG_KEY = "todo-app-perf-diag-v1";
     let perfDiagForceOn = false;
@@ -96203,7 +96240,23 @@
         markBackgroundUiRenderDeferred();
         return;
       }
-      render();
+      /* Syncing≠Blocking：最终 render 前让出一帧，避免与 hash/persist 粘在同一长任务 */
+      void (async function () {
+        await yieldToMainThread();
+        if (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) {
+          markBackgroundUiRenderDeferred();
+          return;
+        }
+        if (typeof isAppUiBusyForBackgroundRefresh === "function" && isAppUiBusyForBackgroundRefresh()) {
+          markBackgroundUiRenderDeferred();
+          return;
+        }
+        if (renderDepth > 0) {
+          noteCloudSyncUiRenderPending();
+          return;
+        }
+        render();
+      })();
     }
 
     /** cloud 驱动的 UI 刷新入口：syncing 时只累计 pending */
@@ -101596,38 +101649,38 @@
     /**
      * 本机 Done 为空但云端有记录时：先合并；仍为空则整包拉取，避免平板只连上却看不到电脑数据。
      */
-    function absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, opts) {
+    async function absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, opts) {
       if (!payload || !payload.state) return false;
       materializePayloadDoneForMerge(payload);
       if (!Array.isArray(payload.state.done)) return false;
       const remoteLen = payload.state.done.length;
       const localLen = countDoneRecordsInState(state);
       if (payload.doneOmitted) {
-        return applyCloudPayloadWithMerge(payload, opts);
+        return await applyCloudPayloadWithMerge(payload, opts);
       }
-      if (remoteLen === 0) return applyCloudPayloadWithMerge(payload, opts);
+      if (remoteLen === 0) return await applyCloudPayloadWithMerge(payload, opts);
       if (localLen === 0) {
-        const mergedOk = applyCloudPayloadWithMerge(payload, opts);
+        const mergedOk = await applyCloudPayloadWithMerge(payload, opts);
         if (mergedOk && countDoneRecordsInState(state) > 0) return true;
         console.warn("[云同步] 本机 Done 为空，合并后仍为 0，改为整包拉取云端。");
-        return applyRemoteState(payload.state, true);
+        return await applyRemoteState(payload.state, true);
       }
-      return applyCloudPayloadWithMerge(payload, opts);
+      return await applyCloudPayloadWithMerge(payload, opts);
     }
 
     /**
      * 合并云端 payload：禁止用「空远端 Done」覆盖本机；force 时整包覆盖（拉取最新）。
      */
-    function applyCloudPayloadWithMerge(payload, opts) {
-      return uiStallWrapMerge(function () {
+    async function applyCloudPayloadWithMerge(payload, opts) {
+      return uiStallWrapMergeAsync(async function () {
       if (!payload || !payload.state) return false;
       materializePayloadDoneForMerge(payload);
       if (!Array.isArray(payload.state.done)) return false;
       const force = Boolean(opts && opts.force);
       if (force) {
         /* 即便调用方要求整包覆盖，也先过「少不覆盖多」守卫 */
-        if (guardAgainstFewerRecordsOverwrite(payload.state)) return true;
-        return applyRemoteState(payload.state, true);
+        if (await guardAgainstFewerRecordsOverwrite(payload.state)) return true;
+        return await applyRemoteState(payload.state, true);
       }
       const localLen = Array.isArray(state.done) ? state.done.length : 0;
       const remoteLen = payload.state.done.length;
@@ -101644,17 +101697,21 @@
       } catch (_locEnfSnap) {
         localSnapForEnforce = null;
       }
+      /* Syncing≠Blocking：remote/local 深拷贝后让出，再跑整包 merge */
+      await yieldToMainThread();
       const merged = mergeLocalStateWithRemotePayloadBeforePush(
         payload.state,
         coerceCloudUpdatedAt(payload.updatedAt),
         getCloudLastSeenUpdatedAt()
       );
       if (!merged) return false;
+      /* Syncing≠Blocking：merge 完成后让出，再 apply/repair */
+      await yieldToMainThread();
       const mergeOpts = Object.assign({}, opts || {}, {
         lifetimeEnforceLocal: localSnapForEnforce,
         lifetimeEnforceRemote: payload.state
       });
-      const r = applyMergedCloudStateInMemory(merged, mergeOpts);
+      const r = await applyMergedCloudStateInMemory(merged, mergeOpts);
       return Boolean(r && r.ok);
       });
     }
@@ -101723,28 +101780,33 @@
      * 返回 true 表示已用合并方式处理，调用方无需再整包覆盖。
      */
     function guardAgainstFewerRecordsOverwrite(remoteState) {
-      if (!remoteState || typeof remoteState !== "object") return false;
+      if (!remoteState || typeof remoteState !== "object") return Promise.resolve(false);
       const localN = countBusinessRecordsInState(state);
       const remoteN = countBusinessRecordsInState(remoteState);
       const fewerClosed = countClosedListRecordsInState(state) > countClosedListRecordsInState(remoteState);
       const fewerChapters = countReadingPlanChaptersInState(state) > countReadingPlanChaptersInState(remoteState);
       const fewerHabitMarks =
         countHabitCheckinMarksInState(state) > countHabitCheckinMarksInState(remoteState);
-      if (localN === 0) return false;
-      if (remoteN >= localN && !fewerClosed && !fewerChapters && !fewerHabitMarks) return false;
+      if (localN === 0) return Promise.resolve(false);
+      if (remoteN >= localN && !fewerClosed && !fewerChapters && !fewerHabitMarks) {
+        return Promise.resolve(false);
+      }
+      return (async function () {
       let localSnapForEnforce = null;
       try {
         localSnapForEnforce = JSON.parse(JSON.stringify(state));
       } catch (_snapErr) {
         localSnapForEnforce = null;
       }
+      await yieldToMainThread();
       const merged = mergeLocalStateWithRemotePayloadBeforePush(
         remoteState,
         coerceCloudUpdatedAt(remoteState.updatedAt),
         getCloudLastSeenUpdatedAt()
       );
       if (!merged) return false;
-      applyMergedCloudStateInMemory(merged, {
+      await yieldToMainThread();
+      await applyMergedCloudStateInMemory(merged, {
         lifetimeEnforceLocal: localSnapForEnforce,
         lifetimeEnforceRemote: remoteState
       });
@@ -101760,17 +101822,18 @@
       cloudSyncLastFullPushAt = 0;
       if (typeof scheduleCloudSyncFullPushDeferred === "function") scheduleCloudSyncFullPushDeferred();
       return true;
+      })();
     }
 
-    function applyRemoteState(remoteState, force) {
-      return uiStallWrapMerge(function () {
+    async function applyRemoteState(remoteState, force) {
+      return uiStallWrapMergeAsync(async function () {
       if (!remoteState || typeof remoteState !== "object") return false;
       if (!Array.isArray(remoteState.done)) {
         console.warn("云同步：已忽略无效远端数据（缺少 done 数组）。");
         return false;
       }
       /* 「少不覆盖多」：整包覆盖前若远端记录更少，改走并集合并 */
-      if (force && guardAgainstFewerRecordsOverwrite(remoteState)) {
+      if (force && (await guardAgainstFewerRecordsOverwrite(remoteState))) {
         return true;
       }
       const remoteRaw = JSON.stringify(remoteState);
@@ -101800,6 +101863,7 @@
         );
         toApplyRaw = JSON.stringify(toApply);
       } catch (_preMergeErr) {}
+      await yieldToMainThread();
       cloudSyncApplyingRemote = true;
       const persistRes = applyStateJsonToLocalStorage(toApplyRaw);
       if (!persistRes.ok) {
@@ -101824,6 +101888,7 @@
       }
       cloudSyncLastHash = serializeStateForCloud();
       cloudSyncApplyingRemote = false;
+      await yieldToMainThread();
       render();
       return true;
       });
@@ -102473,8 +102538,11 @@
       for (let i = 0; i < slices.length; i++) {
         if (isUiPaintSliceDirty(slices[i])) return true;
       }
-      /* habit/forge/dynamic 的 heavy 切片可能在焦点外变脏，切回时要补 paint */
-      if (heavyModulesDepDirty && (key === "habit" || key === "forge" || key === "dynamic")) {
+      /*
+       * heavy 只强制 habit/forge 补 paint。
+       * dynamic（含 Done）仅看本模块切片脏，避免 Forge/周年等 heavy 变更误触发 Done 整表重建。
+       */
+      if (heavyModulesDepDirty && (key === "habit" || key === "forge")) {
         return true;
       }
       return false;
@@ -102773,7 +102841,8 @@
           markUiPaintSlicesDirty(opts.lists);
           if (saveListsTouchHeavyModules(opts.lists)) markHeavyModulesDepDirty();
         } else if (!opts.fromHygiene && !opts.skipUiPaintDirty) {
-          markAllUiPaintSlicesDirty();
+          /* 裸 save：其它切片全脏，但已干净的 Done 保持干净（云合并仍走 markAllUiPaintSlicesDirty() 无 preserve） */
+          markAllUiPaintSlicesDirty({ preserveDoneClean: true });
         }
         saveSplit.prepareDirtyMs = perfRound(perfNow() - tPrep);
         /* 只观测：非 hygiene 写入计为 localSaveRender 链起点 */
