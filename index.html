@@ -91278,7 +91278,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260916h";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260917a";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -95386,7 +95386,8 @@
     /** 十二周年周任务增删改：记入 pulse 并立即上传；并解除全量节流以便 v2/core 尽快含周任务 */
     function saveStateAfterAnniversaryWeekChange(moduleKey, weekNum) {
       noteCloudSyncAnniversaryPulseWeek(moduleKey, weekNum);
-      saveStateWithCloudPulseImmediate();
+      /* 局部 patch 已改 DOM：勿 force stringify / markAll，否则输入编辑会卡主线程 */
+      saveState({ lists: ["closedList", "done"] });
       cloudSyncLastFullPushAt = 0;
       if (typeof scheduleCloudSyncFullPushDeferred === "function") {
         scheduleCloudSyncFullPushDeferred();
@@ -102922,7 +102923,8 @@
      */
     function uiPaintSlicesForListName(listName) {
       if (listName === "done") return ["done", "weeklyPlan", "closedList", "habit", "forge"];
-      if (listName === "closedList") return ["closedList", "done", "weeklyPlan"];
+      /* 纯文案/结构默认只脏封闭清单；改 Done / 周计划的调用方须显式把对应切片放进 lists */
+      if (listName === "closedList") return ["closedList"];
       if (listName === "memo") return ["memo"];
       if (listName === "dailyWin") return ["dailyWin", "habit"];
       if (listName === "stopDoing") return ["stopDoing"];
@@ -107685,9 +107687,9 @@
         });
       }
       closedListInput.value = "";
-      persistCriticalLocalState(["closedList"]);
-      renderClosedListPanel();
-      clearUiPaintSlice("closedList");
+      /* 防抖落盘即可：关页/切后台会 flush；同步 stringify 会把输入卡在主线程 */
+      saveState({ lists: ["closedList"] });
+      refreshClosedListLocalUi();
       closedListInput.focus();
     }
 
@@ -108215,13 +108217,13 @@
           applyWeeklyPlanCompletionFromMirror(moEarly, Boolean(item.completed), item.completedAt);
           syncAllWeeklyPlanMirrorsForWeek(moEarly.weekKey);
           saveStateWithCloudPulseImmediate({ lists: ["closedList", "done", "weeklyPlan"] });
-          render();
+          refreshClosedListLocalUi();
         } else if (moEarly && moEarly.kind === "anniversaryTw") {
           applyAnniversaryCompletionFromMirror(moEarly, Boolean(item.completed));
           syncAllAnniversaryMirrorsForTask(moEarly.module, moEarly.taskId);
           /* 周年 DOM 走 heavy 指纹；无 weeklyPlan state 变更，不必脏 weeklyPlan */
           saveStateWithCloudPulseImmediate({ lists: ["closedList", "done"] });
-          render();
+          refreshClosedListLocalUi();
         }
         return;
       }
@@ -108231,10 +108233,8 @@
         closedListCollapsedTaskIds.delete(id);
         item.completedAt = Date.now();
         closedListCompleteAnimIds.add(id);
-        window.setTimeout(() => {
-          closedListCompleteAnimIds.delete(id);
-          markUiPaintSlicesDirty(["closedList"]);
-          render();
+        window.setTimeout(function () {
+          clearClosedListCompleteEnterClass(id);
         }, 750);
         syncClosedListToDone(item);
       } else {
@@ -108261,7 +108261,7 @@
         saveOpts.hygieneDomains = ["donePrune"];
       }
       saveStateWithCloudPulseImmediate(saveOpts);
-      render();
+      refreshClosedListLocalUi();
     }
 
     function toggleMemoComplete(id, checked) {
@@ -108323,6 +108323,40 @@
       if (closedListExpandedTaskIds.has(taskId)) closedListExpandedTaskIds.delete(taskId);
       else closedListExpandedTaskIds.add(taskId);
       closedListCollapsedTaskIds.delete(taskId);
+    }
+
+    /** 展开/收起只改当前卡片 DOM，避免整页 render */
+    function applyClosedListCardExpandedDom(taskId) {
+      const expanded = closedListExpandedTaskIds.has(taskId);
+      const root = closedList || document.getElementById("closedList");
+      const li = root && root.querySelector('[data-closed-list-id="' + String(taskId) + '"]');
+      if (!li) {
+        renderClosedListPanel();
+        return;
+      }
+      const panel = li.querySelector(".closed-list-expand-panel");
+      if (panel) panel.hidden = !expanded;
+      const toggleBtn = li.querySelector(".reading-plan-item-tool-btn--toggle");
+      if (toggleBtn) {
+        toggleBtn.classList.toggle("is-active", expanded);
+        toggleBtn.setAttribute("aria-label", expanded ? "收起步骤" : "展开步骤");
+      }
+      const headerRow = li.querySelector(".closed-list-header-row");
+      if (headerRow) {
+        headerRow.setAttribute("aria-expanded", expanded ? "true" : "false");
+        headerRow.setAttribute(
+          "aria-label",
+          expanded ? "收起步骤，点击横条" : "展开步骤，点击横条"
+        );
+      }
+    }
+
+    /** 完成动画结束后只去掉入场 class，不整页重绘 */
+    function clearClosedListCompleteEnterClass(id) {
+      closedListCompleteAnimIds.delete(id);
+      const root = closedList || document.getElementById("closedList");
+      const li = root && root.querySelector('[data-closed-list-id="' + String(id) + '"]');
+      if (li) li.classList.remove("closed-list-complete-enter");
     }
 
     function isClosedListItemEffectivelyComplete(item) {
@@ -108395,8 +108429,7 @@
         item.completedAt = Date.now();
         closedListCompleteAnimIds.add(item.id);
         window.setTimeout(function () {
-          closedListCompleteAnimIds.delete(item.id);
-          render();
+          clearClosedListCompleteEnterClass(item.id);
         }, 750);
         syncClosedListToDone(item);
       } else {
@@ -108443,10 +108476,12 @@
         });
         item.miniStep = arr[0].text;
       }
-      syncClosedListParentCompleteFromSubSteps(item);
-      saveStateWithCloudPulseImmediate();
-      if (options && options.forceRender) renderClosedListPanel();
-      else render();
+      const parentChanged = syncClosedListParentCompleteFromSubSteps(item);
+      const lists = ["closedList"];
+      if (parentChanged) lists.push("done");
+      if (item.mirrorOf && item.mirrorOf.kind === "weeklyPlan") lists.push("weeklyPlan");
+      saveState({ lists: lists });
+      refreshClosedListLocalUi();
     }
 
     function addClosedListSubStepWithText(taskId, lineText) {
@@ -108482,8 +108517,8 @@
           .filter(Boolean);
         item.miniStep = nonempty[0] || "";
       }
-      saveState();
-      render();
+      saveState({ lists: ["closedList"] });
+      refreshClosedListLocalUi();
     }
 
     function updateClosedListDeadline(id, msOrNull) {
@@ -108520,7 +108555,7 @@
       }
       dedupeWeeklyPlanTasksInStorage();
       saveStateAfterDeadlineChange({ closedListId: id, weekKeys: pulseWeekKeys });
-      render();
+      refreshClosedListLocalUi();
     }
 
     function isClosedListDateEditable() {
@@ -108535,8 +108570,8 @@
       const item = state.closedList.find((x) => x.id === id);
       if (!item) return;
       item.avoidance = normalizeClosedListAvoidance(level);
-      saveState();
-      render();
+      saveState({ lists: ["closedList"] });
+      refreshClosedListLocalUi();
     }
 
     const RULE100_UNIT_LABELS = {
@@ -114645,6 +114680,11 @@
         const dk = getDailyWinItemDateKey(task);
         if (dk) refreshDailyWinCheckin(dk);
       }
+      if (listName === "closedList") {
+        saveState({ lists: ["closedList", "done"] });
+        refreshClosedListLocalUi();
+        return;
+      }
       let paintLists = uiPaintSlicesForListName(listName);
       if (paintLists && paintLists.length) {
         paintLists = paintLists.slice();
@@ -114698,6 +114738,14 @@
         if (!it) return;
         it.text = t;
         it.updatedAt = Date.now();
+        const lists = ["closedList"];
+        if (isClosedListItemEffectivelyComplete(it)) {
+          syncClosedListToDone(it);
+          lists.push("done");
+        }
+        saveState({ lists: lists });
+        refreshClosedListLocalUi();
+        return;
       } else {
         return;
       }
@@ -126896,7 +126944,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           clToggleBtn.addEventListener("click", function (ev) {
             ev.stopPropagation();
             toggleClosedListCardExpandedState(task.id);
-            render();
+            applyClosedListCardExpandedDom(task.id);
           });
           toolbar.appendChild(clToggleBtn);
 
@@ -126930,7 +126978,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
           function toggleClosedListCardExpanded() {
             toggleClosedListCardExpandedState(task.id);
-            render();
+            applyClosedListCardExpandedDom(task.id);
           }
 
           headerRow.setAttribute("aria-expanded", isExpanded ? "true" : "false");
@@ -131829,7 +131877,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       ensureWeeklyPlanUi();
       if (lane !== "reading" && lane !== "planned" && lane !== "completed") return;
       state.weeklyPlanUi.readingPlanLane = lane;
-      saveState();
+      saveState({ skipUiPaintDirty: true });
       syncReadingPlanCategoryTabsUI();
     }
 
@@ -132658,7 +132706,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       else if (lane === "work") out = life.concat(mergedSegment).concat(open);
       else out = life.concat(work).concat(mergedSegment);
       saveWeeklyPlanTasksForWeek(out);
-      render();
+      refreshWeeklyPlanListAfterStructureChange();
     }
 
     /** Closed List 展示归属日：有截止日则用截止日历日，否则用 createdAt 日历日 */
@@ -132810,8 +132858,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (!mo || mo.kind !== "weeklyPlan" || mo.weekKey !== weekKey || mo.id !== taskId) return true;
         return false;
       });
-      saveStateAfterWeeklyPlanStructuralChange(weekKey);
-      render();
+      saveState({ lists: ["weeklyPlan", "done", "closedList"] });
+      refreshWeeklyPlanListAfterStructureChange();
     }
 
     /** 将周计划主任务同步到当日 Closed List（mirrorOf 联动：任一侧完成则另一侧对齐） */
@@ -133766,7 +133814,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function updateWeeklyPlanTaskText(taskId, newText) {
       const text = String(newText || "").trim();
       if (!text) {
-        render();
+        refreshWeeklyPlanListAfterStructureChange();
         return;
       }
       const tasks = getWeeklyPlanTasksForViewSprint();
@@ -133775,7 +133823,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       task.text = text;
       touchWeeklyPlanTaskRevision(task);
       saveWeeklyPlanTasksForWeek(tasks);
-      render();
+      refreshWeeklyPlanListAfterStructureChange();
     }
 
     function updateWeeklyPlanDeadline(taskId, msOrNull) {
@@ -133795,7 +133843,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const syncWeek = after ? after.weekKey : getWeeklyPlanViewSprintStartKey();
       syncAllWeeklyPlanMirrorsForWeek(syncWeek);
       saveStateAfterDeadlineChange({ weekKeys: pulseWeekKeys });
-      render();
+      refreshWeeklyPlanListAfterStructureChange();
     }
 
     function addWeeklyPlanMicroTask(taskId, microText) {
@@ -133840,7 +133888,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       touchWeeklyPlanTaskRevision(task);
       saveWeeklyPlanTasksForWeekWithPulse(tasks);
       syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewSprintStartKey());
-      render();
+      refreshWeeklyPlanListAfterStructureChange();
     }
 
     function toggleWeeklyPlanMicroDone(taskId, microId, checked) {
@@ -133858,7 +133906,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       touchWeeklyPlanTaskRevision(task);
       saveWeeklyPlanTasksForWeekWithPulse(tasks);
       syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewSprintStartKey());
-      render();
+      refreshWeeklyPlanListAfterStructureChange();
     }
 
     function updateWeeklyPlanMicroText(taskId, microId, newText) {
@@ -133871,7 +133919,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       m.updatedAt = Date.now();
       touchWeeklyPlanTaskRevision(task);
       saveWeeklyPlanTasksForWeek(tasks);
-      render();
+      refreshWeeklyPlanListAfterStructureChange();
     }
 
     function deleteWeeklyPlanMicroTask(taskId, microId) {
@@ -133896,7 +133944,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewSprintStartKey());
       noteCloudSyncWeeklyPlanPulseWeekKey(wk);
       flushCloudSyncPulseImmediate();
-      render();
+      refreshWeeklyPlanListAfterStructureChange();
     }
 
     function renderWeeklyPlanChrome() {
@@ -134624,7 +134672,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         toggleBtn.addEventListener("click", (ev) => {
           ev.stopPropagation();
           setWeeklyPlanMicroSectionExpanded(task.id, !microExpanded);
-          render();
+          applyWeeklyPlanCardExpandedDom(task.id);
         });
         toolbar.appendChild(toggleBtn);
         toolbar.appendChild(actWrap);
@@ -134648,7 +134696,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             if (ev.target.closest(".app-extreme-deadline-popover")) return;
             ev.stopPropagation();
             setWeeklyPlanMicroSectionExpanded(task.id, !microExpanded);
-            render();
+            applyWeeklyPlanCardExpandedDom(task.id);
           });
         }
         cardBody.appendChild(microWrap);
@@ -134863,6 +134911,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return book;
     }
 
+    /** 阅读计划落盘：不 markAll，避免 Habit/Done/十二周年连坐 */
+    function saveReadingPlanLocal() {
+      saveState({ skipUiPaintDirty: true });
+    }
+
     function addReadingPlanBook(status, titleInputEl) {
       const title = String((titleInputEl && titleInputEl.value) || "").trim();
       if (!title) {
@@ -134873,7 +134926,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       getReadingPlanBooks().unshift(createReadingPlanBook(title, lane));
       if (titleInputEl) titleInputEl.value = "";
       setReadingPlanLane(lane);
-      saveState();
+      saveReadingPlanLocal();
       renderReadingPlan();
       if (titleInputEl) titleInputEl.focus();
     }
@@ -134915,7 +134968,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         });
       }
       state.readingPlan.books = books.filter((b) => b.id !== bookId);
-      saveState();
+      saveReadingPlanLocal();
       renderReadingPlan();
     }
 
@@ -134926,8 +134979,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!book) return;
       book.title = t;
       touchReadingPlanBookUpdatedAt(book);
-      saveState();
-      render();
+      saveReadingPlanLocal();
+      renderReadingPlan();
     }
 
     /** 更新书名与「针对的问题」（编辑保存时一并写入） */
@@ -134942,8 +134995,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         book.readOn = normalizeReadingPlanReadOn(readOnOpt);
       }
       touchReadingPlanBookUpdatedAt(book);
-      saveState();
-      render();
+      saveReadingPlanLocal();
+      renderReadingPlan();
     }
 
     function updateReadingPlanBookReadOn(bookId, next) {
@@ -134951,7 +135004,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!book) return;
       book.readOn = normalizeReadingPlanReadOn(next);
       touchReadingPlanBookUpdatedAt(book);
-      saveState();
+      saveReadingPlanLocal();
       renderReadingPlan();
     }
 
@@ -134969,7 +135022,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       touchReadingPlanBookUpdatedAt(book);
       ensureWeeklyPlanUi();
       state.weeklyPlanUi.readingPlanExpandedBooks[bookId] = true;
-      persistCriticalLocalState(["weeklyPlan"]);
+      saveReadingPlanLocal();
       renderReadingPlan();
     }
 
@@ -135030,7 +135083,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (lane) {
         setReadingPlanLane(lane);
       } else {
-        saveState();
+        saveReadingPlanLocal();
       }
       renderReadingPlan();
     }
@@ -135044,7 +135097,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!chapter) return;
       chapter.text = text;
       touchReadingPlanBookUpdatedAt(book);
-      saveState();
+      saveReadingPlanLocal();
     }
 
     function deleteReadingPlanChapter(bookId, chapterId) {
@@ -135066,7 +135119,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (lane) {
         setReadingPlanLane(lane);
       } else {
-        saveState();
+        saveReadingPlanLocal();
       }
       renderReadingPlan();
     }
@@ -135084,7 +135137,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         delete book.completedAt;
       }
       setReadingPlanLane(status);
-      saveState();
+      saveReadingPlanLocal();
       renderReadingPlan();
     }
 
@@ -135158,8 +135211,26 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function toggleReadingPlanBookExpanded(bookId) {
       ensureWeeklyPlanUi();
       state.weeklyPlanUi.readingPlanExpandedBooks[bookId] = !isReadingPlanBookExpanded(bookId);
-      saveState();
-      renderReadingPlan();
+      saveReadingPlanLocal();
+      applyReadingPlanBookExpandedDom(bookId);
+    }
+
+    /** 展开/收起章节区只改当前书卡片，不重建三栏列表 */
+    function applyReadingPlanBookExpandedDom(bookId) {
+      const expanded = isReadingPlanBookExpanded(bookId);
+      const root = document.getElementById("weeklyPlanReadingPanel");
+      const li = root && root.querySelector('li[data-book-id="' + String(bookId) + '"]');
+      if (!li) {
+        renderReadingPlan();
+        return;
+      }
+      const wrap = li.querySelector(".reading-plan-chapters-wrap");
+      if (wrap) wrap.hidden = !expanded;
+      const toggleBtn = li.querySelector(".reading-plan-item-tool-btn--toggle");
+      if (toggleBtn) {
+        toggleBtn.classList.toggle("is-active", expanded);
+        toggleBtn.setAttribute("aria-label", expanded ? "收起章节" : "展开章节");
+      }
     }
 
     function appendReadingPlanBookToolbar(toolbarEl, book, titleBlockEl) {
@@ -135365,7 +135436,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!(next > 0) || next === Number(book.completedAt)) return;
       book.completedAt = next;
       touchReadingPlanBookUpdatedAt(book);
-      saveState();
+      saveReadingPlanLocal();
       renderReadingPlan();
     }
 
@@ -135644,7 +135715,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function renderReadingPlan() {
       if (reconcileReadingPlanBookStatuses()) {
-        saveState();
+        saveReadingPlanLocal();
       }
       const books = getReadingPlanBooks().slice();
       const readingBooks = books.filter((b) => b.status === "reading");
@@ -137388,9 +137459,30 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function refreshWeeklyPlanListAfterStructureChange() {
       if (dedupeWeeklyPlanTasksInStorage()) {
-        saveState();
+        saveState({ lists: ["weeklyPlan"] });
       }
+      try {
+        renderWeeklyPlanChrome();
+      } catch (_wpChromeErr) {}
       renderWeeklyPlanList();
+      clearUiPaintSlice("weeklyPlan");
+    }
+
+    /** 展开/收起微任务只改当前卡片，避免整页 render */
+    function applyWeeklyPlanCardExpandedDom(taskId) {
+      const expanded = weeklyPlanMicroExpandedIds.has(taskId);
+      const li = document.getElementById("weeklyPlanTask-" + String(taskId));
+      if (!li) {
+        renderWeeklyPlanList();
+        return;
+      }
+      const wrap = li.querySelector(".weekly-plan-micro-wrap");
+      if (wrap) wrap.classList.toggle("collapsed", !expanded);
+      const toggleBtn = li.querySelector(".reading-plan-item-tool-btn--toggle");
+      if (toggleBtn) {
+        toggleBtn.classList.toggle("is-active", expanded);
+        toggleBtn.setAttribute("aria-label", expanded ? "收起子步骤" : "展开子步骤");
+      }
     }
 
     function getFilteredClosedListItemsForView() {
@@ -137401,6 +137493,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return filteredClosedListItemsRaw.slice().sort((a, b) =>
         compareClosedListItemsForSort(a, b, allClosedListHaveListOrder)
       );
+    }
+
+    /**
+     * 封闭清单增删改：只重绘本面板，不连坐 Done / 周计划 / 十二周年。
+     * 完成态切片仍由 saveState.lists 标脏，切到对应 Tab 时再 paint。
+     */
+    function refreshClosedListLocalUi() {
+      renderClosedListPanel();
+      clearUiPaintSlice("closedList");
+      try {
+        syncWeeklyPlanIsgGateUI();
+      } catch (_closedIsgErr) {}
     }
 
     /** 仅刷新封闭清单面板（不含全页 render） */
@@ -137426,7 +137530,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
       });
       if (closedListParentSyncChanged) {
-        saveState();
+        saveState({ lists: ["closedList", "done", "weeklyPlan"] });
         filteredClosedListItems = getFilteredClosedListItemsForView();
       }
       const closedKanbanOn =
@@ -137492,10 +137596,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         } finally {
           anniversaryAddLock = false;
         }
-        flushComposerSaveRender();
+        addInp.focus();
       };
       addInp.addEventListener("keydown", function (ev) {
-        if (ev.key === "Enter") {
+        if (ev.key === "Enter" && !ev.isComposing) {
           ev.preventDefault();
           commitAnniversaryAdd();
         }
@@ -137651,8 +137755,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       stampDeadlineChange(task, msOrNull);
       syncAllAnniversaryMirrorsForTask("tw020", taskId);
-      saveStateAfterDeadlineChange({ tw020Week: weekNum });
-      render();
+      saveStateAfterAnniversaryWeekChange("tw020", weekNum);
+      refreshAnniversaryTwWeekTasksPanel("tw020", weekNum);
     }
 
     function deleteTw020Task(weekNum, taskId) {
@@ -139105,10 +139209,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           perfIx.active.marks.saveStateMs = Math.round((nowFn() - tSave0) * 100) / 100;
         }
         const tRender0 = nowFn();
-        render();
+        refreshAnniversaryTwWeekTasksPanel(mk, weekNum);
         if (perfIx && perfIx.active) {
           perfIx.active.marks.renderMs = Math.round((nowFn() - tRender0) * 100) / 100;
-          perfIx.active.marks.fullRenderCount = 1;
+          perfIx.active.marks.fullRenderCount = 0;
           perfIx.active.marks.patchCount = 0;
         }
         result.fullRender = true;
@@ -139207,7 +139311,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           console.log("[PERF] anniversary parent task patch failed → full render fallback", result.miss);
         } catch (_pe) {}
         saveStateAfterAnniversaryWeekChange(mk, weekNum);
-        render();
+        refreshAnniversaryTwWeekTasksPanel(mk, weekNum);
         result.fullRender = true;
         result.ok = true;
         return result;
@@ -147862,7 +147966,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     });
     closedListInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
+      if (event.key === "Enter" && !event.isComposing) {
         addClosedList();
       }
     });
