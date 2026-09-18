@@ -92243,10 +92243,13 @@
 
     let selectedDoneDate = "";
     /**
-     * Done List 时间轴：是否隐藏 timeReflection 提醒（仅组件级 UI，不入 state / 不持久化）。
-     * 默认 false = 显示全部；切换只影响渲染层可见项。
+     * Done List 时间轴：是否隐藏 timeReflection 提醒（不入业务 state / 不上云）。
+     * 换日按奇偶轮流默认；同日偏好写入 localStorage，刷新不翻转，仅手动切换才改。
      */
     let doneListHideTimeReflections = false;
+    /** 本会话已对齐的本地日历日 YYYY-MM-DD */
+    let doneListHideRemindersAppliedDayKey = "";
+    const DONE_HIDE_REMINDERS_DAY_PREF_KEY = "todo-app-done-hide-reminders-day-v1";
     let selectedClosedListDate = "";
     let closedListDateFilterSyncing = false;
     /** Closed List 日界结转：已扫描到的本地日历日（避免同一天重复全表扫描） */
@@ -125384,8 +125387,59 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return !(task && task.kind === "timeReflection");
     }
 
+    /** 按本地日历日奇偶轮流：奇数日默认隐藏提醒，偶数日默认显示 */
+    function getDoneHideRemindersDailyDefault(dateKey) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey || ""));
+      if (!m) return false;
+      const daySerial = Math.floor(
+        Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) / 86400000
+      );
+      return daySerial % 2 === 1;
+    }
+
+    function readDoneHideRemindersDayPref() {
+      try {
+        const raw = localStorage.getItem(DONE_HIDE_REMINDERS_DAY_PREF_KEY);
+        if (!raw) return null;
+        const o = JSON.parse(raw);
+        if (!o || typeof o !== "object") return null;
+        const dayKey = String(o.dayKey || "");
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return null;
+        return { dayKey: dayKey, hiding: !!o.hiding };
+      } catch (_e) {
+        return null;
+      }
+    }
+
+    function writeDoneHideRemindersDayPref(dayKey, hiding) {
+      try {
+        localStorage.setItem(
+          DONE_HIDE_REMINDERS_DAY_PREF_KEY,
+          JSON.stringify({ dayKey: String(dayKey || ""), hiding: !!hiding })
+        );
+      } catch (_e) {}
+    }
+
+    /**
+     * 仅换日时套用轮流默认并写入当日偏好；
+     * 同日若已有偏好（含手动切换）则原样恢复，刷新/重绘不自动翻转。
+     */
+    function ensureDoneHideRemindersDailyDefault() {
+      const todayKey = formatDateInputValue(new Date());
+      if (doneListHideRemindersAppliedDayKey === todayKey) return;
+      const pref = readDoneHideRemindersDayPref();
+      if (pref && pref.dayKey === todayKey) {
+        doneListHideTimeReflections = pref.hiding;
+      } else {
+        doneListHideTimeReflections = getDoneHideRemindersDailyDefault(todayKey);
+        writeDoneHideRemindersDayPref(todayKey, doneListHideTimeReflections);
+      }
+      doneListHideRemindersAppliedDayKey = todayKey;
+    }
+
     /** Done 时间轴可见性：隐藏提醒时滤掉 timeReflection（不改 state.done） */
     function applyDoneListTimeReflectionVisibilityFilter(tasks) {
+      ensureDoneHideRemindersDailyDefault();
       if (!doneListHideTimeReflections) return tasks || [];
       return (tasks || []).filter(function (t) {
         return !(t && t.kind === "timeReflection");
@@ -125393,6 +125447,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function syncDoneHideRemindersToggleUi() {
+      ensureDoneHideRemindersDailyDefault();
       const btn = document.getElementById("doneHideRemindersToggle");
       if (!btn) return;
       const hiding = !!doneListHideTimeReflections;
@@ -125400,8 +125455,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       btn.classList.toggle("is-active", hiding);
       btn.textContent = hiding ? "显示提醒" : "隐藏提醒";
       btn.title = hiding
-        ? "显示 Done 时间轴中的定时提醒"
-        : "隐藏 Done 时间轴中的定时提醒";
+        ? "显示 Done 时间轴中的定时提醒（按日轮流默认，可手动切换）"
+        : "隐藏 Done 时间轴中的定时提醒（按日轮流默认，可手动切换）";
     }
 
     /**
@@ -126262,8 +126317,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     /** My Done：间隙日志 — 卡片三行（色点标签 | 内容），任务名仅在 Act 行展示。
      * 仅在行展开时挂载（见 ensureDoneInterstitialJournalMounted），避免时段展开后
-     * 每条任务预建 2 个 textarea + 双 rAF 量高，导致列表滚动卡顿。 */
+     * 每条任务预建 2 个 textarea + 双 rAF 量高，导致列表滚动卡顿。
+     * 已下线：不再挂载 Act / Assess / Adjust 卡片（保留函数以免调用方报错）。 */
     function appendDoneInterstitialJournal(containerEl, liForSync, task, actLineText) {
+      return;
       if (!containerEl || !liForSync || !task || task.kind === "timeReflection") return;
       if (containerEl.querySelector(":scope > .done-interstitial-journal")) return;
       const dj =
@@ -149066,7 +149123,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       btn.addEventListener("click", function (event) {
         event.preventDefault();
         event.stopPropagation();
+        ensureDoneHideRemindersDailyDefault();
         doneListHideTimeReflections = !doneListHideTimeReflections;
+        writeDoneHideRemindersDayPref(
+          doneListHideRemindersAppliedDayKey || formatDateInputValue(new Date()),
+          doneListHideTimeReflections
+        );
         refreshDoneListVisibilityOnly();
       });
     })();
