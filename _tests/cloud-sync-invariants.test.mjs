@@ -269,6 +269,43 @@ test("habit：两侧都有 revisedAt 时较新清空可盖掉旧勾选", functio
   assert(ctx.isHabitCheckinClearedMarker(out));
 });
 
+test("habit：cleared+revisedAt 不得盖掉来自 Done 回补的无修订戳勾选", function () {
+  const cleared = { cleared: true, times: 0, revisedAt: 9000 };
+  const fromDone = { times: 1 };
+  const out = ctx.mergeHabitCheckinValueForSync(cleared, fromDone);
+  assert(ctx.isHabitCheckinValueChecked(out));
+  assertEq(out.times, 1);
+});
+
+test("habit Done 去重键按 id 独立，同文案不合并", function () {
+  const a = {
+    id: "h1",
+    text: "【习惯】餐后 5–10 分钟轻度散步 · 第 1 次打卡",
+    completedAt: Date.parse("2026-09-18T12:00:00"),
+    habitMeta: { key: "protocolWalkAfterMeals", date: "2026-09-18" }
+  };
+  const b = {
+    id: "h2",
+    text: "【习惯】餐后 5–10 分钟轻度散步 · 第 1 次打卡",
+    completedAt: Date.parse("2026-09-18T12:00:00"),
+    habitMeta: { key: "protocolWalkAfterMeals", date: "2026-09-18" }
+  };
+  const ka = ctx.normalizeDoneTaskDedupeKey(a);
+  const kb = ctx.normalizeDoneTaskDedupeKey(b);
+  assert(ka === "habit:h1");
+  assert(kb === "habit:h2");
+  assert(ka !== kb);
+});
+
+test("Done 性质合并：preferRemote 时 power 仍优先于远端 neutral", function () {
+  const base = { id: "d1", text: "吃老谭湘菜", completedAt: 1 };
+  const local = Object.assign({}, base, { outcomeKind: "power", outcomeScore: 1 });
+  const remote = Object.assign({}, base, { outcomeKind: "neutral", outcomeScore: 0 });
+  const out = ctx.mergeDoneItemOutcomeFields(base, local, remote, true);
+  assertEq(out.outcomeKind, "power");
+  assertEq(out.outcomeScore, 1);
+});
+
 test("空云端 Done 不能覆盖本机", async function () {
   ctx.cloudSyncLastErrorMsg = "";
   ctx.state = emptyState({ done: [{ id: "keep", text: "local", createdAt: 1 }] });

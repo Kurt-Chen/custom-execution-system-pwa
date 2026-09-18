@@ -91329,7 +91329,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260918d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260918e";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -92245,6 +92245,8 @@
     let habitCheckinsSubTabPaintedOnce = false;
     let habitCheckinsSubTabDirty = true;
     let habitCheckinsSubTabPaintDayKey = "";
+    /** 打卡刚完成后禁止立刻「减一次」，避免手机端误触把刚写入的卡清掉 */
+    let habitCheckinClearGuardUntil = 0;
     /**
      * Sprint 壳（Closed/Life/Work/Open）：内存级 paint/dirty（不落盘）。
      * P1.5：Life/Work/Open 各有常驻宿主；warm 且 !dirty 只 hidden/class，不搬家 DOM。
@@ -95966,7 +95968,7 @@
       return mergeDoneItemOutcomeFields(out, L, R, preferRemoteOnConflict);
     }
 
-    /** 合并 My Done 完成性质与分值：任一侧已选则保留；冲突时由 preferRemoteOnConflict 决定 */
+    /** 合并 My Done 完成性质与分值：任一侧已选则保留；power/treason 优先于 neutral（防 pulse preferRemote 打回 0） */
     function mergeDoneItemOutcomeFields(mergedItem, localItem, remoteItem, preferRemoteOnConflict) {
       if (!mergedItem || mergedItem.kind === "timeReflection" || doneTaskUsesPowerBadgeOnly(mergedItem)) {
         return mergedItem;
@@ -95978,7 +95980,15 @@
       if (!locEx && remEx) kind = remoteItem.outcomeKind;
       else if (locEx && !remEx) kind = localItem.outcomeKind;
       else if (localItem.outcomeKind === remoteItem.outcomeKind) kind = localItem.outcomeKind;
-      else kind = preferRemoteOnConflict ? remoteItem.outcomeKind : localItem.outcomeKind;
+      else {
+        const locK = localItem.outcomeKind;
+        const remK = remoteItem.outcomeKind;
+        const locStrong = locK === "power" || locK === "treason";
+        const remStrong = remK === "power" || remK === "treason";
+        if (locStrong && remK === "neutral") kind = locK;
+        else if (remStrong && locK === "neutral") kind = remK;
+        else kind = preferRemoteOnConflict ? remK : locK;
+      }
       const srcForScore =
         kind === (remoteItem && remoteItem.outcomeKind) &&
         (preferRemoteOnConflict || !locEx || localItem.outcomeKind !== kind)
@@ -99355,6 +99365,11 @@
       try {
         flushLocalPersistedState("force");
       } catch (_habitFlushErr) {}
+      /* 立刻 flush pulse，缩短「只在本机、云端仍是旧 cleared/空槽」窗口（与 Done 选分一致） */
+      try {
+        flushCloudSyncPulseImmediate();
+      } catch (_habitPulseFlushErr) {}
+      habitCheckinClearGuardUntil = Date.now() + 450;
       scheduleCloudSyncFullPushAfterCheckin();
       finalizeHabitCheckinUiAfterPunch();
     }
@@ -106587,12 +106602,16 @@
         state.habitCheckins = mergeHabitCheckinsForSync(hcBeforeReconcile, state.habitCheckins);
       }
       if (rebuiltHc) {
-        ENGLISH_HABIT_LIFETIME_KEYS.forEach(function (habitKey) {
-          Object.keys(rebuiltHc).forEach(function (dateStr) {
+        /* 凡当日 Done 仍有行且重建为已打卡：抬回槽位（含 Protocols 简单勾选；减次会先删 Done） */
+        Object.keys(rebuiltHc).forEach(function (dateStr) {
+          const dayReb = rebuiltHc[dateStr];
+          if (!dayReb || typeof dayReb !== "object") return;
+          Object.keys(dayReb).forEach(function (habitKey) {
+            if (habitKey === "dailyThreeWinsDoneSuppressed") return;
             if (getHabitDoneRowsForDay(habitKey, dateStr).length === 0) {
               return;
             }
-            const reb = rebuiltHc[dateStr] && rebuiltHc[dateStr][habitKey];
+            const reb = dayReb[habitKey];
             if (!isHabitCheckinValueChecked(reb)) {
               return;
             }
@@ -107406,6 +107425,9 @@
     }
 
     function decrementHabitStampOnce(habitKey) {
+      if (Date.now() < habitCheckinClearGuardUntil) {
+        return;
+      }
       const todayKey = formatDateInputValue(new Date());
       const dayMap = state.habitCheckins[todayKey];
       const curVal = dayMap ? dayMap[habitKey] : null;
@@ -127835,6 +127857,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
        */
       if (task && task.manualDone && task.id != null) {
         return "manual:" + String(task.id);
+      }
+      /**
+       * 习惯打卡：同日可多次（第 N 次），文案键会在 prune 时与镜像/同文案项冲突吞掉今日行。
+       * 与 manual/Forge 一样按 id 独立保留。
+       */
+      if (task && task.habitMeta && task.id != null) {
+        return "habit:" + String(task.id);
       }
       const stripped = stripDoneTextSourcePrefixesForDedupe(task && task.text != null ? task.text : "");
       if (!stripped) return "";

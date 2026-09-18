@@ -27,6 +27,8 @@ const REQUIRED_FNS = [
   "mergeDoneItemOutcomeFields",
   "mergeDoneItemDerivedFieldsForSync",
   "mergeDoneArraysForSync",
+  "stripDoneTextSourcePrefixesForDedupe",
+  "normalizeDoneTaskDedupeKey",
   "parseClosedListSubStepStored",
   "serializeClosedListSubStepEntry",
   "mergeClosedListSubStepsForSync",
@@ -381,6 +383,8 @@ export function loadSyncFns(indexPath) {
       "function mergeForgeForSync(localForge, remoteForge, preferRemote) { var lo = localForge && typeof localForge === 'object' ? localForge : {}; var ro = remoteForge && typeof remoteForge === 'object' ? remoteForge : {}; return preferRemote ? Object.assign({}, lo, ro) : Object.assign({}, ro, lo); }",
     getForgeDoneLineInfo: "function getForgeDoneLineInfo() { return null; }",
     ensureAnniversaryTwWeekGoalsOnModule: "function ensureAnniversaryTwWeekGoalsOnModule() {}",
+    doneOutcomeScoresForKind:
+      "function doneOutcomeScoresForKind(kind) { if (kind === 'power') return [2, 1]; if (kind === 'neutral') return [0]; if (kind === 'treason') return [-1, -2, -10]; return []; }",
     formatDateInputValue:
       "function formatDateInputValue(date) { var d = date instanceof Date ? date : new Date(date); if (!Number.isFinite(d.getTime())) return ''; var m = String(d.getMonth() + 1).padStart(2, '0'); var day = String(d.getDate()).padStart(2, '0'); return d.getFullYear() + '-' + m + '-' + day; }",
     pruneRedundantDoneEntriesInState:
