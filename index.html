@@ -19340,7 +19340,6 @@
     }
 
     /* Silva / Psycho-Cybernetics：练习参考表（桌面完整表格） */
-    /* Silva / Psycho-Cybernetics：练习参考表（桌面完整表格） */
     #forgeModule #forgeMindPanelSilva .forge-silva-ref-figure {
       margin: 14px 0 4px;
       padding: 0;
@@ -19452,8 +19451,6 @@
 
     /* 手机：每条练习一块，标签+内容（不缩小字号） */
     @media (max-width: 767px) {
-    /* 手机：每条练习一块，标签+内容（不缩小字号） */
-    @media (max-width: 767px) {
       #forgeModule #forgeMindPanelSilva .forge-mind-silva-foundation-stack {
         gap: 8px;
         margin: 0 0 12px;
@@ -19507,7 +19504,7 @@
         display: none;
       }
 
-      #forgeModule #forgeMindPanelPc .forge-pc-ref-stack {      #forgeModule #forgeMindPanelPc .forge-pc-ref-stack {
+      #forgeModule #forgeMindPanelPc .forge-pc-ref-stack {
         margin: 10px 0 2px;
         gap: 18px;
       }
@@ -19659,6 +19656,40 @@
       }
 
       #forgeModule .forge-mind-ref-table td:first-child::before {
+        display: none;
+      }
+
+      #forgeModule #forgeMindPanelSilva .forge-silva-final-table td:first-child {
+        display: grid;
+        grid-template-columns: 6.2em minmax(0, 1fr);
+        gap: 6px 10px;
+        padding: 5px 0;
+        margin: 0;
+        border-bottom: 0;
+        font-size: 14px;
+        font-weight: 700;
+        text-align: left;
+      }
+
+      #forgeModule #forgeMindPanelSilva .forge-silva-final-table td:first-child::before {
+        display: block;
+        content: attr(data-label);
+        font-weight: 700;
+        font-size: 12px;
+        line-height: 1.45;
+        color: #64748b;
+      }
+
+      #forgeModule #forgeMindPanelSilva .forge-silva-final-table td:nth-child(2) {
+        display: block;
+        padding: 0 0 8px;
+        margin-bottom: 4px;
+        border-bottom: 1px solid #e2e8f0;
+        font-size: 15px;
+        font-weight: 800;
+      }
+
+      #forgeModule #forgeMindPanelSilva .forge-silva-final-table td:nth-child(2)::before {
         display: none;
       }
 
@@ -91998,7 +92029,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260920c";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260920d";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -94333,13 +94364,16 @@
     }
 
     function switchPerfBegin(label, meta) {
-      if (!isSwitchPerfEnabled()) return null;
+      if (!isSwitchDiagEnabled()) return null;
       switchPerfEnsureLongTaskObserver();
       if (switchPerfState.finishTimer) {
         clearTimeout(switchPerfState.finishTimer);
         switchPerfState.finishTimer = null;
       }
       const t0 = switchPerfNow();
+      const fromRoute = switchDiagSnapshotRoute();
+      const targetHint = switchDiagInferTargetFromLabel(label);
+      const warmBefore = switchDiagIsWarmBefore(targetHint);
       switchPerfState.active = {
         label: String(label || "switch"),
         meta: meta || null,
@@ -94347,6 +94381,7 @@
         tActivateStart: null,
         tActivateEnd: null,
         tJsHandlersEnd: null,
+        tRaf1: null,
         tPaint: null,
         phases: {},
         renders: {},
@@ -94370,12 +94405,21 @@
           didRender: false,
           needsPaint: null,
           ownSyncDuring: false
+        },
+        capture: {
+          from: fromRoute,
+          targetHint: targetHint,
+          warmBefore: warmBefore,
+          dirtyBefore: switchDiagSnapshotDirtyLight(),
+          nodesBefore: switchDiagCountDomNodes()
         }
       };
       switchPerfDomHookInstall();
-      try {
-        console.log("[SWITCH_PERF] begin", label, meta || "");
-      } catch (_log0) {}
+      if (isSwitchPerfEnabled()) {
+        try {
+          console.log("[SWITCH_PERF] begin", label, meta || "");
+        } catch (_log0) {}
+      }
       return switchPerfState.active;
     }
 
@@ -94387,7 +94431,7 @@
     }
 
     function switchPerfTimePhase(name, fn) {
-      if (!isSwitchPerfEnabled() || !switchPerfState.active) {
+      if (!isSwitchDiagEnabled() || !switchPerfState.active) {
         return typeof fn === "function" ? fn() : undefined;
       }
       const t0 = switchPerfNow();
@@ -94444,6 +94488,7 @@
       const tPaint = a.tPaint != null ? a.tPaint : switchPerfNow();
       a.tPaint = tPaint;
       if (a.tJsHandlersEnd == null) a.tJsHandlersEnd = tPaint;
+      const tRaf1 = a.tRaf1 != null ? a.tRaf1 : null;
       const rendersArr = Object.keys(a.renders).map(function (k) {
         return {
           name: k,
@@ -94485,12 +94530,36 @@
         .sort(function (x, y) {
           return phasesRounded[y] - phasesRounded[x];
         })[0];
+      const toRoute = switchDiagSnapshotRoute();
+      const nodesAfter = switchDiagCountDomNodes();
+      const singleRafMs =
+        tRaf1 != null ? switchPerfRound(tRaf1 - a.tClick) : null;
+      const doubleRafMs = switchPerfRound(tPaint - a.tClick);
+      const jsMs = switchPerfRound(a.tJsHandlersEnd - a.tClick);
+      const renderTotalMs = rendersArr.reduce(function (s, x) {
+        return s + (x.ms || 0);
+      }, 0);
+      const syncHit = {
+        pulse: (a.sync.pulseMs || 0) > 0,
+        persist: (a.sync.persistMs || 0) > 0,
+        cloudUi: (a.sync.cloudUiRenderCalls || 0) > 0 || (a.sync.cloudUiRenderMs || 0) > 0,
+        merge: (a.sync.mergeMs || 0) > 0,
+        dirtyMark: (a.sync.dirtyMarkCalls || 0) > 0 || (a.sync.dirtyMarkMs || 0) > 0
+      };
+      const warmOrCold =
+        a.capture && a.capture.warmBefore === true
+          ? "warm"
+          : a.capture && a.capture.warmBefore === false
+            ? "cold"
+            : "unknown";
       const report = {
         label: a.label,
         meta: a.meta,
         at: Date.now(),
-        clickToPaintMs: switchPerfRound(tPaint - a.tClick),
-        clickToJsEndMs: switchPerfRound(a.tJsHandlersEnd - a.tClick),
+        clickToPaintMs: doubleRafMs,
+        clickToJsEndMs: jsMs,
+        singleRafMs: singleRafMs,
+        doubleRafMs: doubleRafMs,
         clickToActivateStartMs: switchPerfRound(phasesRounded.clickToActivateStartMs || 0),
         activateLogicMs: switchPerfRound(phasesRounded.activateLogicMs || 0),
         phases: phasesRounded,
@@ -94504,6 +94573,13 @@
         },
         longTasks: longTasks,
         flags: a.flags,
+        from: a.capture && a.capture.from,
+        to: toRoute,
+        nodesBefore: a.capture && a.capture.nodesBefore,
+        nodesAfter: nodesAfter,
+        warmOrCold: warmOrCold,
+        dirtyBefore: a.capture && a.capture.dirtyBefore,
+        syncHit: syncHit,
         topCost: {
           render: topRender,
           phase: topPhaseName
@@ -94515,24 +94591,75 @@
       switchPerfState.active = null;
       switchPerfState.reports.push(report);
       if (switchPerfState.reports.length > 60) switchPerfState.reports.shift();
-      try {
-        console.log("[SWITCH_PERF] report", report);
-        console.table(
-          rendersArr.map(function (r) {
-            return { render: r.name, ms: r.ms, calls: r.calls };
-          })
-        );
-      } catch (_log1) {}
+
+      jankCapturePushRecord({
+        at: report.at,
+        iso: new Date(report.at).toISOString(),
+        label: report.label,
+        from: report.from,
+        to: report.to,
+        fromSummary:
+          (report.from && report.from.primary ? report.from.primary : "?") +
+          (report.from && report.from.sub ? "/" + report.from.sub : ""),
+        toSummary:
+          (report.to && report.to.primary ? report.to.primary : "?") +
+          (report.to && report.to.sub ? "/" + report.to.sub : ""),
+        jsMs: jsMs,
+        singleRafMs: singleRafMs,
+        doubleRafMs: doubleRafMs,
+        didRender: !!(report.flags && report.flags.didRender),
+        renderMs: switchPerfRound(renderTotalMs),
+        renderCalls: rendersArr.reduce(function (s, x) {
+          return s + (x.calls || 0);
+        }, 0),
+        createElement: report.dom.createElement,
+        appendChild: report.dom.appendChild,
+        replaceChildren: report.dom.replaceChildren,
+        needsPaint: report.flags ? report.flags.needsPaint : null,
+        dirty: report.dirtyBefore,
+        syncHit: syncHit,
+        syncMs: {
+          pulseMs: syncRounded.pulseMs || 0,
+          persistMs: syncRounded.persistMs || 0,
+          cloudUiRenderMs: syncRounded.cloudUiRenderMs || 0,
+          mergeMs: syncRounded.mergeMs || 0,
+          dirtyMarkMs: syncRounded.dirtyMarkMs || 0
+        },
+        longTasks: longTasks,
+        longTaskCount: longTasks.length,
+        longTaskMaxMs: longTasks[0] ? longTasks[0].ms : 0,
+        nodesBefore: report.nodesBefore,
+        nodesAfter: report.nodesAfter,
+        nodesDelta:
+          typeof report.nodesBefore === "number" && typeof report.nodesAfter === "number"
+            ? report.nodesAfter - report.nodesBefore
+            : null,
+        warmOrCold: warmOrCold,
+        feltJank: false
+      });
+
+      if (isSwitchPerfEnabled()) {
+        try {
+          console.log("[SWITCH_PERF] report", report);
+          console.table(
+            rendersArr.map(function (r) {
+              return { render: r.name, ms: r.ms, calls: r.calls };
+            })
+          );
+        } catch (_log1) {}
+      }
       return report;
     }
 
     function switchPerfScheduleFinishAfterPaint() {
-      if (!isSwitchPerfEnabled() || !switchPerfState.active) return;
+      if (!isSwitchDiagEnabled() || !switchPerfState.active) return;
       const token = switchPerfState.active;
       Promise.resolve().then(function () {
         if (switchPerfState.active !== token) return;
         token.tJsHandlersEnd = switchPerfNow();
         requestAnimationFrame(function () {
+          if (switchPerfState.active !== token) return;
+          token.tRaf1 = switchPerfNow();
           requestAnimationFrame(function () {
             if (switchPerfState.active !== token) return;
             token.tPaint = switchPerfNow();
@@ -94546,7 +94673,7 @@
       if (typeof fn !== "function") return fn;
       if (fn.__switchPerfWrapped) return fn;
       const wrapped = function () {
-        if (!isSwitchPerfEnabled() || !switchPerfState.active) {
+        if (!isSwitchDiagEnabled() || !switchPerfState.active) {
           return fn.apply(this, arguments);
         }
         const t0 = switchPerfNow();
@@ -94625,7 +94752,7 @@
       document.addEventListener(
         "click",
         function (ev) {
-          if (!isSwitchPerfEnabled()) return;
+          if (!isSwitchDiagEnabled()) return;
           const t = ev.target;
           if (!t || !t.closest) return;
           const label = switchPerfLabelFromClickTarget(t);
@@ -94640,15 +94767,21 @@
       );
     }
 
+    function ensureSwitchDiagBooted() {
+      bindSwitchPerfClickCapture();
+      installSwitchPerfRenderWrappers();
+      switchPerfEnsureLongTaskObserver();
+      setTimeout(installSwitchPerfRenderWrappers, 0);
+      setTimeout(installSwitchPerfRenderWrappers, 1500);
+    }
+
     window.__switchPerf = {
       enable: function () {
         switchPerfForceOn = true;
         try {
           localStorage.setItem(SWITCH_PERF_KEY, "1");
         } catch (_e) {}
-        bindSwitchPerfClickCapture();
-        installSwitchPerfRenderWrappers();
-        switchPerfEnsureLongTaskObserver();
+        ensureSwitchDiagBooted();
         return "switch-perf on（刷新后仍生效；或带 ?switchPerf=1）";
       },
       disable: function () {
@@ -94656,7 +94789,7 @@
         try {
           localStorage.setItem(SWITCH_PERF_KEY, "0");
         } catch (_e) {}
-        switchPerfState.active = null;
+        if (!isJankCaptureEnabled()) switchPerfState.active = null;
         return "switch-perf off";
       },
       isEnabled: isSwitchPerfEnabled,
@@ -94700,6 +94833,8 @@
             return {
               操作: r.label,
               总体感延迟ms: r.clickToPaintMs,
+              单rAF: r.singleRafMs,
+              双rAF: r.doubleRafMs,
               最耗时: top,
               耗时ms: topMs,
               是否同步导致: syncMs >= 16 ? "是(" + switchPerfRound(syncMs) + "ms)" : "否",
@@ -94712,11 +94847,126 @@
       }
     };
 
-    if (isSwitchPerfEnabled()) {
-      bindSwitchPerfClickCapture();
-      setTimeout(installSwitchPerfRenderWrappers, 0);
-      setTimeout(installSwitchPerfRenderWrappers, 1500);
-      switchPerfEnsureLongTaskObserver();
+    window.__jankCapture = {
+      enable: function () {
+        jankCaptureForceOn = true;
+        try {
+          localStorage.setItem(JANK_CAPTURE_KEY, "1");
+        } catch (_e) {}
+        ensureSwitchDiagBooted();
+        return "jank-capture on · 正常使用即可；感觉卡了立刻 __jankCapture.export() 或 __jankCapture.markFelt(); __jankCapture.export()";
+      },
+      disable: function () {
+        jankCaptureForceOn = false;
+        try {
+          localStorage.setItem(JANK_CAPTURE_KEY, "0");
+        } catch (_e) {}
+        if (!isSwitchPerfEnabled()) switchPerfState.active = null;
+        return "jank-capture off";
+      },
+      isEnabled: isJankCaptureEnabled,
+      /** 最近最多 20 条原始记录（ring buffer 副本） */
+      dump: function () {
+        return jankCaptureState.ring.slice();
+      },
+      last: function () {
+        return jankCaptureState.ring.length
+          ? jankCaptureState.ring[jankCaptureState.ring.length - 1]
+          : null;
+      },
+      clear: function () {
+        jankCaptureState.ring = [];
+        jankCaptureState.lastFeltSeq = null;
+        return "jank-capture cleared";
+      },
+      /** 标记「刚才那一下」为体感卡顿（默认标记最近一条） */
+      markFelt: function (seqOpt) {
+        let rec = null;
+        if (seqOpt != null) {
+          for (let i = jankCaptureState.ring.length - 1; i >= 0; i--) {
+            if (jankCaptureState.ring[i].seq === seqOpt) {
+              rec = jankCaptureState.ring[i];
+              break;
+            }
+          }
+        } else {
+          rec = jankCaptureState.ring.length
+            ? jankCaptureState.ring[jankCaptureState.ring.length - 1]
+            : null;
+        }
+        if (!rec) return "no record to mark";
+        rec.feltJank = true;
+        jankCaptureState.lastFeltSeq = rec.seq;
+        try {
+          console.log("[JANK_CAPTURE] marked feltJank", rec.seq, rec.fromSummary, "→", rec.toSummary, "doubleRaf=", rec.doubleRafMs);
+        } catch (_m) {}
+        return rec;
+      },
+      /** 按双 rAF 降序看最近记录 */
+      rank: function () {
+        return jankCaptureState.ring
+          .slice()
+          .sort(function (a, b) {
+            return (b.doubleRafMs || 0) - (a.doubleRafMs || 0);
+          })
+          .map(function (r) {
+            return {
+              seq: r.seq,
+              felt: r.feltJank ? "★" : "",
+              从: r.fromSummary,
+              到: r.toSummary,
+              js: r.jsMs,
+              单rAF: r.singleRafMs,
+              双rAF: r.doubleRafMs,
+              render: r.didRender ? "Y/" + r.renderMs : "N",
+              needsPaint: r.needsPaint,
+              warm: r.warmOrCold,
+              sync: r.syncHit && (r.syncHit.pulse || r.syncHit.persist || r.syncHit.cloudUi || r.syncHit.merge)
+                ? "Y"
+                : "N",
+              longTask: r.longTaskMaxMs || 0,
+              nodesΔ: r.nodesDelta
+            };
+          });
+      },
+      /**
+       * 导出最近 ≤20 次切换（JSON）。优先写入剪贴板，并 console 打印。
+       * 感觉卡了立刻调用；可先 markFelt() 再 export()。
+       */
+      export: function () {
+        const payload = {
+          exportedAt: new Date().toISOString(),
+          lastFeltSeq: jankCaptureState.lastFeltSeq,
+          count: jankCaptureState.ring.length,
+          records: jankCaptureState.ring.slice()
+        };
+        const text = JSON.stringify(payload, null, 2);
+        let clipboard = "skip";
+        try {
+          if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+            navigator.clipboard.writeText(text);
+            clipboard = "ok";
+          }
+        } catch (_c) {
+          clipboard = "fail";
+        }
+        try {
+          console.log("[JANK_CAPTURE] export", payload);
+          console.table(window.__jankCapture.rank());
+          if (clipboard !== "ok") {
+            console.log("[JANK_CAPTURE] JSON（可手动复制）:\n" + text);
+          } else {
+            console.log("[JANK_CAPTURE] 已尝试写入剪贴板（" + payload.count + " 条）");
+          }
+        } catch (_log) {}
+        payload._clipboard = clipboard;
+        payload._text = text;
+        return payload;
+      }
+    };
+
+    if (isSwitchDiagEnabled()) {
+      ensureSwitchDiagBooted();
     }
 
     /** 性能探针：强制 Habit「习惯」子 Tab 下次 cold paint（仅内存） */
@@ -97692,7 +97942,7 @@
 
     function applyCloudSyncPulseFromRoom(pulseNode) {
       if (!pulseNode || !pulseNode.state) return false;
-      const tPulse0 = isSwitchPerfEnabled() && switchPerfState.active ? switchPerfNow() : null;
+      const tPulse0 = isSwitchDiagEnabled() && switchPerfState.active ? switchPerfNow() : null;
       try {
       const pu = coerceCloudUpdatedAt(pulseNode.updatedAt);
       const last = getCloudLastPulseSeen();
@@ -97768,7 +98018,7 @@
         pulseNode.updatedBy && pulseNode.updatedBy === cloudSyncClientId
       );
       if (!isOwnPulseEcho) {
-        const tDirty0 = isSwitchPerfEnabled() && switchPerfState.active ? switchPerfNow() : null;
+        const tDirty0 = isSwitchDiagEnabled() && switchPerfState.active ? switchPerfNow() : null;
         markUiPaintDirtyFromCloudPulseFlags({
           pulseHasDone: pulseHasDone,
           pulseHasHabit: pulseHasHabit,
@@ -97972,7 +98222,7 @@
 
     /** cloud 驱动的 UI 刷新入口：syncing 时只累计 pending */
     function requestCloudDrivenUiRender(mode) {
-      const t0 = isSwitchPerfEnabled() && switchPerfState.active ? switchPerfNow() : null;
+      const t0 = isSwitchDiagEnabled() && switchPerfState.active ? switchPerfNow() : null;
       try {
       if (cloudSyncMachineStatus === "syncing") {
         noteCloudSyncUiRenderPending();
@@ -103188,7 +103438,7 @@
 
     async function applyMergedCloudStateInMemory(merged, opts) {
       if (!merged || !Array.isArray(merged.done)) return { ok: false };
-      const tMerge0 = isSwitchPerfEnabled() && switchPerfState.active ? switchPerfNow() : null;
+      const tMerge0 = isSwitchDiagEnabled() && switchPerfState.active ? switchPerfNow() : null;
       const skipRender = Boolean(opts && opts.skipRender);
       const lifetimeBefore = captureCloudSyncLifetimeSnapshot(state);
       const localEnforce = opts && opts.lifetimeEnforceLocal ? opts.lifetimeEnforceLocal : null;
@@ -104525,7 +104775,7 @@
 
     function persistStateToLocalStorage(explicitJson) {
       const t0 = beginCloudSyncPerf();
-      const tSwitch0 = isSwitchPerfEnabled() && switchPerfState.active ? switchPerfNow() : null;
+      const tSwitch0 = isSwitchDiagEnabled() && switchPerfState.active ? switchPerfNow() : null;
       const split = {
         prepareMs: 0,
         jsonStringifyMs: 0,
@@ -151526,7 +151776,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
       const activateTab = (tabKey, opts = {}) => {
         switchPerfMarkActivateStart();
-        const t0 = isSwitchPerfEnabled() && switchPerfState.active ? switchPerfNow() : null;
+        const t0 = isSwitchDiagEnabled() && switchPerfState.active ? switchPerfNow() : null;
         const focus = Boolean(opts.focus);
         validPanels.forEach((item) => {
           const active = item.key === tabKey;
@@ -151546,7 +151796,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           if (active && focus) tabBtn.focus();
         });
         if (hooks && typeof hooks.afterActivate === "function") {
-          const tAfter = isSwitchPerfEnabled() && switchPerfState.active ? switchPerfNow() : null;
+          const tAfter = isSwitchDiagEnabled() && switchPerfState.active ? switchPerfNow() : null;
           hooks.afterActivate(tabKey);
           if (tAfter != null) {
             switchPerfNotePhase("afterActivateMs", switchPerfNow() - tAfter);
@@ -151789,7 +152039,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       let lastActivatedKineticTabKey = null;
       activateKineticTab = (tabKey, opts = {}) => {
         switchPerfMarkActivateStart();
-        const t0 = isSwitchPerfEnabled() && switchPerfState.active ? switchPerfNow() : null;
+        const t0 = isSwitchDiagEnabled() && switchPerfState.active ? switchPerfNow() : null;
         const focus = Boolean(opts.focus);
         const switchingTab = lastActivatedKineticTabKey !== tabKey;
         lastActivatedKineticTabKey = tabKey;
@@ -151840,7 +152090,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             }
             /* 仅切入十二周年时拉云补周；每次 render 再 activate 同 Tab 会合并→重渲死循环 */
             if (typeof ensureAnniversaryWeeksFromCloudIfNeeded === "function") {
-              const tCloud = isSwitchPerfEnabled() && switchPerfState.active ? switchPerfNow() : null;
+              const tCloud = isSwitchDiagEnabled() && switchPerfState.active ? switchPerfNow() : null;
               ensureAnniversaryWeeksFromCloudIfNeeded();
               if (tCloud != null) {
                 switchPerfNotePhase("ensureAnniversaryWeeksFromCloudMs", switchPerfNow() - tCloud);
@@ -154576,7 +154826,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return;
       }
 
-      const tAct0 = isSwitchPerfEnabled() && switchPerfState.active ? switchPerfNow() : null;
+      const tAct0 = isSwitchDiagEnabled() && switchPerfState.active ? switchPerfNow() : null;
       activePrimaryModuleKey = target.key;
       document.body.classList.add("primary-module-fullscreen");
       document.body.classList.add("has-primary-bottom-nav");
@@ -154638,7 +154888,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         switchPerfState.active.flags.needsPaint = needsPaint;
       }
       if (needsPaint) {
-        const tDirty0 = isSwitchPerfEnabled() && switchPerfState.active ? switchPerfNow() : null;
+        const tDirty0 = isSwitchDiagEnabled() && switchPerfState.active ? switchPerfNow() : null;
         if (!primaryModulePaintedOnce[focusKey] && uiPaintDirty != null) {
           const slices = PRIMARY_MODULE_PAINT_SLICES[focusKey];
           if (slices && slices.length) markUiPaintSlicesDirty(slices);
