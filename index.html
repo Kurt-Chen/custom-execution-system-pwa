@@ -134819,8 +134819,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function addWeeklyPlanTask() {
       if (!weeklyPlanTaskInput) return;
       let shell = getWeeklyPlanShell();
+      /*
+       * Closed → Life/Work：纯壳切换，无业务列表变更。
+       * 必须 skipUiPaintDirty + 局部 paint（与顶栏 Tab 点击一致），
+       * 否则裸 saveState → markAllUiPaintSlicesDirty，离开后再 warm 切回会被迫 full render。
+       */
       if (shell === "closed") {
-        setWeeklyPlanShell(getWeeklyPlanAddLane());
+        const prevShell = "closed";
+        const nextShell = getWeeklyPlanAddLane();
+        setWeeklyPlanShell(nextShell, { skipUiPaintDirty: true });
+        if (typeof paintWeeklyPlanAfterShellSwitch === "function") {
+          paintWeeklyPlanAfterShellSwitch(prevShell, nextShell);
+        }
         shell = getWeeklyPlanShell();
       }
       const text = weeklyPlanTaskInput.value.trim();
