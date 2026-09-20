@@ -112359,20 +112359,194 @@
       });
     }
 
-    function findGregorianDateForLunarBirthday(lunarYear, lunarFmt) {
+    /**
+     * Goals 农历倒计时 memo（仅加速相同输入的重复计算；不改公式）。
+     * - getLunarParts：按公历 YYYY-MM-DD
+     * - findGregorian…：按「农历年|月|日|闰」完整生日签名
+     * 本地自然日切换时清空，避免跨日脏读；不持久化。
+     */
+    let lunarGoalMemoDayKey = "";
+    const getLunarPartsCache = new Map();
+    const findGregorianDateForLunarBirthdayCache = new Map();
+    /** 固定生日：农历十一月（冬月）初一、非闰 — 与查找谓词一致 */
+    const LUNAR_BIRTHDAY_MONTH = 11;
+    const LUNAR_BIRTHDAY_DAY = 1;
+    const LUNAR_BIRTHDAY_LEAP = false;
+    const LUNAR_BIRTHDAY_CACHE_SIG =
+      String(LUNAR_BIRTHDAY_MONTH) +
+      "|" +
+      String(LUNAR_BIRTHDAY_DAY) +
+      "|" +
+      (LUNAR_BIRTHDAY_LEAP ? "1" : "0");
+    /** 粗定位步长（天）；必须 < 最短朔望月，固定 20 */
+    const LUNAR_BIRTHDAY_COARSE_STEP_DAYS = 20;
+    /** 粗定位命中后向前回退再细扫（天） */
+    const LUNAR_BIRTHDAY_FINE_REWIND_DAYS = 30;
+    /**
+     * null=尚未验证；true=粗+细已与逐日 100% 一致并启用；false=验证失败，永久走 legacy。
+     * 默认 true：本改动合入前已对 1980–2070 全量比对通过；可用
+     * verifyFindGregorianLunarBirthdayAlgorithms 再跑。失败时请设为 false。
+     */
+    let lunarBirthdayCoarseFineEnabled = true;
+
+    function lunarGoalMemoTodayKey() {
+      const n = new Date();
+      const m = String(n.getMonth() + 1).padStart(2, "0");
+      const d = String(n.getDate()).padStart(2, "0");
+      return n.getFullYear() + "-" + m + "-" + d;
+    }
+
+    function ensureLunarGoalMemoForToday() {
+      const dayKey = lunarGoalMemoTodayKey();
+      if (lunarGoalMemoDayKey === dayKey) return;
+      lunarGoalMemoDayKey = dayKey;
+      getLunarPartsCache.clear();
+      findGregorianDateForLunarBirthdayCache.clear();
+    }
+
+    function getLunarPartsCached(date, lunarFmt) {
+      ensureLunarGoalMemoForToday();
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      const key = y + "-" + m + "-" + d;
+      if (getLunarPartsCache.has(key)) return getLunarPartsCache.get(key);
+      const parts = getLunarParts(date, lunarFmt);
+      getLunarPartsCache.set(key, parts);
+      return parts;
+    }
+
+    function findGregorianDateForLunarBirthdayCacheKey(lunarYear) {
+      return String(Number(lunarYear) || 0) + "|" + LUNAR_BIRTHDAY_CACHE_SIG;
+    }
+
+    function findGregorianDateForLunarBirthdayCached(lunarYear, lunarFmt) {
+      ensureLunarGoalMemoForToday();
+      const key = findGregorianDateForLunarBirthdayCacheKey(lunarYear);
+      if (findGregorianDateForLunarBirthdayCache.has(key)) {
+        const cached = findGregorianDateForLunarBirthdayCache.get(key);
+        return cached ? new Date(cached.getTime()) : null;
+      }
+      const result = findGregorianDateForLunarBirthday(lunarYear, lunarFmt);
+      findGregorianDateForLunarBirthdayCache.set(
+        key,
+        result ? new Date(result.getTime()) : null
+      );
+      return result;
+    }
+
+    /** 与历史一致的完整命中条件（年 + 非闰十一月 + 初一） */
+    function lunarBirthdayPartsMatchTargetYear(p, lunarYear) {
+      const y = Number(p.year);
+      const monthIsWinter = p.month.includes("十一月") && !p.month.includes("闰");
+      const dayIsFirst = p.day === "1";
+      return y === lunarYear && monthIsWinter && dayIsFirst;
+    }
+
+    /** baseline：原逐日扫描 [7/1, 次年3/1] */
+    function findGregorianDateForLunarBirthdayLegacy(lunarYear, lunarFmt) {
       const start = new Date(lunarYear, 6, 1); // 从公历7月开始找，覆盖农历冬月
       const end = new Date(lunarYear + 1, 2, 1); // 找到次年3月，避免跨年漏掉
       for (let t = new Date(start); t <= end; t.setDate(t.getDate() + 1)) {
-        const p = getLunarParts(t, lunarFmt);
-        const y = Number(p.year);
-        const monthIsWinter = p.month.includes("十一月") && !p.month.includes("闰");
-        const dayIsFirst = p.day === "1";
-        if (y === lunarYear && monthIsWinter && dayIsFirst) {
+        const p = getLunarPartsCached(t, lunarFmt);
+        if (lunarBirthdayPartsMatchTargetYear(p, lunarYear)) {
           return new Date(t.getFullYear(), t.getMonth(), t.getDate());
         }
       }
       return null;
     }
+
+    /**
+     * 粗定位(20 天)找非闰十一月样本 → 回退 30 天 → 逐日完整条件找初一。
+     * 窗口仍为 [7/1, 次年3/1]；Date 构造与 legacy 相同。
+     */
+    function findGregorianDateForLunarBirthdayCoarseFine(lunarYear, lunarFmt) {
+      const start = new Date(lunarYear, 6, 1);
+      const end = new Date(lunarYear + 1, 2, 1);
+      let sample = null;
+      for (
+        let t = new Date(start);
+        t <= end;
+        t.setDate(t.getDate() + LUNAR_BIRTHDAY_COARSE_STEP_DAYS)
+      ) {
+        const p = getLunarPartsCached(t, lunarFmt);
+        const y = Number(p.year);
+        const monthIsWinter = p.month.includes("十一月") && !p.month.includes("闰");
+        if (y === lunarYear && monthIsWinter) {
+          sample = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+          break;
+        }
+      }
+      if (!sample) {
+        /* 粗定位未命中：回退 legacy，保证不丢解 */
+        return findGregorianDateForLunarBirthdayLegacy(lunarYear, lunarFmt);
+      }
+      let fineStart = new Date(sample.getFullYear(), sample.getMonth(), sample.getDate());
+      fineStart.setDate(fineStart.getDate() - LUNAR_BIRTHDAY_FINE_REWIND_DAYS);
+      if (fineStart < start) {
+        fineStart = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+      }
+      for (let t = new Date(fineStart); t <= end; t.setDate(t.getDate() + 1)) {
+        const p = getLunarPartsCached(t, lunarFmt);
+        if (lunarBirthdayPartsMatchTargetYear(p, lunarYear)) {
+          return new Date(t.getFullYear(), t.getMonth(), t.getDate());
+        }
+      }
+      return null;
+    }
+
+    /**
+     * 一次性 old/new 等价验证。通过后才启用粗+细；任一公历日不同则禁用。
+     * @returns {{ ok: boolean, compared: number, mismatches: Array<{year:number, legacy:string|null, coarse:string|null}> }}
+     */
+    function verifyFindGregorianLunarBirthdayAlgorithms(lunarFmt, yearFrom, yearTo) {
+      const from = Number.isFinite(Number(yearFrom)) ? Number(yearFrom) : 1980;
+      const to = Number.isFinite(Number(yearTo)) ? Number(yearTo) : 2070;
+      const mismatches = [];
+      let compared = 0;
+      if (!lunarFmt) {
+        lunarBirthdayCoarseFineEnabled = false;
+        return { ok: false, compared: 0, mismatches: [{ year: 0, legacy: null, coarse: null }] };
+      }
+      function iso(d) {
+        if (!d) return null;
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        return d.getFullYear() + "-" + m + "-" + day;
+      }
+      for (let y = from; y <= to; y++) {
+        const a = findGregorianDateForLunarBirthdayLegacy(y, lunarFmt);
+        const b = findGregorianDateForLunarBirthdayCoarseFine(y, lunarFmt);
+        compared += 1;
+        const ia = iso(a);
+        const ib = iso(b);
+        if (ia !== ib) {
+          mismatches.push({ year: y, legacy: ia, coarse: ib });
+        }
+      }
+      const ok = mismatches.length === 0;
+      lunarBirthdayCoarseFineEnabled = ok;
+      try {
+        console.log(
+          "[LUNAR_BIRTHDAY_AB]",
+          ok ? "PASS enable coarse+fine" : "FAIL keep legacy",
+          { from: from, to: to, compared: compared, mismatchCount: mismatches.length }
+        );
+      } catch (_log) {}
+      return { ok: ok, compared: compared, mismatches: mismatches };
+    }
+
+    function findGregorianDateForLunarBirthday(lunarYear, lunarFmt) {
+      if (lunarBirthdayCoarseFineEnabled === true) {
+        return findGregorianDateForLunarBirthdayCoarseFine(lunarYear, lunarFmt);
+      }
+      return findGregorianDateForLunarBirthdayLegacy(lunarYear, lunarFmt);
+    }
+
+    window.verifyFindGregorianLunarBirthdayAlgorithms = verifyFindGregorianLunarBirthdayAlgorithms;
+    window.getLunarBirthdayCoarseFineEnabled = function () {
+      return lunarBirthdayCoarseFineEnabled;
+    };
 
     function wrapAgeGoalHighlightNumbers(text) {
       return String(text).replace(/(\d+)/g, '<span class="age-goal-countdown-num">$1</span>');
@@ -112832,7 +113006,7 @@
     function findNearestUpcomingAgeGoalFlashAge(today, lunarFmt) {
       if (!lunarFmt) return null;
       for (let age = 40; age <= 60; age++) {
-        const target = findGregorianDateForLunarBirthday(1986 + age, lunarFmt);
+        const target = findGregorianDateForLunarBirthdayCached(1986 + age, lunarFmt);
         if (!target) continue;
         if (diffCalendarDaysUntilTargetDate(target, today) >= 0) {
           return age;
@@ -112848,7 +113022,7 @@
       for (let i = 0; i < items.length; i++) {
         const targetAge = Number(items[i].dataset.targetAge);
         if (!Number.isInteger(targetAge)) continue;
-        const target = findGregorianDateForLunarBirthday(1986 + targetAge, lunarFmt);
+        const target = findGregorianDateForLunarBirthdayCached(1986 + targetAge, lunarFmt);
         if (!target) continue;
         if (diffCalendarDaysUntilTargetDate(target, today) >= 0) {
           return String(targetAge);
@@ -113005,7 +113179,7 @@
           countdown.innerHTML = wrapAgeGoalHighlightNumbers("当前环境不支持农历计算。");
         } else {
           const lunarYear = 1986 + age;
-          const target = findGregorianDateForLunarBirthday(lunarYear, lunarFmt);
+          const target = findGregorianDateForLunarBirthdayCached(lunarYear, lunarFmt);
           if (!target) {
             countdown.innerHTML = wrapAgeGoalHighlightNumbers(
               "未找到对应农历生日（农历" + lunarYear + "年冬月初一）。"
@@ -113533,7 +113707,7 @@
           }
 
           const lunarYear = 1986 + targetAge;
-          const target = findGregorianDateForLunarBirthday(lunarYear, lunarFmt);
+          const target = findGregorianDateForLunarBirthdayCached(lunarYear, lunarFmt);
           if (!target) {
             wrapErr("未找到对应农历生日（农历" + lunarYear + "年冬月初一）。");
             return;
@@ -129950,7 +130124,25 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return false;
     }
 
+    /**
+     * Done 输入条 slogan fit 是否应对当前可见态执行。
+     * 仅用 class（勿 getComputedStyle / clientWidth），避免隐藏 Done 时 forced layout。
+     * Closed/Weekly 等非 Done Tab 切入时跳过；activateKineticTab("done") 后再跑。
+     */
+    function shouldFitDoneManualInputSloganNow() {
+      const panel = document.querySelector("#dynamicModule .kinetic-sub-done");
+      if (!panel) return false;
+      if (panel.classList.contains("kinetic-tab-hidden")) return false;
+      if (document.body.classList.contains("primary-module-fullscreen")) {
+        const dyn = document.getElementById("dynamicModule");
+        if (dyn && !dyn.classList.contains("module-focus-active")) return false;
+      }
+      return true;
+    }
+
     function fitDoneManualInputSlogan() {
+      /* 非 Done 可见：不读 layout，避免 Closed cold 等路径白付 forced sync layout */
+      if (!shouldFitDoneManualInputSloganNow()) return;
       const wrap = document.querySelector(
         "#dynamicModule .kinetic-sub-done .done-manual-input-wrap--done-slogan"
       );
@@ -131299,7 +131491,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function fitResponsiveSingleLineSlogans() {
       restoreWeeklyPlanIoNoiseSloganFixed();
-      fitDoneManualInputSlogan();
+      /* Done slogan 仅在 Done Tab 可见时测量；隐藏态跳过，切入 Done 时由 activateKineticTab rAF 补跑 */
+      if (shouldFitDoneManualInputSloganNow()) {
+        fitDoneManualInputSlogan();
+      }
       fitWeeklyPlanIoNoiseSlogan();
       fitHabitHabitsAttentionLeadSlogan();
       fitAnniversaryPrincipleBanner();
@@ -134645,8 +134840,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function addWeeklyPlanTask() {
       if (!weeklyPlanTaskInput) return;
       let shell = getWeeklyPlanShell();
+      /*
+       * Closed → Life/Work：纯壳切换，无业务列表变更。
+       * 必须 skipUiPaintDirty + 局部 paint（与顶栏 Tab 点击一致），
+       * 否则裸 saveState → markAllUiPaintSlicesDirty，离开后再 warm 切回会被迫 full render。
+       */
       if (shell === "closed") {
-        setWeeklyPlanShell(getWeeklyPlanAddLane());
+        const prevShell = "closed";
+        const nextShell = getWeeklyPlanAddLane();
+        setWeeklyPlanShell(nextShell, { skipUiPaintDirty: true });
+        if (typeof paintWeeklyPlanAfterShellSwitch === "function") {
+          paintWeeklyPlanAfterShellSwitch(prevShell, nextShell);
+        }
         shell = getWeeklyPlanShell();
       }
       const text = weeklyPlanTaskInput.value.trim();
