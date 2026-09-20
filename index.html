@@ -97972,7 +97972,30 @@
       }, CLOUD_SYNC_PERSIST_DEBOUNCE_MS);
     }
 
+    /**
+     * true-cold 首次 paint：无历史滚动可保，跳过 scroll 几何读取（避免 class 写入后 forced layout）。
+     * 承接 setPrimaryModuleFocus 在把 primaryModulePaintedOnce 置 true 之后、render 之前的判定。
+     */
+    let suppressUiScrollCaptureOnce = false;
+
+    /** 空快照：不读 scrollX/scrollTop，restore 对空 nodes 为 no-op */
+    function emptyUiScrollSnapshot() {
+      return { winX: 0, winY: 0, nodes: [] };
+    }
+
     function captureUiScrollSnapshot() {
+      /*
+       * 门控只用已有 paint 状态，禁止为了「是否为 0」去读 scroll（会再次 forced layout）。
+       * 1) dynamic/forge 首次 paint：suppress 一次性标志
+       * 2) dynamic 与 forge 都尚未 paint 过：滚动容器不可能有用户历史位置
+       */
+      if (suppressUiScrollCaptureOnce) {
+        suppressUiScrollCaptureOnce = false;
+        return emptyUiScrollSnapshot();
+      }
+      if (!primaryModulePaintedOnce.dynamic && !primaryModulePaintedOnce.forge) {
+        return emptyUiScrollSnapshot();
+      }
       const ids = [
         "doneList",
         "weeklyPlanList",
@@ -155058,9 +155081,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       if (needsPaint) {
         const tDirty0 = isSwitchDiagEnabled() && switchPerfState.active ? switchPerfNow() : null;
+        const firstPaintOfModule = !primaryModulePaintedOnce[focusKey];
         if (!primaryModulePaintedOnce[focusKey] && uiPaintDirty != null) {
           const slices = PRIMARY_MODULE_PAINT_SLICES[focusKey];
           if (slices && slices.length) markUiPaintSlicesDirty(slices);
+        }
+        /*
+         * 滚动快照容器属于 dynamic/forge。首次 paint 前无历史 scroll 可保；
+         * 须在置 paintedOnce=true 之前记下，供紧随其后的 render→capture 跳过几何读。
+         */
+        if (firstPaintOfModule && (focusKey === "dynamic" || focusKey === "forge")) {
+          suppressUiScrollCaptureOnce = true;
         }
         primaryModulePaintedOnce[focusKey] = true;
         if (tDirty0 != null) {
