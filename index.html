@@ -96875,6 +96875,45 @@
       }
     }
 
+    /**
+     * Pulse 合并后的 UI paint 脏标记（仅脏图，不改合并结果）。
+     * 按 pulseHas* 切片标脏；无法判断时 fallback markAll。
+     * 本机回声禁止调用本函数（由 applyCloudSyncPulseFromRoom 跳过）。
+     */
+    function markUiPaintDirtyFromCloudPulseFlags(flags) {
+      flags = flags || {};
+      const slices = [];
+      if (flags.pulseHasDone) slices.push("done");
+      if (flags.pulseHasHabit) {
+        slices.push("habit");
+        slices.push("dailyWin");
+      }
+      if (flags.pulseHasForge) slices.push("forge");
+      /* deadline 聚合了 weeklyPlan / closedList / 十二周年周数据 */
+      if (flags.pulseHasDeadline) {
+        slices.push("weeklyPlan");
+        slices.push("closedList");
+      }
+      if (flags.pulseHasReadingPlan) slices.push("weeklyPlan");
+      if (flags.pulseHasMoveBreak) {
+        slices.push("habit");
+        slices.push("dailyWin");
+      }
+      if (flags.pulseHasStopDoing) {
+        slices.push("stopDoing");
+        slices.push("notToDo");
+      }
+      if (!slices.length) {
+        markAllUiPaintSlicesDirty();
+        return;
+      }
+      markUiPaintSlicesDirty(slices);
+      /* Forge 最低量 / 十二周年走 heavy 指纹，非 UI_PAINT_SLICE */
+      if (flags.pulseHasForge || flags.pulseHasDeadline) {
+        markHeavyModulesDepDirty();
+      }
+    }
+
     function applyCloudSyncPulseFromRoom(pulseNode) {
       if (!pulseNode || !pulseNode.state) return false;
       const pu = coerceCloudUpdatedAt(pulseNode.updatedAt);
@@ -96906,9 +96945,6 @@
       if (typeof runStateRepairAndRolloverPass === "function") {
         runStateRepairAndRolloverPass();
       }
-      markAllUiPaintSlicesDirty();
-      setCloudSyncHashFromCurrentState();
-      scheduleCloudSyncPersistDebounced();
       const pulseHasDone =
         Array.isArray(pulseNode.state && pulseNode.state.done) && pulseNode.state.done.length > 0;
       const pulseHasHabit =
@@ -96945,8 +96981,29 @@
       const pulseHasStopDoing =
         coerceIdRecordList(pulseNode.state && pulseNode.state.stopDoing).length > 0 ||
         coerceIdRecordList(pulseNode.state && pulseNode.state.notToDo).length > 0;
+      /*
+       * Paint 脏图：本机 pulse 回声禁止 markAll（本地 save 已标过切片）。
+       * 他端：按 pulseHas* 细标；无已知切片时 fallback 全脏。
+       * 合并 / persist / hygiene / 时序不变。
+       */
+      const isOwnPulseEcho = Boolean(
+        pulseNode.updatedBy && pulseNode.updatedBy === cloudSyncClientId
+      );
+      if (!isOwnPulseEcho) {
+        markUiPaintDirtyFromCloudPulseFlags({
+          pulseHasDone: pulseHasDone,
+          pulseHasHabit: pulseHasHabit,
+          pulseHasForge: pulseHasForge,
+          pulseHasDeadline: pulseHasDeadline,
+          pulseHasReadingPlan: pulseHasReadingPlan,
+          pulseHasMoveBreak: pulseHasMoveBreak,
+          pulseHasStopDoing: pulseHasStopDoing
+        });
+      }
+      setCloudSyncHashFromCurrentState();
+      scheduleCloudSyncPersistDebounced();
       /* 本机刚写出的 pulse 回声：数据已在本地，不再整页刷新 */
-      if (pulseNode.updatedBy && pulseNode.updatedBy === cloudSyncClientId) {
+      if (isOwnPulseEcho) {
         return true;
       }
       if (
@@ -145549,6 +145606,46 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       };
     }
 
+    /**
+     * 动能切入「十二周年」：依赖指纹未变且周列表 DOM 已建 → 跳过 020/021/022 三连重渲。
+     * 无法判断 / 待滚动 / 冷 DOM → true（保持原补渲语义）。
+     */
+    function shouldPaintAnniversaryOnKineticTabSwitch() {
+      if (anniversaryTwPendingScrollTarget) return true;
+      const elOl = document.getElementById("anniversary020WeekList");
+      if (!elOl || !elOl.children.length) return true;
+      if (!lastHeavyModuleDepSnapshot || !lastHeavyModuleDepSnapshot.anniversary) return true;
+      try {
+        const extras = getLiveHeavyModuleRenderExtras();
+        const nextSnap = getHeavyModuleDependencySnapshot(state, extras);
+        if (!nextSnap || lastHeavyModuleDepSnapshot.anniversary !== nextSnap.anniversary) {
+          return true;
+        }
+        return false;
+      } catch (_annDepErr) {
+        return true;
+      }
+    }
+
+    /** Tab 内补渲成功后对齐 anniversary heavy 指纹，避免随后 renderHeavyModules 再刷一遍 */
+    function noteAnniversaryHeavyDepPaintedAfterKineticTab() {
+      try {
+        const extras = getLiveHeavyModuleRenderExtras();
+        const nextSnap = getHeavyModuleDependencySnapshot(state, extras);
+        if (!nextSnap) return;
+        if (!lastHeavyModuleDepSnapshot) {
+          lastHeavyModuleDepSnapshot = nextSnap;
+        } else {
+          lastHeavyModuleDepSnapshot = Object.assign({}, lastHeavyModuleDepSnapshot, {
+            anniversary: nextSnap.anniversary
+          });
+        }
+        if (typeof getHeavyModuleCheapKey === "function") {
+          lastHeavyModuleCheapKey = getHeavyModuleCheapKey(extras);
+        }
+      } catch (_annNoteErr) {}
+    }
+
     function bumpHeavyModuleSliceCounter(countKey) {
       if (!countKey || !cloudSyncPerfCounters || cloudSyncPerfCounters[countKey] == null) return;
       cloudSyncPerfCounters[countKey] += 1;
@@ -150850,9 +150947,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           }
           if (switchingTab) {
             try {
-              if (typeof renderAnniversaryTw020 === "function") renderAnniversaryTw020();
-              if (typeof renderAnniversaryTw021 === "function") renderAnniversaryTw021();
-              if (typeof renderAnniversaryTw022 === "function") renderAnniversaryTw022();
+              const needAnnPaint =
+                typeof shouldPaintAnniversaryOnKineticTabSwitch !== "function" ||
+                shouldPaintAnniversaryOnKineticTabSwitch();
+              if (needAnnPaint) {
+                if (typeof renderAnniversaryTw020 === "function") renderAnniversaryTw020();
+                if (typeof renderAnniversaryTw021 === "function") renderAnniversaryTw021();
+                if (typeof renderAnniversaryTw022 === "function") renderAnniversaryTw022();
+                if (typeof noteAnniversaryHeavyDepPaintedAfterKineticTab === "function") {
+                  noteAnniversaryHeavyDepPaintedAfterKineticTab();
+                }
+              }
             } catch (_annRenderErr) {
               console.warn("[十二周年] 切入 Tab 补渲失败:", _annRenderErr);
             }
