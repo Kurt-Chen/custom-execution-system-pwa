@@ -130183,6 +130183,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return shouldPaintDoneListNow();
     }
 
+    /**
+     * Daily Reminder / Kinetic 倒计时是否应对当前可见态执行重建。
+     * 仅用 class（勿 getComputedStyle），避免 Closed/Weekly/Anniversary 首屏白付 AlterEgo innerText forced layout。
+     * 隐藏时保持 kinetic 切片脏；切入提醒·备忘 Tab 再补渲。
+     */
+    function shouldPaintDailyReminderNow() {
+      const panel = document.getElementById("dailyReminderSection");
+      if (!panel) return false;
+      if (panel.classList.contains("kinetic-tab-hidden")) return false;
+      if (document.body.classList.contains("primary-module-fullscreen")) {
+        const dyn = document.getElementById("dynamicModule");
+        if (dyn && !dyn.classList.contains("module-focus-active")) return false;
+      }
+      return true;
+    }
+
     function fitDoneManualInputSlogan() {
       /* 非 Done 可见：不读 layout，避免 Closed cold 等路径白付 forced sync layout */
       if (!shouldFitDoneManualInputSloganNow()) return;
@@ -146670,9 +146686,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         clearUiPaintSlice("weeklyPlan");
       }
       if (paintKineticSlice) {
-        try { renderDailyReminder(); } catch (e) { console.warn("[每日提醒] 失败:", e); }
-        try { renderKineticCountdowns(); } catch (e) { console.warn("[Kinetic倒计时] 失败:", e); }
-        clearUiPaintSlice("kinetic");
+        /* Closed/Weekly/Anniversary 等非提醒 Tab：跳过 Daily Reminder collect/innerText，保持 kinetic 脏 */
+        if (typeof shouldPaintDailyReminderNow !== "function" || shouldPaintDailyReminderNow()) {
+          try { renderDailyReminder(); } catch (e) { console.warn("[每日提醒] 失败:", e); }
+          try { renderKineticCountdowns(); } catch (e) { console.warn("[Kinetic倒计时] 失败:", e); }
+          clearUiPaintSlice("kinetic");
+        }
       }
       if (paintForgeSlice) {
         try { refreshAllForgeTodayTaskRowsFromDone(); } catch (e) { console.warn("[Forge] 刷新今日行失败:", e); }
@@ -152276,8 +152295,25 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           requestAnimationFrame(fitResponsiveSingleLineSlogans);
         }
         if (tabKey === "dailyReminder") {
-          if (typeof renderDailyReminder === "function") renderDailyReminder();
-          if (typeof renderKineticCountdowns === "function") renderKineticCountdowns();
+          /* kinetic 若在 Closed/Weekly/Anniversary 路径被跳过仍脏：切入后走 render 补 Reminder+Countdowns */
+          requestAnimationFrame(function () {
+            try {
+              if (
+                typeof isUiPaintSliceDirty === "function" &&
+                isUiPaintSliceDirty("kinetic") &&
+                typeof shouldPaintDailyReminderNow === "function" &&
+                shouldPaintDailyReminderNow() &&
+                typeof render === "function"
+              ) {
+                render();
+              } else {
+                if (typeof renderDailyReminder === "function") renderDailyReminder();
+                if (typeof renderKineticCountdowns === "function") renderKineticCountdowns();
+              }
+            } catch (_drFlushErr) {
+              console.warn("[每日提醒] 切入补渲失败:", _drFlushErr);
+            }
+          });
         }
         if (tabKey === "trash" && typeof renderTrash === "function") {
           renderTrash();
