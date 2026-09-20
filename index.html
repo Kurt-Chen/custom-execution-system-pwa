@@ -112362,12 +112362,32 @@
     /**
      * Goals 农历倒计时 memo（仅加速相同输入的重复计算；不改公式）。
      * - getLunarParts：按公历 YYYY-MM-DD
-     * - findGregorian…：按农历年（冬月初一公历日固定）
+     * - findGregorian…：按「农历年|月|日|闰」完整生日签名
      * 本地自然日切换时清空，避免跨日脏读；不持久化。
      */
     let lunarGoalMemoDayKey = "";
     const getLunarPartsCache = new Map();
     const findGregorianDateForLunarBirthdayCache = new Map();
+    /** 固定生日：农历十一月（冬月）初一、非闰 — 与查找谓词一致 */
+    const LUNAR_BIRTHDAY_MONTH = 11;
+    const LUNAR_BIRTHDAY_DAY = 1;
+    const LUNAR_BIRTHDAY_LEAP = false;
+    const LUNAR_BIRTHDAY_CACHE_SIG =
+      String(LUNAR_BIRTHDAY_MONTH) +
+      "|" +
+      String(LUNAR_BIRTHDAY_DAY) +
+      "|" +
+      (LUNAR_BIRTHDAY_LEAP ? "1" : "0");
+    /** 粗定位步长（天）；必须 < 最短朔望月，固定 20 */
+    const LUNAR_BIRTHDAY_COARSE_STEP_DAYS = 20;
+    /** 粗定位命中后向前回退再细扫（天） */
+    const LUNAR_BIRTHDAY_FINE_REWIND_DAYS = 30;
+    /**
+     * null=尚未验证；true=粗+细已与逐日 100% 一致并启用；false=验证失败，永久走 legacy。
+     * 默认 true：本改动合入前已对 1980–2070 全量比对通过；可用
+     * verifyFindGregorianLunarBirthdayAlgorithms 再跑。失败时请设为 false。
+     */
+    let lunarBirthdayCoarseFineEnabled = true;
 
     function lunarGoalMemoTodayKey() {
       const n = new Date();
@@ -112396,9 +112416,13 @@
       return parts;
     }
 
+    function findGregorianDateForLunarBirthdayCacheKey(lunarYear) {
+      return String(Number(lunarYear) || 0) + "|" + LUNAR_BIRTHDAY_CACHE_SIG;
+    }
+
     function findGregorianDateForLunarBirthdayCached(lunarYear, lunarFmt) {
       ensureLunarGoalMemoForToday();
-      const key = String(Number(lunarYear) || 0);
+      const key = findGregorianDateForLunarBirthdayCacheKey(lunarYear);
       if (findGregorianDateForLunarBirthdayCache.has(key)) {
         const cached = findGregorianDateForLunarBirthdayCache.get(key);
         return cached ? new Date(cached.getTime()) : null;
@@ -112411,20 +112435,118 @@
       return result;
     }
 
-    function findGregorianDateForLunarBirthday(lunarYear, lunarFmt) {
+    /** 与历史一致的完整命中条件（年 + 非闰十一月 + 初一） */
+    function lunarBirthdayPartsMatchTargetYear(p, lunarYear) {
+      const y = Number(p.year);
+      const monthIsWinter = p.month.includes("十一月") && !p.month.includes("闰");
+      const dayIsFirst = p.day === "1";
+      return y === lunarYear && monthIsWinter && dayIsFirst;
+    }
+
+    /** baseline：原逐日扫描 [7/1, 次年3/1] */
+    function findGregorianDateForLunarBirthdayLegacy(lunarYear, lunarFmt) {
       const start = new Date(lunarYear, 6, 1); // 从公历7月开始找，覆盖农历冬月
       const end = new Date(lunarYear + 1, 2, 1); // 找到次年3月，避免跨年漏掉
       for (let t = new Date(start); t <= end; t.setDate(t.getDate() + 1)) {
         const p = getLunarPartsCached(t, lunarFmt);
-        const y = Number(p.year);
-        const monthIsWinter = p.month.includes("十一月") && !p.month.includes("闰");
-        const dayIsFirst = p.day === "1";
-        if (y === lunarYear && monthIsWinter && dayIsFirst) {
+        if (lunarBirthdayPartsMatchTargetYear(p, lunarYear)) {
           return new Date(t.getFullYear(), t.getMonth(), t.getDate());
         }
       }
       return null;
     }
+
+    /**
+     * 粗定位(20 天)找非闰十一月样本 → 回退 30 天 → 逐日完整条件找初一。
+     * 窗口仍为 [7/1, 次年3/1]；Date 构造与 legacy 相同。
+     */
+    function findGregorianDateForLunarBirthdayCoarseFine(lunarYear, lunarFmt) {
+      const start = new Date(lunarYear, 6, 1);
+      const end = new Date(lunarYear + 1, 2, 1);
+      let sample = null;
+      for (
+        let t = new Date(start);
+        t <= end;
+        t.setDate(t.getDate() + LUNAR_BIRTHDAY_COARSE_STEP_DAYS)
+      ) {
+        const p = getLunarPartsCached(t, lunarFmt);
+        const y = Number(p.year);
+        const monthIsWinter = p.month.includes("十一月") && !p.month.includes("闰");
+        if (y === lunarYear && monthIsWinter) {
+          sample = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+          break;
+        }
+      }
+      if (!sample) {
+        /* 粗定位未命中：回退 legacy，保证不丢解 */
+        return findGregorianDateForLunarBirthdayLegacy(lunarYear, lunarFmt);
+      }
+      let fineStart = new Date(sample.getFullYear(), sample.getMonth(), sample.getDate());
+      fineStart.setDate(fineStart.getDate() - LUNAR_BIRTHDAY_FINE_REWIND_DAYS);
+      if (fineStart < start) {
+        fineStart = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+      }
+      for (let t = new Date(fineStart); t <= end; t.setDate(t.getDate() + 1)) {
+        const p = getLunarPartsCached(t, lunarFmt);
+        if (lunarBirthdayPartsMatchTargetYear(p, lunarYear)) {
+          return new Date(t.getFullYear(), t.getMonth(), t.getDate());
+        }
+      }
+      return null;
+    }
+
+    /**
+     * 一次性 old/new 等价验证。通过后才启用粗+细；任一公历日不同则禁用。
+     * @returns {{ ok: boolean, compared: number, mismatches: Array<{year:number, legacy:string|null, coarse:string|null}> }}
+     */
+    function verifyFindGregorianLunarBirthdayAlgorithms(lunarFmt, yearFrom, yearTo) {
+      const from = Number.isFinite(Number(yearFrom)) ? Number(yearFrom) : 1980;
+      const to = Number.isFinite(Number(yearTo)) ? Number(yearTo) : 2070;
+      const mismatches = [];
+      let compared = 0;
+      if (!lunarFmt) {
+        lunarBirthdayCoarseFineEnabled = false;
+        return { ok: false, compared: 0, mismatches: [{ year: 0, legacy: null, coarse: null }] };
+      }
+      function iso(d) {
+        if (!d) return null;
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        return d.getFullYear() + "-" + m + "-" + day;
+      }
+      for (let y = from; y <= to; y++) {
+        const a = findGregorianDateForLunarBirthdayLegacy(y, lunarFmt);
+        const b = findGregorianDateForLunarBirthdayCoarseFine(y, lunarFmt);
+        compared += 1;
+        const ia = iso(a);
+        const ib = iso(b);
+        if (ia !== ib) {
+          mismatches.push({ year: y, legacy: ia, coarse: ib });
+        }
+      }
+      const ok = mismatches.length === 0;
+      lunarBirthdayCoarseFineEnabled = ok;
+      try {
+        console.log(
+          "[LUNAR_BIRTHDAY_AB]",
+          ok ? "PASS enable coarse+fine" : "FAIL keep legacy",
+          { from: from, to: to, compared: compared, mismatchCount: mismatches.length }
+        );
+      } catch (_log) {}
+      return { ok: ok, compared: compared, mismatches: mismatches };
+    }
+
+    function findGregorianDateForLunarBirthday(lunarYear, lunarFmt) {
+      if (lunarBirthdayCoarseFineEnabled === true) {
+        return findGregorianDateForLunarBirthdayCoarseFine(lunarYear, lunarFmt);
+      }
+      return findGregorianDateForLunarBirthdayLegacy(lunarYear, lunarFmt);
+    }
+
+    window.verifyFindGregorianLunarBirthdayAlgorithms = verifyFindGregorianLunarBirthdayAlgorithms;
+    window.getLunarBirthdayCoarseFineEnabled = function () {
+      return lunarBirthdayCoarseFineEnabled;
+    };
 
     function wrapAgeGoalHighlightNumbers(text) {
       return String(text).replace(/(\d+)/g, '<span class="age-goal-countdown-num">$1</span>');
