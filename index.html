@@ -12579,13 +12579,13 @@
       --today-plan-green: #22c55e;
       --today-plan-orange: #f59e0b;
       position: absolute;
-      top: 8px;
+      top: 0;
       left: auto;
       right: 100%;
       margin-right: 12px;
       z-index: 6;
       width: 22px;
-      max-height: calc(100% - 16px);
+      max-height: 100%;
       box-sizing: border-box;
       background: transparent;
       border: 0;
@@ -12597,7 +12597,7 @@
     #todayPlanPanel:not(.is-collapsed) {
       width: 286px;
       height: auto;
-      max-height: calc(100% - 16px);
+      max-height: 100%;
       overflow: visible;
       display: flex;
       flex-direction: column;
@@ -12996,7 +12996,7 @@
     }
 
     .today-plan-panel__section--other .today-plan-panel__item-chevron {
-      color: #e2e8f0;
+      display: none;
     }
 
     .today-plan-panel__mark {
@@ -13012,7 +13012,10 @@
     .today-plan-panel__name {
       flex: 1 1 auto;
       min-width: 0;
-      word-break: break-word;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      word-break: normal;
       font-weight: 500;
       color: #0f172a;
     }
@@ -13023,6 +13026,31 @@
       font-size: 14px;
       font-weight: 600;
       line-height: 1;
+    }
+
+    .today-plan-panel__item-remove {
+      flex: 0 0 auto;
+      width: 22px;
+      height: 22px;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: #cbd5e1;
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .today-plan-panel__item-remove:hover {
+      color: #f87171;
+      background: #fef2f2;
     }
 
     .today-plan-panel__item.is-done {
@@ -13052,10 +13080,6 @@
 
     .today-plan-panel__item.is-done .today-plan-panel__item-chevron {
       color: #e2e8f0;
-    }
-
-    .today-plan-panel__section--closed .today-plan-panel__tip {
-      margin-top: 9px;
     }
 
     .today-plan-panel__empty {
@@ -13126,32 +13150,6 @@
     .today-plan-panel__composer-submit:hover {
       color: #2563eb;
       background: #eff6ff;
-    }
-
-    .today-plan-panel__tip {
-      display: flex;
-      align-items: flex-start;
-      gap: 5px;
-      margin: 8px 0 0;
-      padding: 5px 7px;
-      border-radius: 8px;
-      background: #f5f9ff;
-      border: 1px solid #e8f0fa;
-      color: #94a3b8;
-      font-size: 10px;
-      line-height: 1.35;
-    }
-
-    .today-plan-panel__tip-icon {
-      flex: 0 0 auto;
-      color: #93c5fd;
-      font-size: 11px;
-      line-height: 1.3;
-    }
-
-    .today-plan-panel__tip-text {
-      flex: 1 1 auto;
-      min-width: 0;
     }
 
     .today-plan-panel__more {
@@ -141465,6 +141463,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return wrap;
     }
 
+    /**
+     * 其他任务：仅移出今日计划（清空 todayPlanDate），不删除 weeklyPlan 实体。
+     */
+    function removeTodayPlanOtherTask(taskId) {
+      const raw = findWeeklyPlanTaskRaw(taskId);
+      if (!raw) return;
+      raw.todayPlanDate = "";
+      touchWeeklyPlanTaskRevision(raw);
+      paintTodayPlanPanel();
+      saveState({ skipUiPaintDirty: true });
+      try {
+        flushCloudSyncPulseImmediate();
+      } catch (_pulseErr) {}
+    }
+
     function appendTodayPlanSection(parent, title, rows, opts) {
       opts = opts && typeof opts === "object" ? opts : {};
       const kind = opts.kind === "other" ? "other" : "closed";
@@ -141503,21 +141516,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         empty.className = "today-plan-panel__empty";
         empty.textContent = kind === "other" ? "暂无其他任务" : "暂无封闭清单任务";
         section.appendChild(empty);
-        if (kind === "closed") {
-          const tipEmpty = document.createElement("p");
-          tipEmpty.className = "today-plan-panel__tip";
-          const tipEmptyIcon = document.createElement("span");
-          tipEmptyIcon.className = "today-plan-panel__tip-icon";
-          tipEmptyIcon.setAttribute("aria-hidden", "true");
-          tipEmptyIcon.textContent = "ⓘ";
-          const tipEmptyText = document.createElement("span");
-          tipEmptyText.className = "today-plan-panel__tip-text";
-          tipEmptyText.textContent =
-            "每天最多 2 项，其他任务请放在「其他任务」中";
-          tipEmpty.appendChild(tipEmptyIcon);
-          tipEmpty.appendChild(tipEmptyText);
-          section.appendChild(tipEmpty);
-        }
         parent.appendChild(section);
         return;
       }
@@ -141533,30 +141531,32 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const name = document.createElement("span");
         name.className = "today-plan-panel__name";
         name.textContent = row.name;
+        name.title = row.name;
         li.appendChild(mark);
         li.appendChild(name);
-        const itemChevron = document.createElement("span");
-        itemChevron.className = "today-plan-panel__item-chevron";
-        itemChevron.setAttribute("aria-hidden", "true");
-        itemChevron.textContent = "›";
-        li.appendChild(itemChevron);
+        if (kind === "other" && row.id) {
+          const removeBtn = document.createElement("button");
+          removeBtn.type = "button";
+          removeBtn.className = "today-plan-panel__item-remove";
+          removeBtn.setAttribute("aria-label", "移出今日计划");
+          removeBtn.title = "移出今日计划";
+          removeBtn.textContent = "\u00d7";
+          removeBtn.addEventListener("click", function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            removeTodayPlanOtherTask(row.id);
+          });
+          li.appendChild(removeBtn);
+        } else {
+          const itemChevron = document.createElement("span");
+          itemChevron.className = "today-plan-panel__item-chevron";
+          itemChevron.setAttribute("aria-hidden", "true");
+          itemChevron.textContent = "›";
+          li.appendChild(itemChevron);
+        }
         ul.appendChild(li);
       }
       section.appendChild(ul);
-      if (kind === "closed") {
-        const tip = document.createElement("p");
-        tip.className = "today-plan-panel__tip";
-        const tipIcon = document.createElement("span");
-        tipIcon.className = "today-plan-panel__tip-icon";
-        tipIcon.setAttribute("aria-hidden", "true");
-        tipIcon.textContent = "ⓘ";
-        const tipText = document.createElement("span");
-        tipText.className = "today-plan-panel__tip-text";
-        tipText.textContent = "每天最多 2 项，其他任务请放在「其他任务」中";
-        tip.appendChild(tipIcon);
-        tip.appendChild(tipText);
-        section.appendChild(tip);
-      }
       if (typeof opts.onMore === "function" && total > limit) {
         const moreBtn = document.createElement("button");
         moreBtn.type = "button";
@@ -141621,6 +141621,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (id && closedIdSet[id]) continue;
         const name = String(task.text || "").trim() || "（无标题）";
         otherRows.push({
+          id: id,
           name: name,
           done: isWeeklyPlanMainComplete(task),
           isNext: false
