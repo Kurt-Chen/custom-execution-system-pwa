@@ -91808,7 +91808,17 @@
     let stateStorageUseIdb = false;
     let stateStorageReady = false;
     let stateStorageInitPromise = null;
+    /**
+     * 最近一次「已成功持久化」的完整 state JSON（主后端：IDB 或 localStorage）。
+     * 仅在写入成功后更新；禁止在 open/put 之前用「即将写入」的内容覆盖。
+     * 用于 noop 跳过重复 IDB put（避免无意义的 indexedDB.open）。
+     */
     let _stateJsonCache = null;
+    /**
+     * 最近一次已成功写入的紧急备份 JSON。仅在 emergency setItem 成功后更新；
+     * 与主缓存分开：主盘已同版不代表 emergency 已同版。
+     */
+    let _emergencyBackupJsonCache = null;
     let statePersistQueue = Promise.resolve();
 
     function openAppStateIdb() {
@@ -91890,6 +91900,11 @@
           }
           if (fromIdb && fromIdb.length) {
             _stateJsonCache = fromIdb;
+            /* 仅当 emergency 与已落盘主数据逐字相同时，才认定 emergency 已同版 */
+            try {
+              const emerg = localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY);
+              if (emerg && emerg === fromIdb) _emergencyBackupJsonCache = emerg;
+            } catch (_emergBoot) {}
           }
           stateStorageUseIdb = true;
           try {
@@ -91899,6 +91914,12 @@
           console.warn("[存储] IndexedDB 不可用，继续使用 localStorage:", err);
           stateStorageUseIdb = false;
           _stateJsonCache = localStorage.getItem(STORAGE_KEY);
+          try {
+            const emergLs = localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY);
+            if (emergLs && _stateJsonCache && emergLs === _stateJsonCache) {
+              _emergencyBackupJsonCache = emergLs;
+            }
+          } catch (_emergLsBoot) {}
         }
         stateStorageReady = true;
       })();
@@ -91921,15 +91942,17 @@
     }
 
     async function writeStateJsonToBackend(json) {
-      _stateJsonCache = json;
       if (stateStorageUseIdb) {
         await idbSetJson(STORAGE_KEY, json);
         try {
           localStorage.removeItem(STORAGE_KEY);
         } catch (_e) {}
+        /* 仅 IDB put 成功后才记为已落盘；失败时保持旧缓存，避免 noop 误跳过 */
+        _stateJsonCache = json;
         return;
       }
       localStorage.setItem(STORAGE_KEY, json);
+      _stateJsonCache = json;
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
@@ -103732,12 +103755,18 @@
     function maybeWriteStateEmergencyBackup(json) {
       const s = String(json || "");
       if (!s.length || s.length > STATE_EMERGENCY_BACKUP_MAX_CHARS) return;
+      /* 仅当可证明 emergency 已是同一完整 JSON 时才跳过；不可用「内存将写内容」冒充已落盘 */
+      if (_emergencyBackupJsonCache != null && _emergencyBackupJsonCache === s) return;
       try {
         let prevDone = 0;
         let nextDone = 0;
         try {
           const prev = localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY);
           if (prev) {
+            if (prev === s) {
+              _emergencyBackupJsonCache = prev;
+              return;
+            }
             const pp = JSON.parse(prev);
             prevDone = Array.isArray(pp.done) ? pp.done.length : 0;
           }
@@ -103751,6 +103780,7 @@
         /* 勿用更少 Done 的快照覆盖紧急备份（防止错误整包覆盖冲掉可恢复副本） */
         if (prevDone > 0 && nextDone < prevDone) return;
         localStorage.setItem(STATE_EMERGENCY_BACKUP_KEY, s);
+        _emergencyBackupJsonCache = s;
       } catch (_e) {}
     }
 
@@ -105255,7 +105285,8 @@
         localStorageMs: 0,
         indexedDbMs: 0,
         bytes: 0,
-        usedIdb: false
+        usedIdb: false,
+        skippedUnchanged: false
       };
       try {
       const tPrep = perfNow();
@@ -105283,6 +105314,18 @@
         if (syncChainActive && isSyncChainPerfEnabled()) {
           syncChainEnter("persistWriteMs");
         }
+        if (_stateJsonCache != null && _stateJsonCache === json) {
+          /* 主盘已是同版：跳过 STORAGE_KEY setItem；emergency 自行证明后再决定 */
+          maybeWriteStateEmergencyBackup(json);
+          split.localStorageMs = perfRound(perfNow() - tLs);
+          split.skippedUnchanged = true;
+          if (syncChainActive && isSyncChainPerfEnabled()) {
+            syncChainNote("persistWriteMs", split.localStorageMs, { skippedUnchanged: true });
+            syncChainLeave();
+          }
+          if (perfIx.active) perfNoteSplit("localStorageMs", split.localStorageMs);
+          return;
+        }
         localStorage.setItem(STORAGE_KEY, json);
         _stateJsonCache = json;
         maybeWriteStateEmergencyBackup(json);
@@ -105295,11 +105338,45 @@
         if (isPerfDiagEnabled()) perfMarkLong("localStorage.setItem", split.localStorageMs);
       }
 
+      function notePersistWriteSkipped() {
+        split.indexedDbMs = 0;
+        split.skippedUnchanged = true;
+        if (syncChainActive && isSyncChainPerfEnabled()) {
+          syncChainEnter("persistWriteMs");
+          syncChainNote("persistWriteMs", 0, { skippedUnchanged: true });
+          syncChainLeave();
+        }
+        if (typeof perfIx !== "undefined" && perfIx.active) {
+          perfNoteSplit("indexedDbMs", 0);
+        }
+      }
+
       function enqueueIdbWrite() {
         split.usedIdb = true;
-        _stateJsonCache = json;
+        /* 与「最后成功落盘」逐字相同 → 不 open、不 put；emergency 另证 */
+        if (_stateJsonCache != null && _stateJsonCache === json) {
+          notePersistWriteSkipped();
+          maybeWriteStateEmergencyBackup(json);
+          if (isPerfDiagEnabled()) {
+            perfIx.lastPersistSplit = Object.assign({}, split);
+            perfLog("persist-split", split);
+          }
+          return {
+            ok: true,
+            localPersisted: true,
+            quotaRelief: false,
+            persistPromise: null,
+            skippedUnchanged: true
+          };
+        }
         statePersistQueue = statePersistQueue
           .then(function () {
+            /* 排队期间前序写可能已落同版，再跳过以免重复 open */
+            if (_stateJsonCache != null && _stateJsonCache === json) {
+              notePersistWriteSkipped();
+              maybeWriteStateEmergencyBackup(json);
+              return;
+            }
             const tIdb = perfNow();
             if (syncChainActive && isSyncChainPerfEnabled()) {
               syncChainEnter("persistWriteMs");
@@ -105325,6 +105402,7 @@
           .catch(function (idbErr) {
             console.warn("[存储] IndexedDB 写入失败，回退 localStorage:", idbErr);
             stateStorageUseIdb = false;
+            /* 失败未更新 _stateJsonCache；回退 LS 成功后由 syncWriteLocalOnly 更新 */
             syncWriteLocalOnly();
             if (isPerfDiagEnabled()) {
               perfIx.lastPersistSplit = Object.assign({}, split);
