@@ -13081,6 +13081,68 @@
       color: #94a3b8;
     }
 
+    /* 其他任务：快速添加（仅此区，不进封闭清单） */
+    .today-plan-panel__composer {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0 0 8px;
+      min-height: 36px;
+      padding: 0 10px;
+      border-radius: 11px;
+      border: 1px solid #dbe4f0;
+      background: #fff;
+      box-sizing: border-box;
+    }
+
+    .today-plan-panel__composer:focus-within {
+      border-color: #93c5fd;
+    }
+
+    .today-plan-panel__composer-input {
+      flex: 1 1 auto;
+      min-width: 0;
+      height: 34px;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      outline: none;
+      background: transparent;
+      color: #0f172a;
+      font-size: 13px;
+      line-height: 1.3;
+      font-weight: 500;
+    }
+
+    .today-plan-panel__composer-input::placeholder {
+      color: #94a3b8;
+      font-weight: 400;
+    }
+
+    .today-plan-panel__composer-submit {
+      flex: 0 0 auto;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: #94a3b8;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .today-plan-panel__composer-submit:hover {
+      color: #2563eb;
+      background: #eff6ff;
+    }
+
     .today-plan-panel__tip {
       display: flex;
       align-items: flex-start;
@@ -93500,7 +93562,10 @@
     let todayPlanPanelExpanded = false;
     /** 仅内存：其他任务是否展开全部（不落盘、不同步） */
     let todayPlanOtherExpanded = false;
+    /** 仅内存：快速添加防连点；不落盘 */
+    let todayPlanOtherAddBusy = false;
     const TODAY_PLAN_OTHER_DEFAULT_VISIBLE = 3;
+    const TODAY_PLAN_OTHER_QUICK_ADD_INPUT_ID = "todayPlanOtherQuickAddInput";
     if (todayPlanPanelToggle) {
       todayPlanPanelToggle.addEventListener("click", function (ev) {
         ev.stopPropagation();
@@ -141312,6 +141377,109 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     const TODAY_PLAN_SECTION_ICON_OTHER =
       '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M6 4.5h12a1.5 1.5 0 0 1 1.5 1.5v12a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18V6A1.5 1.5 0 0 1 6 4.5Zm1.5 3.25v1.5h9v-1.5h-9Zm0 3.75v1.5h9v-1.5h-9Zm0 3.75v1.5h6v-1.5h-6Z"/></svg>';
 
+    /**
+     * 今日计划 → 其他任务：快速添加。
+     * 写入 Open List 实体 + todayPlanDate；不进 closedList；不走 addWeeklyPlanTask 全量刷新。
+     */
+    function submitTodayPlanOtherQuickAdd(inputEl) {
+      if (todayPlanOtherAddBusy) return;
+      const text = String((inputEl && inputEl.value) || "").trim();
+      if (!text) return;
+      todayPlanOtherAddBusy = true;
+      try {
+        const todayKey = formatDateInputValue(new Date());
+        const weekKey = getWeeklyPlanViewSprintStartKey();
+        if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
+          state.weeklyPlan = {};
+        }
+        const tasks = getWeeklyPlanTasksForWeekKey(weekKey);
+        const newTask = {
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+          text: text,
+          lane: "open",
+          mainDone: false,
+          microTasks: [],
+          todayPlanDate: todayKey
+        };
+        touchWeeklyPlanTaskRevision(newTask);
+        state.weeklyPlan[weekKey] = insertWeeklyPlanTaskForLane(tasks, newTask, "open");
+        noteCloudSyncWeeklyPlanPulseWeekKey(weekKey);
+        if (inputEl) inputEl.value = "";
+        paintTodayPlanPanel({
+          restoreOtherQuickAdd: { value: "", focused: true, selStart: 0, selEnd: 0 }
+        });
+        saveState({ skipUiPaintDirty: true });
+        try {
+          flushCloudSyncPulseImmediate();
+        } catch (_pulseErr) {}
+      } finally {
+        todayPlanOtherAddBusy = false;
+      }
+    }
+
+    function captureTodayPlanOtherQuickAddRestore() {
+      if (!todayPlanPanelLists) return null;
+      const input = todayPlanPanelLists.querySelector(
+        "#" + TODAY_PLAN_OTHER_QUICK_ADD_INPUT_ID
+      );
+      if (!input) return null;
+      return {
+        value: String(input.value || ""),
+        focused: document.activeElement === input,
+        selStart: typeof input.selectionStart === "number" ? input.selectionStart : null,
+        selEnd: typeof input.selectionEnd === "number" ? input.selectionEnd : null
+      };
+    }
+
+    function applyTodayPlanOtherQuickAddRestore(restore) {
+      if (!restore || !todayPlanPanelLists) return;
+      const input = todayPlanPanelLists.querySelector(
+        "#" + TODAY_PLAN_OTHER_QUICK_ADD_INPUT_ID
+      );
+      if (!input) return;
+      input.value = String(restore.value || "");
+      if (restore.focused) {
+        input.focus();
+        try {
+          if (restore.selStart != null && restore.selEnd != null) {
+            input.setSelectionRange(restore.selStart, restore.selEnd);
+          }
+        } catch (_selErr) {}
+      }
+    }
+
+    function buildTodayPlanOtherComposer() {
+      const wrap = document.createElement("div");
+      wrap.className = "today-plan-panel__composer";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.id = TODAY_PLAN_OTHER_QUICK_ADD_INPUT_ID;
+      input.className = "today-plan-panel__composer-input";
+      input.placeholder = "+ 添加今日任务…";
+      input.setAttribute("aria-label", "添加今日其他任务");
+      input.autocomplete = "off";
+      const submitBtn = document.createElement("button");
+      submitBtn.type = "button";
+      submitBtn.className = "today-plan-panel__composer-submit";
+      submitBtn.setAttribute("aria-label", "添加任务");
+      submitBtn.textContent = "+";
+      input.addEventListener("keydown", function (ev) {
+        if (ev.key !== "Enter") return;
+        if (ev.isComposing || ev.keyCode === 229) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        submitTodayPlanOtherQuickAdd(input);
+      });
+      submitBtn.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        submitTodayPlanOtherQuickAdd(input);
+      });
+      wrap.appendChild(input);
+      wrap.appendChild(submitBtn);
+      return wrap;
+    }
+
     function appendTodayPlanSection(parent, title, rows, opts) {
       opts = opts && typeof opts === "object" ? opts : {};
       const kind = opts.kind === "other" ? "other" : "closed";
@@ -141342,6 +141510,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       head.appendChild(heading);
       head.appendChild(chevron);
       section.appendChild(head);
+      if (kind === "other") {
+        section.appendChild(buildTodayPlanOtherComposer());
+      }
       if (total === 0) {
         const empty = document.createElement("p");
         empty.className = "today-plan-panel__empty";
@@ -141444,9 +141615,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
-    /** 只读本地 state，只写 #todayPlanPanel 自身。不 saveState、不 render、不请求网络。 */
-    function paintTodayPlanPanel() {
+    /** 只写 #todayPlanPanel 自身。不 render、不请求网络；可选恢复其他任务输入框焦点。 */
+    function paintTodayPlanPanel(opts) {
       if (!todayPlanPanelLists) return;
+      opts = opts && typeof opts === "object" ? opts : {};
+      const restoreOtherQuickAdd =
+        opts.restoreOtherQuickAdd || captureTodayPlanOtherQuickAddRestore();
       const todayKey = formatDateInputValue(new Date());
       const closedSource = getClosedListItemsVisibleForViewDate(todayKey).slice(0, CLOSED_LIST_DAY_MAX_ITEMS);
       const closedIdSet = Object.create(null);
@@ -141516,6 +141690,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
       todayPlanPanelLists.textContent = "";
       todayPlanPanelLists.appendChild(frag);
+      applyTodayPlanOtherQuickAddRestore(restoreOtherQuickAdd);
     }
 
     /** 仅刷新封闭清单面板（不含全页 render） */
