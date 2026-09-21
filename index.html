@@ -91820,60 +91820,173 @@
      */
     let _emergencyBackupJsonCache = null;
     let statePersistQueue = Promise.resolve();
+    /** 已成功打开的 IDB 连接；失效（close / versionchange）后清空，下次再 open */
+    let appStateIdbDb = null;
+    let appStateIdbOpenPromise = null;
+
+    function appStateIdbConnectionLive(db) {
+      if (!db) return false;
+      try {
+        /* closing 时 objectStoreNames 仍可读；真正开事务才会抛错 */
+        const tx = db.transaction(IDB_APP_STORE, "readonly");
+        tx.abort();
+        return true;
+      } catch (_closed) {
+        return false;
+      }
+    }
+
+    function forgetAppStateIdbConnection(db) {
+      /* 只丢掉这一条连接，避免旧库 onclose 清掉正在建立的新 open */
+      if (db && appStateIdbDb === db) {
+        appStateIdbDb = null;
+        appStateIdbOpenPromise = null;
+      }
+    }
+
+    function bindAppStateIdbConnection(db) {
+      if (!db || db.__execIdbBound) return;
+      try {
+        db.__execIdbBound = true;
+      } catch (_flag) {}
+      db.onversionchange = function () {
+        /* 其他标签升级版本：关掉失效连接，下次 open 再拿新库 */
+        try {
+          db.close();
+        } catch (_close) {}
+        forgetAppStateIdbConnection(db);
+      };
+      db.onclose = function () {
+        forgetAppStateIdbConnection(db);
+      };
+    }
 
     function openAppStateIdb() {
-      return new Promise(function (resolve, reject) {
-        if (!window.indexedDB) {
-          reject(new Error("IndexedDB 不可用"));
+      if (!appStateIdbConnectionLive(appStateIdbDb)) {
+        if (appStateIdbDb) {
+          appStateIdbDb = null;
+          appStateIdbOpenPromise = null;
+        }
+      } else {
+        return Promise.resolve(appStateIdbDb);
+      }
+      if (appStateIdbOpenPromise) return appStateIdbOpenPromise;
+      if (!window.indexedDB) return Promise.reject(new Error("IndexedDB 不可用"));
+      let settled = false;
+      appStateIdbOpenPromise = new Promise(function (resolve, reject) {
+        let req;
+        try {
+          req = indexedDB.open(IDB_APP_NAME, IDB_APP_VERSION);
+        } catch (openErr) {
+          settled = true;
+          appStateIdbOpenPromise = null;
+          reject(openErr);
           return;
         }
-        const req = indexedDB.open(IDB_APP_NAME, IDB_APP_VERSION);
         req.onerror = function () {
+          settled = true;
+          appStateIdbOpenPromise = null;
           reject(req.error || new Error("IndexedDB 打开失败"));
         };
-        req.onsuccess = function () {
-          resolve(req.result);
-        };
         req.onupgradeneeded = function (ev) {
-          const db = ev.target.result;
-          if (!db.objectStoreNames.contains(IDB_APP_STORE)) {
-            db.createObjectStore(IDB_APP_STORE);
+          const upgrading = ev.target.result;
+          if (!upgrading.objectStoreNames.contains(IDB_APP_STORE)) {
+            upgrading.createObjectStore(IDB_APP_STORE);
           }
         };
+        req.onsuccess = function () {
+          const db = req.result;
+          bindAppStateIdbConnection(db);
+          if (appStateIdbConnectionLive(db)) {
+            appStateIdbDb = db;
+            settled = true;
+            resolve(db);
+            return;
+          }
+          settled = true;
+          appStateIdbOpenPromise = null;
+          openAppStateIdb().then(resolve, reject);
+        };
       });
+      const pending = appStateIdbOpenPromise;
+      pending.catch(function () {
+        if (!settled && appStateIdbOpenPromise === pending) appStateIdbOpenPromise = null;
+      });
+      return pending;
+    }
+
+    /** 只建立连接，不写入 state。失败静默，启动与同步仍走原有 fallback */
+    function warmOpenAppStateIdb() {
+      try {
+        const pending = openAppStateIdb();
+        if (pending && typeof pending.then === "function") {
+          return pending.catch(function () {
+            return null;
+          });
+        }
+      } catch (_warmErr) {}
+      return Promise.resolve(null);
     }
 
     function idbGetJson(key) {
-      return openAppStateIdb().then(function (db) {
-        return new Promise(function (resolve, reject) {
-          const tx = db.transaction(IDB_APP_STORE, "readonly");
-          const store = tx.objectStore(IDB_APP_STORE);
-          const req = store.get(key);
-          req.onsuccess = function () {
-            const v = req.result;
-            resolve(v == null ? null : String(v));
-          };
-          req.onerror = function () {
-            reject(req.error || new Error("IndexedDB 读取失败"));
-          };
+      function readOnce(allowRetry) {
+        return openAppStateIdb().then(function (db) {
+          return new Promise(function (resolve, reject) {
+            let tx;
+            try {
+              tx = db.transaction(IDB_APP_STORE, "readonly");
+            } catch (txErr) {
+              forgetAppStateIdbConnection(db);
+              if (allowRetry) {
+                readOnce(false).then(resolve, reject);
+                return;
+              }
+              reject(txErr);
+              return;
+            }
+            const store = tx.objectStore(IDB_APP_STORE);
+            const req = store.get(key);
+            req.onsuccess = function () {
+              const v = req.result;
+              resolve(v == null ? null : String(v));
+            };
+            req.onerror = function () {
+              reject(req.error || new Error("IndexedDB 读取失败"));
+            };
+          });
         });
-      });
+      }
+      return readOnce(true);
     }
 
     function idbSetJson(key, json) {
-      return openAppStateIdb().then(function (db) {
-        return new Promise(function (resolve, reject) {
-          const tx = db.transaction(IDB_APP_STORE, "readwrite");
-          const store = tx.objectStore(IDB_APP_STORE);
-          const req = store.put(json, key);
-          req.onsuccess = function () {
-            resolve();
-          };
-          req.onerror = function () {
-            reject(req.error || new Error("IndexedDB 写入失败"));
-          };
+      function writeOnce(allowRetry) {
+        return openAppStateIdb().then(function (db) {
+          return new Promise(function (resolve, reject) {
+            let tx;
+            try {
+              tx = db.transaction(IDB_APP_STORE, "readwrite");
+            } catch (txErr) {
+              forgetAppStateIdbConnection(db);
+              if (allowRetry) {
+                writeOnce(false).then(resolve, reject);
+                return;
+              }
+              reject(txErr);
+              return;
+            }
+            const store = tx.objectStore(IDB_APP_STORE);
+            const req = store.put(json, key);
+            req.onsuccess = function () {
+              resolve();
+            };
+            req.onerror = function () {
+              reject(req.error || new Error("IndexedDB 写入失败"));
+            };
+          });
         });
-      });
+      }
+      return writeOnce(true);
     }
 
     function ensureStateStorageReady() {
@@ -151004,13 +151117,28 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       /* Phase 1：不在此启动云同步，避免与首次 render 抢主线程；见 scheduleDeferredCloudSyncBoot */
     }
 
-    /** 首屏绘制后再连 Firebase（双 rAF + idle），保证本地可操作优先 */
+    /** 首屏绘制后再连 Firebase（双 rAF + idle），保证本地可操作优先。
+     * 同步开始前先 warm-open IndexedDB（只建连、不写 state），避免第一次 persist 付 cold open。
+     */
     function scheduleDeferredCloudSyncBoot() {
       const start = function () {
+        const go = function () {
+          try {
+            void initCloudSync();
+          } catch (bootstrapSyncErr) {
+            console.warn("initCloudSync 失败:", bootstrapSyncErr);
+          }
+        };
+        let warmed = null;
         try {
-          void initCloudSync();
-        } catch (bootstrapSyncErr) {
-          console.warn("initCloudSync 失败:", bootstrapSyncErr);
+          warmed = warmOpenAppStateIdb();
+        } catch (_warmBoot) {
+          warmed = null;
+        }
+        if (warmed && typeof warmed.then === "function") {
+          warmed.then(go, go);
+        } else {
+          go();
         }
       };
       const afterPaint = function () {
