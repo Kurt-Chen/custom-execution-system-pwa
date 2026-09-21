@@ -93993,6 +93993,355 @@
       } catch (_e) {}
     };
 
+    /* ========== SYNC_CHAIN_PERF · 同步主链分段量化（可关；关时零开销）==========
+     * 开启：localStorage todo-app-sync-chain-perf-v1=1 或 ?syncChainPerf=1
+     *      或 __syncChainPerf.enable() / measureOnce()
+     * 不改 merge 规则 / 同步协议 / dirty 语义 / 数据结构。
+     */
+    const SYNC_CHAIN_PERF_KEY = "todo-app-sync-chain-perf-v1";
+    let syncChainPerfForceOn = false;
+    try {
+      syncChainPerfForceOn =
+        localStorage.getItem(SYNC_CHAIN_PERF_KEY) === "1" ||
+        new URLSearchParams(location.search).get("syncChainPerf") === "1";
+    } catch (_scpBoot) {
+      syncChainPerfForceOn = false;
+    }
+    let syncChainActive = null;
+    let syncChainLastReport = null;
+    let syncChainLongTaskObserver = null;
+
+    function isSyncChainPerfEnabled() {
+      if (syncChainPerfForceOn) return true;
+      try {
+        if (localStorage.getItem(SYNC_CHAIN_PERF_KEY) === "1") return true;
+        if (new URLSearchParams(location.search).get("syncChainPerf") === "1") return true;
+      } catch (_e) {}
+      return false;
+    }
+
+    function syncChainPerfNow() {
+      return cloudSyncPerfNow();
+    }
+
+    function syncChainMeasureStateBytes() {
+      try {
+        return JSON.stringify(state).length;
+      } catch (_e) {
+        return 0;
+      }
+    }
+
+    function syncChainEmptySession(reason) {
+      return {
+        reason: reason || "sync",
+        t0: syncChainPerfNow(),
+        wallMs: 0,
+        networkWaitMs: 0,
+        mainThreadMs: 0,
+        currentPhase: "",
+        phases: {
+          deepCloneBeforeMergeMs: 0,
+          mergeLocalStateMs: 0,
+          applyMergedCloneMergeMs: 0,
+          markAllDirtyMs: 0,
+          weeklyPlanDoneSyncMs: 0,
+          anniversaryAndRepairMs: 0,
+          hashStringifyMs: 0,
+          persistTotalMs: 0,
+          persistStringifyMs: 0,
+          persistWriteMs: 0,
+          flushRenderMs: 0
+        },
+        longTasks: [],
+        longTaskCount: 0,
+        longTaskMaxMs: 0,
+        stateBytesBefore: 0,
+        stateBytesAfter: 0,
+        stringifyBytesAtPersist: 0,
+        uiLostResponsivenessAtPhase: null,
+        uiLostAtLongTaskMs: 0,
+        ranked: [],
+        note: ""
+      };
+    }
+
+    function syncChainEnsureLongTaskObserver() {
+      if (syncChainLongTaskObserver || typeof PerformanceObserver !== "function") return;
+      try {
+        syncChainLongTaskObserver = new PerformanceObserver(function (list) {
+          if (!syncChainActive || !isSyncChainPerfEnabled()) return;
+          list.getEntries().forEach(function (e) {
+            const d = Number(e && e.duration) || 0;
+            if (d < 50) return;
+            const phase = syncChainActive.currentPhase || "unknown";
+            syncChainActive.longTaskCount += 1;
+            if (d > syncChainActive.longTaskMaxMs) syncChainActive.longTaskMaxMs = d;
+            if (syncChainActive.longTasks.length < 40) {
+              syncChainActive.longTasks.push({
+                ms: Math.round(d * 100) / 100,
+                phase: phase,
+                startTime: Math.round((Number(e.startTime) || 0) * 100) / 100
+              });
+            }
+            if (!syncChainActive.uiLostResponsivenessAtPhase && d >= 50) {
+              syncChainActive.uiLostResponsivenessAtPhase = phase;
+              syncChainActive.uiLostAtLongTaskMs = Math.round(d * 100) / 100;
+            }
+          });
+        });
+        syncChainLongTaskObserver.observe({ type: "longtask", buffered: false });
+      } catch (_obsErr) {
+        syncChainLongTaskObserver = null;
+      }
+    }
+
+    function syncChainBegin(reason) {
+      if (!isSyncChainPerfEnabled()) return null;
+      syncChainEnsureLongTaskObserver();
+      syncChainActive = syncChainEmptySession(reason);
+      syncChainActive.stateBytesBefore = syncChainMeasureStateBytes();
+      return syncChainActive;
+    }
+
+    function syncChainNote(phaseKey, ms, extra) {
+      if (!syncChainActive || !isSyncChainPerfEnabled()) return;
+      const n = Number(ms);
+      if (!Number.isFinite(n) || n <= 0) return;
+      if (phaseKey === "networkWaitMs") {
+        syncChainActive.networkWaitMs += n;
+        return;
+      }
+      if (Object.prototype.hasOwnProperty.call(syncChainActive.phases, phaseKey)) {
+        syncChainActive.phases[phaseKey] += n;
+      }
+      if (extra && extra.stringifyBytes != null) {
+        syncChainActive.stringifyBytesAtPersist = extra.stringifyBytes;
+      }
+    }
+
+    function syncChainEnter(phase) {
+      if (!syncChainActive) return;
+      syncChainActive.currentPhase = phase || "";
+    }
+
+    function syncChainLeave() {
+      if (!syncChainActive) return;
+      syncChainActive.currentPhase = "";
+    }
+
+    function syncChainRun(phaseKey, fn) {
+      if (!syncChainActive || !isSyncChainPerfEnabled()) return fn();
+      const prev = syncChainActive.currentPhase;
+      syncChainActive.currentPhase = phaseKey;
+      const t0 = syncChainPerfNow();
+      try {
+        return fn();
+      } finally {
+        syncChainNote(phaseKey, syncChainPerfNow() - t0);
+        syncChainActive.currentPhase = prev;
+      }
+    }
+
+    function syncChainSeal(extra) {
+      if (!syncChainActive) return syncChainLastReport;
+      const s = syncChainActive;
+      syncChainActive = null;
+      s.wallMs = Math.round((syncChainPerfNow() - s.t0) * 100) / 100;
+      s.stateBytesAfter = syncChainMeasureStateBytes();
+      const phases = s.phases;
+      let main = 0;
+      Object.keys(phases).forEach(function (k) {
+        phases[k] = Math.round(phases[k] * 100) / 100;
+        /* persistTotalMs = stringify+write+prepare，与拆细项互斥，不重复计入主线程合计 */
+        if (k === "persistTotalMs") return;
+        main += phases[k];
+      });
+      s.mainThreadMs = Math.round(main * 100) / 100;
+      s.networkWaitMs = Math.round(s.networkWaitMs * 100) / 100;
+      s.longTaskMaxMs = Math.round(s.longTaskMaxMs * 100) / 100;
+      const rankKeys = [
+        "deepCloneBeforeMergeMs",
+        "mergeLocalStateMs",
+        "applyMergedCloneMergeMs",
+        "markAllDirtyMs",
+        "weeklyPlanDoneSyncMs",
+        "anniversaryAndRepairMs",
+        "hashStringifyMs",
+        "persistStringifyMs",
+        "persistWriteMs",
+        "flushRenderMs"
+      ];
+      /* persistTotalMs 含 stringify+write+prepare，排序用拆细项避免重复 */
+      s.ranked = rankKeys
+        .map(function (k) {
+          const ms = phases[k] || 0;
+          return {
+            phase: k,
+            ms: ms,
+            pctOfMainThread: s.mainThreadMs > 0 ? Math.round((ms / s.mainThreadMs) * 1000) / 10 : 0
+          };
+        })
+        .sort(function (a, b) {
+          return b.ms - a.ms;
+        });
+      if (extra && typeof extra === "object") {
+        Object.keys(extra).forEach(function (k) {
+          s[k] = extra[k];
+        });
+      }
+      syncChainLastReport = s;
+      try {
+        console.warn(
+          "[syncChainPerf]",
+          "main=" + s.mainThreadMs + "ms",
+          "net=" + s.networkWaitMs + "ms",
+          "top1=" + (s.ranked[0] && s.ranked[0].phase) + "@" + (s.ranked[0] && s.ranked[0].ms),
+          "top2=" + (s.ranked[1] && s.ranked[1].phase) + "@" + (s.ranked[1] && s.ranked[1].ms),
+          "uiLost@" + (s.uiLostResponsivenessAtPhase || "-"),
+          "bytes=" + s.stateBytesBefore + "→" + s.stateBytesAfter
+        );
+      } catch (_logErr) {}
+      return s;
+    }
+
+    /**
+     * 触发一次完整 Pull→Merge→Persist→Render 并返回分段报告。
+     * 仅诊断：不改 merge 规则；会强制走 absorb（即使云端标记为本机）。
+     * 若云未连接：可用 opts.localReplay=true（或自动）用本机 state 回放整包 merge 链（网络=0）。
+     */
+    async function syncChainMeasureOnce(opts) {
+      opts = opts && typeof opts === "object" ? opts : {};
+      syncChainPerfForceOn = true;
+      try {
+        localStorage.setItem(SYNC_CHAIN_PERF_KEY, "1");
+      } catch (_e) {}
+      const allowLocalReplay = opts.localReplay !== false;
+      const cloudOk = Boolean(cloudSyncReady && cloudSyncRoomRef);
+      if (!cloudOk && !allowLocalReplay) {
+        return {
+          error: "cloud_not_ready",
+          hint: "请先连接云同步，或 __syncChainPerf.measureOnce({ localReplay: true })"
+        };
+      }
+      if (cloudSyncTxnInFlight || cloudSyncApplyingRemote || cloudSyncPushing) {
+        return { error: "sync_busy", hint: "请等当前同步结束后再测" };
+      }
+      syncChainBegin(opts.reason || (cloudOk ? "measureOnce" : "localReplay"));
+      let absorbed = false;
+      let payloadOk = false;
+      let mode = cloudOk ? "firebase" : "localReplay";
+      try {
+        let payload = null;
+        if (cloudOk) {
+          const tNet0 = syncChainPerfNow();
+          const roomData = await fetchCloudSyncRoomDataPartial({
+            includeDone: true,
+            includeLegacyState: true
+          });
+          syncChainNote("networkWaitMs", syncChainPerfNow() - tNet0);
+          if (roomData && roomData.pulse) {
+            try {
+              applyCloudSyncPulseFromRoom(roomData.pulse);
+            } catch (_pulseDiag) {}
+          }
+          payload = resolveCloudPayloadFromRoomData(roomData);
+          if (payload && payload.state) rememberCloudSyncRemotePayload(payload);
+        } else {
+          /* 无 Firebase：用当前真实 state 深拷贝作远端，跑同一条 absorb/merge/persist/render */
+          let remoteState = null;
+          try {
+            remoteState = JSON.parse(JSON.stringify(state));
+          } catch (_rs) {
+            remoteState = null;
+          }
+          if (!remoteState || !Array.isArray(remoteState.done)) {
+            return syncChainSeal({ error: "local_state_invalid", mode: mode });
+          }
+          payload = {
+            state: remoteState,
+            updatedAt: Date.now(),
+            updatedBy: "sync-chain-perf-local-replay",
+            doneOmitted: false
+          };
+          syncChainActive.note =
+            "cloud_not_ready：已用本机真实 state 回放 Pull 之后的 Merge→Persist→Render（networkWaitMs=0）";
+        }
+        payloadOk = Boolean(payload && payload.state);
+        if (!payloadOk) {
+          return syncChainSeal({ error: "no_payload", absorbed: false, mode: mode });
+        }
+        setCloudSyncStatus("同步中...", "status-syncing");
+        noteCloudSyncUiRenderPending();
+        await yieldToMainThread();
+        materializePayloadDoneForMerge(payload);
+        absorbed = await absorbCloudPayloadPreferringRemoteWhenLocalEmpty(payload, {
+          skipRender: true
+        });
+        try {
+          await (typeof statePersistQueue !== "undefined" && statePersistQueue
+            ? statePersistQueue
+            : Promise.resolve());
+        } catch (_pq) {}
+        restoreCloudSyncConnectedBadgeUnlessError();
+        await new Promise(function (r) {
+          window.setTimeout(r, 50);
+        });
+        await yieldToMainThread();
+        await new Promise(function (r) {
+          requestAnimationFrame(function () {
+            requestAnimationFrame(r);
+          });
+        });
+        await new Promise(function (r) {
+          window.setTimeout(r, 100);
+        });
+        return syncChainSeal({
+          absorbed: Boolean(absorbed),
+          payloadOk: true,
+          mode: mode,
+          doneCount: Array.isArray(state.done) ? state.done.length : 0
+        });
+      } catch (err) {
+        try {
+          restoreCloudSyncConnectedBadgeUnlessError();
+        } catch (_re) {}
+        return syncChainSeal({
+          error: String(err && err.message ? err.message : err),
+          absorbed: Boolean(absorbed),
+          payloadOk: payloadOk,
+          mode: mode
+        });
+      }
+    }
+
+    window.__syncChainPerf = {
+      enable: function () {
+        syncChainPerfForceOn = true;
+        try {
+          localStorage.setItem(SYNC_CHAIN_PERF_KEY, "1");
+        } catch (_e) {}
+        return true;
+      },
+      disable: function () {
+        syncChainPerfForceOn = false;
+        try {
+          localStorage.setItem(SYNC_CHAIN_PERF_KEY, "0");
+        } catch (_e) {}
+        return false;
+      },
+      isEnabled: isSyncChainPerfEnabled,
+      begin: syncChainBegin,
+      seal: syncChainSeal,
+      last: function () {
+        return syncChainLastReport;
+      },
+      dump: function () {
+        return syncChainLastReport;
+      },
+      measureOnce: syncChainMeasureOnce
+    };
+
     /* ========== SWITCH_PERF · 模块切换诊断（可关可删；关时零开销旁路）==========
      * 开启：localStorage todo-app-switch-perf-v1=1 或 URL ?switchPerf=1
      * API：window.__switchPerf.enable() / disable() / dump() / clear() / last()
@@ -97806,42 +98155,203 @@
     }
 
     /**
+     * Pulse / 整包合并共用：由 pulseHas*（及 merge 扩展）标志收集 UI paint 切片。
+     * 不含 empty→markAll；调用方自行决定 fallback。
+     * @returns {{ slices: string[], heavy: boolean }}
+     */
+    function collectUiPaintSlicesFromCloudPulseFlags(flags) {
+      flags = flags || {};
+      const slices = [];
+      function pushUnique(name) {
+        if (!name || slices.indexOf(name) !== -1) return;
+        slices.push(name);
+      }
+      if (flags.pulseHasDone) pushUnique("done");
+      if (flags.pulseHasHabit) {
+        pushUnique("habit");
+        pushUnique("dailyWin");
+      }
+      if (flags.pulseHasForge) pushUnique("forge");
+      /* deadline 聚合了 weeklyPlan / closedList / 十二周年周数据 */
+      if (flags.pulseHasDeadline) {
+        pushUnique("weeklyPlan");
+        pushUnique("closedList");
+      }
+      if (flags.pulseHasReadingPlan) pushUnique("weeklyPlan");
+      if (flags.pulseHasMoveBreak) {
+        pushUnique("habit");
+        pushUnique("dailyWin");
+      }
+      if (flags.pulseHasStopDoing) {
+        pushUnique("stopDoing");
+        pushUnique("notToDo");
+      }
+      /* 整包 merge 扩展：Pulse 不含这些字段时也要细标 */
+      if (flags.paintHasMemo) pushUnique("memo");
+      if (flags.paintHasHaters) pushUnique("haters");
+      if (flags.paintHasKinetic) pushUnique("kinetic");
+      if (flags.paintHasGoals) pushUnique("goals");
+      if (flags.paintHasPurpose) pushUnique("purpose");
+      if (flags.paintHasDailyWin) pushUnique("dailyWin");
+      const heavy = Boolean(
+        flags.pulseHasForge ||
+          flags.pulseHasDeadline ||
+          flags.paintHasHeavyDeps
+      );
+      return { slices: slices, heavy: heavy };
+    }
+
+    /**
      * Pulse 合并后的 UI paint 脏标记（仅脏图，不改合并结果）。
      * 按 pulseHas* 切片标脏；无法判断时 fallback markAll。
      * 本机回声禁止调用本函数（由 applyCloudSyncPulseFromRoom 跳过）。
      */
     function markUiPaintDirtyFromCloudPulseFlags(flags) {
-      flags = flags || {};
-      const slices = [];
-      if (flags.pulseHasDone) slices.push("done");
-      if (flags.pulseHasHabit) {
-        slices.push("habit");
-        slices.push("dailyWin");
-      }
-      if (flags.pulseHasForge) slices.push("forge");
-      /* deadline 聚合了 weeklyPlan / closedList / 十二周年周数据 */
-      if (flags.pulseHasDeadline) {
-        slices.push("weeklyPlan");
-        slices.push("closedList");
-      }
-      if (flags.pulseHasReadingPlan) slices.push("weeklyPlan");
-      if (flags.pulseHasMoveBreak) {
-        slices.push("habit");
-        slices.push("dailyWin");
-      }
-      if (flags.pulseHasStopDoing) {
-        slices.push("stopDoing");
-        slices.push("notToDo");
-      }
-      if (!slices.length) {
+      const collected = collectUiPaintSlicesFromCloudPulseFlags(flags);
+      if (!collected.slices.length) {
         markAllUiPaintSlicesDirty();
         return;
       }
-      markUiPaintSlicesDirty(slices);
+      markUiPaintSlicesDirty(collected.slices);
       /* Forge 最低量 / 十二周年走 heavy 指纹，非 UI_PAINT_SLICE */
-      if (flags.pulseHasForge || flags.pulseHasDeadline) {
+      if (collected.heavy) {
         markHeavyModulesDepDirty();
       }
+    }
+
+    /** 单切片内容是否相等（先引用；再稳定序列化，忽略键序/id 列表顺序噪声） */
+    function cloudSyncPaintStableClone(value) {
+      if (Array.isArray(value)) {
+        const mapped = value.map(cloudSyncPaintStableClone);
+        if (
+          mapped.length &&
+          mapped.every(function (x) {
+            return x && typeof x === "object" && !Array.isArray(x) && x.id != null;
+          })
+        ) {
+          mapped.sort(function (a, b) {
+            return String(a.id).localeCompare(String(b.id));
+          });
+        }
+        return mapped;
+      }
+      if (value && typeof value === "object") {
+        const out = {};
+        Object.keys(value)
+          .sort()
+          .forEach(function (k) {
+            out[k] = cloudSyncPaintStableClone(value[k]);
+          });
+        return out;
+      }
+      return value;
+    }
+
+    function cloudSyncPaintValuesEqual(a, b) {
+      if (a === b) return true;
+      try {
+        return (
+          JSON.stringify(cloudSyncPaintStableClone(a)) ===
+          JSON.stringify(cloudSyncPaintStableClone(b))
+        );
+      } catch (_e) {
+        return false;
+      }
+    }
+
+    /**
+     * 十二周年周任务等内容是否变化（与 Pulse deadline 依赖对齐）。
+     * 忽略 deepTime 等纯 UI 折叠态，避免 noop merge 误标 weekly/closed。
+     */
+    function cloudSyncAnniversaryWeeksPaintChanged(prevState, nextState) {
+      const keys = {};
+      function addKeys(st) {
+        if (!st || typeof st !== "object") return;
+        Object.keys(st).forEach(function (sk) {
+          if (/^anniversaryTw\d+$/i.test(sk)) keys[sk] = true;
+        });
+      }
+      addKeys(prevState);
+      addKeys(nextState);
+      return Object.keys(keys).some(function (sk) {
+        const p = (prevState && prevState[sk]) || {};
+        const n = (nextState && nextState[sk]) || {};
+        return (
+          !cloudSyncPaintValuesEqual(p.weeks, n.weeks) ||
+          !cloudSyncPaintValuesEqual(p.anchor, n.anchor) ||
+          !cloudSyncPaintValuesEqual(p.futureStory, n.futureStory) ||
+          !cloudSyncPaintValuesEqual(p.progressBands, n.progressBands) ||
+          !cloudSyncPaintValuesEqual(p.weekGoals, n.weekGoals)
+        );
+      });
+    }
+
+    /**
+     * 整包云合并：按 merge 前后 state 差分细标脏（复用 Pulse 切片依赖映射）。
+     * 无内容变化时不 markAll、不标 content slice（角标/syncing 状态机不受影响）。
+     * 不新增整包深拷贝；仅对相关字段做切片级比较。
+     */
+    function markUiPaintDirtyFromCloudMergeStateDiff(prevState, nextState) {
+      prevState = prevState && typeof prevState === "object" ? prevState : {};
+      nextState = nextState && typeof nextState === "object" ? nextState : {};
+      const weeklyChanged = !cloudSyncPaintValuesEqual(prevState.weeklyPlan, nextState.weeklyPlan);
+      const closedChanged = !cloudSyncPaintValuesEqual(prevState.closedList, nextState.closedList);
+      const anniversaryChanged = cloudSyncAnniversaryWeeksPaintChanged(prevState, nextState);
+      const flags = {
+        pulseHasDone: !cloudSyncPaintValuesEqual(prevState.done, nextState.done),
+        pulseHasHabit: !cloudSyncPaintValuesEqual(prevState.habitCheckins, nextState.habitCheckins),
+        pulseHasForge: !cloudSyncPaintValuesEqual(prevState.forge, nextState.forge),
+        pulseHasDeadline: weeklyChanged || closedChanged || anniversaryChanged,
+        pulseHasReadingPlan: !cloudSyncPaintValuesEqual(
+          prevState.readingPlan && prevState.readingPlan.books,
+          nextState.readingPlan && nextState.readingPlan.books
+        ),
+        pulseHasMoveBreak: !cloudSyncPaintValuesEqual(prevState.moveBreakDay, nextState.moveBreakDay),
+        pulseHasStopDoing:
+          !cloudSyncPaintValuesEqual(prevState.stopDoing, nextState.stopDoing) ||
+          !cloudSyncPaintValuesEqual(prevState.notToDo, nextState.notToDo),
+        paintHasMemo: !cloudSyncPaintValuesEqual(prevState.memo, nextState.memo),
+        paintHasHaters: !cloudSyncPaintValuesEqual(
+          prevState.hatersDoubtersLog,
+          nextState.hatersDoubtersLog
+        ),
+        paintHasKinetic: !cloudSyncPaintValuesEqual(
+          prevState.kineticCountdowns,
+          nextState.kineticCountdowns
+        ),
+        paintHasGoals:
+          !cloudSyncPaintValuesEqual(prevState.ageGoals, nextState.ageGoals) ||
+          !cloudSyncPaintValuesEqual(prevState.moneyGoalLabels, nextState.moneyGoalLabels) ||
+          !cloudSyncPaintValuesEqual(prevState.goalWhys, nextState.goalWhys),
+        paintHasPurpose: !cloudSyncPaintValuesEqual(prevState.purpose, nextState.purpose),
+        paintHasDailyWin: !cloudSyncPaintValuesEqual(prevState.dailyWin, nextState.dailyWin),
+        paintHasHeavyDeps:
+          !cloudSyncPaintValuesEqual(prevState.life4000Weeks, nextState.life4000Weeks) ||
+          !cloudSyncPaintValuesEqual(prevState.ruleOf100, nextState.ruleOf100) ||
+          !cloudSyncPaintValuesEqual(prevState.rule100DayProjectKeys, nextState.rule100DayProjectKeys) ||
+          !cloudSyncPaintValuesEqual(prevState.rule100UnitProjectKeys, nextState.rule100UnitProjectKeys)
+      };
+      const collected = collectUiPaintSlicesFromCloudPulseFlags(flags);
+      if (!collected.slices.length && !collected.heavy) {
+        return { slices: [], heavy: false };
+      }
+      if (collected.slices.length) {
+        /*
+         * markUiPaintSlicesDirty 在 uiPaintDirty===null 时会 createAllDirtyUiPaintMap（全 true）。
+         * 整包合并已算精确 delta：先收束为全 false 再细标，避免「只脏 done」仍变成 13/13。
+         */
+        if (uiPaintDirty == null) {
+          uiPaintDirty = {};
+          UI_PAINT_SLICE_KEYS.forEach(function (k) {
+            uiPaintDirty[k] = false;
+          });
+        }
+        markUiPaintSlicesDirty(collected.slices);
+      }
+      if (collected.heavy) {
+        markHeavyModulesDepDirty();
+      }
+      return collected;
     }
 
     function applyCloudSyncPulseFromRoom(pulseNode) {
@@ -98143,7 +98653,9 @@
           noteCloudSyncUiRenderPending();
           return;
         }
-        render();
+        syncChainRun("flushRenderMs", function () {
+          render();
+        });
       })();
     }
 
@@ -103370,6 +103882,9 @@
       const lifetimeBefore = captureCloudSyncLifetimeSnapshot(state);
       const localEnforce = opts && opts.lifetimeEnforceLocal ? opts.lifetimeEnforceLocal : null;
       const remoteEnforce = opts && opts.lifetimeEnforceRemote ? opts.lifetimeEnforceRemote : null;
+      const scApplyT0 =
+        syncChainActive && isSyncChainPerfEnabled() ? syncChainPerfNow() : null;
+      if (scApplyT0 != null) syncChainEnter("applyMergedCloneMergeMs");
       let liveHcSnap = null;
       let liveDoneSnap = null;
       try {
@@ -103476,9 +103991,9 @@
           );
         } catch (_reviveLists) {}
         coerceNestedCloudListFields(merged);
+        const prevPaintState = state;
         state = merged;
         markStateHygieneDirty();
-        markAllUiPaintSlicesDirty();
         migrateForgeMindMetaRowKeysIfNeeded._done = false;
         normalizeDoneListJournalFieldsInState();
         normalizeDoneOutcomeKindsInState();
@@ -103506,18 +104021,43 @@
           /* 不写 saveState，避免合并过程中再次 push */
         }
         reconcileMirrorDeadlinesAfterCloudMerge();
+        /* 细标脏：按 merge 前后内容差分，复用 Pulse 切片依赖；noop 不 markAll */
+        const scMarkT0 =
+          syncChainActive && isSyncChainPerfEnabled() ? syncChainPerfNow() : null;
+        if (scMarkT0 != null) syncChainEnter("markAllDirtyMs");
+        markUiPaintDirtyFromCloudMergeStateDiff(prevPaintState, state);
+        let scMarkMs = 0;
+        if (scMarkT0 != null) {
+          scMarkMs = syncChainPerfNow() - scMarkT0;
+          syncChainNote("markAllDirtyMs", scMarkMs);
+          syncChainEnter("applyMergedCloneMergeMs");
+        }
+        if (scApplyT0 != null) {
+          /* 不含 markDirty：该段单独计入 markAllDirtyMs */
+          syncChainNote(
+            "applyMergedCloneMergeMs",
+            Math.max(0, syncChainPerfNow() - scApplyT0 - scMarkMs)
+          );
+          syncChainLeave();
+        }
         /* Syncing≠Blocking：repair/reconcile 后让出，再跑 Done 镜像同步 */
         await yieldToMainThread();
-        syncAllWeeklyPlanDoneLists({ forceAll: true });
-        if (typeof syncAllAnniversaryDoneLists === "function") {
-          syncAllAnniversaryDoneLists({ forceAll: true });
-        }
-        if (typeof runStateRepairAndRolloverPass === "function") {
-          runStateRepairAndRolloverPass();
-        }
+        syncChainRun("weeklyPlanDoneSyncMs", function () {
+          syncAllWeeklyPlanDoneLists({ forceAll: true });
+        });
+        syncChainRun("anniversaryAndRepairMs", function () {
+          if (typeof syncAllAnniversaryDoneLists === "function") {
+            syncAllAnniversaryDoneLists({ forceAll: true });
+          }
+          if (typeof runStateRepairAndRolloverPass === "function") {
+            runStateRepairAndRolloverPass();
+          }
+        });
         /* Syncing≠Blocking：Done 同步后让出，再跑 hash/persist */
         await yieldToMainThread();
-        setCloudSyncHashFromCurrentState();
+        syncChainRun("hashStringifyMs", function () {
+          setCloudSyncHashFromCurrentState();
+        });
         const r = persistStateToLocalStorage();
         /* Syncing≠Blocking：persist 后让出，再决定是否 render */
         await yieldToMainThread();
@@ -103527,7 +104067,9 @@
           } else if (shouldSkipCloudUiRender()) {
             /* 操作中只落盘，界面等菜单收起后再刷 */
           } else {
-            render();
+            syncChainRun("flushRenderMs", function () {
+              render();
+            });
           }
         }
         return r;
@@ -103620,17 +104162,21 @@
       }
       let localSnapForEnforce = null;
       try {
-        localSnapForEnforce = JSON.parse(JSON.stringify(state));
+        localSnapForEnforce = syncChainRun("deepCloneBeforeMergeMs", function () {
+          return JSON.parse(JSON.stringify(state));
+        });
       } catch (_locEnfSnap) {
         localSnapForEnforce = null;
       }
       /* Syncing≠Blocking：remote/local 深拷贝后让出，再跑整包 merge */
       await yieldToMainThread();
-      const merged = mergeLocalStateWithRemotePayloadBeforePush(
-        payload.state,
-        coerceCloudUpdatedAt(payload.updatedAt),
-        getCloudLastSeenUpdatedAt()
-      );
+      const merged = syncChainRun("mergeLocalStateMs", function () {
+        return mergeLocalStateWithRemotePayloadBeforePush(
+          payload.state,
+          coerceCloudUpdatedAt(payload.updatedAt),
+          getCloudLastSeenUpdatedAt()
+        );
+      });
       if (!merged) return false;
       /* Syncing≠Blocking：merge 完成后让出，再 apply/repair */
       await yieldToMainThread();
@@ -104734,10 +105280,17 @@
 
       function syncWriteLocalOnly() {
         const tLs = perfNow();
+        if (syncChainActive && isSyncChainPerfEnabled()) {
+          syncChainEnter("persistWriteMs");
+        }
         localStorage.setItem(STORAGE_KEY, json);
         _stateJsonCache = json;
         maybeWriteStateEmergencyBackup(json);
         split.localStorageMs = perfRound(perfNow() - tLs);
+        if (syncChainActive && isSyncChainPerfEnabled()) {
+          syncChainNote("persistWriteMs", split.localStorageMs);
+          syncChainLeave();
+        }
         if (perfIx.active) perfNoteSplit("localStorageMs", split.localStorageMs);
         if (isPerfDiagEnabled()) perfMarkLong("localStorage.setItem", split.localStorageMs);
       }
@@ -104748,9 +105301,16 @@
         statePersistQueue = statePersistQueue
           .then(function () {
             const tIdb = perfNow();
+            if (syncChainActive && isSyncChainPerfEnabled()) {
+              syncChainEnter("persistWriteMs");
+            }
             return writeStateJsonToBackend(json).then(function () {
               const idbMs = perfRound(perfNow() - tIdb);
               split.indexedDbMs = idbMs;
+              if (syncChainActive && isSyncChainPerfEnabled()) {
+                syncChainNote("persistWriteMs", idbMs);
+                syncChainLeave();
+              }
               if (typeof perfIx !== "undefined") {
                 if (perfIx.active) perfNoteSplit("indexedDbMs", idbMs);
                 if (isPerfDiagEnabled()) {
@@ -104807,6 +105367,14 @@
         addCloudSyncPerf("persistCount", "persistMs", t0);
         if (t0 != null) uiStallNotePersist(cloudSyncPerfNow() - t0);
         if (tSwitch0 != null) switchPerfNoteSync("persistMs", switchPerfNow() - tSwitch0);
+        if (syncChainActive && isSyncChainPerfEnabled()) {
+          const totalPersist = t0 != null ? cloudSyncPerfNow() - t0 : 0;
+          syncChainNote("persistTotalMs", totalPersist);
+          syncChainNote("persistStringifyMs", split.jsonStringifyMs || 0, {
+            stringifyBytes: split.bytes || 0
+          });
+          /* localStorage 同步写已在 syncWriteLocalOnly 记入；IDB 异步写在 enqueue 回调记入 */
+        }
         if (isPerfDiagEnabled() && !split.usedIdb) {
           perfIx.lastPersistSplit = Object.assign({}, split);
           perfLog("persist-split", split);
@@ -104860,7 +105428,7 @@
           markUiPaintSlicesDirty(opts.lists);
           if (saveListsTouchHeavyModules(opts.lists)) markHeavyModulesDepDirty();
         } else if (!opts.fromHygiene && !opts.skipUiPaintDirty) {
-          /* 裸 save：其它切片全脏，但已干净的 Done 保持干净（云合并仍走 markAllUiPaintSlicesDirty() 无 preserve） */
+          /* 裸 save：其它切片全脏，但已干净的 Done 保持干净（整包云合并已改走 merge 差分细标脏） */
           markAllUiPaintSlicesDirty({ preserveDoneClean: true });
         }
         saveSplit.prepareDirtyMs = perfRound(perfNow() - tPrep);
