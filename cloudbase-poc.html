@@ -107,8 +107,8 @@
 <body>
   <main>
     <div class="banner">
-      CloudBase POC 测试页 · v2026-09-22b
-      <small>这不是 Kinetic Execution 正式 PWA · 文件名 cloudbase-poc.html · 正常大小约 16KB（不是 0B）</small>
+      CloudBase POC 测试页 · v2026-09-22c
+      <small>这不是 Kinetic Execution 正式 PWA · 文件名 cloudbase-poc.html · 正常大小约 18KB（不是 0B）</small>
     </div>
 
     <section>
@@ -226,23 +226,156 @@
     el.watchStatus.innerHTML = badge(text, kind);
   }
 
-  function logError(msg, err) {
-    var line = new Date().toISOString() + "  " + msg;
-    if (err != null) {
-      var detail = "";
-      try {
-        if (typeof err === "string") detail = err;
-        else if (err.message) detail = err.message + (err.code != null ? " [" + err.code + "]" : "");
-        else detail = JSON.stringify(err);
-      } catch (e) {
-        detail = String(err);
-      }
-      line += " → " + detail;
-    }
-    errorLines.push(line);
-    if (errorLines.length > 80) errorLines = errorLines.slice(-80);
+  function pushLogLines(lines) {
+    for (var i = 0; i < lines.length; i++) errorLines.push(lines[i]);
+    if (errorLines.length > 120) errorLines = errorLines.slice(-120);
     el.errorLog.textContent = errorLines.join("\n");
-    console.warn(line, err || "");
+  }
+
+  function safeJson(value) {
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch (e) {
+      try {
+        return String(value);
+      } catch (e2) {
+        return "[无法序列化]";
+      }
+    }
+  }
+
+  /** 从 CloudBase / 浏览器错误对象提取可读字段 */
+  function extractErrorFields(err) {
+    var fields = {
+      code: "",
+      message: "",
+      category: "",
+      origin: String(location.origin || ""),
+      raw: ""
+    };
+    if (err == null) {
+      fields.message = "(无错误对象)";
+      return fields;
+    }
+    if (typeof err === "string") {
+      fields.message = err;
+      fields.raw = err;
+      return fields;
+    }
+
+    fields.code = String(
+      err.code ||
+      err.error ||
+      err.error_code ||
+      err.errorCode ||
+      (err.data && (err.data.code || err.data.error || err.data.error_code)) ||
+      ""
+    );
+    fields.message = String(
+      err.message ||
+      err.msg ||
+      err.error_description ||
+      err.description ||
+      (err.data && (err.data.message || err.data.msg || err.data.error_description)) ||
+      ""
+    );
+    fields.category = String(
+      err.category ||
+      err.error_category ||
+      (err.data && (err.data.category || err.data.error_category)) ||
+      ""
+    );
+    fields.raw = safeJson(err);
+
+    // 部分 SDK 把细节挂在 error / response 上
+    if (!fields.message && err.error && typeof err.error === "object") {
+      var nested = extractErrorFields(err.error);
+      if (!fields.code) fields.code = nested.code;
+      if (!fields.message) fields.message = nested.message;
+      if (!fields.category) fields.category = nested.category;
+    }
+    return fields;
+  }
+
+  function isCorsPermissionDenied(fields, err) {
+    var blob = (
+      (fields.code || "") + " " +
+      (fields.message || "") + " " +
+      (fields.category || "") + " " +
+      (fields.raw || "") + " " +
+      String(err || "")
+    ).toLowerCase();
+    return (
+      blob.indexOf("cors") >= 0 ||
+      blob.indexOf("permission denied") >= 0 ||
+      blob.indexOf("not in domain list") >= 0 ||
+      blob.indexOf("unauthorized origin") >= 0 ||
+      blob.indexOf("origin not allowed") >= 0 ||
+      blob.indexOf("安全域名") >= 0
+    );
+  }
+
+  function logError(msg, err) {
+    var stamp = new Date().toISOString();
+    var lines = [stamp + "  " + msg];
+    if (err != null) {
+      var f = extractErrorFields(err);
+      lines.push("  code: " + (f.code || "(无)"));
+      lines.push("  message: " + (f.message || "(无)"));
+      if (f.category) lines.push("  category: " + f.category);
+      lines.push("  origin: " + f.origin);
+      lines.push("  raw: " + f.raw);
+    }
+    pushLogLines(lines);
+    console.warn(msg, err || "");
+  }
+
+  /** 登录失败：完整错误 + 常见诊断提示 */
+  function logLoginFailure(err) {
+    var stamp = new Date().toISOString();
+    var f = extractErrorFields(err);
+    var lines = [
+      stamp + "  登录失败（完整错误）",
+      "  code: " + (f.code || "(无)"),
+      "  message: " + (f.message || "(无)"),
+      "  category: " + (f.category || "(无)"),
+      "  origin: " + f.origin
+    ];
+
+    if (isCorsPermissionDenied(f, err)) {
+      lines.push("  诊断: 安全域名未放行");
+      lines.push("  说明: 请把当前 origin 加到 CloudBase 控制台 → 环境设置 → 安全配置 → 网页安全域名");
+    }
+
+    // 常见 Auth 错误原样保留 code/message，并加一行提示标签（不遮盖原文）
+    var codeLower = String(f.code || "").toLowerCase();
+    var msgLower = String(f.message || "").toLowerCase();
+    var known = [
+      "invalid_password",
+      "user_pending",
+      "client not found",
+      "client_not_found",
+      "provider not enabled",
+      "provider_not_enabled"
+    ];
+    for (var i = 0; i < known.length; i++) {
+      var k = known[i];
+      if (codeLower.indexOf(k) >= 0 || msgLower.indexOf(k) >= 0) {
+        lines.push("  匹配: " + k + "（见上方 code/message 原文）");
+        break;
+      }
+    }
+
+    lines.push("  raw: " + f.raw);
+    pushLogLines(lines);
+    console.warn("登录失败", err || "");
+
+    // 状态徽章也带上 code，避免只显示「登录失败」
+    var badgeText = "登录失败";
+    if (isCorsPermissionDenied(f, err)) badgeText = "登录失败·安全域名未放行";
+    else if (f.code) badgeText = "登录失败·" + f.code;
+    else if (f.message) badgeText = "登录失败·" + String(f.message).slice(0, 24);
+    setLoginStatus(badgeText, "err");
   }
 
   function setActionsEnabled(on) {
@@ -403,10 +536,9 @@
       startWatch();
       setActionsEnabled(true);
     } catch (e) {
-      setLoginStatus("登录失败", "err");
       setWatchStatus("未连接", "idle");
       setActionsEnabled(false);
-      logError("登录或初始化失败", e);
+      logLoginFailure(e);
     } finally {
       el.btnLogin.disabled = false;
     }
