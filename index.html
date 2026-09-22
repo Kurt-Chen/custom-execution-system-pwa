@@ -143429,17 +143429,235 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     /**
      * 其他任务：仅移出今日计划（清空 todayPlanDate），不删除 weeklyPlan 实体。
+     * UI：局部 patch，不走 paintTodayPlanPanel 全量重绘。
      */
     function removeTodayPlanOtherTask(taskId) {
       const raw = findWeeklyPlanTaskRaw(taskId);
       if (!raw) return;
       raw.todayPlanDate = "";
       touchWeeklyPlanTaskRevision(raw);
-      paintTodayPlanPanel();
+      patchTodayPlanUiAfterOtherTaskRemoved(taskId);
       saveState({ skipUiPaintDirty: true });
       try {
         flushCloudSyncPulseImmediate();
       } catch (_pulseErr) {}
+    }
+
+    /** 轻量：今日 Closed + Other 进度计数与 Other 排序列表（不碰 DOM） */
+    function getTodayPlanUiSnapshot() {
+      const todayKey = formatDateInputValue(new Date());
+      const closedSource = getClosedListItemsVisibleForViewDate(todayKey).slice(
+        0,
+        CLOSED_LIST_DAY_MAX_ITEMS
+      );
+      const closedIdSet = Object.create(null);
+      let closedDone = 0;
+      let closedTotal = 0;
+      for (let i = 0; i < closedSource.length; i++) {
+        const item = closedSource[i];
+        if (!item) continue;
+        closedTotal += 1;
+        if (item.completed) closedDone += 1;
+        if (item.id) closedIdSet[String(item.id)] = 1;
+        const mirror = item.mirrorOf;
+        if (mirror && mirror.id) closedIdSet[String(mirror.id)] = 1;
+      }
+      const otherSource = collectRawWeeklyPlanTasksForTodayPlan(todayKey);
+      const otherRows = [];
+      for (let j = 0; j < otherSource.length; j++) {
+        const task = otherSource[j];
+        const id = String(task.id || "");
+        if (id && closedIdSet[id]) continue;
+        otherRows.push({
+          id: id,
+          name: String(task.text || "").trim() || "（无标题）",
+          done: isWeeklyPlanMainComplete(task)
+        });
+      }
+      const otherSorted = partitionTodayPlanPendingFirst(otherRows, function (row) {
+        return row.done;
+      });
+      let otherDone = 0;
+      for (let d = 0; d < otherSorted.length; d++) {
+        if (otherSorted[d].done) otherDone += 1;
+      }
+      return {
+        doneCount: closedDone + otherDone,
+        totalCount: closedTotal + otherSorted.length,
+        otherSorted: otherSorted
+      };
+    }
+
+    /** 只改 Other 标题数量文案，不重建 head DOM */
+    function updateTodayPlanOtherSectionHeadCount(total) {
+      if (!todayPlanOtherSectionHeadMount) return;
+      const heading = todayPlanOtherSectionHeadMount.querySelector(
+        ".today-plan-panel__section-title"
+      );
+      if (heading) {
+        heading.textContent =
+          "其他任务（" + Math.max(0, Number(total) || 0) + "）";
+        return;
+      }
+      paintTodayPlanOtherSectionHead(total);
+    }
+
+    /** 构建单条「其他任务」行（含 data-today-plan-other-id） */
+    function buildTodayPlanOtherItemRow(row) {
+      const li = document.createElement("li");
+      li.className = "today-plan-panel__item" + (row.done ? " is-done" : "");
+      if (row.id) li.setAttribute("data-today-plan-other-id", String(row.id));
+      const mark = document.createElement("button");
+      mark.type = "button";
+      mark.className = "today-plan-panel__mark";
+      mark.setAttribute("aria-label", row.done ? "取消完成" : "打卡完成");
+      if (row.done) mark.textContent = "\u2713";
+      if (row.id) {
+        mark.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          toggleTodayPlanOtherTaskDone(row.id, !row.done);
+        });
+      } else {
+        mark.disabled = true;
+        mark.setAttribute("aria-hidden", "true");
+      }
+      const name = document.createElement("span");
+      name.className = "today-plan-panel__name";
+      name.textContent = row.name;
+      name.title = row.name;
+      li.appendChild(mark);
+      li.appendChild(name);
+      if (row.id) {
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "today-plan-panel__item-remove";
+        removeBtn.setAttribute("aria-label", "移出今日计划");
+        removeBtn.title = "移出今日计划";
+        removeBtn.textContent = "\u00d7";
+        removeBtn.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          removeTodayPlanOtherTask(row.id);
+        });
+        li.appendChild(removeBtn);
+      } else {
+        const itemChevron = document.createElement("span");
+        itemChevron.className = "today-plan-panel__item-chevron";
+        itemChevron.setAttribute("aria-hidden", "true");
+        itemChevron.textContent = "›";
+        li.appendChild(itemChevron);
+      }
+      return li;
+    }
+
+    function findTodayPlanOtherItemEl(taskId) {
+      if (!todayPlanPanelOtherMount) return null;
+      const tid = String(taskId || "");
+      if (!tid) return null;
+      const items = todayPlanPanelOtherMount.querySelectorAll(
+        "[data-today-plan-other-id]"
+      );
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].getAttribute("data-today-plan-other-id") === tid) {
+          return items[i];
+        }
+      }
+      return null;
+    }
+
+    /**
+     * 删除 Other 后局部 UI：去行、改数量、改进度；不重建 Closed / 不全量刷 Other。
+     * 若默认折叠且可见位不足 limit，从数据补一行，与原 paint 可见集合对齐。
+     */
+    function patchTodayPlanUiAfterOtherTaskRemoved(taskId) {
+      if (!todayPlanPanelOtherMount) return;
+      const li = findTodayPlanOtherItemEl(taskId);
+      if (li && li.parentNode) li.parentNode.removeChild(li);
+
+      const snap = getTodayPlanUiSnapshot();
+      const total = snap.otherSorted.length;
+      updateTodayPlanOtherSectionHeadCount(total);
+      updateTodayPlanPanelProgress(snap.doneCount, snap.totalCount);
+
+      if (total === 0) {
+        todayPlanPanelOtherMount.textContent = "";
+        const empty = document.createElement("p");
+        empty.className = "today-plan-panel__empty";
+        empty.textContent = "暂无其他任务";
+        todayPlanPanelOtherMount.appendChild(empty);
+        return;
+      }
+
+      const emptyEl = todayPlanPanelOtherMount.querySelector(
+        ".today-plan-panel__empty"
+      );
+      if (emptyEl && emptyEl.parentNode) emptyEl.parentNode.removeChild(emptyEl);
+
+      let ul = todayPlanPanelOtherMount.querySelector("ul.today-plan-panel__list");
+      if (!ul) {
+        ul = document.createElement("ul");
+        ul.className = "today-plan-panel__list";
+        const moreExisting = todayPlanPanelOtherMount.querySelector(
+          ".today-plan-panel__more"
+        );
+        if (moreExisting) {
+          todayPlanPanelOtherMount.insertBefore(ul, moreExisting);
+        } else {
+          todayPlanPanelOtherMount.appendChild(ul);
+        }
+      }
+
+      const limit = todayPlanOtherExpanded
+        ? total
+        : TODAY_PLAN_OTHER_DEFAULT_VISIBLE;
+      const present = Object.create(null);
+      const existing = ul.querySelectorAll("[data-today-plan-other-id]");
+      for (let e = 0; e < existing.length; e++) {
+        const id = existing[e].getAttribute("data-today-plan-other-id");
+        if (id) present[id] = 1;
+      }
+      while (ul.children.length < Math.min(limit, total)) {
+        let next = null;
+        for (let i = 0; i < snap.otherSorted.length; i++) {
+          const row = snap.otherSorted[i];
+          if (row.id && !present[row.id]) {
+            next = row;
+            break;
+          }
+        }
+        if (!next) break;
+        ul.appendChild(buildTodayPlanOtherItemRow(next));
+        present[next.id] = 1;
+      }
+
+      let moreBtn = todayPlanPanelOtherMount.querySelector(
+        ".today-plan-panel__more"
+      );
+      if (total > limit) {
+        if (!moreBtn) {
+          moreBtn = document.createElement("button");
+          moreBtn.type = "button";
+          moreBtn.className = "today-plan-panel__more";
+          moreBtn.setAttribute("aria-label", "展开查看更多任务");
+          const moreLabel = document.createElement("span");
+          moreLabel.className = "today-plan-panel__more-label";
+          moreLabel.textContent = "+ MORE";
+          const moreHint = document.createElement("span");
+          moreHint.className = "today-plan-panel__more-hint";
+          moreHint.textContent = "展开查看更多任务";
+          moreBtn.appendChild(moreLabel);
+          moreBtn.appendChild(moreHint);
+          moreBtn.addEventListener("click", function (ev) {
+            ev.stopPropagation();
+            todayPlanOtherExpanded = true;
+            paintTodayPlanPanel();
+          });
+          todayPlanPanelOtherMount.appendChild(moreBtn);
+        }
+      } else if (moreBtn && moreBtn.parentNode) {
+        moreBtn.parentNode.removeChild(moreBtn);
+      }
     }
 
     function appendTodayPlanSection(parent, title, rows, opts) {
@@ -143584,6 +143802,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       ul.className = "today-plan-panel__list";
       for (let i = 0; i < visible.length; i++) {
         const row = visible[i];
+        if (kind === "other") {
+          ul.appendChild(buildTodayPlanOtherItemRow(row));
+          continue;
+        }
         const li = document.createElement("li");
         li.className = "today-plan-panel__item" + (row.done ? " is-done" : "");
         const mark = document.createElement("button");
@@ -143594,17 +143816,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (row.done) {
           mark.textContent = "\u2713";
         }
-        if (kind === "closed" && row.id) {
+        if (row.id) {
           mark.addEventListener("click", function (ev) {
             ev.preventDefault();
             ev.stopPropagation();
             toggleTodayPlanClosedItemDone(row.id, !row.done);
-          });
-        } else if (kind === "other" && row.id) {
-          mark.addEventListener("click", function (ev) {
-            ev.preventDefault();
-            ev.stopPropagation();
-            toggleTodayPlanOtherTaskDone(row.id, !row.done);
           });
         } else {
           mark.disabled = true;
@@ -143616,26 +143832,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         name.title = row.name;
         li.appendChild(mark);
         li.appendChild(name);
-        if (kind === "other" && row.id) {
-          const removeBtn = document.createElement("button");
-          removeBtn.type = "button";
-          removeBtn.className = "today-plan-panel__item-remove";
-          removeBtn.setAttribute("aria-label", "移出今日计划");
-          removeBtn.title = "移出今日计划";
-          removeBtn.textContent = "\u00d7";
-          removeBtn.addEventListener("click", function (ev) {
-            ev.preventDefault();
-            ev.stopPropagation();
-            removeTodayPlanOtherTask(row.id);
-          });
-          li.appendChild(removeBtn);
-        } else if (kind === "other") {
-          const itemChevron = document.createElement("span");
-          itemChevron.className = "today-plan-panel__item-chevron";
-          itemChevron.setAttribute("aria-hidden", "true");
-          itemChevron.textContent = "›";
-          li.appendChild(itemChevron);
-        }
         ul.appendChild(li);
       }
       section.appendChild(ul);
