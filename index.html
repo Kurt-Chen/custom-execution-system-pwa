@@ -716,6 +716,24 @@
       }
     }
 
+    /* 腾讯云实验 A：复用云同步面板壳，仅改边框色以示 TEST */
+    #tencentExpPanelOverlay .cloud-sync-panel {
+      border-color: #c2410c;
+      background: #fff7ed;
+    }
+    #tencentExpPanelOverlay .cloud-sync-panel h3 {
+      color: #9a3412;
+    }
+
+    /* 阿里云实验 A：复用云同步面板壳，绿框区分 TEST DATA */
+    #aliyunExpPanelOverlay .cloud-sync-panel {
+      border-color: #047857;
+      background: #ecfdf5;
+    }
+    #aliyunExpPanelOverlay .cloud-sync-panel h3 {
+      color: #065f46;
+    }
+
     .forge-body-checkin-overlay {
       position: fixed;
       inset: 0;
@@ -93456,6 +93474,51 @@
         <button id="cloudSyncDisableBtn" class="btn btn-danger" type="button">关闭同步</button>
         <button id="cloudSyncCancelBtn" class="btn" type="button">取消</button>
         <button id="cloudSyncSaveBtn" class="btn btn-primary" type="button">保存并连接</button>
+        <button id="cloudSyncOpenTencentExpBtn" class="btn" type="button" title="仅烟雾测试，默认不加载 SDK">腾讯云实验 A…</button>
+        <button id="cloudSyncOpenAliyunExpBtn" class="btn" type="button" title="仅烟雾测试，默认不请求阿里云">阿里云实验 A…</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="aliyunExpPanelOverlay" class="cloud-sync-panel-overlay hidden" aria-hidden="true">
+    <div class="cloud-sync-panel" role="dialog" aria-modal="true" aria-labelledby="aliyunExpPanelTitle">
+      <h3 id="aliyunExpPanelTitle">阿里云实验 A / TEST DATA</h3>
+      <p class="cloud-sync-panel-meta">
+        隔离烟雾：FC → aliyun_exec_smoke_a。不写正式 Firebase / IndexedDB。禁止 AccessKey。仅点「运行 A/B」时请求。B 走既有 merge/render，不替换 Firebase 主路径。
+      </p>
+      <label for="aliyunExpUrlInput">Function URL</label>
+      <input
+        id="aliyunExpUrlInput"
+        type="text"
+        spellcheck="false"
+        value="https://exec-smoke-a-gbhrcsrizq.cn-hangzhou.fcapp.run"
+        autocomplete="off"
+      />
+      <label for="aliyunExpLogArea">日志</label>
+      <textarea id="aliyunExpLogArea" readonly spellcheck="false" placeholder="尚未运行"></textarea>
+      <div class="cloud-sync-panel-actions">
+        <button id="aliyunExpCloseBtn" class="btn" type="button">关闭</button>
+        <button id="aliyunExpRunABtn" class="btn btn-primary" type="button">运行 A</button>
+        <button id="aliyunExpRunBBtn" class="btn" type="button" title="单点：阿里云读取→merge→render">运行 B</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="tencentExpPanelOverlay" class="cloud-sync-panel-overlay hidden" aria-hidden="true">
+    <div class="cloud-sync-panel" role="dialog" aria-modal="true" aria-labelledby="tencentExpPanelTitle">
+      <h3 id="tencentExpPanelTitle">腾讯云实验 A / TEST DATA</h3>
+      <p class="cloud-sync-panel-meta">
+        隔离烟雾：集合 tcb_exec_smoke_a / 文档 tcb-smoke-a-isolated。不写正式 Firebase / IndexedDB。禁止 SecretId/SecretKey。SDK 仅点「运行 A」时加载。
+      </p>
+      <label for="tencentExpEnvInput">CloudBase envId（公开）</label>
+      <input id="tencentExpEnvInput" type="text" spellcheck="false" placeholder="your-env-xxxxxx" autocomplete="off" />
+      <label for="tencentExpAccessKeyInput">Publishable Key（可选；勿填 SecretKey）</label>
+      <input id="tencentExpAccessKeyInput" type="text" spellcheck="false" placeholder="可留空，走 Auth v2 匿名登录" autocomplete="off" />
+      <label for="tencentExpLogArea">日志</label>
+      <textarea id="tencentExpLogArea" readonly spellcheck="false" placeholder="尚未运行"></textarea>
+      <div class="cloud-sync-panel-actions">
+        <button id="tencentExpCloseBtn" class="btn" type="button">关闭</button>
+        <button id="tencentExpRunABtn" class="btn btn-primary" type="button">运行 A</button>
       </div>
     </div>
   </div>
@@ -102470,6 +102533,713 @@
     if (cloudSyncPullLatestBtn) {
       cloudSyncPullLatestBtn.addEventListener("click", () => {
         void pullLatestStateFromCloud();
+      });
+    }
+
+    /**
+     * 腾讯云实验 A（烟雾）：默认不加载 SDK、不进正式同步路径。
+     * SDK 3.10.1（官方 v3）+ Auth v2：app.auth.signInAnonymously()；可选 Publishable Key（accessKey）。
+     * 禁止 SecretId/SecretKey。集合/文档写死隔离名。
+     */
+    const TENCENT_EXP_SDK_URL =
+      "https://static.cloudbase.net/cloudbase-js-sdk/3.10.1/cloudbase.full.js";
+    const TENCENT_EXP_COLLECTION = "tcb_exec_smoke_a";
+    const TENCENT_EXP_DOC_ID = "tcb-smoke-a-isolated";
+    let tencentExpSdkPromise = null;
+
+    const tencentExpPanelOverlay = document.getElementById("tencentExpPanelOverlay");
+    const tencentExpEnvInput = document.getElementById("tencentExpEnvInput");
+    const tencentExpAccessKeyInput = document.getElementById("tencentExpAccessKeyInput");
+    const tencentExpLogArea = document.getElementById("tencentExpLogArea");
+    const tencentExpCloseBtn = document.getElementById("tencentExpCloseBtn");
+    const tencentExpRunABtn = document.getElementById("tencentExpRunABtn");
+    const cloudSyncOpenTencentExpBtn = document.getElementById("cloudSyncOpenTencentExpBtn");
+
+    function tencentExpLog(lines, msg) {
+      lines.push(String(msg || ""));
+      if (tencentExpLogArea) {
+        tencentExpLogArea.value = lines.join("\n");
+        tencentExpLogArea.scrollTop = tencentExpLogArea.scrollHeight;
+      }
+    }
+
+    function tencentExpHasForbiddenSecret(s) {
+      return /secret\s*id|secret\s*key|private[_\s-]?key|session[_\s-]?token|cloudbase_apikey/i.test(
+        String(s || "")
+      );
+    }
+
+    function ensureTencentExpSdk() {
+      if (window.cloudbase && typeof window.cloudbase.init === "function") {
+        return Promise.resolve(window.cloudbase);
+      }
+      if (tencentExpSdkPromise) return tencentExpSdkPromise;
+      tencentExpSdkPromise = new Promise(function (resolve, reject) {
+        const s = document.createElement("script");
+        s.src = TENCENT_EXP_SDK_URL;
+        s.async = true;
+        s.onload = function () {
+          if (window.cloudbase && typeof window.cloudbase.init === "function") resolve(window.cloudbase);
+          else reject(new Error("CloudBase SDK 加载后无 cloudbase.init"));
+        };
+        s.onerror = function () {
+          tencentExpSdkPromise = null;
+          reject(new Error("无法加载 " + TENCENT_EXP_SDK_URL));
+        };
+        document.head.appendChild(s);
+      });
+      return tencentExpSdkPromise;
+    }
+
+    function openTencentExpPanel() {
+      if (!tencentExpPanelOverlay) return;
+      tencentExpPanelOverlay.classList.remove("hidden");
+      tencentExpPanelOverlay.setAttribute("aria-hidden", "false");
+    }
+
+    function closeTencentExpPanel() {
+      if (!tencentExpPanelOverlay) return;
+      tencentExpPanelOverlay.classList.add("hidden");
+      tencentExpPanelOverlay.setAttribute("aria-hidden", "true");
+    }
+
+    function tencentExpDocEmpty(data) {
+      return (
+        data == null ||
+        (Array.isArray(data) && data.length === 0) ||
+        (typeof data === "object" && !Array.isArray(data) && Object.keys(data).length === 0)
+      );
+    }
+
+    async function runTencentExpSmokeA() {
+      const lines = [];
+      const env = String((tencentExpEnvInput && tencentExpEnvInput.value) || "").trim();
+      const accessKey = String((tencentExpAccessKeyInput && tencentExpAccessKeyInput.value) || "").trim();
+      if (!env) {
+        tencentExpLog(lines, "请填写 envId");
+        return;
+      }
+      if (tencentExpHasForbiddenSecret(env) || tencentExpHasForbiddenSecret(accessKey)) {
+        tencentExpLog(lines, "中止：检测到疑似 SecretId/SecretKey，禁止在浏览器使用。");
+        return;
+      }
+      const tAll = Date.now();
+      try {
+        tencentExpLog(lines, "SDK " + TENCENT_EXP_SDK_URL.split("/").slice(-2).join("/"));
+        tencentExpLog(lines, "集合=" + TENCENT_EXP_COLLECTION + " 文档=" + TENCENT_EXP_DOC_ID);
+        const cloudbase = await ensureTencentExpSdk();
+        const initOpts = { env: env, region: "ap-shanghai" };
+        if (accessKey) initOpts.accessKey = accessKey;
+        const app = cloudbase.init(initOpts);
+        if (!app.auth || typeof app.auth.signInAnonymously !== "function") {
+          throw new Error("需要 Auth v2（app.auth.signInAnonymously），请使用 SDK ≥2.21");
+        }
+        const tAuth = Date.now();
+        const authRes = await app.auth.signInAnonymously();
+        if (authRes && authRes.error) {
+          throw authRes.error instanceof Error
+            ? authRes.error
+            : new Error(String((authRes.error && authRes.error.message) || authRes.error));
+        }
+        tencentExpLog(
+          lines,
+          "登录 Auth v2 signInAnonymously" +
+            (accessKey ? " + Publishable Key" : "") +
+            " +" +
+            (Date.now() - tAuth) +
+            "ms"
+        );
+
+        const docRef = app.database().collection(TENCENT_EXP_COLLECTION).doc(TENCENT_EXP_DOC_ID);
+        const token = "a-" + Date.now().toString(36);
+        const createPayload = {
+          kind: "tencent-exp-smoke-a",
+          text: "smoke-create-" + token,
+          updatedAt: Date.now()
+        };
+        const updateText = "smoke-update-" + token;
+
+        async function step(name, fn) {
+          const t0 = Date.now();
+          await fn();
+          tencentExpLog(lines, "✓ " + name + " +" + (Date.now() - t0) + "ms");
+        }
+
+        await step("读取", async function () {
+          await docRef.get();
+        });
+        await step("新增", async function () {
+          await docRef.set(createPayload);
+        });
+        await step("修改", async function () {
+          await docRef.update({ text: updateText, updatedAt: Date.now() });
+        });
+        await step("再读取(校验)", async function () {
+          const res = await docRef.get();
+          const row = Array.isArray(res.data) ? res.data[0] : res.data;
+          if (!row || row.text !== updateText) throw new Error("读回 text 不匹配");
+        });
+        await step("删除", async function () {
+          await docRef.remove();
+        });
+        await step("确认已删", async function () {
+          const res = await docRef.get();
+          if (!tencentExpDocEmpty(res && res.data)) throw new Error("删除后文档仍存在");
+        });
+        tencentExpLog(lines, "A 通过（正确性，非性能）总耗时 +" + (Date.now() - tAll) + "ms");
+        tencentExpLog(lines, "未写正式 Firebase / IndexedDB；未进现有同步路径。");
+      } catch (err) {
+        tencentExpLog(lines, "A 失败: " + (err && err.message ? err.message : String(err)));
+      }
+    }
+
+    if (cloudSyncOpenTencentExpBtn) {
+      cloudSyncOpenTencentExpBtn.addEventListener("click", function () {
+        closeCloudSyncPanel();
+        openTencentExpPanel();
+      });
+    }
+    if (tencentExpCloseBtn) tencentExpCloseBtn.addEventListener("click", closeTencentExpPanel);
+    if (tencentExpRunABtn) {
+      tencentExpRunABtn.addEventListener("click", function () {
+        tencentExpRunABtn.disabled = true;
+        Promise.resolve(runTencentExpSmokeA()).finally(function () {
+          tencentExpRunABtn.disabled = false;
+        });
+      });
+    }
+
+    /**
+     * 阿里云实验 A（烟雾）：默认不请求 FC；仅点「运行 A」时 fetch Function URL。
+     * 不进 saveState / initCloudSync / merge / render；禁止浏览器 AccessKey。
+     */
+    const ALIYUN_EXP_DEFAULT_URL =
+      "https://exec-smoke-a-gbhrcsrizq.cn-hangzhou.fcapp.run";
+    const aliyunExpPanelOverlay = document.getElementById("aliyunExpPanelOverlay");
+    const aliyunExpUrlInput = document.getElementById("aliyunExpUrlInput");
+    const aliyunExpLogArea = document.getElementById("aliyunExpLogArea");
+    const aliyunExpCloseBtn = document.getElementById("aliyunExpCloseBtn");
+    const aliyunExpRunABtn = document.getElementById("aliyunExpRunABtn");
+    const aliyunExpRunBBtn = document.getElementById("aliyunExpRunBBtn");
+    const cloudSyncOpenAliyunExpBtn = document.getElementById("cloudSyncOpenAliyunExpBtn");
+
+    function aliyunExpLog(lines, msg) {
+      lines.push(String(msg || ""));
+      if (aliyunExpLogArea) {
+        aliyunExpLogArea.value = lines.join("\n");
+        aliyunExpLogArea.scrollTop = aliyunExpLogArea.scrollHeight;
+      }
+    }
+
+    function aliyunExpHasForbiddenSecret(s) {
+      return /access\s*key|accesskey(id|secret)?|secret\s*key|ALIBABA_CLOUD_ACCESS_KEY/i.test(
+        String(s || "")
+      );
+    }
+
+    function openAliyunExpPanel() {
+      if (!aliyunExpPanelOverlay) return;
+      if (aliyunExpUrlInput && !String(aliyunExpUrlInput.value || "").trim()) {
+        aliyunExpUrlInput.value = ALIYUN_EXP_DEFAULT_URL;
+      }
+      aliyunExpPanelOverlay.classList.remove("hidden");
+      aliyunExpPanelOverlay.setAttribute("aria-hidden", "false");
+    }
+
+    function closeAliyunExpPanel() {
+      if (!aliyunExpPanelOverlay) return;
+      aliyunExpPanelOverlay.classList.add("hidden");
+      aliyunExpPanelOverlay.setAttribute("aria-hidden", "true");
+    }
+
+    async function aliyunExpFetchJson(method, url, bodyObj) {
+      const opts = {
+        method: method,
+        headers: { Accept: "application/json" }
+      };
+      if (bodyObj != null) {
+        opts.headers["Content-Type"] = "application/json";
+        opts.body = JSON.stringify(bodyObj);
+      }
+      const res = await fetch(url, opts);
+      let data = null;
+      const text = await res.text();
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch (_parseErr) {
+        data = { raw: text };
+      }
+      return { status: res.status, ok: res.ok, data: data };
+    }
+
+    async function runAliyunExpSmokeA() {
+      const lines = [];
+      const base = String((aliyunExpUrlInput && aliyunExpUrlInput.value) || ALIYUN_EXP_DEFAULT_URL)
+        .trim()
+        .replace(/\/+$/, "");
+      if (!base) {
+        aliyunExpLog(lines, "请填写 Function URL");
+        return;
+      }
+      if (aliyunExpHasForbiddenSecret(base)) {
+        aliyunExpLog(lines, "中止：URL 中疑似 AccessKey，禁止在浏览器使用。");
+        return;
+      }
+
+      const storageKey =
+        typeof STORAGE_KEY !== "undefined" ? STORAGE_KEY : "todo-app-data-v1";
+      let lsBefore = null;
+      try {
+        lsBefore = localStorage.getItem(storageKey);
+      } catch (_ls0) {}
+      const firebaseWrites = [];
+      let firebaseProbeOk = false;
+      try {
+        if (window.firebase && firebase.database && firebase.database.Reference) {
+          const proto = firebase.database.Reference.prototype;
+          ["set", "update", "remove", "push", "transaction"].forEach(function (m) {
+            const orig = proto[m];
+            if (typeof orig !== "function" || orig.__aliyunExpProbe) return;
+            const wrapped = function () {
+              firebaseWrites.push(m);
+              return orig.apply(this, arguments);
+            };
+            wrapped.__aliyunExpProbe = true;
+            proto[m] = wrapped;
+          });
+          firebaseProbeOk = true;
+        }
+      } catch (_fbProbe) {}
+
+      const docId = "aliyun-smoke-a-browser-" + Date.now().toString(36);
+      const tAll = Date.now();
+      aliyunExpLog(lines, "URL=" + base);
+      aliyunExpLog(lines, "id=" + docId + " 表=aliyun_exec_smoke_a（服务端）");
+
+      try {
+        async function step(name, method, path, bodyObj, assertFn) {
+          const t0 = Date.now();
+          const r = await aliyunExpFetchJson(method, base + path, bodyObj);
+          const ms = Date.now() - t0;
+          if (assertFn) assertFn(r);
+          aliyunExpLog(
+            lines,
+            "✓ " + name + " HTTP " + r.status + " +" + ms + "ms"
+          );
+          return r;
+        }
+
+        await step("POST", "POST", "/smoke", {
+          id: docId,
+          payload: { hello: "aliyun-a-browser", n: 1 }
+        }, function (r) {
+          if (!(r.status === 200 || r.status === 201) || !(r.data && r.data.ok)) {
+            throw new Error("POST 失败: HTTP " + r.status + " " + JSON.stringify(r.data));
+          }
+        });
+
+        await step("GET", "GET", "/smoke/" + encodeURIComponent(docId), null, function (r) {
+          if (r.status !== 200 || !(r.data && r.data.ok && r.data.data && r.data.data.id === docId)) {
+            throw new Error("GET 失败: HTTP " + r.status + " " + JSON.stringify(r.data));
+          }
+        });
+
+        await step(
+          "PATCH",
+          "PATCH",
+          "/smoke/" + encodeURIComponent(docId),
+          { payload: { hello: "aliyun-a-browser", n: 2, patched: true } },
+          function (r) {
+            if (r.status !== 200 || !(r.data && r.data.ok)) {
+              throw new Error("PATCH 失败: HTTP " + r.status + " " + JSON.stringify(r.data));
+            }
+          }
+        );
+
+        await step("GET2", "GET", "/smoke/" + encodeURIComponent(docId), null, function (r) {
+          const payload =
+            r.data && r.data.data && r.data.data.attrs && r.data.data.attrs.payload;
+          if (r.status !== 200 || String(payload || "").indexOf("patched") < 0) {
+            throw new Error("GET2 校验失败: HTTP " + r.status + " " + JSON.stringify(r.data));
+          }
+        });
+
+        await step("DELETE", "DELETE", "/smoke/" + encodeURIComponent(docId), null, function (r) {
+          if (r.status !== 200 || !(r.data && r.data.ok)) {
+            throw new Error("DELETE 失败: HTTP " + r.status + " " + JSON.stringify(r.data));
+          }
+        });
+
+        await step("GET3_absent", "GET", "/smoke/" + encodeURIComponent(docId), null, function (r) {
+          if (r.status !== 404) {
+            throw new Error("删除后应 404，实际 HTTP " + r.status + " " + JSON.stringify(r.data));
+          }
+        });
+
+        let lsAfter = null;
+        try {
+          lsAfter = localStorage.getItem(storageKey);
+        } catch (_ls1) {}
+        aliyunExpLog(lines, "A 通过（正确性，非性能）总耗时 +" + (Date.now() - tAll) + "ms");
+        aliyunExpLog(
+          lines,
+          "CORS=ok Firebase写入=" +
+            firebaseWrites.length +
+            (firebaseProbeOk ? "" : "(未探测到SDK)") +
+            " 正式localStorage变更=" +
+            (lsBefore !== lsAfter)
+        );
+        aliyunExpLog(lines, "未写正式 IndexedDB/Firebase；未进现有同步路径。");
+        window.__aliyunExpSmokeAReport = {
+          ok: true,
+          docId: docId,
+          firebaseWrites: firebaseWrites.slice(),
+          formalLocalStorageChanged: lsBefore !== lsAfter,
+          totalMs: Date.now() - tAll
+        };
+      } catch (err) {
+        aliyunExpLog(lines, "A 失败: " + (err && err.message ? err.message : String(err)));
+        window.__aliyunExpSmokeAReport = {
+          ok: false,
+          error: err && err.message ? err.message : String(err),
+          firebaseWrites: firebaseWrites.slice()
+        };
+      }
+    }
+
+    /** B 单点：用接近真实结构的隔离包走 阿里云读取→parse→既有 merge→render，然后恢复快照。 */
+    function aliyunExpBuildBenchRemoteState() {
+      let remote;
+      try {
+        remote = JSON.parse(JSON.stringify(state));
+      } catch (_e) {
+        remote = { done: [] };
+      }
+      if (!remote || typeof remote !== "object") remote = { done: [] };
+      if (!Array.isArray(remote.done)) remote.done = [];
+      const padded = remote.done.length < 50;
+      if (padded) {
+        const need = 500 - remote.done.length;
+        for (let i = 0; i < need; i++) {
+          remote.done.push({
+            id: "aliyun-exp-b-pad-" + i,
+            text: "aliyun-b-pad-" + i,
+            completedAt: Date.now() - i * 1000
+          });
+        }
+      }
+      remote.done.push({
+        id: "aliyun-exp-b-marker-" + Date.now().toString(36),
+        text: "aliyun-exp-b-marker",
+        completedAt: Date.now()
+      });
+      return { remote: remote, padded: padded, doneCount: remote.done.length };
+    }
+
+    function aliyunExpRestoreStateSnapshot(snap) {
+      if (!snap || typeof snap !== "object") return;
+      const keys = Object.keys(state);
+      for (let i = 0; i < keys.length; i++) {
+        try {
+          delete state[keys[i]];
+        } catch (_del) {}
+      }
+      const sk = Object.keys(snap);
+      for (let j = 0; j < sk.length; j++) {
+        state[sk[j]] = snap[sk[j]];
+      }
+    }
+
+    async function runAliyunExpSmokeB() {
+      const lines = [];
+      const base = String((aliyunExpUrlInput && aliyunExpUrlInput.value) || ALIYUN_EXP_DEFAULT_URL)
+        .trim()
+        .replace(/\/+$/, "");
+      if (!base) {
+        aliyunExpLog(lines, "请填写 Function URL");
+        return;
+      }
+      if (aliyunExpHasForbiddenSecret(base)) {
+        aliyunExpLog(lines, "中止：URL 中疑似 AccessKey，禁止在浏览器使用。");
+        return;
+      }
+
+      const storageKey =
+        typeof STORAGE_KEY !== "undefined" ? STORAGE_KEY : "todo-app-data-v1";
+      let lsBefore = null;
+      try {
+        lsBefore = localStorage.getItem(storageKey);
+      } catch (_ls0) {}
+
+      const firebaseWrites = [];
+      try {
+        if (window.firebase && firebase.database && firebase.database.Reference) {
+          const proto = firebase.database.Reference.prototype;
+          ["set", "update", "remove", "push", "transaction"].forEach(function (m) {
+            const orig = proto[m];
+            if (typeof orig !== "function" || orig.__aliyunExpBProbe) return;
+            const wrapped = function () {
+              firebaseWrites.push(m);
+              return orig.apply(this, arguments);
+            };
+            wrapped.__aliyunExpBProbe = true;
+            proto[m] = wrapped;
+          });
+        }
+      } catch (_fb) {}
+
+      const docId = "aliyun-smoke-b-" + Date.now().toString(36);
+      const tAll = Date.now();
+      const marks = {
+        cloneMs: 0,
+        uploadMs: 0,
+        downloadMs: 0,
+        parseMs: 0,
+        mergeMs: 0,
+        renderMs: 0,
+        restoreMs: 0,
+        deleteMs: 0
+      };
+      let snap = null;
+      let restored = false;
+      let uiFeltBlocked = null;
+
+      aliyunExpLog(lines, "======== B 单点开始 ========");
+      aliyunExpLog(lines, "路径: 阿里云读写 → parse → applyCloudPayloadWithMerge → render → 恢复快照");
+      aliyunExpLog(lines, "不替换 Firebase 主路径；merge 使用 skipPersist。");
+
+      try {
+        let t0 = Date.now();
+        try {
+          snap = JSON.parse(JSON.stringify(state));
+        } catch (_snapErr) {
+          throw new Error("无法快照本机 state，中止 B 以免无法恢复");
+        }
+        marks.cloneMs = Date.now() - t0;
+
+        const built = aliyunExpBuildBenchRemoteState();
+        const remoteState = built.remote;
+        aliyunExpLog(
+          lines,
+          "规模: done=" +
+            built.doneCount +
+            (built.padded ? "（本机偏小，已合成填充至约500+marker）" : "（本机真实规模）")
+        );
+
+        let remoteJson;
+        try {
+          remoteJson = JSON.stringify(remoteState);
+        } catch (_serErr) {
+          throw new Error("remote state 无法序列化");
+        }
+        const bytes = remoteJson.length;
+        aliyunExpLog(lines, "隔离包约 " + Math.round(bytes / 1024) + " KB");
+        if (bytes > 900000) {
+          throw new Error(
+            "隔离包过大（>" +
+              Math.round(bytes / 1024) +
+              "KB），单列 Tablestore 不安全；本单点实验中止，勿扩大迁移。"
+          );
+        }
+
+        t0 = Date.now();
+        if (typeof uiStallBegin === "function") uiStallBegin("cloudPush");
+        const up = await aliyunExpFetchJson("POST", base + "/smoke", {
+          id: docId,
+          payload: { kind: "aliyun-exp-b", state: remoteState }
+        });
+        marks.uploadMs = Date.now() - t0;
+        if (!(up.status === 200 || up.status === 201) || !(up.data && up.data.ok)) {
+          throw new Error("B 上传失败 HTTP " + up.status + " " + JSON.stringify(up.data));
+        }
+        aliyunExpLog(lines, "✓ 阿里云上传 HTTP " + up.status + " +" + marks.uploadMs + "ms");
+
+        t0 = Date.now();
+        if (typeof uiStallBegin === "function") uiStallBegin("cloudPull");
+        const down = await aliyunExpFetchJson("GET", base + "/smoke/" + encodeURIComponent(docId), null);
+        marks.downloadMs = Date.now() - t0;
+        if (down.status !== 200 || !(down.data && down.data.ok)) {
+          throw new Error("B 下载失败 HTTP " + down.status + " " + JSON.stringify(down.data));
+        }
+        aliyunExpLog(lines, "✓ 阿里云下载 HTTP " + down.status + " +" + marks.downloadMs + "ms");
+
+        t0 = Date.now();
+        let payloadStr =
+          down.data &&
+          down.data.data &&
+          down.data.data.attrs &&
+          down.data.data.attrs.payload;
+        if (typeof payloadStr !== "string") {
+          throw new Error("下载 payload 不是字符串");
+        }
+        const envelope = JSON.parse(payloadStr);
+        const pulledState = envelope && envelope.state ? envelope.state : null;
+        if (!pulledState || !Array.isArray(pulledState.done)) {
+          throw new Error("下载 state 缺少 done[]");
+        }
+        marks.parseMs = Date.now() - t0;
+        aliyunExpLog(lines, "✓ parse +" + marks.parseMs + "ms done=" + pulledState.done.length);
+
+        const prevSuppress = cloudSyncSuppressPush;
+        cloudSyncSuppressPush = true;
+        t0 = Date.now();
+        if (typeof uiStallBegin === "function") uiStallBegin("cloudMerge");
+        const mergedOk = await applyCloudPayloadWithMerge(
+          { state: pulledState, updatedAt: Date.now(), updatedBy: "aliyun-exp-b" },
+          { skipPersist: true, skipRender: true }
+        );
+        marks.mergeMs = Date.now() - t0;
+        cloudSyncSuppressPush = prevSuppress;
+        aliyunExpLog(
+          lines,
+          (mergedOk ? "✓" : "△") + " merge(applyCloudPayloadWithMerge) +" + marks.mergeMs + "ms"
+        );
+
+        t0 = Date.now();
+        if (typeof uiStallBegin === "function") uiStallBegin("cloudPull");
+        render(true);
+        marks.renderMs = Date.now() - t0;
+        aliyunExpLog(lines, "✓ render(true) +" + marks.renderMs + "ms");
+
+        try {
+          if (window.__aliyunExpBSkipConfirm) {
+            uiFeltBlocked = null;
+          } else {
+            uiFeltBlocked = window.confirm(
+              "B 单点刚跑完 merge+render。\n\n同步期间界面是否明显卡死（点击/滚动几乎无法操作）？\n\n确定=仍然卡死（阿里云未改善）\n取消=尚可操作（有改善或可接受）"
+            );
+          }
+        } catch (_c) {
+          uiFeltBlocked = null;
+        }
+        aliyunExpLog(
+          lines,
+          "主观卡顿=" +
+            (uiFeltBlocked === true ? "仍卡死" : uiFeltBlocked === false ? "尚可操作" : "未采集")
+        );
+
+        t0 = Date.now();
+        cloudSyncSuppressPush = true;
+        aliyunExpRestoreStateSnapshot(snap);
+        marks.restoreMs = Date.now() - t0;
+        restored = true;
+        cloudSyncSuppressPush = prevSuppress;
+        try {
+          render(true);
+        } catch (_rr) {}
+        aliyunExpLog(lines, "✓ 已恢复本机 state 快照 +" + marks.restoreMs + "ms");
+
+        t0 = Date.now();
+        const del = await aliyunExpFetchJson(
+          "DELETE",
+          base + "/smoke/" + encodeURIComponent(docId),
+          null
+        );
+        marks.deleteMs = Date.now() - t0;
+        aliyunExpLog(lines, "✓ 删除隔离行 HTTP " + del.status + " +" + marks.deleteMs + "ms");
+
+        let lsAfter = null;
+        try {
+          lsAfter = localStorage.getItem(storageKey);
+        } catch (_ls1) {}
+
+        const totalMs = Date.now() - tAll;
+        aliyunExpLog(lines, "======== B 单点结束 总耗时 +" + totalMs + "ms ========");
+        aliyunExpLog(
+          lines,
+          "分项 ms: clone=" +
+            marks.cloneMs +
+            " upload=" +
+            marks.uploadMs +
+            " download=" +
+            marks.downloadMs +
+            " parse=" +
+            marks.parseMs +
+            " merge=" +
+            marks.mergeMs +
+            " render=" +
+            marks.renderMs +
+            " restore=" +
+            marks.restoreMs
+        );
+        aliyunExpLog(
+          lines,
+          "Firebase写入=" +
+            firebaseWrites.length +
+            " 正式localStorage变更=" +
+            (lsBefore !== lsAfter) +
+            " skipPersist=true"
+        );
+        if (uiFeltBlocked === true) {
+          aliyunExpLog(lines, "结论倾向: 阿里云未消除卡顿 → 按约定应停止扩大迁移并回滚实验投入。");
+        } else if (uiFeltBlocked === false) {
+          aliyunExpLog(lines, "结论倾向: 主观尚可操作；仍须你确认后才可扩大范围。");
+        }
+
+        window.__aliyunExpSmokeBReport = {
+          ok: true,
+          docId: docId,
+          marks: marks,
+          totalMs: totalMs,
+          doneCount: built.doneCount,
+          padded: built.padded,
+          bytes: bytes,
+          firebaseWrites: firebaseWrites.slice(),
+          formalLocalStorageChanged: lsBefore !== lsAfter,
+          uiFeltBlocked: uiFeltBlocked,
+          restored: restored
+        };
+      } catch (err) {
+        aliyunExpLog(lines, "B 失败: " + (err && err.message ? err.message : String(err)));
+        if (snap && !restored) {
+          try {
+            cloudSyncSuppressPush = true;
+            aliyunExpRestoreStateSnapshot(snap);
+            cloudSyncSuppressPush = false;
+            render(true);
+            aliyunExpLog(lines, "失败后已尝试恢复 state 快照");
+          } catch (_re) {
+            aliyunExpLog(lines, "恢复快照失败: " + (_re && _re.message ? _re.message : String(_re)));
+          }
+        }
+        try {
+          await aliyunExpFetchJson("DELETE", base + "/smoke/" + encodeURIComponent(docId), null);
+        } catch (_delErr) {}
+        window.__aliyunExpSmokeBReport = {
+          ok: false,
+          error: err && err.message ? err.message : String(err),
+          marks: marks,
+          firebaseWrites: firebaseWrites.slice(),
+          restored: restored
+        };
+      }
+    }
+
+    if (cloudSyncOpenAliyunExpBtn) {
+      cloudSyncOpenAliyunExpBtn.addEventListener("click", function () {
+        closeCloudSyncPanel();
+        openAliyunExpPanel();
+      });
+    }
+    if (aliyunExpCloseBtn) aliyunExpCloseBtn.addEventListener("click", closeAliyunExpPanel);
+    if (aliyunExpRunABtn) {
+      aliyunExpRunABtn.addEventListener("click", function () {
+        aliyunExpRunABtn.disabled = true;
+        if (aliyunExpRunBBtn) aliyunExpRunBBtn.disabled = true;
+        Promise.resolve(runAliyunExpSmokeA()).finally(function () {
+          aliyunExpRunABtn.disabled = false;
+          if (aliyunExpRunBBtn) aliyunExpRunBBtn.disabled = false;
+        });
+      });
+    }
+    if (aliyunExpRunBBtn) {
+      aliyunExpRunBBtn.addEventListener("click", function () {
+        aliyunExpRunBBtn.disabled = true;
+        if (aliyunExpRunABtn) aliyunExpRunABtn.disabled = true;
+        Promise.resolve(runAliyunExpSmokeB()).finally(function () {
+          aliyunExpRunBBtn.disabled = false;
+          if (aliyunExpRunABtn) aliyunExpRunABtn.disabled = false;
+        });
       });
     }
 
