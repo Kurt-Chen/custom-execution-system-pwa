@@ -14164,6 +14164,50 @@
       }
     }
 
+    /*
+     * 电脑版（≥1366）：宽度锁在当前值 calc(340px - 3cm)，不再随标语伸缩。
+     * 底边用 --today-plan-dock-bottom（底栏实际高度）贴住主底栏上沿。
+     */
+    @media (min-width: 1366px) {
+      #todayPlanPanel:not(.is-collapsed) {
+        position: fixed;
+        top: 14px;
+        right: auto;
+        bottom: var(--today-plan-dock-bottom, 62px);
+        left: calc(50% - (var(--desktop-main-col) / 2) - 12px - (340px - 3cm));
+        margin-right: 0;
+        width: calc(340px - 3cm);
+        min-width: calc(340px - 3cm);
+        max-width: calc(340px - 3cm);
+        height: auto;
+        max-height: none;
+      }
+    }
+
+    /*
+     * 桌面精细指针：标语与底栏胶囊允许换行，避免窄栏把 nowrap 内容裁掉。
+     * 手机/触控平板不进此查询。
+     */
+    @media (min-width: 768px) and (pointer: fine) {
+      #todayPlanPanel:not(.is-collapsed) .today-plan-panel__title {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      #todayPlanPanel:not(.is-collapsed) .today-plan-panel__tagline {
+        white-space: normal;
+      }
+
+      #todayPlanPanel:not(.is-collapsed) .today-plan-panel__smg-formula {
+        flex-wrap: wrap;
+        row-gap: 6px;
+      }
+
+      #todayPlanPanel:not(.is-collapsed) .today-plan-panel__smg-pill--expect {
+        white-space: normal;
+      }
+    }
+
     #anniversaryModule .anniversary-tw-actions-wrap .compact-manual-item-icons {
       flex-wrap: wrap;
       gap: 6px;
@@ -94542,6 +94586,8 @@
     /** 平板横屏大屏：与 CSS Tablet Landscape MQ 对齐（不落盘）；断点 1024 对齐常见 iPad landscape CSS viewport */
     const TODAY_PLAN_TABLET_LANDSCAPE_MQ =
       "(min-width: 1024px) and (orientation: landscape) and (pointer: coarse)";
+    /** 电脑版：宽度由 CSS 锁死，这里只把底边对齐主底栏上沿 */
+    const TODAY_PLAN_DESKTOP_FIXED_MQ = "(min-width: 1366px)";
     if (todayPlanPanelToggle) {
       todayPlanPanelToggle.addEventListener("click", function (ev) {
         ev.stopPropagation();
@@ -102950,6 +102996,88 @@
       }
     }
 
+    /** B 只读：观察主线程 Long Task（>50ms），不改变同步逻辑 */
+    function aliyunExpStartLongTaskProbe() {
+      const probe = {
+        supported: false,
+        entries: [],
+        phase: "idle",
+        observer: null
+      };
+      if (typeof PerformanceObserver === "undefined") return probe;
+      try {
+        const onEntries = function (list) {
+          const phase = probe.phase;
+          const items = list.getEntries ? list.getEntries() : [];
+          for (let i = 0; i < items.length; i++) {
+            const e = items[i];
+            probe.entries.push({
+              duration: Math.round(Number(e.duration) * 100) / 100,
+              startTime: Math.round(Number(e.startTime) * 100) / 100,
+              name: String(e.name || "longtask"),
+              phase: phase
+            });
+          }
+        };
+        const po = new PerformanceObserver(onEntries);
+        try {
+          po.observe({ type: "longtask", buffered: true });
+        } catch (_typeErr) {
+          po.observe({ entryTypes: ["longtask"] });
+        }
+        probe.observer = po;
+        probe.supported = true;
+      } catch (_obsErr) {
+        probe.supported = false;
+      }
+      return probe;
+    }
+
+    function aliyunExpStopLongTaskProbe(probe) {
+      if (!probe || !probe.observer) return;
+      try {
+        probe.observer.disconnect();
+      } catch (_d) {}
+      probe.observer = null;
+    }
+
+    function aliyunExpSummarizeLongTasks(probe) {
+      const entries = (probe && probe.entries) || [];
+      let maxDur = 0;
+      let maxPhase = "";
+      let beforeRender = 0;
+      let duringRender = 0;
+      let afterRender = 0;
+      let duringMerge = 0;
+      let duringNetwork = 0;
+      for (let i = 0; i < entries.length; i++) {
+        const e = entries[i];
+        const d = Number(e.duration) || 0;
+        if (d > maxDur) {
+          maxDur = d;
+          maxPhase = String(e.phase || "");
+        }
+        const ph = String(e.phase || "");
+        if (ph === "merge") duringMerge += 1;
+        else if (ph === "render") duringRender += 1;
+        else if (ph === "before_render") beforeRender += 1;
+        else if (ph === "after_render") afterRender += 1;
+        else if (ph === "upload" || ph === "download") duringNetwork += 1;
+      }
+      return {
+        supported: !!(probe && probe.supported),
+        count: entries.length,
+        maxMs: maxDur,
+        maxPhase: maxPhase,
+        duringMerge: duringMerge,
+        beforeRender: beforeRender,
+        duringRender: duringRender,
+        afterRender: afterRender,
+        duringNetworkWait: duringNetwork,
+        entries: entries.slice()
+      };
+    }
+
     async function runAliyunExpSmokeB() {
       const lines = [];
       const base = String((aliyunExpUrlInput && aliyunExpUrlInput.value) || ALIYUN_EXP_DEFAULT_URL)
@@ -103003,12 +103131,23 @@
       let snap = null;
       let restored = false;
       let uiFeltBlocked = null;
+      const ltProbe = aliyunExpStartLongTaskProbe();
+      let ltSummary = null;
 
       aliyunExpLog(lines, "======== B 单点开始 ========");
       aliyunExpLog(lines, "路径: 阿里云读写 → parse → applyCloudPayloadWithMerge → render → 恢复快照");
       aliyunExpLog(lines, "不替换 Firebase 主路径；merge 使用 skipPersist。");
+      aliyunExpLog(
+        lines,
+        "判定重点: 网络等待属异步，不看总耗时；看等待期间能否点击/滚动，以及 Long Task(>50ms)。"
+      );
+      aliyunExpLog(
+        lines,
+        "Long Task 观察: " + (ltProbe.supported ? "已开启 PerformanceObserver(longtask)" : "本浏览器不支持 longtask，仅主观体验")
+      );
 
       try {
+        ltProbe.phase = "clone";
         let t0 = Date.now();
         try {
           snap = JSON.parse(JSON.stringify(state));
@@ -103042,6 +103181,7 @@
           );
         }
 
+        ltProbe.phase = "upload";
         t0 = Date.now();
         if (typeof uiStallBegin === "function") uiStallBegin("cloudPush");
         const up = await aliyunExpFetchJson("POST", base + "/smoke", {
@@ -103052,8 +103192,16 @@
         if (!(up.status === 200 || up.status === 201) || !(up.data && up.data.ok)) {
           throw new Error("B 上传失败 HTTP " + up.status + " " + JSON.stringify(up.data));
         }
-        aliyunExpLog(lines, "✓ 阿里云上传 HTTP " + up.status + " +" + marks.uploadMs + "ms");
+        aliyunExpLog(
+          lines,
+          "✓ 阿里云上传 HTTP " +
+            up.status +
+            " 等待 +" +
+            marks.uploadMs +
+            "ms（异步网络，不单独当作 UI 卡顿）"
+        );
 
+        ltProbe.phase = "download";
         t0 = Date.now();
         if (typeof uiStallBegin === "function") uiStallBegin("cloudPull");
         const down = await aliyunExpFetchJson("GET", base + "/smoke/" + encodeURIComponent(docId), null);
@@ -103061,8 +103209,16 @@
         if (down.status !== 200 || !(down.data && down.data.ok)) {
           throw new Error("B 下载失败 HTTP " + down.status + " " + JSON.stringify(down.data));
         }
-        aliyunExpLog(lines, "✓ 阿里云下载 HTTP " + down.status + " +" + marks.downloadMs + "ms");
+        aliyunExpLog(
+          lines,
+          "✓ 阿里云下载 HTTP " +
+            down.status +
+            " 等待 +" +
+            marks.downloadMs +
+            "ms（异步网络）"
+        );
 
+        ltProbe.phase = "parse";
         t0 = Date.now();
         let payloadStr =
           down.data &&
@@ -103082,6 +103238,7 @@
 
         const prevSuppress = cloudSyncSuppressPush;
         cloudSyncSuppressPush = true;
+        ltProbe.phase = "merge";
         t0 = Date.now();
         if (typeof uiStallBegin === "function") uiStallBegin("cloudMerge");
         const mergedOk = await applyCloudPayloadWithMerge(
@@ -103095,18 +103252,72 @@
           (mergedOk ? "✓" : "△") + " merge(applyCloudPayloadWithMerge) +" + marks.mergeMs + "ms"
         );
 
+        ltProbe.phase = "before_render";
+        await new Promise(function (r) {
+          if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(function () {
+              requestAnimationFrame(function () {
+                r();
+              });
+            });
+          } else {
+            setTimeout(r, 0);
+          }
+        });
+
+        ltProbe.phase = "render";
         t0 = Date.now();
         if (typeof uiStallBegin === "function") uiStallBegin("cloudPull");
         render(true);
         marks.renderMs = Date.now() - t0;
         aliyunExpLog(lines, "✓ render(true) +" + marks.renderMs + "ms");
 
+        ltProbe.phase = "after_render";
+        await new Promise(function (r) {
+          if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(function () {
+              requestAnimationFrame(function () {
+                r();
+              });
+            });
+          } else {
+            setTimeout(r, 32);
+          }
+        });
+
+        ltProbe.phase = "idle";
+        aliyunExpStopLongTaskProbe(ltProbe);
+        ltSummary = aliyunExpSummarizeLongTasks(ltProbe);
+        if (ltSummary.supported) {
+          aliyunExpLog(
+            lines,
+            "Long Task: 次数=" +
+              ltSummary.count +
+              " 最长=" +
+              ltSummary.maxMs +
+              "ms@" +
+              (ltSummary.maxPhase || "?") +
+              " | merge期=" +
+              ltSummary.duringMerge +
+              " render前=" +
+              ltSummary.beforeRender +
+              " render中=" +
+              ltSummary.duringRender +
+              " render后=" +
+              ltSummary.afterRender +
+              " 网络等待期=" +
+              ltSummary.duringNetworkWait
+          );
+        } else {
+          aliyunExpLog(lines, "Long Task: 不支持观察（请以主观点击/滚动为准）");
+        }
+
         try {
           if (window.__aliyunExpBSkipConfirm) {
             uiFeltBlocked = null;
           } else {
             uiFeltBlocked = window.confirm(
-              "B 单点刚跑完 merge+render。\n\n同步期间界面是否明显卡死（点击/滚动几乎无法操作）？\n\n确定=仍然卡死（阿里云未改善）\n取消=尚可操作（有改善或可接受）"
+              "B 单点刚跑完。\n\n请忽略总耗时（含阿里云网络异步等待）。\n重点：等待与 merge/render 期间，点击/滚动/输入/切模块是否仍明显卡死？\n\n确定=仍然卡死\n取消=尚可操作"
             );
           }
         } catch (_c) {
@@ -103118,6 +103329,7 @@
             (uiFeltBlocked === true ? "仍卡死" : uiFeltBlocked === false ? "尚可操作" : "未采集")
         );
 
+        ltProbe.phase = "restore";
         t0 = Date.now();
         cloudSyncSuppressPush = true;
         aliyunExpRestoreStateSnapshot(snap);
@@ -103129,6 +103341,7 @@
         } catch (_rr) {}
         aliyunExpLog(lines, "✓ 已恢复本机 state 快照 +" + marks.restoreMs + "ms");
 
+        ltProbe.phase = "delete";
         t0 = Date.now();
         const del = await aliyunExpFetchJson(
           "DELETE",
@@ -103144,7 +103357,12 @@
         } catch (_ls1) {}
 
         const totalMs = Date.now() - tAll;
-        aliyunExpLog(lines, "======== B 单点结束 总耗时 +" + totalMs + "ms ========");
+        aliyunExpLog(
+          lines,
+          "======== B 单点结束（总耗时 +" +
+            totalMs +
+            "ms 仅供参考，含网络等待，勿用来判断 UI 卡顿）========"
+        );
         aliyunExpLog(
           lines,
           "分项 ms: clone=" +
@@ -103171,7 +103389,7 @@
             " skipPersist=true"
         );
         if (uiFeltBlocked === true) {
-          aliyunExpLog(lines, "结论倾向: 阿里云未消除卡顿 → 按约定应停止扩大迁移并回滚实验投入。");
+          aliyunExpLog(lines, "结论倾向: 主观仍卡死 → 按约定应停止扩大迁移。");
         } else if (uiFeltBlocked === false) {
           aliyunExpLog(lines, "结论倾向: 主观尚可操作；仍须你确认后才可扩大范围。");
         }
@@ -103181,15 +103399,19 @@
           docId: docId,
           marks: marks,
           totalMs: totalMs,
+          totalMsNote: "includes async network wait; do not use for UI stall judgment",
           doneCount: built.doneCount,
           padded: built.padded,
           bytes: bytes,
           firebaseWrites: firebaseWrites.slice(),
           formalLocalStorageChanged: lsBefore !== lsAfter,
           uiFeltBlocked: uiFeltBlocked,
-          restored: restored
+          restored: restored,
+          longTasks: ltSummary
         };
       } catch (err) {
+        aliyunExpStopLongTaskProbe(ltProbe);
+        if (!ltSummary) ltSummary = aliyunExpSummarizeLongTasks(ltProbe);
         aliyunExpLog(lines, "B 失败: " + (err && err.message ? err.message : String(err)));
         if (snap && !restored) {
           try {
@@ -103210,7 +103432,8 @@
           error: err && err.message ? err.message : String(err),
           marks: marks,
           firebaseWrites: firebaseWrites.slice(),
-          restored: restored
+          restored: restored,
+          longTasks: ltSummary
         };
       }
     }
@@ -144029,17 +144252,38 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (todayPlanPanelExpanded) {
         paintTodayPlanPanel();
         syncTodayPlanPanelWidthToTagline();
+        syncTodayPlanPanelDockBottom();
       } else {
         clearTodayPlanPanelWidthOverride();
       }
     }
 
+    /** 电脑版：侧栏底边贴主底栏上沿（红框），只写高度变量，不改宽度 */
+    function syncTodayPlanPanelDockBottom() {
+      try {
+        if (!window.matchMedia(TODAY_PLAN_DESKTOP_FIXED_MQ).matches) {
+          document.documentElement.style.removeProperty("--today-plan-dock-bottom");
+          return;
+        }
+      } catch (_mqErr) {
+        return;
+      }
+      const nav = document.getElementById("morePageSkeleton");
+      if (!nav) return;
+      const h = nav.offsetHeight;
+      if (!(h > 0)) return;
+      document.documentElement.style.setProperty("--today-plan-dock-bottom", h + "px");
+    }
+
     /** 按标语实测宽度加宽整栏，保证单行不换行（完成数已在标题行，不占标语宽） */
     function syncTodayPlanPanelWidthToTagline() {
       if (!todayPlanPanel || !todayPlanPanelExpanded) return;
-      /* 平板横屏：CSS 固定 25vw，清除历史实测覆盖，避免忽宽忽窄 */
+      /* 平板横屏：CSS 固定 25vw；电脑版：CSS 锁死宽度。都清掉实测覆盖 */
       try {
-        if (window.matchMedia(TODAY_PLAN_TABLET_LANDSCAPE_MQ).matches) {
+        if (
+          window.matchMedia(TODAY_PLAN_TABLET_LANDSCAPE_MQ).matches ||
+          window.matchMedia(TODAY_PLAN_DESKTOP_FIXED_MQ).matches
+        ) {
           clearTodayPlanPanelWidthOverride();
           return;
         }
@@ -144056,7 +144300,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (!tagline) return;
         let need = 0;
         try {
+          /* 桌面样式允许换行；量宽时临时单行，避免按折行后的窄宽反复收缩 */
+          const prevWs = tagline.style.whiteSpace;
+          tagline.style.whiteSpace = "nowrap";
           need = Math.ceil(tagline.scrollWidth || tagline.offsetWidth || 0);
+          tagline.style.whiteSpace = prevWs;
         } catch (_swErr) {
           need = 0;
         }
@@ -144070,7 +144318,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
           } catch (_padErr) {}
         }
-        const target = Math.max(340, need + Math.ceil(padX) + 8);
+        let target = Math.max(340, need + Math.ceil(padX) + 8);
+        try {
+          if (window.matchMedia(TODAY_PLAN_DESKTOP_MQ).matches) {
+            target = Math.max(200, target - TODAY_PLAN_DESKTOP_NARROW_PX);
+          }
+        } catch (_deskNarrowErr) {}
         const px = target + "px";
         document.documentElement.style.setProperty("--today-plan-panel-width", px);
         try {
