@@ -12699,6 +12699,7 @@
       align-self: stretch;
       padding: 0;
       border-radius: 16px;
+      /* 整块不滚；仅 #todayPlanPanelLists 自管上下滑 */
       overflow: hidden;
     }
 
@@ -12707,10 +12708,12 @@
       min-height: 0;
       display: flex;
       flex-direction: column;
+      overflow: hidden;
     }
 
     .today-plan-panel__head {
       flex: 0 0 auto;
+      flex-shrink: 0;
       position: relative;
       padding: 10px 12px 8px;
       border-bottom: 1px solid #eaf0f8;
@@ -12878,23 +12881,39 @@
       color: #0d9488;
     }
 
+    /*
+     * 列表区：独立上下滑动（不带动整面板 / 外层页面）。
+     * flex-basis:0 把剩余高度留给 footer，避免 SMG 正文被 overflow:hidden 裁掉。
+     */
     #todayPlanPanelLists {
-      flex: 1 1 auto;
+      flex: 1 1 0%;
       min-height: 0;
       max-height: none;
       overflow-x: hidden;
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+      touch-action: pan-y;
       padding: 12px 12px 10px;
     }
 
-    /* 侧栏底部：SMG 贴面板底边；仅列表区滚动 */
+    #todayPlanOtherComposerHost {
+      position: relative;
+      z-index: 3;
+      flex-shrink: 0;
+      pointer-events: auto;
+    }
+
+    /* 侧栏底部：整块 SMG（公式+正文+Expectosis）贴底，高度随内容、不被压缩 */
     .today-plan-panel__footer {
       flex: 0 0 auto;
-      margin-top: auto;
+      flex-shrink: 0;
+      margin-top: 0;
       padding: 10px 12px 8px;
       border-top: 1px solid #e8eef6;
       background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+      overflow: visible;
+      z-index: 1;
     }
 
     .today-plan-panel__smg-formula {
@@ -13619,6 +13638,7 @@
       position: relative;
       z-index: 2;
       pointer-events: auto;
+      touch-action: manipulation;
     }
 
     .today-plan-panel__composer:focus-within {
@@ -13639,8 +13659,9 @@
       line-height: 1.3;
       font-weight: 500;
       pointer-events: auto;
-      -webkit-user-select: text;
-      user-select: text;
+      touch-action: manipulation;
+      -webkit-user-select: text !important;
+      user-select: text !important;
     }
 
     .today-plan-panel__composer-input::placeholder {
@@ -13941,6 +13962,26 @@
         display: flex;
         flex-direction: column;
         overflow: hidden;
+      }
+
+      body.primary-module-fullscreen
+        .container
+        > #todayPlanPanel:not(.is-collapsed)
+        #todayPlanPanelLists {
+        flex: 1 1 0%;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        touch-action: pan-y;
+      }
+
+      body.primary-module-fullscreen
+        .container
+        > #todayPlanPanel:not(.is-collapsed)
+        > .today-plan-panel__body
+        > .today-plan-panel__footer {
+        flex: 0 0 auto;
+        flex-shrink: 0;
       }
 
       body.primary-module-fullscreen .container > #todayPlanPanel.is-collapsed {
@@ -143439,12 +143480,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         ev.stopPropagation();
         submitTodayPlanOtherQuickAdd(input);
       });
-      /* 阻止冒泡到模块级手势，避免平板上抢走焦点 */
+      /* 阻止冒泡到模块级手势，避免平板上抢走焦点；主动 focus 保证可输入 */
       input.addEventListener("pointerdown", function (ev) {
         ev.stopPropagation();
+        try {
+          if (document.activeElement !== input) input.focus();
+        } catch (_focusErr) {}
       });
+      input.addEventListener("touchstart", function (ev) {
+        ev.stopPropagation();
+      }, { passive: true });
       input.addEventListener("click", function (ev) {
         ev.stopPropagation();
+        try {
+          input.focus();
+        } catch (_clickFocusErr) {}
       });
       submitBtn.addEventListener("click", function (ev) {
         ev.preventDefault();
