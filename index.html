@@ -94000,7 +94000,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260924c";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260924d";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -103612,6 +103612,265 @@
       aliyunExpLog(lines, "======== Long Task 定位结束；仅供定位，未做优化 ========");
     }
 
+    /**
+     * 阿里云实验专用：仅当 window.__aliyunExpMergeDiag===true 时，
+     * 在 applyCloudPayloadWithMerge / applyMergedCloudStateInMemory 内打 mark。
+     * 不改变业务分支；正式同步默认不开启。
+     */
+    let aliyunExpMergeDiagCtx = null;
+
+    function aliyunExpMergeDiagEnabled() {
+      try {
+        return !!(typeof window !== "undefined" && window.__aliyunExpMergeDiag && aliyunExpMergeDiagCtx);
+      } catch (_e) {
+        return false;
+      }
+    }
+
+    function aliyunExpMergeDiagNow() {
+      return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+    }
+
+    function aliyunExpMergeDiagBegin() {
+      aliyunExpMergeDiagCtx = {
+        wallT0: Date.now(),
+        perfT0: aliyunExpMergeDiagNow(),
+        syncMs: 0,
+        syncSegT0: aliyunExpMergeDiagNow(),
+        asyncGaps: [],
+        asyncNotes: [],
+        marks: [],
+        stages: []
+      };
+      try {
+        if (typeof performance !== "undefined" && performance.clearMarks) {
+          /* 只清本诊断前缀，避免误伤其它 aliyun-exp-b mark */
+        }
+      } catch (_c) {}
+      return aliyunExpMergeDiagCtx;
+    }
+
+    function aliyunExpMergeDiagPauseSyncForAsync(note) {
+      if (!aliyunExpMergeDiagEnabled()) return;
+      const ctx = aliyunExpMergeDiagCtx;
+      const now = aliyunExpMergeDiagNow();
+      if (ctx.syncSegT0 != null) {
+        ctx.syncMs += Math.max(0, now - ctx.syncSegT0);
+        ctx.syncSegT0 = null;
+      }
+      ctx.asyncNotes.push(String(note || "async"));
+      aliyunExpMergeDiagMark("ASYNC:" + String(note || "await"));
+      ctx._asyncGapT0 = now;
+    }
+
+    function aliyunExpMergeDiagResumeSyncAfterAsync(note) {
+      if (!aliyunExpMergeDiagEnabled()) return;
+      const ctx = aliyunExpMergeDiagCtx;
+      const now = aliyunExpMergeDiagNow();
+      if (ctx._asyncGapT0 != null) {
+        ctx.asyncGaps.push({
+          note: String(note || "async"),
+          ms: Math.round((now - ctx._asyncGapT0) * 100) / 100
+        });
+        ctx._asyncGapT0 = null;
+      }
+      aliyunExpMergeDiagMark("ASYNC-RESUME:" + String(note || "await"));
+      ctx.syncSegT0 = now;
+    }
+
+    function aliyunExpMergeDiagMark(name) {
+      if (!aliyunExpMergeDiagCtx) return;
+      const n = String(name || "");
+      const t = aliyunExpMergeDiagNow();
+      const rel = Math.round((t - aliyunExpMergeDiagCtx.perfT0) * 100) / 100;
+      aliyunExpMergeDiagCtx.marks.push({ name: n, t: t, rel: rel });
+      try {
+        if (typeof performance !== "undefined" && typeof performance.mark === "function") {
+          performance.mark("aliyun-merge-diag:" + n);
+        }
+      } catch (_m) {}
+      const prev = aliyunExpMergeDiagCtx._lastMark;
+      if (prev) {
+        const dur = Math.round((t - prev.t) * 100) / 100;
+        aliyunExpMergeDiagCtx.stages.push({
+          from: prev.name,
+          to: n,
+          ms: dur,
+          async: String(prev.name).indexOf("ASYNC:") === 0 || String(n).indexOf("ASYNC-RESUME:") === 0
+        });
+        try {
+          if (typeof performance !== "undefined" && typeof performance.measure === "function") {
+            performance.measure(
+              "aliyun-merge-diag:" + prev.name + "→" + n,
+              "aliyun-merge-diag:" + prev.name,
+              "aliyun-merge-diag:" + n
+            );
+          }
+        } catch (_mm) {}
+      }
+      aliyunExpMergeDiagCtx._lastMark = { name: n, t: t };
+    }
+
+    function aliyunExpMergeDiagEnd() {
+      if (!aliyunExpMergeDiagCtx) return null;
+      const ctx = aliyunExpMergeDiagCtx;
+      const now = aliyunExpMergeDiagNow();
+      if (ctx.syncSegT0 != null) {
+        ctx.syncMs += Math.max(0, now - ctx.syncSegT0);
+        ctx.syncSegT0 = null;
+      }
+      aliyunExpMergeDiagMark("merge-fn-exit");
+      ctx.wallMs = Date.now() - ctx.wallT0;
+      ctx.perfMs = Math.round((now - ctx.perfT0) * 100) / 100;
+      ctx.syncMs = Math.round(ctx.syncMs * 100) / 100;
+      const asyncWaitMs = (ctx.asyncGaps || []).reduce(function (s, g) {
+        return s + (Number(g.ms) || 0);
+      }, 0);
+      ctx.asyncWaitMs = Math.round(asyncWaitMs * 100) / 100;
+      const report = {
+        wallMs: ctx.wallMs,
+        perfMs: ctx.perfMs,
+        syncCpuMs: ctx.syncMs,
+        asyncWaitMs: ctx.asyncWaitMs,
+        asyncNotes: ctx.asyncNotes.slice(),
+        asyncGaps: ctx.asyncGaps.slice(),
+        stages: ctx.stages.slice(),
+        marks: ctx.marks.slice(),
+        over50Stages: ctx.stages
+          .filter(function (s) {
+            return Number(s.ms) > 50;
+          })
+          .slice()
+          .sort(function (a, b) {
+            return Number(b.ms) - Number(a.ms);
+          })
+      };
+      aliyunExpMergeDiagCtx = null;
+      try {
+        window.__aliyunExpMergeDiagReport = report;
+      } catch (_w) {}
+      return report;
+    }
+
+    function aliyunExpLogMergeDiag(lines, mergeDiag, ltDuringMerge) {
+      if (!mergeDiag) {
+        aliyunExpLog(lines, "merge 诊断: 无报告（未开启 __aliyunExpMergeDiag）");
+        return;
+      }
+      aliyunExpLog(lines, "======== merge 内部分段诊断（仅实验，非优化）========");
+      aliyunExpLog(
+        lines,
+        "merge 墙钟=" +
+          mergeDiag.wallMs +
+          "ms | 同步CPU累计≈" +
+          mergeDiag.syncCpuMs +
+          "ms | 明确异步等待累计≈" +
+          mergeDiag.asyncWaitMs +
+          "ms"
+      );
+      aliyunExpLog(
+        lines,
+        "说明: 同步CPU=墙钟区间内扣除 await yieldToMainThread 等异步空隙；若同步CPU≈墙钟，则近似纯主线程忙。"
+      );
+      if (mergeDiag.asyncNotes && mergeDiag.asyncNotes.length) {
+        aliyunExpLog(lines, "异步边界: " + mergeDiag.asyncNotes.join(" | "));
+      }
+      if (mergeDiag.asyncGaps && mergeDiag.asyncGaps.length) {
+        for (let i = 0; i < mergeDiag.asyncGaps.length; i++) {
+          const g = mergeDiag.asyncGaps[i];
+          aliyunExpLog(lines, "  async-gap #" + (i + 1) + " " + g.note + " +" + g.ms + "ms");
+        }
+      }
+      aliyunExpLog(lines, "—— 子阶段（mark→mark）——");
+      const stages = mergeDiag.stages || [];
+      for (let s = 0; s < stages.length; s++) {
+        const st = stages[s];
+        aliyunExpLog(
+          lines,
+          "  " +
+            st.from +
+            " → " +
+            st.to +
+            " +" +
+            st.ms +
+            "ms" +
+            (st.async ? " [含异步边界]" : "")
+        );
+      }
+      aliyunExpLog(lines, "—— >50ms 子阶段（降序）——");
+      const over = mergeDiag.over50Stages || [];
+      if (!over.length) {
+        aliyunExpLog(lines, "  (无 >50ms 子阶段)");
+      } else {
+        for (let o = 0; o < over.length; o++) {
+          aliyunExpLog(
+            lines,
+            "  >50 #" +
+              (o + 1) +
+              " " +
+              over[o].from +
+              " → " +
+              over[o].to +
+              " +" +
+              over[o].ms +
+              "ms"
+          );
+        }
+      }
+      if (ltDuringMerge) {
+        aliyunExpLog(
+          lines,
+          "merge 期间 Long Task: 次数=" +
+            ltDuringMerge.count +
+            " 最长=" +
+            ltDuringMerge.maxMs +
+            "ms"
+        );
+        const ents = ltDuringMerge.entries || [];
+        for (let e = 0; e < ents.length; e++) {
+          aliyunExpLog(
+            lines,
+            "  LT#" +
+              (e + 1) +
+              " start=" +
+              ents[e].startTime +
+              " dur=" +
+              ents[e].duration +
+              " phase=" +
+              ents[e].phaseAtStart +
+              "→" +
+              ents[e].phaseAtEnd
+          );
+        }
+      }
+      aliyunExpLog(lines, "======== merge 分段诊断结束 ========");
+    }
+
+    function aliyunExpCollectLtDuringMerge(probe, mergeDiag) {
+      if (!probe || !mergeDiag || !mergeDiag.marks || !mergeDiag.marks.length) {
+        return { count: 0, maxMs: 0, entries: [] };
+      }
+      const t0 = Number(mergeDiag.marks[0].t) || 0;
+      const t1 = Number(mergeDiag.marks[mergeDiag.marks.length - 1].t) || t0;
+      const all = (probe.entries || []).slice();
+      const hit = [];
+      let maxDur = 0;
+      for (let i = 0; i < all.length; i++) {
+        const e = all[i];
+        const s = Number(e.startTime) || 0;
+        const d = Number(e.duration) || 0;
+        const end = s + d;
+        if (end < t0 || s > t1) continue;
+        hit.push(e);
+        if (d > maxDur) maxDur = d;
+      }
+      return {
+        count: hit.length,
+        maxMs: maxDur,
+        entries: hit
+      };
+    }
+
     async function runAliyunExpSmokeB() {
       const lines = [];
       const base = String((aliyunExpUrlInput && aliyunExpUrlInput.value) || ALIYUN_EXP_DEFAULT_URL)
@@ -103815,30 +104074,61 @@
         }
         mergeRemoteState[slice.moduleKey] = pulledModuleData;
         aliyunExpPerfMark("merge-prep-end");
+        const mergePrepMs = Date.now() - t0;
+        aliyunExpLog(
+          lines,
+          "✓ merge 底稿准备(clone快照+替换 " +
+            slice.moduleKey +
+            ") +" +
+            mergePrepMs +
+            "ms（主线程；不含 applyCloudPayloadWithMerge）"
+        );
         const prevSuppress = cloudSyncSuppressPush;
         cloudSyncSuppressPush = true;
         if (typeof uiStallBegin === "function") uiStallBegin("cloudMerge");
+        const mergeApplyT0 = Date.now();
+        window.__aliyunExpMergeDiag = true;
         aliyunExpPerfMark("applyCloudPayloadWithMerge-start");
-        const mergedOk = await applyCloudPayloadWithMerge(
-          { state: mergeRemoteState, updatedAt: Date.now(), updatedBy: "aliyun-exp-b-module" },
-          { skipPersist: true, skipRender: true }
-        );
+        let mergedOk = false;
+        try {
+          mergedOk = await applyCloudPayloadWithMerge(
+            { state: mergeRemoteState, updatedAt: Date.now(), updatedBy: "aliyun-exp-b-module" },
+            { skipPersist: true, skipRender: true }
+          );
+        } finally {
+          window.__aliyunExpMergeDiag = false;
+        }
         aliyunExpPerfMark("applyCloudPayloadWithMerge-end");
         aliyunExpPerfMeasure(
           "applyCloudPayloadWithMerge",
           "applyCloudPayloadWithMerge-start",
           "applyCloudPayloadWithMerge-end"
         );
-        marks.mergeMs = Date.now() - t0;
+        const mergeApplyMs = Date.now() - mergeApplyT0;
+        marks.mergeMs = mergePrepMs + mergeApplyMs;
+        marks.mergePrepMs = mergePrepMs;
+        marks.mergeApplyMs = mergeApplyMs;
         cloudSyncSuppressPush = prevSuppress;
+        const mergeDiagReport =
+          (typeof window !== "undefined" && window.__aliyunExpMergeDiagReport) || null;
+        const ltDuringMerge = aliyunExpCollectLtDuringMerge(ltProbe, mergeDiagReport);
         aliyunExpLog(
           lines,
           (mergedOk ? "✓" : "△") +
-            " merge(applyCloudPayloadWithMerge) +" +
+            " applyCloudPayloadWithMerge 墙钟 +" +
+            mergeApplyMs +
+            "ms（不含底稿准备；delete 网络绝不计入）"
+        );
+        aliyunExpLogMergeDiag(lines, mergeDiagReport, ltDuringMerge);
+        aliyunExpLog(
+          lines,
+          "merge 合计(底稿+" +
+            "apply) +" +
             marks.mergeMs +
-            "ms（主线程；底稿=快照+仅替换 " +
-            slice.moduleKey +
-            "）"
+            "ms = prep " +
+            mergePrepMs +
+            " + apply " +
+            mergeApplyMs
         );
 
         aliyunExpSetPhase(ltProbe, "before_render");
@@ -104022,9 +104312,12 @@
           formalLocalStorageChanged: lsBefore !== lsAfter,
           uiFeltBlocked: uiFeltBlocked,
           restored: restored,
-          longTasks: ltSummary
+          longTasks: ltSummary,
+          mergeDiag: mergeDiagReport || null,
+          longTasksDuringMerge: ltDuringMerge || null
         };
       } catch (err) {
+        window.__aliyunExpMergeDiag = false;
         aliyunExpStopLongTaskProbe(ltProbe);
         if (!ltSummary) ltSummary = aliyunExpSummarizeLongTasks(ltProbe);
         aliyunExpLog(lines, "B 失败: " + (err && err.message ? err.message : String(err)));
@@ -108358,7 +108651,11 @@
     }
 
     async function applyMergedCloudStateInMemory(merged, opts) {
-      if (!merged || !Array.isArray(merged.done)) return { ok: false };
+      aliyunExpMergeDiagMark("applyMerged-enter");
+      if (!merged || !Array.isArray(merged.done)) {
+        aliyunExpMergeDiagMark("applyMerged-reject");
+        return { ok: false };
+      }
       const tMerge0 = isSwitchDiagEnabled() && switchPerfState.active ? switchPerfNow() : null;
       const skipRender = Boolean(opts && opts.skipRender);
       /* preMerged：调用方刚跑完 mergeLocalStateWithRemotePayloadBeforePush（含 reconcile），
@@ -108373,6 +108670,7 @@
       mergeDetailStretchBegin("applyMergedCloudStateInMemory:preYield");
       let liveHcSnap = null;
       let liveDoneSnap = null;
+      aliyunExpMergeDiagMark("applyMerged-prep-start");
       if (!preMerged) {
         try {
           liveHcSnap = mergeDetailTime("clone", "liveHabitCheckinsCloneMs", function () {
@@ -108387,6 +108685,7 @@
           liveDoneSnap = Array.isArray(state.done) ? state.done : [];
         }
       }
+      aliyunExpMergeDiagMark("applyMerged-prep-end");
       cloudSyncApplyingRemote = true;
       cloudSyncSuppressPush = true;
       setCloudSyncLifetimeEnforceSides(localEnforce, remoteEnforce);
@@ -108516,9 +108815,12 @@
           coerceNestedCloudListFields(merged);
         });
         const prevPaintState = state;
+        aliyunExpMergeDiagMark("state-assign-start");
         state = merged;
+        aliyunExpMergeDiagMark("state-assign-end");
         markStateHygieneDirty();
         migrateForgeMindMetaRowKeysIfNeeded._done = false;
+        aliyunExpMergeDiagMark("derived-normalize-start");
         mergeDetailTime("apply", "normalizeDoneListJournalFieldsInState", function () {
           normalizeDoneListJournalFieldsInState();
         });
@@ -108528,7 +108830,9 @@
         mergeDetailTime("apply", "repairDoneListCompletedAtFromHabitMeta", function () {
           repairDoneListCompletedAtFromHabitMeta();
         });
+        aliyunExpMergeDiagMark("derived-normalize-end");
         if (!preMerged) {
+          aliyunExpMergeDiagMark("derived-reconcile-start");
           mergeDetailTime("apply", "reconcileDerivedCheckinsFromDoneAfterLoad", function () {
             reconcileDerivedCheckinsFromDoneAfterLoad();
           });
@@ -108554,7 +108858,9 @@
               });
             }
           } catch (_reviveHcAfter) {}
+          aliyunExpMergeDiagMark("derived-reconcile-end");
         }
+        aliyunExpMergeDiagMark("derived-enforce-start");
         mergeDetailTime("apply", "enforceCloudSyncLifetimeMaxFromSides", function () {
           enforceCloudSyncLifetimeMaxFromSides(localEnforce, remoteEnforce);
         });
@@ -108569,13 +108875,16 @@
         mergeDetailTime("apply", "reconcileMirrorDeadlinesAfterCloudMerge", function () {
           reconcileMirrorDeadlinesAfterCloudMerge();
         });
+        aliyunExpMergeDiagMark("derived-enforce-end");
         /* 细标脏：按 merge 前后内容差分，复用 Pulse 切片依赖；noop 不 markAll */
         const scMarkT0 =
           syncChainActive && isSyncChainPerfEnabled() ? syncChainPerfNow() : null;
         if (scMarkT0 != null) syncChainEnter("markAllDirtyMs");
+        aliyunExpMergeDiagMark("listener-markDirty-start");
         mergeDetailTime("apply", "markUiPaintDirtyFromCloudMergeStateDiff", function () {
           markUiPaintDirtyFromCloudMergeStateDiff(prevPaintState, state);
         });
+        aliyunExpMergeDiagMark("listener-markDirty-end");
         let scMarkMs = 0;
         if (scMarkT0 != null) {
           scMarkMs = syncChainPerfNow() - scMarkT0;
@@ -108592,7 +108901,10 @@
         }
         mergeDetailStretchEnd("applyMerged-before-first-yield");
         /* Syncing≠Blocking：repair/reconcile 后让出，再跑 Done 镜像同步 */
+        aliyunExpMergeDiagPauseSyncForAsync("await yieldToMainThread#A (applyMerged after dirty)");
         await yieldToMainThread();
+        aliyunExpMergeDiagResumeSyncAfterAsync("yieldToMainThread#A");
+        aliyunExpMergeDiagMark("derived-syncDoneLists-start");
         syncChainRun("weeklyPlanDoneSyncMs", function () {
           mergeDetailTime("apply", "syncAllWeeklyPlanDoneLists", function () {
             syncAllWeeklyPlanDoneLists({ forceAll: true });
@@ -108610,36 +108922,56 @@
             }
           });
         });
+        aliyunExpMergeDiagMark("derived-syncDoneLists-end");
         /* Syncing≠Blocking：Done 同步后让出，再跑 hash/persist */
+        aliyunExpMergeDiagPauseSyncForAsync("await yieldToMainThread#B (applyMerged before hash)");
         await yieldToMainThread();
+        aliyunExpMergeDiagResumeSyncAfterAsync("yieldToMainThread#B");
+        aliyunExpMergeDiagMark("hash-start");
         syncChainRun("hashStringifyMs", function () {
           mergeDetailTime("apply", "setCloudSyncHashFromCurrentState", function () {
             setCloudSyncHashFromCurrentState();
           });
         });
+        aliyunExpMergeDiagMark("hash-end");
+        aliyunExpMergeDiagMark("persist-branch-start");
         const r =
           opts && opts.skipPersist
             ? { ok: true, localPersisted: false, skippedDiag: true }
             : persistStateToLocalStorage();
+        aliyunExpMergeDiagMark(
+          opts && opts.skipPersist ? "persist-skipped" : "persist-done"
+        );
         /* Syncing≠Blocking：persist 后让出，再决定是否 render */
+        aliyunExpMergeDiagPauseSyncForAsync("await yieldToMainThread#C (applyMerged before render)");
         await yieldToMainThread();
+        aliyunExpMergeDiagResumeSyncAfterAsync("yieldToMainThread#C");
+        aliyunExpMergeDiagMark("render-decision-start");
         if (!skipRender) {
           if (cloudSyncMachineStatus === "syncing") {
             noteCloudSyncUiRenderPending();
+            aliyunExpMergeDiagMark("render-deferred-pending");
           } else if (shouldSkipCloudUiRender()) {
+            aliyunExpMergeDiagMark("render-skipped-busy");
             /* 操作中只落盘，界面等菜单收起后再刷 */
           } else {
+            aliyunExpMergeDiagMark("render-call-start");
             syncChainRun("flushRenderMs", function () {
               render();
             });
+            aliyunExpMergeDiagMark("render-call-end");
           }
+        } else {
+          aliyunExpMergeDiagMark("render-skipped-by-opts");
         }
+        aliyunExpMergeDiagMark("applyMerged-before-return");
         return r;
       } finally {
         cloudSyncSuppressPush = false;
         cloudSyncApplyingRemote = false;
         clearCloudSyncLifetimeEnforceSides();
         if (tMerge0 != null) switchPerfNoteSync("mergeMs", switchPerfNow() - tMerge0);
+        aliyunExpMergeDiagMark("applyMerged-finally");
       }
     }
 
@@ -108703,15 +109035,39 @@
      * 合并云端 payload：禁止用「空远端 Done」覆盖本机；force 时整包覆盖（拉取最新）。
      */
     async function applyCloudPayloadWithMerge(payload, opts) {
-      return uiStallWrapMergeAsync(async function () {
-      if (!payload || !payload.state) return false;
+      const wantMergeDiag = !!(typeof window !== "undefined" && window.__aliyunExpMergeDiag);
+      if (wantMergeDiag) aliyunExpMergeDiagBegin();
+      try {
+      return await uiStallWrapMergeAsync(async function () {
+      aliyunExpMergeDiagMark("merge-fn-enter");
+      aliyunExpMergeDiagMark("payload-read-start");
+      if (!payload || !payload.state) {
+        aliyunExpMergeDiagMark("payload-read-fail");
+        return false;
+      }
+      aliyunExpMergeDiagMark("materializePayloadDone-start");
       materializePayloadDoneForMerge(payload);
-      if (!Array.isArray(payload.state.done)) return false;
+      aliyunExpMergeDiagMark("materializePayloadDone-end");
+      aliyunExpMergeDiagMark("done-guard-start");
+      if (!Array.isArray(payload.state.done)) {
+        aliyunExpMergeDiagMark("done-guard-reject-no-done");
+        return false;
+      }
       const force = Boolean(opts && opts.force);
       if (force) {
+        aliyunExpMergeDiagMark("force-path");
         /* 即便调用方要求整包覆盖，也先过「少不覆盖多」守卫 */
-        if (await guardAgainstFewerRecordsOverwrite(payload.state)) return true;
-        return await applyRemoteState(payload.state, true);
+        aliyunExpMergeDiagPauseSyncForAsync("await guardAgainstFewerRecordsOverwrite");
+        if (await guardAgainstFewerRecordsOverwrite(payload.state)) {
+          aliyunExpMergeDiagResumeSyncAfterAsync("guardAgainstFewerRecordsOverwrite");
+          aliyunExpMergeDiagMark("force-guard-handled");
+          return true;
+        }
+        aliyunExpMergeDiagResumeSyncAfterAsync("guardAgainstFewerRecordsOverwrite");
+        aliyunExpMergeDiagPauseSyncForAsync("await applyRemoteState(force)");
+        const fr = await applyRemoteState(payload.state, true);
+        aliyunExpMergeDiagResumeSyncAfterAsync("applyRemoteState(force)");
+        return fr;
       }
       const localLen = Array.isArray(state.done) ? state.done.length : 0;
       const remoteLen = payload.state.done.length;
@@ -108720,23 +109076,32 @@
         cloudSyncLastErrorMsg =
           "云端 Done 为空，已保留本机记录。请检查网络/代理后点角标重试同步，或在电脑端确认已成功上传。";
         setCloudSyncStatus("同步错误", "status-error");
+        aliyunExpMergeDiagMark("done-guard-reject-empty-remote");
         return false;
       }
+      aliyunExpMergeDiagMark("done-guard-end");
       let localSnapForEnforce = null;
       try {
         mergeDetailStretchBegin("applyCloudPayload:lifetimeLocalDeepClone");
+        aliyunExpMergeDiagMark("clone-local-state-start");
         localSnapForEnforce = syncChainRun("deepCloneBeforeMergeMs", function () {
           return mergeDetailTime("clone", "lifetimeEnforceLocalDeepCloneMs", function () {
             return JSON.parse(JSON.stringify(state));
           });
         });
+        aliyunExpMergeDiagMark("clone-local-state-end");
         mergeDetailStretchEnd("lifetime-clone-done");
       } catch (_locEnfSnap) {
         mergeDetailStretchEnd("lifetime-clone-fail");
         localSnapForEnforce = null;
+        aliyunExpMergeDiagMark("clone-local-state-fail");
       }
       /* Syncing≠Blocking：remote/local 深拷贝后让出，再跑整包 merge */
+      aliyunExpMergeDiagPauseSyncForAsync("await yieldToMainThread#1 (setTimeout/scheduler.yield)");
       await yieldToMainThread();
+      aliyunExpMergeDiagResumeSyncAfterAsync("yieldToMainThread#1");
+      aliyunExpMergeDiagMark("mergeLocalState-start");
+      /* 内含各域字段合并（含 memo 替换/并集）；不做业务改动，仅整体计时 */
       const merged = syncChainRun("mergeLocalStateMs", function () {
         return mergeLocalStateWithRemotePayloadBeforePush(
           payload.state,
@@ -108744,17 +109109,30 @@
           getCloudLastSeenUpdatedAt()
         );
       });
-      if (!merged) return false;
+      aliyunExpMergeDiagMark("mergeLocalState-end");
+      if (!merged) {
+        aliyunExpMergeDiagMark("mergeLocalState-null");
+        return false;
+      }
       /* Syncing≠Blocking：merge 完成后让出，再 apply/repair */
+      aliyunExpMergeDiagPauseSyncForAsync("await yieldToMainThread#2 (setTimeout/scheduler.yield)");
       await yieldToMainThread();
+      aliyunExpMergeDiagResumeSyncAfterAsync("yieldToMainThread#2");
       const mergeOpts = Object.assign({}, opts || {}, {
         lifetimeEnforceLocal: localSnapForEnforce,
         lifetimeEnforceRemote: payload.state,
         preMerged: true
       });
+      aliyunExpMergeDiagMark("applyMergedCloudStateInMemory-start");
+      /* 注意: 不可把整个 applyMerged 算作 async-gap；其内部自有 yield 边界会单独标注 */
       const r = await applyMergedCloudStateInMemory(merged, mergeOpts);
+      aliyunExpMergeDiagMark("applyMergedCloudStateInMemory-end");
+      aliyunExpMergeDiagMark("merge-fn-before-return");
       return Boolean(r && r.ok);
       });
+      } finally {
+        if (wantMergeDiag) aliyunExpMergeDiagEnd();
+      }
     }
 
     /**
