@@ -93607,6 +93607,7 @@
       <h3 id="aliyunExpPanelTitle">阿里云实验 A / TEST DATA</h3>
       <p class="cloud-sync-panel-meta">
         隔离烟雾：FC → aliyun_exec_smoke_a。不写正式 Firebase / IndexedDB。禁止 AccessKey。仅点「运行 A/B」时请求。B 走既有 merge/render，不替换 Firebase 主路径。
+        Done 真实同步默认关（ALIYUN_DONE_REAL_SYNC_ENABLED）；勾选后仅 Done 后台异步双写，可回滚。
       </p>
       <label for="aliyunExpUrlInput">Function URL</label>
       <input
@@ -93616,12 +93617,17 @@
         value="https://exec-smoke-a-gbhrcsrizq.cn-hangzhou.fcapp.run"
         autocomplete="off"
       />
+      <label class="cloud-sync-panel-meta" style="display:flex;align-items:center;gap:0.4rem;margin-top:0.5rem;">
+        <input id="aliyunDoneRealSyncToggle" type="checkbox" />
+        启用 Done 真实同步（实验，默认关）
+      </label>
       <label for="aliyunExpLogArea">日志</label>
       <textarea id="aliyunExpLogArea" readonly spellcheck="false" placeholder="尚未运行"></textarea>
       <div class="cloud-sync-panel-actions">
         <button id="aliyunExpCloseBtn" class="btn" type="button">关闭</button>
         <button id="aliyunExpRunABtn" class="btn btn-primary" type="button">运行 A</button>
         <button id="aliyunExpRunBBtn" class="btn" type="button" title="单点：阿里云读取→merge→render">运行 B</button>
+        <button id="aliyunDoneRealPullBtn" class="btn" type="button" title="仅合并 Done List，不全量 reload">拉取 Done（阿里云）</button>
       </div>
     </div>
   </div>
@@ -94000,7 +94006,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260924e";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260924g";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -103037,7 +103043,42 @@
     const aliyunExpCloseBtn = document.getElementById("aliyunExpCloseBtn");
     const aliyunExpRunABtn = document.getElementById("aliyunExpRunABtn");
     const aliyunExpRunBBtn = document.getElementById("aliyunExpRunBBtn");
+    const aliyunDoneRealSyncToggle = document.getElementById("aliyunDoneRealSyncToggle");
+    const aliyunDoneRealPullBtn = document.getElementById("aliyunDoneRealPullBtn");
     const cloudSyncOpenAliyunExpBtn = document.getElementById("cloudSyncOpenAliyunExpBtn");
+
+    /**
+     * Done List 最小真实同步实验开关（可回滚）。
+     * 默认 false；实验时勾选面板，或 window.__ALIYUN_DONE_REAL_SYNC_ENABLED = true。
+     * 不替换 Firebase / IndexedDB / localStorage 主路径。
+     */
+    const ALIYUN_DONE_REAL_SYNC_ENABLED = false;
+
+    function isAliyunDoneRealSyncEnabled() {
+      /* 面板勾选为权威来源（面板关闭后 DOM 仍在）；避免仅写 window 失败时静默跳过 */
+      if (aliyunDoneRealSyncToggle && aliyunDoneRealSyncToggle.checked) return true;
+      try {
+        if (window.__ALIYUN_DONE_REAL_SYNC_ENABLED === true) return true;
+      } catch (_w) {}
+      return ALIYUN_DONE_REAL_SYNC_ENABLED === true;
+    }
+
+    function syncAliyunDoneRealToggleUi() {
+      if (!aliyunDoneRealSyncToggle) return;
+      aliyunDoneRealSyncToggle.checked = isAliyunDoneRealSyncEnabled();
+    }
+
+    /** Done 真实同步诊断：追加写入，避免 aliyunExpLog(lines=[]) 整表覆盖冲掉 reason=add */
+    function aliyunDoneRealAppendLog(msg) {
+      const line = String(msg || "");
+      try {
+        console.log("[aliyun-done-real]", line);
+      } catch (_c) {}
+      if (!aliyunExpLogArea) return;
+      const prev = String(aliyunExpLogArea.value || "");
+      aliyunExpLogArea.value = prev ? prev + "\n" + line : line;
+      aliyunExpLogArea.scrollTop = aliyunExpLogArea.scrollHeight;
+    }
 
     function aliyunExpLog(lines, msg) {
       lines.push(String(msg || ""));
@@ -103058,6 +103099,7 @@
       if (aliyunExpUrlInput && !String(aliyunExpUrlInput.value || "").trim()) {
         aliyunExpUrlInput.value = ALIYUN_EXP_DEFAULT_URL;
       }
+      syncAliyunDoneRealToggleUi();
       aliyunExpPanelOverlay.classList.remove("hidden");
       aliyunExpPanelOverlay.setAttribute("aria-hidden", "false");
     }
@@ -104383,6 +104425,632 @@
         Promise.resolve(runAliyunExpSmokeB()).finally(function () {
           aliyunExpRunBBtn.disabled = false;
           if (aliyunExpRunABtn) aliyunExpRunABtn.disabled = false;
+        });
+      });
+    }
+
+    /**
+     * —— Done List 最小真实同步（阿里云实验，可回滚）——
+     * 本地 UI 先更新；后台异步 upsert/tombstone。仅 state.done 域，不全量 state。
+     */
+    const ALIYUN_DONE_REAL_KIND = "done-real-v1";
+    const ALIYUN_DONE_REAL_PERF_PREFIX = "aliyun-done-real:";
+    let aliyunDoneRealQueue = [];
+    let aliyunDoneRealFlushTimer = null;
+    let aliyunDoneRealFlushing = false;
+    let aliyunDoneRealLastReport = null;
+
+    function aliyunDoneRealPerfMark(name) {
+      try {
+        if (typeof performance !== "undefined" && typeof performance.mark === "function") {
+          performance.mark(ALIYUN_DONE_REAL_PERF_PREFIX + name);
+        }
+      } catch (_m) {}
+    }
+
+    function aliyunDoneRealDocId() {
+      const room = String(
+        cloudSyncRoomId ||
+          (typeof localStorage !== "undefined" && localStorage.getItem(CLOUD_SYNC_ROOM_KEY)) ||
+          "default-room"
+      )
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]/g, "_")
+        .slice(0, 64);
+      return "aliyun-done-real-v1-" + (room || "default-room");
+    }
+
+    function aliyunDoneRealBaseUrl() {
+      return String((aliyunExpUrlInput && aliyunExpUrlInput.value) || ALIYUN_EXP_DEFAULT_URL)
+        .trim()
+        .replace(/\/+$/, "");
+    }
+
+    function aliyunDoneRealItemTs(item) {
+      if (!item || typeof item !== "object") return 0;
+      return Math.max(
+        Number(item.updatedAt) || 0,
+        Number(item.completedAt) || 0,
+        Number(item.createdAt) || 0,
+        Number(item.deletedAt) || 0
+      );
+    }
+
+    /** 只序列化 Done 条目业务字段（不带整包 state） */
+    function aliyunDoneRealCloneItemForCloud(item) {
+      if (!item || typeof item !== "object") return null;
+      const id = item.id != null ? String(item.id) : "";
+      if (!id) return null;
+      const out = {
+        id: id,
+        text: String(item.text != null ? item.text : ""),
+        createdAt: Number(item.createdAt) || 0,
+        completedAt: Number(item.completedAt) || 0,
+        updatedAt: aliyunDoneRealItemTs(item) || Date.now(),
+        deleted: false
+      };
+      if (item.manualDone) out.manualDone = true;
+      if (item.outcomeKind) out.outcomeKind = String(item.outcomeKind);
+      if (item.outcomeScore != null && Number.isFinite(Number(item.outcomeScore))) {
+        out.outcomeScore = Number(item.outcomeScore);
+      }
+      if (item.todoListMeta && typeof item.todoListMeta === "object") {
+        out.todoListMeta = {
+          listKey: item.todoListMeta.listKey != null ? String(item.todoListMeta.listKey) : ""
+        };
+      }
+      return out;
+    }
+
+    function aliyunDoneRealEmptyEnvelope() {
+      return {
+        kind: ALIYUN_DONE_REAL_KIND,
+        roomId: String(cloudSyncRoomId || ""),
+        envelopeUpdatedAt: Date.now(),
+        items: {},
+        tombstones: {}
+      };
+    }
+
+    function aliyunDoneRealParseEnvelope(rawPayload) {
+      let p = rawPayload;
+      if (typeof p === "string") {
+        try {
+          p = JSON.parse(p);
+        } catch (_e) {
+          return aliyunDoneRealEmptyEnvelope();
+        }
+      }
+      if (!p || typeof p !== "object") return aliyunDoneRealEmptyEnvelope();
+      const env = aliyunDoneRealEmptyEnvelope();
+      env.roomId = p.roomId != null ? String(p.roomId) : env.roomId;
+      env.envelopeUpdatedAt = Number(p.envelopeUpdatedAt) || 0;
+      if (p.items && typeof p.items === "object") env.items = p.items;
+      if (p.tombstones && typeof p.tombstones === "object") env.tombstones = p.tombstones;
+      return env;
+    }
+
+    function aliyunDoneRealApplyMutationToEnvelope(env, mutation) {
+      if (!env || !mutation) return env;
+      const id = String(mutation.id || "");
+      if (!id) return env;
+      const now = Date.now();
+      if (mutation.op === "tombstone") {
+        const ts = Number(mutation.deletedAt) || now;
+        const prevItem = env.items && env.items[id];
+        const prevTs = aliyunDoneRealItemTs(prevItem);
+        const prevTomb = env.tombstones && env.tombstones[id];
+        const prevTombTs = aliyunDoneRealItemTs(prevTomb);
+        if (ts < prevTs || ts < prevTombTs) {
+          return env;
+        }
+        if (env.items) delete env.items[id];
+        if (!env.tombstones) env.tombstones = {};
+        env.tombstones[id] = {
+          id: id,
+          deleted: true,
+          deletedAt: ts,
+          updatedAt: ts,
+          reason: mutation.reason || "delete"
+        };
+      } else if (mutation.op === "upsert" && mutation.item) {
+        const item = mutation.item;
+        const ts = aliyunDoneRealItemTs(item) || now;
+        item.updatedAt = ts;
+        item.deleted = false;
+        const prevItem = env.items && env.items[id];
+        const prevTs = aliyunDoneRealItemTs(prevItem);
+        const prevTomb = env.tombstones && env.tombstones[id];
+        const prevTombTs = aliyunDoneRealItemTs(prevTomb);
+        if (ts < prevTs || ts < prevTombTs) {
+          return env;
+        }
+        if (env.tombstones) delete env.tombstones[id];
+        if (!env.items) env.items = {};
+        env.items[id] = item;
+      }
+      env.envelopeUpdatedAt = Math.max(Number(env.envelopeUpdatedAt) || 0, now);
+      env.kind = ALIYUN_DONE_REAL_KIND;
+      return env;
+    }
+
+    function aliyunDoneRealStartLtObserver() {
+      const bucket = { count: 0, maxMs: 0, over50: 0 };
+      let obs = null;
+      try {
+        if (typeof PerformanceObserver === "undefined") return { bucket: bucket, stop: function () {} };
+        obs = new PerformanceObserver(function (list) {
+          const entries = list.getEntries() || [];
+          for (let i = 0; i < entries.length; i++) {
+            const d = Number(entries[i].duration) || 0;
+            bucket.count += 1;
+            if (d > bucket.maxMs) bucket.maxMs = d;
+            if (d > 50) bucket.over50 += 1;
+          }
+        });
+        obs.observe({ entryTypes: ["longtask"] });
+      } catch (_lt) {}
+      return {
+        bucket: bucket,
+        stop: function () {
+          try {
+            if (obs) obs.disconnect();
+          } catch (_d) {}
+        }
+      };
+    }
+
+    function aliyunDoneRealLogReport(report) {
+      aliyunDoneRealLastReport = report;
+      try {
+        window.__aliyunDoneRealLastReport = report;
+      } catch (_w) {}
+      aliyunDoneRealAppendLog("—— Done 真实同步 " + (report.reason || "") + " ——");
+      aliyunDoneRealAppendLog(
+        "ok=" +
+          !!report.ok +
+          " docId=" +
+          (report.docId || "") +
+          (report.httpStatus != null ? " HTTP=" + report.httpStatus : "")
+      );
+      aliyunDoneRealAppendLog(
+        "payloadKB=" +
+          (report.payloadKB != null ? report.payloadKB : "?") +
+          " upload=" +
+          (report.uploadMs != null ? report.uploadMs + "ms" : "?") +
+          " download=" +
+          (report.downloadMs != null ? report.downloadMs + "ms" : "?") +
+          " parse=" +
+          (report.parseMs != null ? report.parseMs + "ms" : "?") +
+          " merge=" +
+          (report.mergeMs != null ? report.mergeMs + "ms" : "?") +
+          " render=" +
+          (report.renderMs != null ? report.renderMs + "ms" : "?")
+      );
+      aliyunDoneRealAppendLog(
+        "LT>50=" +
+          (report.longTaskOver50 != null ? report.longTaskOver50 : "?") +
+          " LTmax=" +
+          (report.longTaskMaxMs != null ? Math.round(report.longTaskMaxMs) + "ms" : "?") +
+          " netWait=" +
+          (report.networkWaitMs != null ? report.networkWaitMs + "ms" : "?") +
+          " mainWork=" +
+          (report.mainThreadWorkMs != null ? report.mainThreadWorkMs + "ms" : "?")
+      );
+      if (report.error) aliyunDoneRealAppendLog("error: " + report.error);
+    }
+
+    /**
+     * 后台写入：不 await 于 UI 路径。mutation.op = upsert | tombstone
+     */
+    function scheduleAliyunDoneRealSync(reason, mutation) {
+      if (!isAliyunDoneRealSyncEnabled()) {
+        aliyunDoneRealAppendLog(
+          "schedule skip: flag=false reason=" +
+            (reason || "") +
+            " toggleChecked=" +
+            !!(aliyunDoneRealSyncToggle && aliyunDoneRealSyncToggle.checked)
+        );
+        return;
+      }
+      if (!mutation || !mutation.id) {
+        aliyunDoneRealAppendLog("schedule skip: missing mutation.id reason=" + (reason || ""));
+        return;
+      }
+      aliyunDoneRealQueue.push({
+        reason: reason || "unknown",
+        mutation: mutation,
+        queuedAt: Date.now()
+      });
+      aliyunDoneRealAppendLog(
+        "schedule ok: reason=" +
+          (reason || "") +
+          " id=" +
+          mutation.id +
+          " op=" +
+          (mutation.op || "") +
+          " queueLen=" +
+          aliyunDoneRealQueue.length
+      );
+      if (aliyunDoneRealFlushTimer) clearTimeout(aliyunDoneRealFlushTimer);
+      aliyunDoneRealFlushTimer = setTimeout(function () {
+        aliyunDoneRealFlushTimer = null;
+        Promise.resolve(flushAliyunDoneRealQueue()).catch(function (err) {
+          aliyunDoneRealAppendLog(
+            "flush promise reject: " + (err && err.message ? err.message : String(err))
+          );
+          console.warn("[aliyun-done-real] flush", err);
+        });
+      }, 80);
+    }
+
+    function notifyAliyunDoneRealUpsert(reason, item) {
+      const flagOn = isAliyunDoneRealSyncEnabled();
+      aliyunDoneRealAppendLog(
+        "notify upsert enter: reason=" +
+          (reason || "") +
+          " flag=" +
+          flagOn +
+          " toggleChecked=" +
+          !!(aliyunDoneRealSyncToggle && aliyunDoneRealSyncToggle.checked) +
+          " itemId=" +
+          (item && item.id != null ? String(item.id) : "(none)")
+      );
+      if (!flagOn) {
+        aliyunDoneRealAppendLog("notify upsert return: flag=false");
+        return;
+      }
+      const cloned = aliyunDoneRealCloneItemForCloud(item);
+      if (!cloned) {
+        aliyunDoneRealAppendLog("notify upsert return: cloneItem failed (no id?)");
+        return;
+      }
+      if (!cloned.updatedAt) cloned.updatedAt = Date.now();
+      scheduleAliyunDoneRealSync(reason, { op: "upsert", id: cloned.id, item: cloned });
+    }
+
+    function notifyAliyunDoneRealTombstone(reason, id, itemOpt) {
+      if (!isAliyunDoneRealSyncEnabled()) return;
+      const sid = id != null ? String(id) : "";
+      if (!sid) return;
+      const deletedAt = Math.max(aliyunDoneRealItemTs(itemOpt), Date.now());
+      scheduleAliyunDoneRealSync(reason, {
+        op: "tombstone",
+        id: sid,
+        deletedAt: deletedAt,
+        reason: reason
+      });
+    }
+
+    async function flushAliyunDoneRealQueue() {
+      if (aliyunDoneRealFlushing) {
+        aliyunDoneRealAppendLog("flush return: already flushing (will retry after)");
+        return;
+      }
+      if (!aliyunDoneRealQueue.length) {
+        aliyunDoneRealAppendLog("flush return: queue empty");
+        return;
+      }
+      if (!isAliyunDoneRealSyncEnabled()) {
+        aliyunDoneRealAppendLog(
+          "flush return: flag=false, drop queue len=" + aliyunDoneRealQueue.length
+        );
+        aliyunDoneRealQueue = [];
+        return;
+      }
+      aliyunDoneRealFlushing = true;
+      const batch = aliyunDoneRealQueue.slice();
+      aliyunDoneRealQueue = [];
+      const reason = batch
+        .map(function (b) {
+          return b.reason;
+        })
+        .join("+");
+      const base = aliyunDoneRealBaseUrl();
+      const docId = aliyunDoneRealDocId();
+      aliyunDoneRealAppendLog(
+        "flush start: reason=" + reason + " batch=" + batch.length + " docId=" + docId
+      );
+      const lt = aliyunDoneRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let mainThreadWorkMs = 0;
+      let uploadMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let payloadKB = 0;
+      let httpStatus = null;
+      let ok = false;
+      let errMsg = "";
+      try {
+        if (!base || aliyunExpHasForbiddenSecret(base)) {
+          throw new Error(!base ? "缺少 Function URL" : "URL 疑似含 AccessKey");
+        }
+        aliyunDoneRealPerfMark("flush-start");
+        const tDl0 = Date.now();
+        aliyunDoneRealPerfMark("download-start");
+        const getRes = await aliyunExpFetchJson("GET", base + "/smoke/" + encodeURIComponent(docId), null);
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+        aliyunDoneRealPerfMark("download-end");
+        aliyunDoneRealAppendLog("flush GET status=" + getRes.status + " downloadMs=" + downloadMs);
+
+        const tParse0 = Date.now();
+        aliyunDoneRealPerfMark("parse-start");
+        let env = aliyunDoneRealEmptyEnvelope();
+        if (getRes.ok && getRes.data && getRes.data.data) {
+          const row = getRes.data.data;
+          const attrs = row.attrs || row;
+          env = aliyunDoneRealParseEnvelope(attrs.payload != null ? attrs.payload : attrs);
+        } else if (getRes.status !== 404 && !(getRes.data && getRes.data.error === "not_found")) {
+          console.warn("[aliyun-done-real] GET status", getRes.status, getRes.data);
+        }
+        parseMs = Date.now() - tParse0;
+        aliyunDoneRealPerfMark("parse-end");
+
+        const tMerge0 = Date.now();
+        aliyunDoneRealPerfMark("merge-start");
+        for (let i = 0; i < batch.length; i++) {
+          aliyunDoneRealApplyMutationToEnvelope(env, batch[i].mutation);
+        }
+        env.roomId = String(cloudSyncRoomId || env.roomId || "");
+        env.envelopeUpdatedAt = Date.now();
+        mergeMs = Date.now() - tMerge0;
+        aliyunDoneRealPerfMark("merge-end");
+
+        let bodyJson = "";
+        try {
+          bodyJson = JSON.stringify({ id: docId, payload: env });
+        } catch (_ser) {
+          throw new Error("envelope serialize failed");
+        }
+        payloadKB = Math.round((bodyJson.length / 1024) * 10) / 10;
+
+        const tUp0 = Date.now();
+        aliyunDoneRealPerfMark("upload-start");
+        /* POST put_row IGNORE = upsert，避免无行时 PATCH 失败 */
+        const putRes = await aliyunExpFetchJson("POST", base + "/smoke", JSON.parse(bodyJson));
+        uploadMs = Date.now() - tUp0;
+        networkWaitMs += uploadMs;
+        httpStatus = putRes.status;
+        aliyunDoneRealPerfMark("upload-end");
+        aliyunDoneRealAppendLog(
+          "flush POST status=" + putRes.status + " uploadMs=" + uploadMs + " payloadKB=" + payloadKB
+        );
+        if (!putRes.ok) {
+          throw new Error(
+            "upload HTTP " +
+              putRes.status +
+              " " +
+              (putRes.data && (putRes.data.error || putRes.data.message)
+                ? putRes.data.error || putRes.data.message
+                : "")
+          );
+        }
+        ok = true;
+        mainThreadWorkMs = Math.max(0, Date.now() - tAll - networkWaitMs);
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        ok = false;
+      } finally {
+        lt.stop();
+        aliyunDoneRealFlushing = false;
+        aliyunDoneRealLogReport({
+          ok: ok,
+          reason: reason,
+          docId: docId,
+          httpStatus: httpStatus,
+          payloadKB: payloadKB,
+          uploadMs: uploadMs,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: 0,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: mainThreadWorkMs,
+          error: errMsg || undefined
+        });
+        if (aliyunDoneRealQueue.length) {
+          Promise.resolve(flushAliyunDoneRealQueue()).catch(function () {});
+        }
+      }
+    }
+
+    /**
+     * 实验拉取：只 merge Done，局部标脏 done 后 render（不全量 reload / 不换整包 state）
+     */
+    async function runAliyunDoneRealPullAndMerge() {
+      if (!isAliyunDoneRealSyncEnabled()) {
+        aliyunDoneRealAppendLog(
+          "Done 真实同步未启用：请勾选面板开关或设 window.__ALIYUN_DONE_REAL_SYNC_ENABLED=true"
+        );
+        return;
+      }
+      const base = aliyunDoneRealBaseUrl();
+      const docId = aliyunDoneRealDocId();
+      if (!base || aliyunExpHasForbiddenSecret(base)) {
+        aliyunDoneRealAppendLog(!base ? "请填写 Function URL" : "中止：URL 疑似 AccessKey");
+        return;
+      }
+      const lt = aliyunDoneRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let renderMs = 0;
+      let payloadKB = 0;
+      let ok = false;
+      let errMsg = "";
+      let mergedCount = 0;
+      let tombstoneApplied = 0;
+      try {
+        aliyunDoneRealAppendLog("拉取 Done docId=" + docId);
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson("GET", base + "/smoke/" + encodeURIComponent(docId), null);
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+        if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+          aliyunDoneRealAppendLog("云端尚无 Done 文档（首次写入前正常）");
+          ok = true;
+          return;
+        }
+        if (!getRes.ok) {
+          throw new Error("GET HTTP " + getRes.status);
+        }
+        const tParse0 = Date.now();
+        const row = getRes.data && getRes.data.data;
+        const attrs = (row && (row.attrs || row)) || {};
+        const payloadRaw = attrs.payload != null ? attrs.payload : attrs;
+        let payloadStr = "";
+        try {
+          payloadStr = typeof payloadRaw === "string" ? payloadRaw : JSON.stringify(payloadRaw);
+        } catch (_ps) {
+          payloadStr = "";
+        }
+        payloadKB = Math.round((payloadStr.length / 1024) * 10) / 10;
+        const env = aliyunDoneRealParseEnvelope(payloadRaw);
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        if (!Array.isArray(state.done)) state.done = [];
+        const localById = {};
+        for (let i = 0; i < state.done.length; i++) {
+          const it = state.done[i];
+          if (it && it.id != null) localById[String(it.id)] = it;
+        }
+        const remoteItems = env.items || {};
+        const remoteTombs = env.tombstones || {};
+        const remoteIds = Object.keys(remoteItems);
+        for (let r = 0; r < remoteIds.length; r++) {
+          const rid = remoteIds[r];
+          const remote = remoteItems[rid];
+          if (!remote || remote.deleted) continue;
+          const local = localById[rid];
+          const rTs = aliyunDoneRealItemTs(remote);
+          const lTs = aliyunDoneRealItemTs(local);
+          const tomb = remoteTombs[rid];
+          const tTs = aliyunDoneRealItemTs(tomb);
+          if (tTs > rTs && tTs > lTs) continue;
+          if (local && lTs > rTs) continue;
+          if (!local) {
+            /* 不覆盖：仅当无法判断新旧时保留本地；无本地则接纳远端 */
+            const accept = aliyunDoneRealCloneItemForCloud(remote);
+            if (accept) {
+              accept.updatedAt = rTs || Date.now();
+              state.done.unshift(accept);
+              localById[rid] = accept;
+              mergedCount += 1;
+            }
+            continue;
+          }
+          /* 已完成态不被旧的「未完成」反向覆盖：Done 行存在即完成；远端缺 completedAt 且本地有则保留本地完成 */
+          const next = aliyunDoneRealCloneItemForCloud(remote) || {};
+          next.id = rid;
+          if ((!next.completedAt || next.completedAt <= 0) && local.completedAt) {
+            next.completedAt = local.completedAt;
+          }
+          if (rTs >= lTs) {
+            next.updatedAt = Math.max(rTs, lTs);
+            if (remote.outcomeKind) next.outcomeKind = remote.outcomeKind;
+            else if (local.outcomeKind) next.outcomeKind = local.outcomeKind;
+            if (remote.outcomeScore != null) next.outcomeScore = remote.outcomeScore;
+            else if (local.outcomeScore != null) next.outcomeScore = local.outcomeScore;
+            if (local.manualDone || remote.manualDone) next.manualDone = true;
+            Object.keys(next).forEach(function (k) {
+              local[k] = next[k];
+            });
+            local.updatedAt = next.updatedAt;
+            mergedCount += 1;
+          }
+        }
+        const tombIds = Object.keys(remoteTombs);
+        for (let t = 0; t < tombIds.length; t++) {
+          const tid = tombIds[t];
+          const tomb = remoteTombs[tid];
+          const tTs = aliyunDoneRealItemTs(tomb);
+          const local = localById[tid];
+          if (!local) continue;
+          const lTs = aliyunDoneRealItemTs(local);
+          if (tTs < lTs) continue;
+          state.done = state.done.filter(function (d) {
+            return !(d && String(d.id) === tid);
+          });
+          delete localById[tid];
+          tombstoneApplied += 1;
+        }
+        mergeMs = Date.now() - tMerge0;
+
+        /* 只脏 Done：避免 uiPaintDirty===null 时全量 paint */
+        if (uiPaintDirty == null) {
+          uiPaintDirty = {};
+          if (typeof UI_PAINT_SLICE_KEYS !== "undefined") {
+            UI_PAINT_SLICE_KEYS.forEach(function (k) {
+              uiPaintDirty[k] = false;
+            });
+          }
+        }
+        markUiPaintSlicesDirty(["done"]);
+        saveState({ lists: ["done"] });
+
+        const tRen0 = Date.now();
+        render();
+        renderMs = Date.now() - tRen0;
+        ok = true;
+        aliyunDoneRealAppendLog(
+          "合并完成：upsert/更新 " + mergedCount + "，tombstone 生效 " + tombstoneApplied
+        );
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        aliyunDoneRealAppendLog("拉取失败: " + errMsg);
+      } finally {
+        lt.stop();
+        const mainThreadWorkMs = Math.max(0, Date.now() - tAll - networkWaitMs);
+        aliyunDoneRealLogReport({
+          ok: ok,
+          reason: "manual pull",
+          docId: docId,
+          payloadKB: payloadKB,
+          uploadMs: 0,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: renderMs,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: mainThreadWorkMs,
+          mergedCount: mergedCount,
+          tombstoneApplied: tombstoneApplied,
+          error: errMsg || undefined
+        });
+      }
+    }
+
+    if (aliyunDoneRealSyncToggle) {
+      syncAliyunDoneRealToggleUi();
+      aliyunDoneRealSyncToggle.addEventListener("change", function () {
+        try {
+          window.__ALIYUN_DONE_REAL_SYNC_ENABLED = !!aliyunDoneRealSyncToggle.checked;
+        } catch (_e) {}
+        aliyunDoneRealAppendLog(
+          "Done 真实同步: " +
+            (isAliyunDoneRealSyncEnabled() ? "已启用（后台异步）" : "已关闭") +
+            " toggleChecked=" +
+            !!aliyunDoneRealSyncToggle.checked
+        );
+      });
+    }
+    if (aliyunDoneRealPullBtn) {
+      aliyunDoneRealPullBtn.addEventListener("click", function () {
+        aliyunDoneRealPullBtn.disabled = true;
+        Promise.resolve(runAliyunDoneRealPullAndMerge()).finally(function () {
+          aliyunDoneRealPullBtn.disabled = false;
         });
       });
     }
@@ -119573,16 +120241,28 @@
       }
       const dateKey = selectedDoneDate || formatDateInputValue(new Date());
       const ts = habitDateToCompletedAt(dateKey);
-      state.done.unshift({
+      const newItem = {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text,
         createdAt: ts,
         completedAt: ts,
+        updatedAt: Date.now(),
         /* 手动添加须独立去重，否则会与周计划/封闭清单同文案条目合并后被删掉 */
         manualDone: true
-      });
+      };
+      state.done.unshift(newItem);
       doneManualInput.value = "";
       saveState({ lists: ["done"] });
+      /* 先排队阿里云（本地已落盘）；勿放在 render 之后，避免 paint 异常时跳过 hook */
+      aliyunDoneRealAppendLog(
+        "addManualDone: local ok id=" +
+          newItem.id +
+          " flag=" +
+          isAliyunDoneRealSyncEnabled() +
+          " toggleChecked=" +
+          !!(aliyunDoneRealSyncToggle && aliyunDoneRealSyncToggle.checked)
+      );
+      notifyAliyunDoneRealUpsert("add", newItem);
       flushDoneComposerRender();
       doneManualInput.focus();
     }
@@ -121840,6 +122520,10 @@
 
       saveState();
       render();
+      /* 取消完成：本地已离开 Done；阿里云 tombstone（软删） */
+      if (removed.manualDone) {
+        notifyAliyunDoneRealTombstone("toggle", removed.id, removed);
+      }
     }
 
     function createStopNotItem(text, dateStr) {
@@ -122247,6 +122931,10 @@
         saveState();
       }
       render();
+      /* Done 手动条目删除：本地+trash 已完成；阿里云 tombstone，不物理删云端文档 */
+      if (listName === "done" && task && task.manualDone) {
+        notifyAliyunDoneRealTombstone("delete", task.id, task);
+      }
     }
 
     function updateSimpleListItemText(listName, id, newText) {
@@ -133501,9 +134189,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         doneOutcomeScorePickOpenIds.add(sid);
         queueDoneOutcomeScoreFx(sid, item.outcomeScore);
       }
+      item.updatedAt = Date.now();
       saveState();
       flushCloudSyncPulseImmediate();
       render();
+      if (item.manualDone) notifyAliyunDoneRealUpsert("edit", item);
     }
 
     function setDoneOutcomeScoreForDoneId(id, score) {
@@ -133518,11 +134208,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const n = Number(score);
       if (!isValidDoneOutcomeScoreForKind(kind, n)) return;
       item.outcomeScore = n;
+      item.updatedAt = Date.now();
       doneOutcomeScorePickOpenIds.delete(sid);
       queueDoneOutcomeScoreFx(sid, n);
       saveState();
       flushCloudSyncPulseImmediate();
       render();
+      if (item.manualDone) notifyAliyunDoneRealUpsert("edit", item);
     }
 
     function createDonePowerBadgeEl(playFx) {
