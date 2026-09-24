@@ -13015,6 +13015,23 @@
       .today-plan-smg-label-short {
         display: inline;
       }
+
+      /*
+       * 平板：底栏只保留红框公式行（SMG = 缩小落差 × 缩短等待）；
+       * 隐藏长说明与 Expectosis 胶囊。桌面/手机不进此条。
+       */
+      #todayPlanPanel .today-plan-panel__smg {
+        display: none !important;
+      }
+
+      #todayPlanPanel .today-plan-panel__footer {
+        padding-top: 8px;
+        padding-bottom: 8px;
+      }
+
+      #todayPlanPanel .today-plan-panel__smg-formula {
+        margin: 0;
+      }
     }
 
     .today-plan-capsule--violet {
@@ -93934,7 +93951,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260923g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260924a";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -98137,6 +98154,8 @@
     /** pulse 截止期限：待上传的周键 / 封闭清单 id / 十二周年 moduleKey→周次（构建 payload 后清空） */
     let cloudSyncPulseWeeklyPlanWeekKeys = null;
     let cloudSyncPulseClosedListIds = null;
+    /** 今日计划 todayPlanDate 变更任务 id（含清空）；构建 payload 后清空 */
+    let cloudSyncPulseTodayPlanTaskIds = null;
     /** @type {Record<string, Set<string>>|null} */
     let cloudSyncPulseAnniversaryWeeks = null;
 
@@ -99054,44 +99073,75 @@
     }
 
     /**
-     * pulse 超限时优先保住近几日习惯/Done/Forge；丢掉周年/清单/阅读等胖切片。
-     * 内存 sticky 仍保留完整并集，仅缩小本次 Firebase 写入，避免习惯打卡因 256KB 失败卡住数小时。
+     * pulse 超限瘦身：优先保住今日计划（todayPlanMarks + 紧凑 weeklyPlan）与习惯/Forge。
+     * 旧逻辑直接丢掉 weeklyPlan/closedList，导致「今日计划」跨端完全不同步。
      */
     function shrinkCloudSyncPulseStateForWrite(pulseState) {
       if (!pulseState || typeof pulseState !== "object") return pulseState;
-      const core = {};
-      if (pulseState.habitCheckins && typeof pulseState.habitCheckins === "object") {
-        core.habitCheckins = pulseState.habitCheckins;
+
+      function copyPulseBase(dst) {
+        if (pulseState.habitCheckins && typeof pulseState.habitCheckins === "object") {
+          dst.habitCheckins = pulseState.habitCheckins;
+        }
+        if (pulseState.forge && typeof pulseState.forge === "object") {
+          dst.forge = pulseState.forge;
+        }
+        if (pulseState.syncTombstones && typeof pulseState.syncTombstones === "object") {
+          dst.syncTombstones = pulseState.syncTombstones;
+        }
+        if (pulseState.moveBreakDay && typeof pulseState.moveBreakDay === "object") {
+          dst.moveBreakDay = pulseState.moveBreakDay;
+        }
+        if (coerceIdRecordList(pulseState.stopDoing).length) {
+          dst.stopDoing = pulseState.stopDoing;
+        }
+        if (coerceIdRecordList(pulseState.notToDo).length) {
+          dst.notToDo = pulseState.notToDo;
+        }
+        if (pulseState.todayPlanMarks && typeof pulseState.todayPlanMarks === "object") {
+          dst.todayPlanMarks = pulseState.todayPlanMarks;
+        }
       }
-      if (Array.isArray(pulseState.done) && pulseState.done.length) {
-        core.done = pulseState.done;
+
+      const tier1 = {};
+      copyPulseBase(tier1);
+      if (
+        pulseState.weeklyPlan &&
+        typeof pulseState.weeklyPlan === "object" &&
+        Object.keys(pulseState.weeklyPlan).length
+      ) {
+        tier1.weeklyPlan = pulseState.weeklyPlan;
       }
-      if (pulseState.forge && typeof pulseState.forge === "object") {
-        core.forge = pulseState.forge;
+      if (Array.isArray(pulseState.closedList) && pulseState.closedList.length) {
+        tier1.closedList = pulseState.closedList;
       }
-      if (pulseState.syncTombstones && typeof pulseState.syncTombstones === "object") {
-        core.syncTombstones = pulseState.syncTombstones;
+      if (estimateCloudSyncPulseWriteBytes(tier1) <= FIREBASE_RTDB_SAFE_WRITE_BYTES) {
+        return tier1;
       }
-      if (pulseState.moveBreakDay && typeof pulseState.moveBreakDay === "object") {
-        core.moveBreakDay = pulseState.moveBreakDay;
+
+      const tier2 = {};
+      copyPulseBase(tier2);
+      const compactWp = compactWeeklyPlanPulseForTodaySync(
+        pulseState.weeklyPlan,
+        pulseState.todayPlanMarks
+      );
+      if (compactWp) tier2.weeklyPlan = compactWp;
+      if (Array.isArray(pulseState.closedList) && pulseState.closedList.length) {
+        tier2.closedList = pulseState.closedList;
       }
-      if (coerceIdRecordList(pulseState.stopDoing).length) {
-        core.stopDoing = pulseState.stopDoing;
+      if (estimateCloudSyncPulseWriteBytes(tier2) <= FIREBASE_RTDB_SAFE_WRITE_BYTES) {
+        return tier2;
       }
-      if (coerceIdRecordList(pulseState.notToDo).length) {
-        core.notToDo = pulseState.notToDo;
+
+      const tier3 = {};
+      copyPulseBase(tier3);
+      if (compactWp) tier3.weeklyPlan = compactWp;
+      if (estimateCloudSyncPulseWriteBytes(tier3) <= FIREBASE_RTDB_SAFE_WRITE_BYTES) {
+        return tier3;
       }
-      if (estimateCloudSyncPulseWriteBytes(core) <= FIREBASE_RTDB_SAFE_WRITE_BYTES) {
-        return core;
-      }
-      /* 仍超限：再丢掉 Done，只保习惯打卡 + Forge + tombstone */
+
       const minimal = {};
-      if (core.habitCheckins) minimal.habitCheckins = core.habitCheckins;
-      if (core.forge) minimal.forge = core.forge;
-      if (core.syncTombstones) minimal.syncTombstones = core.syncTombstones;
-      if (core.moveBreakDay) minimal.moveBreakDay = core.moveBreakDay;
-      if (core.stopDoing) minimal.stopDoing = core.stopDoing;
-      if (core.notToDo) minimal.notToDo = core.notToDo;
+      copyPulseBase(minimal);
       return minimal;
     }
 
@@ -99292,6 +99342,120 @@
       if (weekKey == null || String(weekKey).trim() === "") return;
       if (!cloudSyncPulseWeeklyPlanWeekKeys) cloudSyncPulseWeeklyPlanWeekKeys = new Set();
       cloudSyncPulseWeeklyPlanWeekKeys.add(String(weekKey));
+    }
+
+    function noteCloudSyncTodayPlanPulseTaskId(taskId) {
+      if (taskId == null || String(taskId).trim() === "") return;
+      if (!cloudSyncPulseTodayPlanTaskIds) cloudSyncPulseTodayPlanTaskIds = new Set();
+      cloudSyncPulseTodayPlanTaskIds.add(String(taskId));
+    }
+
+    function buildCloudSyncTodayPlanMarksPulseSlice() {
+      const dirty = cloudSyncPulseTodayPlanTaskIds;
+      cloudSyncPulseTodayPlanTaskIds = null;
+      const out = {};
+      const plan = state.weeklyPlan;
+      if (!plan || typeof plan !== "object") {
+        return Object.keys(out).length ? out : null;
+      }
+      Object.keys(plan).forEach(function (wk) {
+        const arr = Array.isArray(plan[wk]) ? plan[wk] : [];
+        for (let i = 0; i < arr.length; i++) {
+          const task = arr[i];
+          if (!task || task.id == null) continue;
+          const id = String(task.id);
+          const hasField = Object.prototype.hasOwnProperty.call(task, "todayPlanDate");
+          const date = hasField ? normalizeWeeklyPlanTodayPlanDate(task.todayPlanDate) : "";
+          const isDirty = !!(dirty && dirty.has(id));
+          if (!isDirty && !date) continue;
+          if (!hasField && !isDirty) continue;
+          out[id] = {
+            date: date,
+            updatedAt: Number(task.updatedAt) || Date.now()
+          };
+        }
+      });
+      if (dirty) {
+        dirty.forEach(function (id) {
+          if (out[id]) return;
+          out[String(id)] = { date: "", updatedAt: Date.now() };
+        });
+      }
+      return Object.keys(out).length ? out : null;
+    }
+
+    function compactWeeklyPlanPulseForTodaySync(weeklyPlan, todayPlanMarks) {
+      if (!weeklyPlan || typeof weeklyPlan !== "object") return null;
+      const markIds =
+        todayPlanMarks && typeof todayPlanMarks === "object"
+          ? new Set(Object.keys(todayPlanMarks))
+          : null;
+      const dirty = cloudSyncPulseTodayPlanTaskIds;
+      const out = {};
+      Object.keys(weeklyPlan).forEach(function (wk) {
+        const arr = Array.isArray(weeklyPlan[wk]) ? weeklyPlan[wk] : [];
+        const keep = [];
+        for (let i = 0; i < arr.length; i++) {
+          const task = arr[i];
+          if (!task || task.id == null) continue;
+          const id = String(task.id);
+          const date = Object.prototype.hasOwnProperty.call(task, "todayPlanDate")
+            ? normalizeWeeklyPlanTodayPlanDate(task.todayPlanDate)
+            : "";
+          if (date || (dirty && dirty.has(id)) || (markIds && markIds.has(id))) {
+            keep.push(normalizeWeeklyPlanTask(task));
+          }
+        }
+        if (keep.length) out[wk] = keep;
+      });
+      return Object.keys(out).length ? out : null;
+    }
+
+    function mergeTodayPlanMarksMapsForSticky(prevMarks, nextMarks) {
+      const out = {};
+      const prev = prevMarks && typeof prevMarks === "object" ? prevMarks : {};
+      const next = nextMarks && typeof nextMarks === "object" ? nextMarks : {};
+      const ids = new Set([...Object.keys(prev), ...Object.keys(next)]);
+      ids.forEach(function (id) {
+        const p = prev[id];
+        const n = next[id];
+        if (!p) {
+          out[id] = n;
+          return;
+        }
+        if (!n) {
+          out[id] = p;
+          return;
+        }
+        const pU = Number(p.updatedAt) || 0;
+        const nU = Number(n.updatedAt) || 0;
+        out[id] = nU >= pU ? n : p;
+      });
+      return Object.keys(out).length ? out : null;
+    }
+
+    function mergeCloudSyncTodayPlanMarksIntoState(marks) {
+      if (!marks || typeof marks !== "object") return false;
+      let changed = false;
+      Object.keys(marks).forEach(function (taskId) {
+        const mark = marks[taskId];
+        if (!mark || typeof mark !== "object") return;
+        const remDate = normalizeWeeklyPlanTodayPlanDate(
+          mark.date != null ? mark.date : mark.todayPlanDate
+        );
+        const remU = Number(mark.updatedAt) || 0;
+        const raw = findWeeklyPlanTaskRaw(taskId);
+        if (!raw) return;
+        const locHas = Object.prototype.hasOwnProperty.call(raw, "todayPlanDate");
+        const locDate = locHas ? normalizeWeeklyPlanTodayPlanDate(raw.todayPlanDate) : "";
+        const locU = Number(raw.updatedAt) || 0;
+        if (remU < locU) return;
+        if (remU === locU && remDate === locDate) return;
+        raw.todayPlanDate = remDate;
+        if (remU > 0) raw.updatedAt = remU;
+        changed = true;
+      });
+      return changed;
     }
 
     function noteCloudSyncClosedListPulseId(itemId) {
@@ -99993,6 +100157,27 @@
         next[sk] = Object.assign({}, p, n, { weeks: mergedWeeks, weekGoals: mergedGoals });
       });
       if (!next.weeklyPlan && prev.weeklyPlan) next.weeklyPlan = prev.weeklyPlan;
+      else if (prev.weeklyPlan && next.weeklyPlan) {
+        const stickyTsWp =
+          next.syncTombstones && typeof next.syncTombstones === "object"
+            ? next.syncTombstones
+            : prev.syncTombstones && typeof prev.syncTombstones === "object"
+              ? prev.syncTombstones
+              : {};
+        next.weeklyPlan = mergeWeeklyPlanPulseSliceForSync(
+          prev.weeklyPlan,
+          next.weeklyPlan,
+          stickyTsWp
+        );
+      }
+      if (prev.todayPlanMarks || next.todayPlanMarks) {
+        const mergedMarks = mergeTodayPlanMarksMapsForSticky(
+          prev.todayPlanMarks,
+          next.todayPlanMarks
+        );
+        if (mergedMarks) next.todayPlanMarks = mergedMarks;
+        else delete next.todayPlanMarks;
+      }
       /* 两侧都有清单时必须并集：旧逻辑「next 非空就整包用 next」会把后写入的瘦快照盖掉新加条目/章节 */
       if (prev.closedList || next.closedList) {
         next.closedList = mergeClosedListArraysForSync(prev.closedList, next.closedList);
@@ -100817,6 +101002,8 @@
       if (forgePulse) pulseState.forge = forgePulse;
       const weeklyPlanPulse = buildCloudSyncWeeklyPlanPulseSlice();
       if (weeklyPlanPulse) pulseState.weeklyPlan = weeklyPlanPulse;
+      const todayPlanMarksPulse = buildCloudSyncTodayPlanMarksPulseSlice();
+      if (todayPlanMarksPulse) pulseState.todayPlanMarks = todayPlanMarksPulse;
       const closedListPulse = buildCloudSyncClosedListPulseSlice();
       if (closedListPulse) pulseState.closedList = closedListPulse;
       /* Stop Doing / Restrictions：条目少，完整快照进 pulse，避免只靠 2–3 分钟全量才同步 */
@@ -100947,6 +101134,9 @@
         }
         if (pulseState.weeklyPlan && typeof pulseState.weeklyPlan === "object") {
           if (mergeCloudSyncWeeklyPlanPulseIntoState(pulseState.weeklyPlan)) changed = true;
+        }
+        if (pulseState.todayPlanMarks && typeof pulseState.todayPlanMarks === "object") {
+          if (mergeCloudSyncTodayPlanMarksIntoState(pulseState.todayPlanMarks)) changed = true;
         }
         if (
           pulseState.weeklyPlanDoneSuppress &&
@@ -101273,6 +101463,10 @@
           pulseNode.state.weeklyPlan &&
           typeof pulseNode.state.weeklyPlan === "object" &&
           Object.keys(pulseNode.state.weeklyPlan).length > 0) ||
+        (pulseNode.state &&
+          pulseNode.state.todayPlanMarks &&
+          typeof pulseNode.state.todayPlanMarks === "object" &&
+          Object.keys(pulseNode.state.todayPlanMarks).length > 0) ||
         (Array.isArray(pulseNode.state.closedList) && pulseNode.state.closedList.length > 0) ||
         (pulseNode.state &&
           Object.keys(pulseNode.state).some(function (sk) {
@@ -101337,6 +101531,16 @@
         requestCloudDrivenUiRender("immediate");
       } else {
         scheduleCloudSyncRenderDebounced();
+      }
+      if (
+        !isOwnPulseEcho &&
+        todayPlanPanelExpanded &&
+        typeof paintTodayPlanPanel === "function" &&
+        pulseHasDeadline
+      ) {
+        try {
+          paintTodayPlanPanel();
+        } catch (_todayPulsePaintErr) {}
       }
       return true;
       } finally {
@@ -101849,6 +102053,10 @@
       const hasForge = pulseState.forge && typeof pulseState.forge === "object";
       const hasWeeklyPlan =
         pulseState.weeklyPlan && typeof pulseState.weeklyPlan === "object" && Object.keys(pulseState.weeklyPlan).length > 0;
+      const hasTodayPlanMarks =
+        pulseState.todayPlanMarks &&
+        typeof pulseState.todayPlanMarks === "object" &&
+        Object.keys(pulseState.todayPlanMarks).length > 0;
       const hasClosedList = Array.isArray(pulseState.closedList) && pulseState.closedList.length > 0;
       const hasStopDoing = coerceIdRecordList(pulseState.stopDoing).length > 0;
       const hasNotToDo = coerceIdRecordList(pulseState.notToDo).length > 0;
@@ -101885,6 +102093,7 @@
         !hasHc &&
         !hasForge &&
         !hasWeeklyPlan &&
+        !hasTodayPlanMarks &&
         !hasClosedList &&
         !hasStopDoing &&
         !hasNotToDo &&
@@ -101912,7 +102121,7 @@
         }
         /* 粘合后易超 256KB：写入前瘦身，优先保住习惯打卡 */
         if (estimateCloudSyncPulseWriteBytes(safeState) > FIREBASE_RTDB_SAFE_WRITE_BYTES) {
-          console.warn("[云同步] pulse 超限，本次只写习惯/Done 快通道");
+          console.warn("[云同步] pulse 超限，优先保留今日计划/习惯快通道");
           safeState = cloneStateForFirebaseUpload(shrinkCloudSyncPulseStateForWrite(safeState));
           if (!safeState) {
             return Promise.reject(new Error("pulse 瘦身序列化失败"));
@@ -102965,33 +103174,47 @@
       }
     }
 
-    /** B 单点：用接近真实结构的隔离包走 阿里云读取→parse→既有 merge→render，然后恢复快照。 */
-    function aliyunExpBuildBenchRemoteState() {
-      let remote;
+    /**
+     * B 单域：只从真实 state 抽一个独立模块做隔离副本（非整包 snapshot）。
+     * 首轮固定 memo（备忘录）；其它域等你确认后再开。
+     */
+    const ALIYUN_EXP_B_MODULE_KEY = "memo";
+    const ALIYUN_EXP_B_MODULE_LABEL = "memo（备忘录）";
+
+    function aliyunExpCloneModuleSlice(moduleKey) {
+      const key = String(moduleKey || ALIYUN_EXP_B_MODULE_KEY);
+      let raw = state && state[key];
+      let data;
       try {
-        remote = JSON.parse(JSON.stringify(state));
+        data = JSON.parse(JSON.stringify(raw == null ? [] : raw));
       } catch (_e) {
-        remote = { done: [] };
+        data = Array.isArray(raw) ? [] : raw && typeof raw === "object" ? {} : [];
       }
-      if (!remote || typeof remote !== "object") remote = { done: [] };
-      if (!Array.isArray(remote.done)) remote.done = [];
-      const padded = remote.done.length < 50;
-      if (padded) {
-        const need = 500 - remote.done.length;
-        for (let i = 0; i < need; i++) {
-          remote.done.push({
-            id: "aliyun-exp-b-pad-" + i,
-            text: "aliyun-b-pad-" + i,
-            completedAt: Date.now() - i * 1000
-          });
-        }
+      if (key === "memo" && !Array.isArray(data)) data = [];
+      const itemCount = Array.isArray(data) ? data.length : data && typeof data === "object" ? Object.keys(data).length : 0;
+      /* 追加隔离 marker，保证 merge 有可观察差异；restore 会整包回滚 */
+      if (key === "memo" && Array.isArray(data)) {
+        data.push({
+          id: "aliyun-exp-b-memo-marker-" + Date.now().toString(36),
+          text: "aliyun-exp-b-memo-marker",
+          createdAt: Date.now()
+        });
       }
-      remote.done.push({
-        id: "aliyun-exp-b-marker-" + Date.now().toString(36),
-        text: "aliyun-exp-b-marker",
-        completedAt: Date.now()
-      });
-      return { remote: remote, padded: padded, doneCount: remote.done.length };
+      let json = "[]";
+      try {
+        json = JSON.stringify(data);
+      } catch (_ser) {
+        json = "[]";
+        data = [];
+      }
+      return {
+        moduleKey: key,
+        label: key === "memo" ? ALIYUN_EXP_B_MODULE_LABEL : key,
+        data: data,
+        itemCount: Array.isArray(data) ? data.length : itemCount,
+        bytes: json.length,
+        json: json
+      };
     }
 
     function aliyunExpRestoreStateSnapshot(snap) {
@@ -103146,12 +103369,19 @@
       const ltProbe = aliyunExpStartLongTaskProbe();
       let ltSummary = null;
 
-      aliyunExpLog(lines, "======== B 单点开始 ========");
-      aliyunExpLog(lines, "路径: 阿里云读写 → parse → applyCloudPayloadWithMerge → render → 恢复快照");
-      aliyunExpLog(lines, "不替换 Firebase 主路径；merge 使用 skipPersist。");
+      aliyunExpLog(lines, "======== B 单域开始 ========");
       aliyunExpLog(
         lines,
-        "判定重点: 网络等待属异步，不看总耗时；看等待期间能否点击/滚动，以及 Long Task(>50ms)。"
+        "本轮模块: " + ALIYUN_EXP_B_MODULE_LABEL + "（仅此域真实副本；非整包 snapshot）"
+      );
+      aliyunExpLog(
+        lines,
+        "路径: 阿里云读写(单域) → parse → 注入该域到快照副本 → applyCloudPayloadWithMerge → render → 恢复快照"
+      );
+      aliyunExpLog(lines, "不替换 Firebase 主路径；merge 使用 skipPersist；不写正式 IDB/localStorage。");
+      aliyunExpLog(
+        lines,
+        "判定重点: 网络等待属异步，与主线程工作分开看；等待期间请点击/滚动/输入/切模块；看 Long Task(>50ms)。"
       );
       aliyunExpLog(
         lines,
@@ -103167,27 +103397,23 @@
           throw new Error("无法快照本机 state，中止 B 以免无法恢复");
         }
         marks.cloneMs = Date.now() - t0;
+        aliyunExpLog(lines, "✓ clone(本机全量备份仅用于恢复) +" + marks.cloneMs + "ms（主线程）");
 
-        const built = aliyunExpBuildBenchRemoteState();
-        const remoteState = built.remote;
+        const slice = aliyunExpCloneModuleSlice(ALIYUN_EXP_B_MODULE_KEY);
+        const bytes = slice.bytes;
         aliyunExpLog(
           lines,
-          "规模: done=" +
-            built.doneCount +
-            (built.padded ? "（本机偏小，已合成填充至约500+marker）" : "（本机真实规模）")
+          "模块=" +
+            slice.label +
+            " 条目≈" +
+            slice.itemCount +
+            " 隔离包=" +
+            Math.round(bytes / 1024) +
+            " KB（仅该域，非整包）"
         );
-
-        let remoteJson;
-        try {
-          remoteJson = JSON.stringify(remoteState);
-        } catch (_serErr) {
-          throw new Error("remote state 无法序列化");
-        }
-        const bytes = remoteJson.length;
-        aliyunExpLog(lines, "隔离包约 " + Math.round(bytes / 1024) + " KB");
         if (bytes > 900000) {
           throw new Error(
-            "隔离包过大（>" +
+            "单域隔离包仍过大（>" +
               Math.round(bytes / 1024) +
               "KB），单列 Tablestore 不安全；本单点实验中止，勿扩大迁移。"
           );
@@ -103198,7 +103424,12 @@
         if (typeof uiStallBegin === "function") uiStallBegin("cloudPush");
         const up = await aliyunExpFetchJson("POST", base + "/smoke", {
           id: docId,
-          payload: { kind: "aliyun-exp-b", state: remoteState }
+          payload: {
+            kind: "aliyun-exp-b-module",
+            module: slice.moduleKey,
+            label: slice.label,
+            data: slice.data
+          }
         });
         marks.uploadMs = Date.now() - t0;
         if (!(up.status === 200 || up.status === 201) || !(up.data && up.data.ok)) {
@@ -103208,9 +103439,9 @@
           lines,
           "✓ 阿里云上传 HTTP " +
             up.status +
-            " 等待 +" +
+            " 网络等待 +" +
             marks.uploadMs +
-            "ms（异步网络，不单独当作 UI 卡顿）"
+            "ms（异步，不单独当作 UI 卡顿）"
         );
 
         ltProbe.phase = "download";
@@ -103225,9 +103456,9 @@
           lines,
           "✓ 阿里云下载 HTTP " +
             down.status +
-            " 等待 +" +
+            " 网络等待 +" +
             marks.downloadMs +
-            "ms（异步网络）"
+            "ms（异步）"
         );
 
         ltProbe.phase = "parse";
@@ -103241,27 +103472,48 @@
           throw new Error("下载 payload 不是字符串");
         }
         const envelope = JSON.parse(payloadStr);
-        const pulledState = envelope && envelope.state ? envelope.state : null;
-        if (!pulledState || !Array.isArray(pulledState.done)) {
-          throw new Error("下载 state 缺少 done[]");
+        if (!envelope || envelope.module !== slice.moduleKey || envelope.data == null) {
+          throw new Error("下载 envelope 缺少 module/data");
         }
+        const pulledModuleData = envelope.data;
         marks.parseMs = Date.now() - t0;
-        aliyunExpLog(lines, "✓ parse +" + marks.parseMs + "ms done=" + pulledState.done.length);
+        aliyunExpLog(
+          lines,
+          "✓ parse +" +
+            marks.parseMs +
+            "ms（主线程） module=" +
+            envelope.module +
+            " 条目≈" +
+            (Array.isArray(pulledModuleData) ? pulledModuleData.length : "?")
+        );
 
-        const prevSuppress = cloudSyncSuppressPush;
-        cloudSyncSuppressPush = true;
+        /* 用恢复快照为底，只替换本轮模块域，再走既有 merge（满足 done[] 守卫，且不上传整包） */
         ltProbe.phase = "merge";
         t0 = Date.now();
+        let mergeRemoteState;
+        try {
+          mergeRemoteState = JSON.parse(JSON.stringify(snap));
+        } catch (_mr) {
+          throw new Error("无法构建单域 merge 底稿");
+        }
+        mergeRemoteState[slice.moduleKey] = pulledModuleData;
+        const prevSuppress = cloudSyncSuppressPush;
+        cloudSyncSuppressPush = true;
         if (typeof uiStallBegin === "function") uiStallBegin("cloudMerge");
         const mergedOk = await applyCloudPayloadWithMerge(
-          { state: pulledState, updatedAt: Date.now(), updatedBy: "aliyun-exp-b" },
+          { state: mergeRemoteState, updatedAt: Date.now(), updatedBy: "aliyun-exp-b-module" },
           { skipPersist: true, skipRender: true }
         );
         marks.mergeMs = Date.now() - t0;
         cloudSyncSuppressPush = prevSuppress;
         aliyunExpLog(
           lines,
-          (mergedOk ? "✓" : "△") + " merge(applyCloudPayloadWithMerge) +" + marks.mergeMs + "ms"
+          (mergedOk ? "✓" : "△") +
+            " merge(applyCloudPayloadWithMerge) +" +
+            marks.mergeMs +
+            "ms（主线程；底稿=快照+仅替换 " +
+            slice.moduleKey +
+            "）"
         );
 
         ltProbe.phase = "before_render";
@@ -103282,7 +103534,7 @@
         if (typeof uiStallBegin === "function") uiStallBegin("cloudPull");
         render(true);
         marks.renderMs = Date.now() - t0;
-        aliyunExpLog(lines, "✓ render(true) +" + marks.renderMs + "ms");
+        aliyunExpLog(lines, "✓ render(true) +" + marks.renderMs + "ms（主线程）");
 
         ltProbe.phase = "after_render";
         await new Promise(function (r) {
@@ -103303,7 +103555,7 @@
         if (ltSummary.supported) {
           aliyunExpLog(
             lines,
-            "Long Task: 次数=" +
+            "Long Task(>50ms): 次数=" +
               ltSummary.count +
               " 最长=" +
               ltSummary.maxMs +
@@ -103321,15 +103573,27 @@
               ltSummary.duringNetworkWait
           );
         } else {
-          aliyunExpLog(lines, "Long Task: 不支持观察（请以主观点击/滚动为准）");
+          aliyunExpLog(lines, "Long Task(>50ms): 不支持观察（请以主观点击/滚动为准）");
         }
+
+        const networkWaitMs = marks.uploadMs + marks.downloadMs;
+        aliyunExpLog(
+          lines,
+          "时间拆分: 网络等待(upload+download)=" +
+            networkWaitMs +
+            "ms | 主线程工作(clone+parse+merge+render)=" +
+            (marks.cloneMs + marks.parseMs + marks.mergeMs + marks.renderMs) +
+            "ms（restore 见后）"
+        );
 
         try {
           if (window.__aliyunExpBSkipConfirm) {
             uiFeltBlocked = null;
           } else {
             uiFeltBlocked = window.confirm(
-              "B 单点刚跑完。\n\n请忽略总耗时（含阿里云网络异步等待）。\n重点：等待与 merge/render 期间，点击/滚动/输入/切模块是否仍明显卡死？\n\n确定=仍然卡死\n取消=尚可操作"
+              "B 单域（" +
+                slice.label +
+                "）刚跑完。\n\n请忽略总耗时（含阿里云网络异步等待）。\n重点：等待与 merge/render 期间，点击/滚动/输入/切模块是否仍明显卡死？\n\n确定=仍然卡死\n取消=尚可操作"
             );
           }
         } catch (_c) {
@@ -103351,7 +103615,7 @@
         try {
           render(true);
         } catch (_rr) {}
-        aliyunExpLog(lines, "✓ 已恢复本机 state 快照 +" + marks.restoreMs + "ms");
+        aliyunExpLog(lines, "✓ restore +" + marks.restoreMs + "ms（主线程；已恢复本机 state 快照）");
 
         ltProbe.phase = "delete";
         t0 = Date.now();
@@ -103361,7 +103625,7 @@
           null
         );
         marks.deleteMs = Date.now() - t0;
-        aliyunExpLog(lines, "✓ 删除隔离行 HTTP " + del.status + " +" + marks.deleteMs + "ms");
+        aliyunExpLog(lines, "✓ 删除隔离行 HTTP " + del.status + " 网络等待 +" + marks.deleteMs + "ms");
 
         let lsAfter = null;
         try {
@@ -103369,11 +103633,17 @@
         } catch (_ls1) {}
 
         const totalMs = Date.now() - tAll;
+        const mainThreadWorkMsFinal =
+          marks.cloneMs + marks.parseMs + marks.mergeMs + marks.renderMs + marks.restoreMs;
         aliyunExpLog(
           lines,
-          "======== B 单点结束（总耗时 +" +
+          "======== B 单域结束 module=" +
+            slice.label +
+            " 隔离包≈" +
+            Math.round(bytes / 1024) +
+            "KB 总耗时 +" +
             totalMs +
-            "ms 仅供参考，含网络等待，勿用来判断 UI 卡顿）========"
+            "ms（含网络，勿用来判断 UI 卡顿）========"
         );
         aliyunExpLog(
           lines,
@@ -103394,6 +103664,16 @@
         );
         aliyunExpLog(
           lines,
+          "汇总: 网络等待=" +
+            (marks.uploadMs + marks.downloadMs + marks.deleteMs) +
+            "ms | 主线程工作=" +
+            mainThreadWorkMsFinal +
+            "ms | LongTask次数=" +
+            (ltSummary && ltSummary.supported ? ltSummary.count : "n/a") +
+            (ltSummary && ltSummary.supported ? " 最长=" + ltSummary.maxMs + "ms" : "")
+        );
+        aliyunExpLog(
+          lines,
           "Firebase写入=" +
             firebaseWrites.length +
             " 正式localStorage变更=" +
@@ -103403,17 +103683,22 @@
         if (uiFeltBlocked === true) {
           aliyunExpLog(lines, "结论倾向: 主观仍卡死 → 按约定应停止扩大迁移。");
         } else if (uiFeltBlocked === false) {
-          aliyunExpLog(lines, "结论倾向: 主观尚可操作；仍须你确认后才可扩大范围。");
+          aliyunExpLog(lines, "结论倾向: 主观尚可操作；仍须你确认后才可测下一域。");
         }
+        aliyunExpLog(lines, "已停在单域 memo；等待你确认结果后再继续其它模块。");
 
         window.__aliyunExpSmokeBReport = {
           ok: true,
+          mode: "single-module",
+          module: slice.moduleKey,
+          moduleLabel: slice.label,
+          itemCount: slice.itemCount,
           docId: docId,
           marks: marks,
           totalMs: totalMs,
+          networkWaitMs: marks.uploadMs + marks.downloadMs + marks.deleteMs,
+          mainThreadWorkMs: mainThreadWorkMsFinal,
           totalMsNote: "includes async network wait; do not use for UI stall judgment",
-          doneCount: built.doneCount,
-          padded: built.padded,
           bytes: bytes,
           firebaseWrites: firebaseWrites.slice(),
           formalLocalStorageChanged: lsBefore !== lsAfter,
@@ -103441,6 +103726,8 @@
         } catch (_delErr) {}
         window.__aliyunExpSmokeBReport = {
           ok: false,
+          mode: "single-module",
+          module: ALIYUN_EXP_B_MODULE_KEY,
           error: err && err.message ? err.message : String(err),
           marks: marks,
           firebaseWrites: firebaseWrites.slice(),
@@ -144440,9 +144727,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const joined = raw.todayPlanDate === todayKey;
       raw.todayPlanDate = joined ? "" : todayKey;
       touchWeeklyPlanTaskRevision(raw);
+      noteCloudSyncTodayPlanPulseTaskId(raw.id);
+      try {
+        const located = findWeeklyPlanTaskInStorage(taskId);
+        if (located && located.weekKey) noteCloudSyncWeeklyPlanPulseWeekKey(located.weekKey);
+      } catch (_wkNoteErr) {}
       syncWeeklyPlanTodayPlanButton(btn, raw.todayPlanDate === todayKey);
       if (todayPlanPanelExpanded) paintTodayPlanPanel();
       saveState({ skipUiPaintDirty: true });
+      try {
+        flushCloudSyncPulseImmediate();
+      } catch (_pulseErr) {}
     }
 
     function collectRawWeeklyPlanTasksForTodayPlan(todayKey) {
@@ -144510,6 +144805,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         touchWeeklyPlanTaskRevision(newTask);
         state.weeklyPlan[weekKey] = insertWeeklyPlanTaskForLane(tasks, newTask, "open");
         noteCloudSyncWeeklyPlanPulseWeekKey(weekKey);
+        noteCloudSyncTodayPlanPulseTaskId(newTask.id);
         if (inputEl) inputEl.value = "";
         paintTodayPlanPanel();
         /* 同一 input 节点：paint 不销毁，添加后保持焦点即可 */
@@ -144697,6 +144993,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!raw) return;
       raw.todayPlanDate = "";
       touchWeeklyPlanTaskRevision(raw);
+      noteCloudSyncTodayPlanPulseTaskId(raw.id);
+      try {
+        const located = findWeeklyPlanTaskInStorage(taskId);
+        if (located && located.weekKey) noteCloudSyncWeeklyPlanPulseWeekKey(located.weekKey);
+      } catch (_wkNoteErr) {}
       patchTodayPlanUiAfterOtherTaskRemoved(taskId);
       saveState({ skipUiPaintDirty: true });
       try {
@@ -152340,6 +152641,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         restoreUiScrollSnapshot(uiScrollSnap);
         restoreUiActionChromeSnapshot(uiActionChromeSnap);
       });
+      if (todayPlanPanelExpanded && typeof paintTodayPlanPanel === "function") {
+        try {
+          paintTodayPlanPanel();
+        } catch (_todayRenderPaintErr) {}
+      }
       endUiRebuildSnap();
       if (stallSegT0 != null) {
         stallScrollMs += cloudSyncPerfNow() - stallSegT0;
