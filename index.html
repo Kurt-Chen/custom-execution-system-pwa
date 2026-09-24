@@ -94000,7 +94000,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260924d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260924e";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -103225,10 +103225,10 @@
 
     /**
      * B 单域：只从真实 state 抽一个独立模块做隔离副本（非整包 snapshot）。
-     * 首轮固定 memo（备忘录）；其它域等你确认后再开。
+     * 本轮：done（Done List / My Done）；memo 诊断已停。
      */
-    const ALIYUN_EXP_B_MODULE_KEY = "memo";
-    const ALIYUN_EXP_B_MODULE_LABEL = "memo（备忘录）";
+    const ALIYUN_EXP_B_MODULE_KEY = "done";
+    const ALIYUN_EXP_B_MODULE_LABEL = "done（Done List）";
 
     function aliyunExpCloneModuleSlice(moduleKey) {
       const key = String(moduleKey || ALIYUN_EXP_B_MODULE_KEY);
@@ -103239,10 +103239,16 @@
       } catch (_e) {
         data = Array.isArray(raw) ? [] : raw && typeof raw === "object" ? {} : [];
       }
-      if (key === "memo" && !Array.isArray(data)) data = [];
+      if ((key === "memo" || key === "done") && !Array.isArray(data)) data = [];
       const itemCount = Array.isArray(data) ? data.length : data && typeof data === "object" ? Object.keys(data).length : 0;
       /* 追加隔离 marker，保证 merge 有可观察差异；restore 会整包回滚 */
-      if (key === "memo" && Array.isArray(data)) {
+      if (key === "done" && Array.isArray(data)) {
+        data.push({
+          id: "aliyun-exp-b-done-marker-" + Date.now().toString(36),
+          text: "aliyun-exp-b-done-marker",
+          completedAt: Date.now()
+        });
+      } else if (key === "memo" && Array.isArray(data)) {
         data.push({
           id: "aliyun-exp-b-memo-marker-" + Date.now().toString(36),
           text: "aliyun-exp-b-memo-marker",
@@ -103258,7 +103264,12 @@
       }
       return {
         moduleKey: key,
-        label: key === "memo" ? ALIYUN_EXP_B_MODULE_LABEL : key,
+        label:
+          key === "done"
+            ? ALIYUN_EXP_B_MODULE_LABEL
+            : key === "memo"
+              ? "memo（备忘录）"
+              : key,
         data: data,
         itemCount: Array.isArray(data) ? data.length : itemCount,
         bytes: json.length,
@@ -104293,7 +104304,7 @@
         } else if (uiFeltBlocked === false) {
           aliyunExpLog(lines, "结论倾向: 主观尚可操作；仍须你确认后才可测下一域。");
         }
-        aliyunExpLog(lines, "已停在单域 memo；等待你确认结果后再继续其它模块。");
+        aliyunExpLog(lines, "已停在单域 done（Done List）；等待你确认结果后再继续其它模块。");
 
         window.__aliyunExpSmokeBReport = {
           ok: true,
