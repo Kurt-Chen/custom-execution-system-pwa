@@ -101346,13 +101346,8 @@
       const out = Object.assign({}, metaB, metaA);
       const sa = Number(metaA.stampAt);
       const sb = Number(metaB.stampAt);
-      if (Number.isFinite(sa) && sa > 0 && Number.isFinite(sb) && sb > 0) {
-        out.stampAt = Math.min(sa, sb);
-      } else if (Number.isFinite(sa) && sa > 0) {
-        out.stampAt = sa;
-      } else if (Number.isFinite(sb) && sb > 0) {
-        out.stampAt = sb;
-      }
+      const stampPick = pickRealHabitClockMs([sa, sb]);
+      if (stampPick) out.stampAt = stampPick;
       const ba = Number(metaA.batchAmount);
       const bb = Number(metaB.batchAmount);
       if (Number.isFinite(ba) || Number.isFinite(bb)) {
@@ -101559,7 +101554,7 @@
         "";
       const raw = [localItem && localItem.completedAt, remoteItem && remoteItem.completedAt, mergedItem && mergedItem.completedAt]
         .map(function (t) {
-          return Number(t);
+          return coerceDoneCompletedAtMs(t);
         })
         .filter(function (t) {
           return Number.isFinite(t) && t > 0;
@@ -101571,7 +101566,7 @@
           })
         : raw;
       const pool = sameDay.length ? sameDay : raw;
-      return Math.min.apply(null, pool);
+      return pickRealHabitClockMs(pool);
     }
 
     function mergeDoneItemDerivedFieldsForSync(mergedItem, localItem, remoteItem, preferRemoteOnConflict) {
@@ -106015,8 +106010,20 @@
       const stampCandidates = [Number(a.stampAt), Number(b.stampAt)].filter(function (t) {
         return Number.isFinite(t) && t > 0;
       });
-      if (stampCandidates.length) {
-        out.stampAt = Math.min.apply(null, stampCandidates);
+      const stampPick = pickRealHabitClockMs(stampCandidates);
+      if (stampPick) out.stampAt = stampPick;
+      const stampsA = Array.isArray(a.stamps) ? a.stamps : [];
+      const stampsB = Array.isArray(b.stamps) ? b.stamps : [];
+      if (stampsA.length || stampsB.length) {
+        const seen = {};
+        const mergedStamps = [];
+        stampsA.concat(stampsB).forEach(function (t) {
+          const n = Number(t);
+          if (!Number.isFinite(n) || n <= 0 || seen[n]) return;
+          seen[n] = true;
+          mergedStamps.push(n);
+        });
+        if (mergedStamps.length) out.stamps = mergedStamps;
       }
       if (Array.isArray(a.batches) || Array.isArray(b.batches)) {
         const batchesA = Array.isArray(a.batches) ? a.batches : [];
@@ -110941,12 +110948,22 @@
           if (Array.isArray(state.done)) {
             state.done = state.done.map((item) => {
               if (!item || typeof item !== "object") return item;
-              const n = Number(item.completedAt);
-              if (Number.isFinite(n) && n > 0) {
-                if (item.habitMeta && item.habitMeta.date && !isSameDate(n, item.habitMeta.date)) {
+              const n = coerceDoneCompletedAtMs(item.completedAt);
+              if (n > 0) {
+                if (
+                  item.habitMeta &&
+                  item.habitMeta.date &&
+                  !isSameDate(n, item.habitMeta.date) &&
+                  !isSyntheticHabitNoonAt(n)
+                ) {
                   return { ...item, completedAt: habitDateToCompletedAt(item.habitMeta.date, n) };
                 }
+                if (item.completedAt !== n) return { ...item, completedAt: n };
                 return item;
+              }
+              const stamped = item.habitMeta ? coerceDoneCompletedAtMs(item.habitMeta.stampAt) : 0;
+              if (item.habitMeta && item.habitMeta.date && stamped > 0 && !isSyntheticHabitNoonAt(stamped)) {
+                return { ...item, completedAt: habitDateToCompletedAt(item.habitMeta.date, stamped) };
               }
               const fallbackAt =
                 item.habitMeta && item.habitMeta.date
@@ -112995,6 +113012,46 @@
       return new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0, 0).getTime();
     }
 
+    /** 完成时刻：数字、数字字符串、ISO 日期都收下；解析失败才当没有时刻，避免被中午占位盖掉 */
+    function coerceDoneCompletedAtMs(raw) {
+      if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) return raw;
+      if (typeof raw === "string" && raw.trim()) {
+        const n = Number(raw);
+        if (Number.isFinite(n) && n > 0) return n;
+        const parsed = Date.parse(raw);
+        if (Number.isFinite(parsed) && parsed > 0) return parsed;
+      }
+      return 0;
+    }
+
+    /** 12:00:00.000 是补洞占位，不是用户打卡时刻。有真实时分时禁止再用它覆盖。 */
+    function isSyntheticHabitNoonAt(ms) {
+      const n = Number(ms);
+      if (!Number.isFinite(n) || n <= 0) return false;
+      const d = new Date(n);
+      return (
+        d.getHours() === 12 &&
+        d.getMinutes() === 0 &&
+        d.getSeconds() === 0 &&
+        d.getMilliseconds() === 0
+      );
+    }
+
+    /** 同一天多个时刻：丢掉中午占位，保留最早的真实时分；全是占位才退回中午 */
+    function pickRealHabitClockMs(list) {
+      const real = [];
+      const noon = [];
+      (Array.isArray(list) ? list : []).forEach(function (t) {
+        const n = Number(t);
+        if (!Number.isFinite(n) || n <= 0) return;
+        if (isSyntheticHabitNoonAt(n)) noon.push(n);
+        else real.push(n);
+      });
+      if (real.length) return Math.min.apply(null, real);
+      if (noon.length) return Math.min.apply(null, noon);
+      return 0;
+    }
+
     function completedAtForHabitDoneRow(dateStr, atMs) {
       const src = Number(atMs);
       if (Number.isFinite(src) && src > 0) {
@@ -113004,8 +113061,16 @@
     }
 
     function habitDoneAtMsFromCheckin(v, dateStr) {
+      const bag = [];
       const stamp = typeof getHabitStampAtFromValue === "function" ? getHabitStampAtFromValue(v) : 0;
-      if (stamp) return habitDateToCompletedAt(dateStr, stamp);
+      if (stamp) bag.push(stamp);
+      if (v && typeof v === "object" && Array.isArray(v.stamps)) {
+        v.stamps.forEach(function (t) {
+          bag.push(t);
+        });
+      }
+      const picked = pickRealHabitClockMs(bag);
+      if (picked) return habitDateToCompletedAt(dateStr, picked);
       return habitDateToNoonCompletedAt(dateStr);
     }
 
@@ -113159,17 +113224,30 @@
           rebuilt = false;
         } else {
           const o = { times: n };
-          if (isHabitWeekClockKey(habitKey)) {
-            let minStamp = Infinity;
-            rows.forEach(function (row) {
-              const s = row.habitMeta && Number(row.habitMeta.stampAt);
-              if (Number.isFinite(s) && s > 0 && s < minStamp) minStamp = s;
-            });
-            if (minStamp === Infinity && prev && typeof prev === "object") {
-              const ps = Number(prev.stampAt);
-              if (Number.isFinite(ps) && ps > 0) minStamp = ps;
+          const clockBag = [];
+          rows.forEach(function (row) {
+            const s = row.habitMeta && Number(row.habitMeta.stampAt);
+            const c = Number(row.completedAt);
+            if (Number.isFinite(s) && s > 0) clockBag.push(s);
+            if (Number.isFinite(c) && c > 0) clockBag.push(c);
+          });
+          if (prev && typeof prev === "object") {
+            if (Number(prev.stampAt) > 0) clockBag.push(Number(prev.stampAt));
+            if (Array.isArray(prev.stamps)) {
+              prev.stamps.forEach(function (t) {
+                clockBag.push(t);
+              });
             }
-            if (minStamp !== Infinity) o.stampAt = minStamp;
+          }
+          const kept = clockBag.filter(function (t) {
+            return Number.isFinite(Number(t)) && Number(t) > 0 && !isSyntheticHabitNoonAt(t);
+          });
+          if (kept.length) {
+            o.stamps = kept.slice();
+            o.stampAt = Math.min.apply(null, kept);
+          } else if (isHabitWeekClockKey(habitKey)) {
+            const fallback = pickRealHabitClockMs(clockBag);
+            if (fallback) o.stampAt = fallback;
           }
           rebuilt = o;
         }
@@ -113457,21 +113535,20 @@
         text += " · 第 " + String(tc) + " 次打卡";
       }
       const meta = { key: habitKey, date: dateStr };
-      if (isHabitWeekClockKey(habitKey)) {
-        const dayRow = state.habitCheckins[dateStr];
-        const stampAt = getHabitStampAtFromValue(dayRow && dayRow[habitKey]);
-        if (stampAt) {
-          meta.stampAt = stampAt;
-          const clock = formatHabitWeekClockLabel(stampAt);
-          if (clock) text += " · " + clock;
-        }
-      }
       const todayKey = formatDateInputValue(new Date());
       const completedAt = Number(atMs) > 0
         ? completedAtForHabitDoneRow(dateStr, atMs)
         : isHabitWeekClockKey(habitKey) && dateStr === todayKey
           ? Date.now()
           : habitDateToCompletedAt(dateStr);
+      if (!isSyntheticHabitNoonAt(completedAt)) meta.stampAt = completedAt;
+      if (isHabitWeekClockKey(habitKey)) {
+        const dayRow = state.habitCheckins[dateStr];
+        const stampAt = getHabitStampAtFromValue(dayRow && dayRow[habitKey]);
+        if (stampAt && !isSyntheticHabitNoonAt(stampAt)) meta.stampAt = stampAt;
+        const clock = formatHabitWeekClockLabel(meta.stampAt || completedAt);
+        if (clock) text += " · " + clock;
+      }
       state.done.unshift({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text,
@@ -114796,9 +114873,17 @@
       } else {
         const nextTimes = tt - 1;
         const nextObj = { times: nextTimes };
-        if (isHabitWeekClockKey(habitKey) && v && typeof v === "object") {
+        if (v && typeof v === "object") {
           const stamp = Number(v.stampAt);
-          if (Number.isFinite(stamp) && stamp > 0) nextObj.stampAt = stamp;
+          if (Number.isFinite(stamp) && stamp > 0 && !isSyntheticHabitNoonAt(stamp)) {
+            nextObj.stampAt = stamp;
+          }
+          if (Array.isArray(v.stamps) && v.stamps.length) {
+            nextObj.stamps = v.stamps.slice(0, Math.max(0, v.stamps.length - 1));
+            if (!nextObj.stampAt && nextObj.stamps.length) {
+              nextObj.stampAt = pickRealHabitClockMs(nextObj.stamps);
+            }
+          }
         }
         day[habitKey] = stampHabitCheckinRevision(nextObj);
         removeLastHabitStampFromDone(habitKey, todayKey);
@@ -114859,13 +114944,30 @@
         alert("今日打卡次数过大，请先点击「减一次」后再试。");
         return;
       }
+      const nowStamp = Date.now();
       const next = { times: nextTimes };
+      const prevStamps =
+        current && typeof current === "object" && Array.isArray(current.stamps)
+          ? current.stamps
+              .map(function (t) {
+                return Number(t);
+              })
+              .filter(function (t) {
+                return Number.isFinite(t) && t > 0 && !isSyntheticHabitNoonAt(t);
+              })
+          : [];
       if (isHabitWeekClockKey(habitKey)) {
         const prevStamp = current && typeof current === "object" ? Number(current.stampAt) : NaN;
-        next.stampAt = Number.isFinite(prevStamp) && prevStamp > 0 ? prevStamp : Date.now();
+        next.stampAt =
+          Number.isFinite(prevStamp) && prevStamp > 0 && !isSyntheticHabitNoonAt(prevStamp)
+            ? prevStamp
+            : nowStamp;
+      } else {
+        next.stamps = prevStamps.concat([nowStamp]);
+        next.stampAt = next.stamps[0];
       }
       state.habitCheckins[dateKey][habitKey] = stampHabitCheckinRevision(next);
-      syncHabitToDone(habitKey, dateKey, nextTimes);
+      syncHabitToDone(habitKey, dateKey, nextTimes, isHabitWeekClockKey(habitKey) ? next.stampAt : nowStamp);
       bumpRule100LinkedForEntrepreneurHabitIfNeeded(habitKey);
       /* 可能联动 Rule100 的创业习惯仍全量 hygiene，避免误伤；其余普通简单勾选走 habitDone */
       if (ENTREPRENEUR_HABIT_RULE100_NAME_HINTS[habitKey]) {
@@ -157470,23 +157572,48 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       state.done.forEach(function (item) {
         if (!item || !item.habitMeta || !item.habitMeta.date) return;
         const dateStr = item.habitMeta.date;
-        const cur = Number(item.completedAt);
-        if (Number.isFinite(cur) && cur > 0 && isSameDate(cur, dateStr)) return;
-        const stampAt = Number(item.habitMeta.stampAt);
-        const created = Number(item.createdAt);
-        const source =
-          Number.isFinite(cur) && cur > 0
-            ? cur
-            : Number.isFinite(stampAt) && stampAt > 0
-              ? stampAt
-              : Number.isFinite(created) && created > 0
-                ? created
-                : 0;
-        const next = source
-          ? habitDateToCompletedAt(dateStr, source)
-          : habitDateToNoonCompletedAt(dateStr);
+        const cur = coerceDoneCompletedAtMs(item.completedAt);
+        const stampAt = coerceDoneCompletedAtMs(item.habitMeta.stampAt);
+        const created = coerceDoneCompletedAtMs(item.createdAt);
+        const daySlot =
+          state.habitCheckins && state.habitCheckins[dateStr]
+            ? state.habitCheckins[dateStr][item.habitMeta.key]
+            : null;
+        const checkinBag = [];
+        if (daySlot && typeof daySlot === "object") {
+          if (Number(daySlot.stampAt) > 0) checkinBag.push(Number(daySlot.stampAt));
+          if (Array.isArray(daySlot.stamps)) {
+            daySlot.stamps.forEach(function (t) {
+              checkinBag.push(t);
+            });
+          }
+        }
+        const realClock = pickRealHabitClockMs([stampAt, created, cur].concat(checkinBag));
+        const curIsReal =
+          Number.isFinite(cur) && cur > 0 && isSameDate(cur, dateStr) && !isSyntheticHabitNoonAt(cur);
+        if (curIsReal) {
+          if (daySlot && typeof daySlot === "object") {
+            const slotStamp = Number(daySlot.stampAt);
+            if (!(slotStamp > 0) || isSyntheticHabitNoonAt(slotStamp)) {
+              daySlot.stampAt = cur;
+              changed = true;
+            }
+          }
+          if (!(stampAt > 0) || isSyntheticHabitNoonAt(stampAt)) {
+            item.habitMeta.stampAt = cur;
+            changed = true;
+          }
+          return;
+        }
+        if (!(realClock > 0)) return;
+        const next = habitDateToCompletedAt(dateStr, realClock);
+        if (isSyntheticHabitNoonAt(next)) return;
         if (Number(item.completedAt) !== next) {
           item.completedAt = next;
+          changed = true;
+        }
+        if (Number(item.habitMeta.stampAt) !== realClock) {
+          item.habitMeta.stampAt = realClock;
           changed = true;
         }
       });
