@@ -95856,6 +95856,12 @@
     /** 有未上传本地改动时，后台自动重试（断网不丢） */
     const CLOUD_SYNC_PENDING_RETRY_MS = 15 * 1000;
     /**
+     * A/B 临时实验（可逆）：true 时阻止 pendingRetry / 事务内 pulse 路径升级到 pushStateToCloudFull。
+     * 仍保留 pulse push、listener、merge、persist 及其他独立全量入口。
+     * 恢复原行为：将下一行改为 false 即可（一行）。
+     */
+    const CLOUD_SYNC_AB_SUPPRESS_PULSE_PATH_FULL_PUSH = true;
+    /**
      * 只读性能探针：默认开启。关闭：localStorage.setItem('todo-app-cloud-sync-perf-enabled-v1','0')
      * 或 setCloudSyncPerfEnabled(false)。不改变同步结果，只计数/计时。
      */
@@ -109507,9 +109513,18 @@
         }
         if (!cloudSyncRef || cloudSyncSuppressPush) return;
         if (!hasCloudSyncPendingUpload()) return;
+        if (CLOUD_SYNC_AB_SUPPRESS_PULSE_PATH_FULL_PUSH) {
+          console.info("[云同步A/B] pendingRetry fired");
+        }
         scheduleCloudSyncPush();
         /* pulse 之外仍要推进全量，避免只反复写 pulse、core 永远不落盘 */
-        scheduleCloudSyncFullPushDeferred(CLOUD_SYNC_FULL_PUSH_CHECKIN_IDLE_MS);
+        if (CLOUD_SYNC_AB_SUPPRESS_PULSE_PATH_FULL_PUSH) {
+          console.info(
+            "[云同步A/B] full push 被此次实验 suppress (pendingRetry→scheduleCloudSyncFullPushDeferred)"
+          );
+        } else {
+          scheduleCloudSyncFullPushDeferred(CLOUD_SYNC_FULL_PUSH_CHECKIN_IDLE_MS);
+        }
       }, CLOUD_SYNC_PENDING_RETRY_MS);
     }
 
@@ -109570,6 +109585,13 @@
         return;
       }
       cloudSyncTxnInFlight = true;
+      const abTxnT0 =
+        typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : Date.now();
+      if (CLOUD_SYNC_AB_SUPPRESS_PULSE_PATH_FULL_PUSH) {
+        console.info("[云同步A/B] transaction start", { reason: reason, mode: mode });
+      }
       setCloudSyncStatus("同步中...", "status-syncing");
       try {
         const skipPull =
@@ -109607,10 +109629,35 @@
         }
         if (hasCloudSyncPendingUpload() || reason === "local-edit") {
           const serverTs = getCloudSyncServerTimestamp();
+          const abPulseT0 =
+            typeof performance !== "undefined" && typeof performance.now === "function"
+              ? performance.now()
+              : Date.now();
+          if (CLOUD_SYNC_AB_SUPPRESS_PULSE_PATH_FULL_PUSH) {
+            console.info("[云同步A/B] pulse push start", { reason: reason });
+          }
           await pushCloudSyncPulseToRoom(serverTs);
+          if (CLOUD_SYNC_AB_SUPPRESS_PULSE_PATH_FULL_PUSH) {
+            const abPulseMs =
+              (typeof performance !== "undefined" && typeof performance.now === "function"
+                ? performance.now()
+                : Date.now()) - abPulseT0;
+            console.info("[云同步A/B] pulse push end", {
+              reason: reason,
+              ms: Math.round(abPulseMs * 100) / 100
+            });
+          }
           if (hasCloudSyncPendingUpload()) {
             markCloudSyncSuccess(getCloudSyncCursor() || undefined, { keepPending: true });
-            scheduleCloudSyncFullPushDeferred();
+            /* A/B：阻止事务内 pulse 后升级全量；其它独立全量入口不受影响 */
+            if (CLOUD_SYNC_AB_SUPPRESS_PULSE_PATH_FULL_PUSH) {
+              console.info(
+                "[云同步A/B] full push 被此次实验 suppress (txn pulse→scheduleCloudSyncFullPushDeferred)",
+                { reason: reason }
+              );
+            } else {
+              scheduleCloudSyncFullPushDeferred();
+            }
           } else {
             markCloudSyncSuccess(getCloudSyncCursor() || undefined);
           }
@@ -109628,6 +109675,17 @@
         }
       } finally {
         cloudSyncTxnInFlight = false;
+        if (CLOUD_SYNC_AB_SUPPRESS_PULSE_PATH_FULL_PUSH) {
+          const abTxnMs =
+            (typeof performance !== "undefined" && typeof performance.now === "function"
+              ? performance.now()
+              : Date.now()) - abTxnT0;
+          console.info("[云同步A/B] transaction end", {
+            reason: reason,
+            mode: mode,
+            ms: Math.round(abTxnMs * 100) / 100
+          });
+        }
         const queued = cloudSyncTxnQueued;
         cloudSyncTxnQueued = null;
         if (queued) {
