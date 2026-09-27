@@ -137785,7 +137785,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return changed;
     }
 
-    /** 同 lane + 同标题但不同 id（改期限/同步残留）时合并为一条 */
+    /**
+     * 同 lane + 同标题但不同 id（改期限/同步残留）时合并为一条。
+     * 已完成与未完成不互并：否则「其他任务」再次添加同名项（如每日健身）会被旧完成态吞掉，表现为添加后自动打卡。
+     */
     function dedupeWeeklyPlanDuplicateTitlesAcrossBuckets() {
       if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
       const byTitle = new Map();
@@ -137799,8 +137802,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         });
       });
       let changed = false;
-      byTitle.forEach(function (entries) {
-        if (entries.length < 2) return;
+      function mergeTitleDedupeGroup(entries) {
+        if (!entries || entries.length < 2) return;
         const winner = pickWeeklyPlanDuplicateWinner(
           entries.map(function (e) {
             return e.task;
@@ -137824,6 +137827,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         ) {
           changed = true;
         }
+      }
+      byTitle.forEach(function (entries) {
+        if (entries.length < 2) return;
+        const pending = [];
+        const done = [];
+        for (let i = 0; i < entries.length; i++) {
+          if (isWeeklyPlanMainComplete(entries[i].task)) done.push(entries[i]);
+          else pending.push(entries[i]);
+        }
+        mergeTitleDedupeGroup(pending);
+        mergeTitleDedupeGroup(done);
       });
       return changed;
     }
