@@ -94710,7 +94710,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260925b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260927a";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -95365,6 +95365,12 @@
     let closedListWasWinReady = false;
     /** 仅内存：快速添加防连点；不落盘 */
     let todayPlanOtherAddBusy = false;
+    /**
+     * 仅内存：刚添加的其他任务 id → 忽略打卡截止时刻。
+     * 防止 Enter/+ 提交后同步 paint 时，误触/幽灵点击立刻勾上完成圆。
+     */
+    const todayPlanOtherToggleGuardUntilById = Object.create(null);
+    const TODAY_PLAN_OTHER_TOGGLE_GUARD_MS = 450;
     /** 其他任务 composer：只创建一次，paint 永不销毁（节点引用，不靠 getElementById） */
     let todayPlanOtherComposerEl = null;
     let todayPlanOtherComposerInputEl = null;
@@ -141793,6 +141799,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      * 完成后立即 pulse，并刷新面板与周计划列表。
      */
     function toggleTodayPlanOtherTaskDone(taskId, checked) {
+      const tid = String(taskId || "");
+      if (!tid) return;
+      const guardUntil = todayPlanOtherToggleGuardUntilById[tid];
+      if (guardUntil && Date.now() < guardUntil) {
+        return;
+      }
+      if (guardUntil) delete todayPlanOtherToggleGuardUntilById[tid];
       const found = findWeeklyPlanTaskInStorage(taskId);
       if (!found) return;
       const weekKey = found.weekKey;
@@ -145687,7 +145700,45 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /**
      * 今日计划 → 其他任务：快速添加。
      * 写入 Open List 实体 + todayPlanDate；不进 closedList；不走 addWeeklyPlanTask 全量刷新。
+     * 同名 open 任务优先复用：已完成则重置为未完成再挂今日（避免「又自动完成」与重复实体）。
      */
+    function findOpenWeeklyPlanTasksByTitleKey(titleKey) {
+      const out = [];
+      if (!titleKey || !state.weeklyPlan || typeof state.weeklyPlan !== "object") return out;
+      const keys = Object.keys(state.weeklyPlan);
+      for (let i = 0; i < keys.length; i++) {
+        const wk = keys[i];
+        const arr = state.weeklyPlan[wk];
+        if (!Array.isArray(arr)) continue;
+        for (let j = 0; j < arr.length; j++) {
+          const task = arr[j];
+          if (!task || task.id == null) continue;
+          if (getWeeklyPlanTaskLane(task) !== "open") continue;
+          if (weeklyPlanTaskTitleDedupeKey(task) !== titleKey) continue;
+          out.push({ weekKey: wk, task: task });
+        }
+      }
+      return out;
+    }
+
+    /** 复用 open 同名任务：未完成优先；否则取最近更新的已完成项 */
+    function pickOpenWeeklyPlanTaskForTodayQuickAddReuse(titleKey) {
+      const hits = findOpenWeeklyPlanTasksByTitleKey(titleKey);
+      if (!hits.length) return null;
+      let pendingBest = null;
+      let doneBest = null;
+      for (let i = 0; i < hits.length; i++) {
+        const hit = hits[i];
+        const u = Number(hit.task.updatedAt) || 0;
+        if (isWeeklyPlanMainComplete(hit.task)) {
+          if (!doneBest || u >= (Number(doneBest.task.updatedAt) || 0)) doneBest = hit;
+        } else if (!pendingBest || u >= (Number(pendingBest.task.updatedAt) || 0)) {
+          pendingBest = hit;
+        }
+      }
+      return pendingBest || doneBest;
+    }
+
     function submitTodayPlanOtherQuickAdd(inputEl) {
       if (todayPlanOtherAddBusy) return;
       const text = String((inputEl && inputEl.value) || "").trim();
@@ -145699,19 +145750,55 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
           state.weeklyPlan = {};
         }
-        const tasks = getWeeklyPlanTasksForWeekKey(weekKey);
-        const newTask = {
-          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
-          text: text,
-          lane: "open",
-          mainDone: false,
-          microTasks: [],
-          todayPlanDate: todayKey
-        };
-        touchWeeklyPlanTaskRevision(newTask);
-        state.weeklyPlan[weekKey] = insertWeeklyPlanTaskForLane(tasks, newTask, "open");
-        noteCloudSyncWeeklyPlanPulseWeekKey(weekKey);
-        noteCloudSyncTodayPlanPulseTaskId(newTask.id);
+        const titleKey = weeklyPlanTaskTitleDedupeKey({ text: text, lane: "open" });
+        const reuse = titleKey ? pickOpenWeeklyPlanTaskForTodayQuickAddReuse(titleKey) : null;
+        let targetTask = null;
+        let targetWeekKey = weekKey;
+
+        if (reuse && reuse.task) {
+          targetTask = reuse.task;
+          targetWeekKey = reuse.weekKey || weekKey;
+          /* 已完成同名：用户再次添加 = 今日重做，必须清完成态 */
+          if (isWeeklyPlanMainComplete(targetTask)) {
+            clearWeeklyPlanCompletionStamps(targetTask);
+            suppressWeeklyPlanDoneMirrorForTask(targetTask.id);
+            try {
+              removeWeeklyPlanTaskDoneMirrors(targetWeekKey, targetTask.id);
+            } catch (_rmDoneErr) {}
+          }
+          targetTask.lane = "open";
+          targetTask.text = text;
+          targetTask.todayPlanDate = todayKey;
+          touchWeeklyPlanTaskRevision(targetTask);
+          /* 同名其它副本若也挂在今日，摘掉，避免列表出现两条同文案 */
+          const siblings = findOpenWeeklyPlanTasksByTitleKey(titleKey);
+          for (let s = 0; s < siblings.length; s++) {
+            const sib = siblings[s].task;
+            if (!sib || String(sib.id) === String(targetTask.id)) continue;
+            if (sib.todayPlanDate === todayKey) {
+              sib.todayPlanDate = "";
+              touchWeeklyPlanTaskRevision(sib);
+              noteCloudSyncTodayPlanPulseTaskId(sib.id);
+            }
+          }
+        } else {
+          const tasks = getWeeklyPlanTasksForWeekKey(weekKey);
+          targetTask = {
+            id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+            text: text,
+            lane: "open",
+            mainDone: false,
+            microTasks: [],
+            todayPlanDate: todayKey
+          };
+          touchWeeklyPlanTaskRevision(targetTask);
+          state.weeklyPlan[weekKey] = insertWeeklyPlanTaskForLane(tasks, targetTask, "open");
+        }
+
+        todayPlanOtherToggleGuardUntilById[String(targetTask.id)] =
+          Date.now() + TODAY_PLAN_OTHER_TOGGLE_GUARD_MS;
+        noteCloudSyncWeeklyPlanPulseWeekKey(targetWeekKey);
+        noteCloudSyncTodayPlanPulseTaskId(targetTask.id);
         if (inputEl) inputEl.value = "";
         paintTodayPlanPanel();
         /* 同一 input 节点：paint 不销毁，添加后保持焦点即可 */
