@@ -94977,7 +94977,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260927f";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260927g";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -113803,7 +113803,9 @@
       const label = HABIT_LABELS[habitKey] || habitKey;
       const tc = Number.isFinite(stampTimesOpt) && stampTimesOpt > 0 ? stampTimesOpt : null;
       let text =
-        habitKey === "dailyThreeWins" ? "书写「每天三赢」" : "【习惯】" + label;
+        habitKey === "dailyThreeWins"
+          ? buildDailyThreeWinsDoneText(dateStr) || "每天三赢"
+          : "【习惯】" + label;
       if (tc != null && habitKey !== "dailyThreeWins") {
         text += " · 第 " + String(tc) + " 次打卡";
       }
@@ -113897,6 +113899,58 @@
       }).length;
     }
 
+    /** 每天三赢 / 预设明天：Done 文案统一为「前缀 · ①…；②…；③…」 */
+    function listMeaningfulDailyWinForDate(dateStr) {
+      return state.dailyWin
+        .filter(function (item) {
+          if (!item) return false;
+          if (!dailyWinItemMatchesDate(item, dateStr)) return false;
+          return isMeaningfulDailyWinText(item.text);
+        })
+        .slice()
+        .sort(function (a, b) {
+          return (a.createdAt || 0) - (b.createdAt || 0);
+        });
+    }
+
+    function buildDailyWinDetailedDoneText(prefix, items) {
+      const marks = ["①", "②", "③"];
+      const parts = (items || []).slice(0, 3).map(function (item, i) {
+        return (marks[i] || String(i + 1)) + String(item.text || "").trim();
+      });
+      return String(prefix || "") + (parts.length ? " · " + parts.join("；") : "");
+    }
+
+    function buildDailyThreeWinsDoneText(dateStr) {
+      return buildDailyWinDetailedDoneText(
+        "每天三赢",
+        listMeaningfulDailyWinForDate(dateStr).slice(0, 3)
+      );
+    }
+
+    /** 已有 Done 行时同步三条原文；新建仍走 syncHabitToDone */
+    function syncDailyThreeWinsDoneText(dateStr) {
+      if (!dateStr) return false;
+      const text = buildDailyThreeWinsDoneText(dateStr);
+      if (!text || text === "每天三赢") return false;
+      let changed = false;
+      (state.done || []).forEach(function (row) {
+        if (
+          !row ||
+          !row.habitMeta ||
+          row.habitMeta.key !== "dailyThreeWins" ||
+          row.habitMeta.date !== dateStr
+        ) {
+          return;
+        }
+        if (row.text !== text) {
+          row.text = text;
+          changed = true;
+        }
+      });
+      return changed;
+    }
+
     /** 写满 3 条后手动补记入（例如曾从 My Done 删掉且 suppressed 时） */
     function stampDailyThreeWinsToDone(dateStr) {
       const dk = dateStr || formatDateInputValue(new Date());
@@ -113904,7 +113958,11 @@
         alert("请先写满 3 条每天三赢，再记入 My Done。");
         return false;
       }
-      if (hasHabitDoneEntry("dailyThreeWins", dk)) return true;
+      if (hasHabitDoneEntry("dailyThreeWins", dk)) {
+        syncDailyThreeWinsDoneText(dk);
+        saveStateAfterHabitCheckin();
+        return true;
+      }
       if (!state.habitCheckins[dk]) state.habitCheckins[dk] = {};
       delete state.habitCheckins[dk].dailyThreeWinsDoneSuppressed;
       state.habitCheckins[dk].dailyThreeWins = true;
@@ -113940,11 +113998,17 @@
         removeHabitFromDone("dailyThreeWins", dateStr);
       }
 
+      let textSynced = false;
+      if (should && hasHabitDoneEntry("dailyThreeWins", dateStr)) {
+        textSynced = syncDailyThreeWinsDoneText(dateStr);
+      }
+
       const hasEntryNow = hasHabitDoneEntry("dailyThreeWins", dateStr);
       return (
         prevFlag !== should ||
         prevSuppressed !== Boolean(day.dailyThreeWinsDoneSuppressed) ||
-        hadEntry !== hasEntryNow
+        hadEntry !== hasEntryNow ||
+        textSynced
       );
     }
 
@@ -113986,11 +114050,7 @@
     }
 
     function buildDailyWinTomorrowPresetDoneText(items) {
-      const marks = ["①", "②", "③"];
-      const parts = items.slice(0, 3).map(function (item, i) {
-        return (marks[i] || String(i + 1)) + String(item.text || "").trim();
-      });
-      return "预设明天三赢 · " + parts.join("；");
+      return buildDailyWinDetailedDoneText("预设明天三赢", items);
     }
 
     function findDailyWinTomorrowPresetDoneIndex(targetDateKey) {
@@ -134330,11 +134390,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       delete entry.outcomeScore;
     }
 
-    /** Habit / Forge / 历史深度时间镜像 / 清空油箱 / A.M.B.：固定为 Power（艰难选择），仅展示绿标，不参与三选一 */
+    /** Habit / Forge / 历史深度时间镜像 / 清空油箱 / A.M.B. / 预设明天三赢：固定为 Power（艰难选择），仅展示绿标，不参与三选一 */
     function doneTaskUsesPowerBadgeOnly(task) {
       if (!task || typeof task !== "object") return false;
       if (task.anniversaryDeepTimeMeta) return true;
       if (task.habitMeta && typeof task.habitMeta === "object") return true;
+      if (task.dailyWinTomorrowMeta && typeof task.dailyWinTomorrowMeta === "object") return true;
       if (task.forgeMindMeta || task.forgeBodyMeta) return true;
       if (getForgeDoneLineInfo(task)) return true;
       if (task.fuelMeta && typeof task.fuelMeta === "object") return true;
