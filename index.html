@@ -95056,7 +95056,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260928g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260928h";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -111388,8 +111388,8 @@
           }
           refreshKineticCountdownLunarTargets();
           normalizeKineticCountdownTargetDays();
-          /* Closed List：未完成项留在归属日不结转；仅硬截当日超过上限的条目 */
-          if (Array.isArray(state.closedList) && tickClosedListDayRollover()) {
+          /* Closed List 硬截上限；其他任务未完成挂牌结转到今天 */
+          if (tickClosedListDayRollover()) {
             saveState();
           }
           const preReconcileJson = getPersistedStateJsonFromCache();
@@ -139599,11 +139599,44 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return false;
     }
 
-    /** 仅硬截当日 ≤ 上限；不做跨日结转 */
+    /**
+     * 其他任务跨日结转：未完成且仍挂今日计划（todayPlanDate 非空）的项，
+     * 把过去日期推进到今天；已完成留在原日；已移出（空串）不结转。
+     */
+    function rolloverIncompleteTodayPlanOtherTasksToToday() {
+      const todayKey = formatDateInputValue(new Date());
+      if (!todayKey || !state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
+      let changed = false;
+      const weekKeys = Object.keys(state.weeklyPlan);
+      for (let w = 0; w < weekKeys.length; w++) {
+        const wk = weekKeys[w];
+        const arr = state.weeklyPlan[wk];
+        if (!Array.isArray(arr)) continue;
+        for (let i = 0; i < arr.length; i++) {
+          const task = arr[i];
+          if (!task || task.id == null) continue;
+          const date = normalizeWeeklyPlanTodayPlanDate(task.todayPlanDate);
+          if (!date || date >= todayKey) continue;
+          if (isWeeklyPlanMainComplete(task)) continue;
+          task.todayPlanDate = todayKey;
+          touchWeeklyPlanTaskRevision(task);
+          noteCloudSyncTodayPlanPulseTaskId(task.id);
+          try {
+            noteCloudSyncWeeklyPlanPulseWeekKey(wk);
+          } catch (_wkNoteErr) {}
+          changed = true;
+        }
+      }
+      return changed;
+    }
+
+    /** 日界：Closed List 硬截当日上限；其他任务未完成项结转到今天 */
     function tickClosedListDayRollover() {
       const todayKey = formatDateInputValue(new Date());
       closedListRolloverAnchorDate = todayKey;
-      return clampClosedListDayToMaxItems(todayKey);
+      let changed = clampClosedListDayToMaxItems(todayKey);
+      if (rolloverIncompleteTodayPlanOtherTasksToToday()) changed = true;
+      return changed;
     }
 
     /** Closed List「自周计划」镜像 ↔ 周计划主任务：勾选任一侧，另一侧同步完成状态 */
@@ -146825,6 +146858,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } catch (_pulseErr) {}
     }
 
+    /**
+     * 收集「其他任务」源：当日挂牌，或过去日未完成（结转展示兜底；正式推进日期见 rollover）。
+     * 已移出（无 todayPlanDate）与过去日已完成不进入。
+     */
     function collectRawWeeklyPlanTasksForTodayPlan(todayKey) {
       const out = [];
       const seen = Object.create(null);
@@ -146840,7 +146877,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           const task = arr[j];
           if (!task) continue;
           const date = normalizeWeeklyPlanTodayPlanDate(task.todayPlanDate);
-          if (date !== want) continue;
+          if (!date) continue;
+          if (date === want) {
+            /* 当日：含已完成，便于在「其他任务」里看到今日打卡 */
+          } else if (date < want && !isWeeklyPlanMainComplete(task)) {
+            /* 过去未完成：一直结转到今天展示 */
+          } else {
+            continue;
+          }
           const id = String(task.id || "");
           if (!id || seen[id]) continue;
           seen[id] = 1;
@@ -154282,6 +154326,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       let rolled = false;
       if (typeof rolloverWeeklyPlanIncompleteToCurrentWeek === "function") {
         if (rolloverWeeklyPlanIncompleteToCurrentWeek()) rolled = true;
+      }
+      /* 其他任务：未完成挂牌跨日推进到今天（云合并后也补跑） */
+      if (typeof rolloverIncompleteTodayPlanOtherTasksToToday === "function") {
+        if (rolloverIncompleteTodayPlanOtherTasksToToday()) {
+          repairChanged = true;
+        }
       }
       if (repairChanged) {
         saveState({
