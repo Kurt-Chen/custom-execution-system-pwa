@@ -95056,7 +95056,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260928f";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260928g";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -100566,8 +100566,9 @@
         const locHas = Object.prototype.hasOwnProperty.call(raw, "todayPlanDate");
         const locDate = locHas ? normalizeWeeklyPlanTodayPlanDate(raw.todayPlanDate) : "";
         const locU = Number(raw.updatedAt) || 0;
-        if (remU < locU) return;
-        if (remU === locU && remDate === locDate) return;
+        /* 严格较新才采纳；持平保留本机（避免移出今日后被同刻旧挂牌写回） */
+        if (remU <= locU) return;
+        if (remDate === locDate) return;
         raw.todayPlanDate = remDate;
         if (remU > 0) raw.updatedAt = remU;
         changed = true;
@@ -107031,16 +107032,21 @@
       const rHas = !!(remTask && Object.prototype.hasOwnProperty.call(remTask, "todayPlanDate"));
       const lVal = lHas ? normalizeWeeklyPlanTodayPlanDate(locTask.todayPlanDate) : "";
       const rVal = rHas ? normalizeWeeklyPlanTodayPlanDate(remTask.todayPlanDate) : "";
-      /* 非空今日标记优先于空串，避免同名合并/pulse 用较新 updatedAt 把挂牌冲掉 */
-      if (lVal && !rVal) return lVal;
-      if (rVal && !lVal) return rVal;
+      /* 缺字段的旧端不覆盖另一侧已有值（含主动清空的空串） */
       if (lHas && !rHas) return lVal;
       if (rHas && !lHas) return rVal;
-      if (!lVal && !rVal) return "";
+      if (!lHas && !rHas) return "";
+      /*
+       * 两侧都有字段时以 updatedAt 为准（含主动移出今日的空串）。
+       * 不可再「非空优先于空串」：否则移出后云合并/粘合会把旧日期写回，其他任务删了又复活。
+       */
       const lU = Number(locTask && locTask.updatedAt) || 0;
       const rU = Number(remTask && remTask.updatedAt) || 0;
       if (rU > lU) return rVal;
       if (lU > rU) return lVal;
+      /* updatedAt 持平：非空作软保底，再按 preferRemote */
+      if (lVal && !rVal) return lVal;
+      if (rVal && !lVal) return rVal;
       return preferRemote ? rVal : lVal;
     }
 
