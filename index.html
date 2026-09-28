@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
@@ -14349,14 +14349,14 @@
 
     .today-plan-panel__composer-submit {
       flex: 0 0 auto;
-      width: 22px;
-      height: 22px;
+      width: 32px;
+      height: 32px;
       padding: 0;
       border: 0;
-      border-radius: 6px;
+      border-radius: 8px;
       background: transparent;
-      color: #94a3b8;
-      font-size: 14px;
+      color: #64748b;
+      font-size: 18px;
       font-weight: 700;
       line-height: 1;
       cursor: pointer;
@@ -77392,20 +77392,22 @@
               class="closed-list-day-progress closed-list-day-progress--segments"
               role="progressbar"
               aria-valuemin="0"
-              aria-valuemax="2"
+              aria-valuemax="3"
               aria-valuenow="0"
               aria-label="当日 Closed List 完成进度"
             >
               <span class="closed-list-day-progress__seg" data-seg="0"></span>
               <span class="closed-list-day-progress__seg" data-seg="1"></span>
+              <span class="closed-list-day-progress__seg" data-seg="2"></span>
             </div>
             <div id="closedListQuotaFooter" class="closed-list-quota-footer" hidden aria-hidden="true">
               <div class="closed-list-quota-slots">
                 <span class="closed-list-quota-slot"></span>
                 <span class="closed-list-quota-slot"></span>
+                <span class="closed-list-quota-slot"></span>
               </div>
               <button type="button" id="closedListCapLockBtn" class="closed-list-cap-lock-btn" disabled hidden>
-                已达上限 2/2
+                已达上限 3/3
               </button>
             </div>
             <button id="closedListTodayBtn" type="button" hidden tabindex="-1" aria-hidden="true">今天</button>
@@ -95054,7 +95056,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260927g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260928a";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -96105,8 +96107,8 @@
     /** Closed List 当日条目拖拽：{ dragId } */
     let ageGoalsEditMode = false;
     let closedListCompleteAnimIds = new Set();
-    /** Closed List 每日任务上限 */
-    const CLOSED_LIST_DAY_MAX_ITEMS = 2;
+    /** Closed List 每日任务上限（与进度段 / quota 槽位数一致） */
+    const CLOSED_LIST_DAY_MAX_ITEMS = 3;
     /** 封闭清单卡片展开（仅内存，不入库） */
     let closedListExpandedTaskIds = new Set();
     /** 有子步骤时默认展开；用户手动收起后记入此集合（仅内存） */
@@ -146685,13 +146687,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const seen = Object.create(null);
       const plan = state.weeklyPlan;
       if (!plan || typeof plan !== "object") return out;
+      const want = normalizeWeeklyPlanTodayPlanDate(todayKey);
+      if (!want) return out;
       const keys = Object.keys(plan);
       for (let i = 0; i < keys.length; i++) {
         const arr = plan[keys[i]];
         if (!Array.isArray(arr)) continue;
         for (let j = 0; j < arr.length; j++) {
           const task = arr[j];
-          if (!task || task.todayPlanDate !== todayKey) continue;
+          if (!task) continue;
+          const date = normalizeWeeklyPlanTodayPlanDate(task.todayPlanDate);
+          if (date !== want) continue;
           const id = String(task.id || "");
           if (!id || seen[id]) continue;
           seen[id] = 1;
@@ -146716,6 +146722,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      * 今日计划 → 其他任务：快速添加。
      * 写入 Open List 实体 + todayPlanDate；不进 closedList；不走 addWeeklyPlanTask 全量刷新。
      * 同名 open 任务优先复用：已完成则重置为未完成再挂今日（避免「又自动完成」与重复实体）。
+     * 新建时用当前冲刺桶 + 浅拷贝原数组（勿整桶 normalize），避免冲掉 todayPlanDate。
      */
     function findOpenWeeklyPlanTasksByTitleKey(titleKey) {
       const out = [];
@@ -146761,7 +146768,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       todayPlanOtherAddBusy = true;
       try {
         const todayKey = formatDateInputValue(new Date());
-        const weekKey = getWeeklyPlanViewSprintStartKey();
+        /* 始终写入「当前」3 日冲刺，避免视图停在旧期次时加了却看不见 */
+        const weekKey = getCurrentWeeklyPlanSprintStartKey();
+        if (!weekKey) {
+          console.warn("[今日计划] 无法解析当前冲刺 weekKey，其他任务未添加");
+          return;
+        }
         if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
           state.weeklyPlan = {};
         }
@@ -146790,14 +146802,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           for (let s = 0; s < siblings.length; s++) {
             const sib = siblings[s].task;
             if (!sib || String(sib.id) === String(targetTask.id)) continue;
-            if (sib.todayPlanDate === todayKey) {
+            if (normalizeWeeklyPlanTodayPlanDate(sib.todayPlanDate) === todayKey) {
               sib.todayPlanDate = "";
               touchWeeklyPlanTaskRevision(sib);
               noteCloudSyncTodayPlanPulseTaskId(sib.id);
             }
           }
         } else {
-          const tasks = getWeeklyPlanTasksForWeekKey(weekKey);
+          const rawBucket = Array.isArray(state.weeklyPlan[weekKey])
+            ? state.weeklyPlan[weekKey]
+            : [];
           targetTask = {
             id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
             text: text,
@@ -146807,7 +146821,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             todayPlanDate: todayKey
           };
           touchWeeklyPlanTaskRevision(targetTask);
-          state.weeklyPlan[weekKey] = insertWeeklyPlanTaskForLane(tasks, targetTask, "open");
+          state.weeklyPlan[weekKey] = insertWeeklyPlanTaskForLane(
+            rawBucket.slice(),
+            targetTask,
+            "open"
+          );
         }
 
         todayPlanOtherToggleGuardUntilById[String(targetTask.id)] =
@@ -146823,6 +146841,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           } catch (_focusErr) {}
         }
         saveState({ skipUiPaintDirty: true });
+        try {
+          flushLocalPersistedState("force");
+        } catch (_persistErr) {}
         /* 延后 pulse，避免添加瞬间卡顿 */
         try {
           window.setTimeout(function () {
@@ -146835,6 +146856,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             flushCloudSyncPulseImmediate();
           } catch (_pulseErr2) {}
         }
+      } catch (err) {
+        console.warn("[今日计划] 其他任务添加失败:", err);
       } finally {
         todayPlanOtherAddBusy = false;
       }
@@ -147599,6 +147622,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               Math.round((closedDone / closedTotal) * CLOSED_LIST_DAY_MAX_ITEMS)
             );
       if (closedListDayProgress) {
+        closedListDayProgress.setAttribute("aria-valuemax", String(CLOSED_LIST_DAY_MAX_ITEMS));
         closedListDayProgress.querySelectorAll(".closed-list-day-progress__seg").forEach(function (el, i) {
           el.classList.toggle("is-filled", i < filledSegs);
         });
