@@ -30367,6 +30367,34 @@
     .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__emph--stop-restrictions {
       color: #c2410c;
     }
+    /* 睡前一小时 GAIN-hour：标题厚底胶囊 + 四点分色平底胶囊（在输入条滚动） */
+    .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__capsule--gain-title {
+      --done-aaa-ink: #312e81;
+      --done-aaa-edge: #4338ca;
+      --done-aaa-edge-soft: rgba(67, 56, 202, 0.28);
+      --done-aaa-face: linear-gradient(180deg, #eef2ff 0%, #c7d2fe 55%, #818cf8 100%);
+      margin-right: 6px;
+    }
+    .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__pill--gain-0 {
+      color: #065f46;
+      background: #d1fae5;
+      border-color: #6ee7b7;
+    }
+    .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__pill--gain-1 {
+      color: #9a3412;
+      background: #ffedd5;
+      border-color: #fdba74;
+    }
+    .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__pill--gain-2 {
+      color: #991b1b;
+      background: #fee2e2;
+      border-color: #fca5a5;
+    }
+    .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__pill--gain-3 {
+      color: #5b21b6;
+      background: #ede9fe;
+      border-color: #c4b5fd;
+    }
 
     /* Act ➫ Assess ➫ Adjust … Repeat：软面厚底胶囊（对齐 DON'T THINK / Start / Finish / Sleep） */
     .done-manual-input-wrap--done-slogan .done-input-slogan-marquee__capsule {
@@ -86220,7 +86248,7 @@
 
                     <div class="forge-task-card-title-wrap">
 
-                      <span class="forge-task-text">棒铃练习 <em>Clubbell</em></span>
+                      <span class="forge-task-text">双杠曲臂伸 <em>Parallel Bar Dips</em></span>
 
                     </div>
 
@@ -86253,7 +86281,40 @@
 
                     <div class="forge-task-card-title-wrap">
 
-                      <span class="forge-task-text">臂屈伸 <em>Dips</em></span>
+                      <span class="forge-task-text">单杠垂悬 <em>Dead Hang</em></span>
+
+                    </div>
+
+                    <div class="forge-task-card-right">
+
+                      <span class="forge-task-val forge-task-val--idle">— / — min</span>
+
+                      <span class="forge-task-card-checkin-slot"></span>
+
+                    </div>
+
+                  </div>
+
+                  <div class="forge-task-card-bar">
+
+                    <div class="forge-task-card-track forge-task-card-track--empty" aria-hidden="true">
+
+                      <div class="forge-task-card-fill"></div>
+
+                    </div>
+
+                  </div>
+
+                </div>
+                <div class="forge-task-row forge-task-card forge-task-card--body" data-forge-wp-goal-sync="true">
+
+                  <div class="forge-task-card-top">
+
+                    <div class="forge-task-card-icon forge-task-card-icon--body" role="button" tabindex="0" title="打卡"><span class="forge-task-card-check-label" aria-hidden="true"></span></div>
+
+                    <div class="forge-task-card-title-wrap">
+
+                      <span class="forge-task-text">棒铃练习 <em>Clubbell</em></span>
 
                     </div>
 
@@ -121912,6 +121973,53 @@
       return changed;
     }
 
+    /** Forge Body：臂屈伸已改名为双杠曲臂伸，迁移打卡键、Done 文案与日/周最低标签 */
+    function migrateForgeArmDipToParallelBarDipIfNeeded() {
+      if (migrateForgeArmDipToParallelBarDipIfNeeded._done) return false;
+      migrateForgeArmDipToParallelBarDipIfNeeded._done = true;
+      const newLabel = "双杠曲臂伸";
+      function isLegacyArmDipKey(raw) {
+        const s = String(raw || "").trim();
+        if (!s) return false;
+        const n = forgeWpCanonicalPrimaryTaskKey(s) || forgeWpNormalizeTaskKey(s);
+        return n === "臂屈伸" || s.indexOf("臂屈伸") === 0;
+      }
+      let changed = false;
+      if (state.done && Array.isArray(state.done)) {
+        state.done.forEach(function (task) {
+          if (!task) return;
+          const text = String(task.text || "");
+          if (text.indexOf("【Forge·Body】臂屈伸") !== -1) {
+            task.text = text.replace("【Forge·Body】臂屈伸", "【Forge·Body】" + newLabel);
+            changed = true;
+          }
+          if (!task.forgeBodyMeta) return;
+          const rk = task.forgeBodyMeta.rowKey != null ? String(task.forgeBodyMeta.rowKey).trim() : "";
+          const fromDone = extractForgeDoneLabelForMatch(task);
+          if (isLegacyArmDipKey(rk) || isLegacyArmDipKey(fromDone)) {
+            task.forgeBodyMeta.rowKey = newLabel;
+            changed = true;
+          }
+        });
+      }
+      function rewriteMinList(list) {
+        if (!Array.isArray(list)) return;
+        list.forEach(function (r) {
+          if (!r || r.realm !== "body") return;
+          const lb = String(r.label || "").trim();
+          if (lb && isLegacyArmDipKey(lb)) {
+            r.label = newLabel;
+            changed = true;
+          }
+        });
+      }
+      if (state.forge) {
+        rewriteMinList(state.forge.weeklyMinimums);
+        rewriteMinList(state.forge.dailyMinimums);
+      }
+      return changed;
+    }
+
     /** Forge Body：壶铃绕颈已改名为壶铃绕头，迁移打卡键与周最低标签 */
     function migrateForgeKbHaloNeckToHeadIfNeeded() {
       if (migrateForgeKbHaloNeckToHeadIfNeeded._done) return false;
@@ -122008,6 +122116,7 @@
         saveState();
       }
       if (migrateForgeZhanZhuangToClubbellIfNeeded()) saveState();
+      if (migrateForgeArmDipToParallelBarDipIfNeeded()) saveState();
       if (migrateForgeKbHaloNeckToHeadIfNeeded()) saveState();
       if (migrateForgeBodyMetaRowKeysIfNeeded()) saveState();
       if (migrateForgeDailyMinimumsHygiene()) saveState();
@@ -124476,13 +124585,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const d = dateOpt instanceof Date ? dateOpt : new Date();
       const min = d.getMinutes();
       if (min !== 15 && min !== 30 && min !== 45) return "";
-      /* 睡前一小时整五分钟让位给 GAIN-hour / Sweet Spot */
-      if (
-        typeof getSprintFinishGainHourMarqueeClockSlotKey === "function" &&
-        getSprintFinishGainHourMarqueeClockSlotKey(d)
-      ) {
-        return "";
-      }
       const y = d.getFullYear();
       const mo = String(d.getMonth() + 1).padStart(2, "0");
       const day = String(d.getDate()).padStart(2, "0");
@@ -124865,13 +124967,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const min = d.getMinutes();
       if (min % 5 !== 0) return "";
       if (min === 15 || min === 30 || min === 45) return "";
-      /* 睡前一小时整五分钟让位给 GAIN-hour / Sweet Spot */
-      if (
-        typeof getSprintFinishGainHourMarqueeClockSlotKey === "function" &&
-        getSprintFinishGainHourMarqueeClockSlotKey(d)
-      ) {
-        return "";
-      }
       const y = d.getFullYear();
       const mo = String(d.getMonth() + 1).padStart(2, "0");
       const day = String(d.getDate()).padStart(2, "0");
@@ -125229,7 +125324,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /**
      * 当前小时终点线：Closed List 当天全部 / 十二周年当周全部 / 年岁目标 / 逃离数字 / 时薪 / 结果上瘾。
      * 与蓝/绿胶囊同一套 overlay；无胶囊外壳。触发后连着滚 2 遍再停（本分钟不重开）。
-     * 阻挡：整五分钟绿/蓝（21:30–22:30 整五分钟改走 GAIN-hour）+ :37 自省。封顶 = 距下一阻挡 − 60s。
+     * 阻挡：整五分钟绿/蓝 + :37 自省。封顶 = 距下一阻挡 − 60s。GAIN-hour 在 Done 输入条滚动，不占终点线。
      * 2/3 遍放 :x1/:x6（距阻挡 4 分钟）；同窗 1 遍至少隔到 :x3，避免 +1 分钟抢走 overlay。
      * :01 Fail Fast（2）/ :02 Black Sheep→GOAT（1，长文，距 :05 绿条 3 分钟）/ :03 想要+忽略+Volume 三胶囊（1，可打断未播完的 :02）/ :04 Daily Identity Stack 双列胶囊（1，Alpha Male→Approach / Entrepreneur→Pain Point Journal；夹在 :03 与 :05 绿条之间，cap = until−20s 约 40s 够单遍）/ :06 欲望双胶囊（3，本窗不再挂 1 遍）；
      * :08 最小动作（1，顶栏同时刻不占终点线，距 :10 绿条 2 分钟、cap 60s 够单遍）；
@@ -127613,17 +127708,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return totalMin >= 21 * 60 + 30 && totalMin <= 22 * 60 + 30;
     }
 
-    function getSprintFinishGainHourMarqueeClockSlotKey(dateOpt) {
-      const d = dateOpt instanceof Date ? dateOpt : new Date();
-      if (!isSprintFinishGainHourWindow(d)) return "";
-      const min = d.getMinutes();
-      if (min % 5 !== 0) return "";
-      const y = d.getFullYear();
-      const mo = String(d.getMonth() + 1).padStart(2, "0");
-      const day = String(d.getDate()).padStart(2, "0");
-      const h = String(d.getHours()).padStart(2, "0");
-      const mm = String(min).padStart(2, "0");
-      return y + "-" + mo + "-" + day + "T" + h + ":" + mm;
+    /** 终点线不再占睡前整五分钟；GAIN-hour 改在 Done 输入条滚动 */
+    function getSprintFinishGainHourMarqueeClockSlotKey() {
+      return "";
     }
 
     /** 播放中占终点线；结束后立刻让路给 :31 十二周年等，不额外空 1 分钟 */
@@ -137173,7 +137260,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
-    /** Done 输入条：:00 播「5分钟重启」一遍；其余尾号 0 轮流 essay；:25/:55 播 3A+进化公式 2 遍；原三句不滚动；输入中不播 */
+    /** Done 输入条：21:30–22:30 整五分钟播 GAIN-hour 两遍；其余：:00 播「5分钟重启」一遍；其余尾号 0 轮流 essay；:25/:55 播 3A+进化公式 2 遍；原三句不滚动；输入中不播 */
     const DONE_INPUT_SLOGAN_MARQUEE_PASSES = 3;
     const DONE_INPUT_SLOGAN_ESSAY_PASSES = 1;
     const DONE_INPUT_SLOGAN_ACT_PASSES = 2;
@@ -137792,13 +137879,39 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       };
     }
 
+    /** 21:30–22:30 整五分钟：GAIN-hour 在输入条滚动，不占小时冲刺终点线 */
+    function doneInputSloganIsGainHourSlot(dateOpt) {
+      const d = dateOpt instanceof Date ? dateOpt : new Date();
+      if (typeof isSprintFinishGainHourWindow !== "function") return false;
+      if (!isSprintFinishGainHourWindow(d)) return false;
+      return d.getMinutes() % 5 === 0;
+    }
+
+    function getDoneInputSloganGainHourItem() {
+      const p = doneInputSloganSeg;
+      return {
+        id: "gain-hour",
+        kind: "gain-hour",
+        passes: 2,
+        segments: [
+          p("capsule", "GAIN-hour / Sweet Spot（睡前一小时）", "gain-title"),
+          p("pill", "1、记录今天三赢", "gain-0"),
+          p("pill", "2、预设明天三赢", "gain-1"),
+          p("pill", "3、切断电子设备", "gain-2"),
+          p("pill", "4、向潜意识「提出请求」", "gain-3")
+        ]
+      };
+    }
+
     function getDoneInputSloganMarqueeItems() {
       const hourly = getDoneInputSloganHourlyRestartItem();
       const act = getDoneInputSloganActAssessItem();
       const rules = getDoneInputSloganStopDoingRulesItem();
       const restrictions = getDoneInputSloganStopDoingRestrictionsItem();
-      /* 原三句 lead/mid/day 仅静态展示，不进跑马灯 */
+      const gain = getDoneInputSloganGainHourItem();
+      /* 原三句 lead/mid/day 仅静态展示，不进跑马灯；gain-hour 始终留在表里，便于播完前重挂 */
       return []
+        .concat(gain ? [gain] : [])
         .concat(hourly ? [hourly] : [])
         .concat(act ? [act] : [])
         .concat(rules ? [rules] : [])
@@ -137809,7 +137922,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function getDoneInputSloganMarqueeClockSlotKey(dateOpt) {
       const d = dateOpt instanceof Date ? dateOpt : new Date();
       const min = d.getMinutes();
-      if (min === 25 || min === 55) {
+      if (doneInputSloganIsGainHourSlot(d)) {
+        /* 21:30–22:30 整五分钟改播 GAIN-hour，含原来不开槽的 :15/:45 */
+      } else if (min === 25 || min === 55) {
         /* :25/:55 → 3A 循环 + 进化公式，每小时两次 */
       } else if (min === 0) {
         /* :00 → 5分钟重启倒计时，每小时一遍 */
@@ -137862,6 +137977,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function pickDoneInputSloganMarqueeItem(dateOpt) {
       const d = dateOpt instanceof Date ? dateOpt : new Date();
       const min = d.getMinutes();
+      if (doneInputSloganIsGainHourSlot(d)) {
+        return getDoneInputSloganGainHourItem();
+      }
       if (min === 25 || min === 55) {
         return getDoneInputSloganActAssessItem();
       }
@@ -138178,9 +138296,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           return;
         }
         if (!startDoneInputSloganMarqueePlay(item)) return;
-        /* essay 槽播成功后再推进游标，避免输入中占槽却跳过某条 */
+        /* essay 槽播成功后再推进游标；GAIN-hour 占整五分钟时不消耗 essay 游标 */
         const min = new Date().getMinutes();
-        if (min % 10 === 0 && min !== 0) {
+        if (item.id !== "gain-hour" && min % 10 === 0 && min !== 0) {
           advanceDoneInputSloganEssayCursor();
         }
         clearHomeMarqueeStaggerPending("slogan");
@@ -158189,7 +158307,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     const FORGE_WP_TASK_NAME_EXTRAS = [
       "箭步蹲",
       "正念呼吸",
-      "臂屈伸",
+      "双杠曲臂伸",
+      "单杠垂悬",
       "快走",
       "慢跑",
       "冲刺跑",
@@ -160572,10 +160691,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (/冲刺|间歇/.test(s)) return "Set";
       if (/农夫行走|Farmer.?s?\s*Carry|Farmer\s*Carry|Suitcase\s*Carry/i.test(s)) return "米";
       if (/快走|快步|走步|公里|慢跑|跑步|跑/.test(s)) return "km";
-      /* 平板支撑按分钟计；勿用 sec（占位与日/周最低单位） */
-      if (/平板支撑|侧平板|Side\s*Plank|Plank\s*Hold/i.test(s)) return "min";
+      /* 平板支撑、单杠垂悬按分钟计；勿用 sec（占位与日/周最低单位） */
+      if (/平板支撑|侧平板|Side\s*Plank|Plank\s*Hold|单杠垂悬|Dead\s*Hang/i.test(s)) return "min";
       if (
-        /壶铃|棒铃|臂屈伸|摆荡|深蹲|波比|开合|弹跳|登山|箭步|俯卧撑|引体|硬拉|卧推|单手|双手|负重|乌鸦|倒立|卷腹|腹肌轮|凯格尔|Kegel|超人|引体向上|^桥\s|囚徒|第\s*[一二三四五六七八九十\d]+\s*式|^第\s*\d|生理叹息|循环换气|划船|推举|下拉|腿举|肩推|胸推/.test(s)
+        /壶铃|棒铃|双杠曲臂伸|曲臂伸|臂屈伸|摆荡|深蹲|波比|开合|弹跳|登山|箭步|俯卧撑|引体|硬拉|卧推|单手|双手|负重|乌鸦|倒立|卷腹|腹肌轮|凯格尔|Kegel|超人|引体向上|^桥\s|囚徒|第\s*[一二三四五六七八九十\d]+\s*式|^第\s*\d|生理叹息|循环换气|划船|推举|下拉|腿举|肩推|胸推/.test(s)
       ) {
         return "Reps";
       }
@@ -160587,7 +160706,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function inferForgeWpMindBodyKind(nameRaw) {
       const s = String(nameRaw || "").trim();
       /* 单位虽为 min，仍属 Body（勿被 min→mind 启发式误入 Mind） */
-      if (/平板支撑|侧平板|Side\s*Plank|Plank\s*Hold/i.test(s)) return "body";
+      if (/平板支撑|侧平板|Side\s*Plank|Plank\s*Hold|单杠垂悬|Dead\s*Hang/i.test(s)) return "body";
       return inferForgeWpGoalUnit(nameRaw) === "min" ? "mind" : "body";
     }
 
@@ -161123,7 +161242,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       { realm: "body", label: "第3式 折刀引体", dailyMin: 10, unit: "reps" },
       { realm: "body", label: "第2式 平卧抬膝", dailyMin: 10, unit: "reps" },
       /* 徒手·慢跑：当日累计 < 0.5 km 时卡片中文标题标红，达标后恢复 */
-      { realm: "body", label: "慢跑", dailyMin: 0.5, unit: "km" }
+      { realm: "body", label: "慢跑", dailyMin: 0.5, unit: "km" },
+      /* 徒手·单杠垂悬：每天最低 30 秒 = 0.5 min；未达标标题标红 */
+      { realm: "body", label: "单杠垂悬", dailyMin: 0.5, unit: "min" }
     ];
 
     function ensureForgeBuiltinDailyMinimumsSeeded() {
