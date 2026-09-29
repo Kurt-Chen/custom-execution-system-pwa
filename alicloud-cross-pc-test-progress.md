@@ -4,7 +4,7 @@
 > 稳定业务基线：`71b89a3` · tag：`stable/aliyun-dhf-integrate-go`  
 > Firebase 全程保留回退；**不动 `main`**，直至正式切换方案落地。
 
-更新时间：2026-09-29（正式切换 Step1：总开关 + 启动拉取 · 待本机一轮验证）
+更新时间：2026-09-29（正式切换 Step2：双写默认开 · 待本机一轮验证）
 
 ---
 
@@ -42,23 +42,34 @@
 
 | Step | 内容 | 状态 |
 |---|---|---|
-| **1** | 持久化总开关 + 开则启用 6 域 + 启动串行拉取 | **已接入（默认关）· 待一轮验证** |
-| 2 | Firebase 写入优先级 / 可选双写 | 未开工 |
-| 3 | soak → 议合入 `main` | 未开工 |
+| **1** | 持久化总开关 + 开则启用 6 域 + 启动串行拉取 | **已通过** |
+| **2** | Firebase 可选双写（默认开）；关双写则 pulse 剥离 6 域 / 全量保留远端旧值 | **已接入 · 待一轮验证** |
+| 3 | 是否默认阿里云单写 → soak → 议合入 `main` | 未决定 |
 
 ### Step1 用法（控制台 · 无新 UI）
 ```js
 window.setAliyunSyncPrimaryEnabled(true)   // 持久化；刷新后自动开 6 域并拉取
-// Ctrl+F5，角标含 v20260929sp1
 // 控制台期望：[aliyun-sync-primary] boot pull start → boot pull done
 window.__aliyunSyncPrimaryBootPullReport   // 6 域 ok
 window.setAliyunSyncPrimaryEnabled(false)  // 回滚关总开关
 ```
 键：`localStorage["todo-app-aliyun-sync-primary-v1"]`（仅 `"1"` 为开；缺省/其它 = 关）
 
+### Step2 用法（写入优先级 · 双写默认 true）
+```js
+window.setAliyunSyncPrimaryEnabled(true)
+window.isAliyunSyncPrimaryDualWriteFirebaseEnabled() // 期望 true（缺省安全双写）
+// Ctrl+F5，角标含 v20260929sp2
+// 改 Habit/Done → 阿里云 POST + Firebase 仍可能带 6 域（双写开）
+window.setAliyunSyncPrimaryDualWriteFirebase(false)  // 关双写：pulse 不再带 6 域；全量用远端旧值占位
+// 再改一条 → 应有阿里云 POST；Firebase pulse 无 done/habit/forge/weeklyPlan/todayPlanMarks/anniversaryTw*
+window.setAliyunSyncPrimaryDualWriteFirebase(true)   // 回滚双写
+```
+键：`localStorage["todo-app-aliyun-sync-primary-dual-write-v1"]`（缺省/`"1"` = 开；仅 `"0"`/`"false"` = 关）
+
 ## 约束（继续有效）
 
 - 不动 `main`
 - 不改无关 UI / 不重构
 - 不为测试而扩测
-- 正式切换前保留 Firebase 全路径；Step1 **未改** Firebase 写入优先级
+- 正式切换前保留 Firebase 全路径；Step2 **未删** Firebase，仅可选剥离 6 域上传
