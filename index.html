@@ -105055,6 +105055,577 @@
       });
     }
 
+    /**
+     * —— Forge 打卡单域真实同步（阿里云实验，可回滚）——
+     * 仅 Done 中带 forgeBodyMeta / forgeMindMeta 的行；不同步 state.forge 设置。
+     * 默认关；无新 UI。启用：window.__ALIYUN_FORGE_REAL_SYNC_ENABLED = true
+     * 拉取：await window.runAliyunForgeRealPullAndMerge()
+     * 独立 kind，不走 Done 阿里云信封（避免丢掉 meta）；不碰 Habit。
+     */
+    const ALIYUN_FORGE_REAL_KIND = "forge-real-v1";
+    const ALIYUN_FORGE_REAL_PERF_PREFIX = "aliyun-forge-real:";
+    const ALIYUN_FORGE_REAL_SYNC_ENABLED = false;
+    let aliyunForgeRealQueue = [];
+    let aliyunForgeRealFlushTimer = null;
+    let aliyunForgeRealFlushing = false;
+    let aliyunForgeRealLastReport = null;
+    let aliyunForgeRealSuppressPush = false;
+
+    function isAliyunForgeRealSyncEnabled() {
+      try {
+        if (window.__ALIYUN_FORGE_REAL_SYNC_ENABLED === true) return true;
+      } catch (_w) {}
+      return ALIYUN_FORGE_REAL_SYNC_ENABLED === true;
+    }
+
+    function isAliyunForgeRealItem(item) {
+      return !!(item && typeof item === "object" && (item.forgeBodyMeta || item.forgeMindMeta));
+    }
+
+    function aliyunForgeRealAppendLog(msg) {
+      const line = "[forge] " + String(msg || "");
+      try {
+        console.log("[aliyun-forge-real]", line);
+      } catch (_c) {}
+      if (!aliyunExpLogArea) return;
+      const prev = String(aliyunExpLogArea.value || "");
+      aliyunExpLogArea.value = prev ? prev + "\n" + line : line;
+      aliyunExpLogArea.scrollTop = aliyunExpLogArea.scrollHeight;
+    }
+
+    function aliyunForgeRealPerfMark(name) {
+      try {
+        if (typeof performance !== "undefined" && typeof performance.mark === "function") {
+          performance.mark(ALIYUN_FORGE_REAL_PERF_PREFIX + name);
+        }
+      } catch (_m) {}
+    }
+
+    function aliyunForgeRealDocId() {
+      const room = String(
+        cloudSyncRoomId ||
+          (typeof localStorage !== "undefined" && localStorage.getItem(CLOUD_SYNC_ROOM_KEY)) ||
+          "default-room"
+      )
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]/g, "_")
+        .slice(0, 64);
+      return "aliyun-forge-real-v1-" + (room || "default-room");
+    }
+
+    function aliyunForgeRealBaseUrl() {
+      return String((aliyunExpUrlInput && aliyunExpUrlInput.value) || ALIYUN_EXP_DEFAULT_URL)
+        .trim()
+        .replace(/\/+$/, "");
+    }
+
+    function aliyunForgeRealItemTs(item) {
+      if (!item || typeof item !== "object") return 0;
+      return Math.max(
+        Number(item.updatedAt) || 0,
+        Number(item.completedAt) || 0,
+        Number(item.createdAt) || 0,
+        Number(item.deletedAt) || 0
+      );
+    }
+
+    /** 保留 forge*Meta；无 meta 则拒绝（不进 Done 普通信封） */
+    function aliyunForgeRealCloneItemForCloud(item) {
+      if (!isAliyunForgeRealItem(item)) return null;
+      const id = item.id != null ? String(item.id) : "";
+      if (!id) return null;
+      const out = {
+        id: id,
+        text: String(item.text != null ? item.text : ""),
+        createdAt: Number(item.createdAt) || 0,
+        completedAt: Number(item.completedAt) || 0,
+        updatedAt: aliyunForgeRealItemTs(item) || Date.now(),
+        deleted: false
+      };
+      try {
+        if (item.forgeBodyMeta && typeof item.forgeBodyMeta === "object") {
+          out.forgeBodyMeta = JSON.parse(JSON.stringify(item.forgeBodyMeta));
+        }
+        if (item.forgeMindMeta && typeof item.forgeMindMeta === "object") {
+          out.forgeMindMeta = JSON.parse(JSON.stringify(item.forgeMindMeta));
+        }
+      } catch (_metaErr) {
+        if (item.forgeBodyMeta) out.forgeBodyMeta = Object.assign({}, item.forgeBodyMeta);
+        if (item.forgeMindMeta) out.forgeMindMeta = Object.assign({}, item.forgeMindMeta);
+      }
+      return out;
+    }
+
+    function aliyunForgeRealEmptyEnvelope() {
+      return {
+        kind: ALIYUN_FORGE_REAL_KIND,
+        roomId: String(cloudSyncRoomId || ""),
+        envelopeUpdatedAt: Date.now(),
+        items: {},
+        tombstones: {}
+      };
+    }
+
+    function aliyunForgeRealParseEnvelope(rawPayload) {
+      let p = rawPayload;
+      if (typeof p === "string") {
+        try {
+          p = JSON.parse(p);
+        } catch (_e) {
+          return aliyunForgeRealEmptyEnvelope();
+        }
+      }
+      if (!p || typeof p !== "object") return aliyunForgeRealEmptyEnvelope();
+      const env = aliyunForgeRealEmptyEnvelope();
+      env.roomId = p.roomId != null ? String(p.roomId) : env.roomId;
+      env.envelopeUpdatedAt = Number(p.envelopeUpdatedAt) || 0;
+      if (p.items && typeof p.items === "object") env.items = p.items;
+      if (p.tombstones && typeof p.tombstones === "object") env.tombstones = p.tombstones;
+      return env;
+    }
+
+    function aliyunForgeRealApplyMutationToEnvelope(env, mutation) {
+      if (!env || !mutation) return env;
+      const id = String(mutation.id || "");
+      if (!id) return env;
+      const now = Date.now();
+      if (mutation.op === "tombstone") {
+        const ts = Number(mutation.deletedAt) || now;
+        const prevItem = env.items && env.items[id];
+        const prevTs = aliyunForgeRealItemTs(prevItem);
+        const prevTomb = env.tombstones && env.tombstones[id];
+        const prevTombTs = aliyunForgeRealItemTs(prevTomb);
+        if (ts < prevTs || ts < prevTombTs) return env;
+        if (env.items) delete env.items[id];
+        if (!env.tombstones) env.tombstones = {};
+        env.tombstones[id] = {
+          id: id,
+          deleted: true,
+          deletedAt: ts,
+          updatedAt: ts,
+          reason: mutation.reason || "delete"
+        };
+      } else if (mutation.op === "upsert" && mutation.item) {
+        const item = mutation.item;
+        const ts = aliyunForgeRealItemTs(item) || now;
+        item.updatedAt = ts;
+        item.deleted = false;
+        const prevItem = env.items && env.items[id];
+        const prevTs = aliyunForgeRealItemTs(prevItem);
+        const prevTomb = env.tombstones && env.tombstones[id];
+        const prevTombTs = aliyunForgeRealItemTs(prevTomb);
+        if (ts < prevTs || ts < prevTombTs) return env;
+        if (env.tombstones) delete env.tombstones[id];
+        if (!env.items) env.items = {};
+        env.items[id] = item;
+      }
+      env.envelopeUpdatedAt = Math.max(Number(env.envelopeUpdatedAt) || 0, now);
+      env.kind = ALIYUN_FORGE_REAL_KIND;
+      return env;
+    }
+
+    function aliyunForgeRealStartLtObserver() {
+      const bucket = { count: 0, maxMs: 0, over50: 0 };
+      let obs = null;
+      try {
+        if (typeof PerformanceObserver === "undefined") return { bucket: bucket, stop: function () {} };
+        obs = new PerformanceObserver(function (list) {
+          const entries = list.getEntries() || [];
+          for (let i = 0; i < entries.length; i++) {
+            const d = Number(entries[i].duration) || 0;
+            bucket.count += 1;
+            if (d > bucket.maxMs) bucket.maxMs = d;
+            if (d > 50) bucket.over50 += 1;
+          }
+        });
+        obs.observe({ entryTypes: ["longtask"] });
+      } catch (_lt) {}
+      return {
+        bucket: bucket,
+        stop: function () {
+          try {
+            if (obs) obs.disconnect();
+          } catch (_d) {}
+        }
+      };
+    }
+
+    function aliyunForgeRealLogReport(report) {
+      aliyunForgeRealLastReport = report;
+      try {
+        window.__aliyunForgeRealLastReport = report;
+      } catch (_w) {}
+      aliyunForgeRealAppendLog("—— Forge 真实同步 " + (report.reason || "") + " ——");
+      aliyunForgeRealAppendLog(
+        "ok=" +
+          !!report.ok +
+          " docId=" +
+          (report.docId || "") +
+          (report.httpStatus != null ? " HTTP=" + report.httpStatus : "")
+      );
+      aliyunForgeRealAppendLog(
+        "payloadKB=" +
+          (report.payloadKB != null ? report.payloadKB : "?") +
+          " upload=" +
+          (report.uploadMs != null ? report.uploadMs + "ms" : "?") +
+          " download=" +
+          (report.downloadMs != null ? report.downloadMs + "ms" : "?") +
+          " merge=" +
+          (report.mergeMs != null ? report.mergeMs + "ms" : "?") +
+          " render=" +
+          (report.renderMs != null ? report.renderMs + "ms" : "?")
+      );
+      if (report.longTaskOver50 != null) {
+        aliyunForgeRealAppendLog(
+          "longTask>50=" + report.longTaskOver50 + " maxMs=" + (report.longTaskMaxMs || 0)
+        );
+      }
+      if (report.error) aliyunForgeRealAppendLog("error: " + report.error);
+    }
+
+    function scheduleAliyunForgeRealSync(reason, mutation) {
+      if (!isAliyunForgeRealSyncEnabled() || aliyunForgeRealSuppressPush) return;
+      if (!mutation || !mutation.id) {
+        aliyunForgeRealAppendLog("schedule skip: missing id reason=" + (reason || ""));
+        return;
+      }
+      aliyunForgeRealQueue.push({
+        reason: reason || "unknown",
+        mutation: mutation,
+        queuedAt: Date.now()
+      });
+      aliyunForgeRealAppendLog(
+        "schedule ok: reason=" +
+          (reason || "") +
+          " id=" +
+          mutation.id +
+          " op=" +
+          (mutation.op || "") +
+          " queueLen=" +
+          aliyunForgeRealQueue.length
+      );
+      if (aliyunForgeRealFlushTimer) clearTimeout(aliyunForgeRealFlushTimer);
+      aliyunForgeRealFlushTimer = setTimeout(function () {
+        aliyunForgeRealFlushTimer = null;
+        Promise.resolve(flushAliyunForgeRealQueue()).catch(function (err) {
+          aliyunForgeRealAppendLog(
+            "flush reject: " + (err && err.message ? err.message : String(err))
+          );
+          console.warn("[aliyun-forge-real] flush", err);
+        });
+      }, 80);
+    }
+
+    function notifyAliyunForgeRealUpsert(reason, item) {
+      if (!isAliyunForgeRealSyncEnabled() || aliyunForgeRealSuppressPush) return;
+      const cloned = aliyunForgeRealCloneItemForCloud(item);
+      if (!cloned) return;
+      if (!cloned.updatedAt) cloned.updatedAt = Date.now();
+      scheduleAliyunForgeRealSync(reason, { op: "upsert", id: cloned.id, item: cloned });
+    }
+
+    function notifyAliyunForgeRealTombstone(reason, id, itemOpt) {
+      if (!isAliyunForgeRealSyncEnabled() || aliyunForgeRealSuppressPush) return;
+      const sid = id != null ? String(id) : "";
+      if (!sid) return;
+      if (itemOpt && !isAliyunForgeRealItem(itemOpt) && !itemOpt.deleted) return;
+      const deletedAt = Math.max(aliyunForgeRealItemTs(itemOpt), Date.now());
+      scheduleAliyunForgeRealSync(reason, {
+        op: "tombstone",
+        id: sid,
+        deletedAt: deletedAt,
+        reason: reason || "delete"
+      });
+    }
+
+    async function flushAliyunForgeRealQueue() {
+      if (aliyunForgeRealFlushing) return;
+      if (!aliyunForgeRealQueue.length) return;
+      if (!isAliyunForgeRealSyncEnabled() || aliyunForgeRealSuppressPush) {
+        aliyunForgeRealQueue = [];
+        return;
+      }
+      aliyunForgeRealFlushing = true;
+      const batch = aliyunForgeRealQueue.splice(0, aliyunForgeRealQueue.length);
+      const reason = batch.length ? batch[batch.length - 1].reason : "flush";
+      const base = aliyunForgeRealBaseUrl();
+      const docId = aliyunForgeRealDocId();
+      aliyunForgeRealAppendLog(
+        "flush start: reason=" + reason + " batch=" + batch.length + " docId=" + docId
+      );
+      const lt = aliyunForgeRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let uploadMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let payloadKB = 0;
+      let httpStatus = null;
+      let ok = false;
+      let errMsg = "";
+      try {
+        if (!base || aliyunExpHasForbiddenSecret(base)) {
+          throw new Error(!base ? "缺少 Function URL" : "URL 疑似含 AccessKey");
+        }
+        aliyunForgeRealPerfMark("flush-start");
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson("GET", base + "/smoke/" + encodeURIComponent(docId), null);
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+
+        const tParse0 = Date.now();
+        let env = aliyunForgeRealEmptyEnvelope();
+        if (getRes.ok && getRes.data && getRes.data.data) {
+          const row = getRes.data.data;
+          const attrs = row.attrs || row;
+          env = aliyunForgeRealParseEnvelope(attrs.payload != null ? attrs.payload : attrs);
+        } else if (getRes.status !== 404 && !(getRes.data && getRes.data.error === "not_found")) {
+          console.warn("[aliyun-forge-real] GET status", getRes.status, getRes.data);
+        }
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        for (let i = 0; i < batch.length; i++) {
+          aliyunForgeRealApplyMutationToEnvelope(env, batch[i].mutation);
+        }
+        env.roomId = String(cloudSyncRoomId || env.roomId || "");
+        env.envelopeUpdatedAt = Date.now();
+        mergeMs = Date.now() - tMerge0;
+
+        let bodyJson = "";
+        try {
+          bodyJson = JSON.stringify({ id: docId, payload: env });
+        } catch (_ser) {
+          throw new Error("envelope serialize failed");
+        }
+        payloadKB = Math.round((bodyJson.length / 1024) * 10) / 10;
+
+        const tUp0 = Date.now();
+        const putRes = await aliyunExpFetchJson("POST", base + "/smoke", JSON.parse(bodyJson));
+        uploadMs = Date.now() - tUp0;
+        networkWaitMs += uploadMs;
+        httpStatus = putRes.status;
+        aliyunForgeRealAppendLog(
+          "flush POST status=" + putRes.status + " uploadMs=" + uploadMs + " payloadKB=" + payloadKB
+        );
+        if (!putRes.ok) {
+          throw new Error(
+            "upload HTTP " +
+              putRes.status +
+              " " +
+              (putRes.data && (putRes.data.error || putRes.data.message)
+                ? putRes.data.error || putRes.data.message
+                : "")
+          );
+        }
+        ok = true;
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        ok = false;
+      } finally {
+        lt.stop();
+        aliyunForgeRealFlushing = false;
+        aliyunForgeRealLogReport({
+          ok: ok,
+          reason: reason,
+          docId: docId,
+          httpStatus: httpStatus,
+          payloadKB: payloadKB,
+          uploadMs: uploadMs,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: 0,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          error: errMsg || undefined
+        });
+        if (aliyunForgeRealQueue.length) {
+          Promise.resolve(flushAliyunForgeRealQueue()).catch(function () {});
+        }
+      }
+    }
+
+    /** 实验拉取：只 merge Forge 打卡行进 state.done，不动其它 Done / Habit / forge 设置 */
+    async function runAliyunForgeRealPullAndMerge() {
+      if (!isAliyunForgeRealSyncEnabled()) {
+        aliyunForgeRealAppendLog(
+          "Forge 真实同步未启用：请设 window.__ALIYUN_FORGE_REAL_SYNC_ENABLED=true"
+        );
+        return { ok: false, error: "disabled" };
+      }
+      const base = aliyunForgeRealBaseUrl();
+      const docId = aliyunForgeRealDocId();
+      if (!base || aliyunExpHasForbiddenSecret(base)) {
+        aliyunForgeRealAppendLog(!base ? "请填写 Function URL" : "中止：URL 疑似 AccessKey");
+        return { ok: false, error: "bad-url" };
+      }
+      const lt = aliyunForgeRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let renderMs = 0;
+      let payloadKB = 0;
+      let ok = false;
+      let errMsg = "";
+      let mergedCount = 0;
+      let tombstoneApplied = 0;
+      try {
+        aliyunForgeRealAppendLog("拉取 Forge docId=" + docId);
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson("GET", base + "/smoke/" + encodeURIComponent(docId), null);
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+        if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+          aliyunForgeRealAppendLog("云端尚无 Forge 文档（首次写入前正常）");
+          ok = true;
+          return { ok: true, empty: true, docId: docId };
+        }
+        if (!getRes.ok) throw new Error("GET HTTP " + getRes.status);
+
+        const tParse0 = Date.now();
+        const row = getRes.data && getRes.data.data;
+        const attrs = (row && (row.attrs || row)) || {};
+        const payloadRaw = attrs.payload != null ? attrs.payload : attrs;
+        let payloadStr = "";
+        try {
+          payloadStr = typeof payloadRaw === "string" ? payloadRaw : JSON.stringify(payloadRaw);
+        } catch (_ps) {
+          payloadStr = "";
+        }
+        payloadKB = Math.round((payloadStr.length / 1024) * 10) / 10;
+        const env = aliyunForgeRealParseEnvelope(payloadRaw);
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        if (!Array.isArray(state.done)) state.done = [];
+        const localById = {};
+        for (let i = 0; i < state.done.length; i++) {
+          const it = state.done[i];
+          if (it && it.id != null) localById[String(it.id)] = it;
+        }
+        const remoteItems = env.items || {};
+        const remoteTombs = env.tombstones || {};
+        const remoteIds = Object.keys(remoteItems);
+        aliyunForgeRealSuppressPush = true;
+        try {
+          for (let r = 0; r < remoteIds.length; r++) {
+            const rid = remoteIds[r];
+            const remote = remoteItems[rid];
+            if (!remote || remote.deleted || !isAliyunForgeRealItem(remote)) continue;
+            const local = localById[rid];
+            const rTs = aliyunForgeRealItemTs(remote);
+            const lTs = aliyunForgeRealItemTs(local);
+            const tomb = remoteTombs[rid];
+            const tTs = aliyunForgeRealItemTs(tomb);
+            if (tTs > rTs && tTs > lTs) continue;
+            if (local && lTs > rTs) continue;
+            const accept = aliyunForgeRealCloneItemForCloud(remote);
+            if (!accept) continue;
+            accept.updatedAt = rTs || Date.now();
+            if (!local) {
+              state.done.unshift(accept);
+              localById[rid] = accept;
+              mergedCount += 1;
+              continue;
+            }
+            if (rTs >= lTs) {
+              Object.keys(accept).forEach(function (k) {
+                local[k] = accept[k];
+              });
+              local.updatedAt = Math.max(rTs, lTs);
+              mergedCount += 1;
+            }
+          }
+          const tombIds = Object.keys(remoteTombs);
+          for (let t = 0; t < tombIds.length; t++) {
+            const tid = tombIds[t];
+            const tomb = remoteTombs[tid];
+            const tTs = aliyunForgeRealItemTs(tomb);
+            const local = localById[tid];
+            if (!local || !isAliyunForgeRealItem(local)) continue;
+            const lTs = aliyunForgeRealItemTs(local);
+            if (tTs < lTs) continue;
+            state.done = state.done.filter(function (d) {
+              return !(d && String(d.id) === tid);
+            });
+            delete localById[tid];
+            tombstoneApplied += 1;
+          }
+          if (uiPaintDirty == null) {
+            uiPaintDirty = {};
+            if (typeof UI_PAINT_SLICE_KEYS !== "undefined") {
+              UI_PAINT_SLICE_KEYS.forEach(function (k) {
+                uiPaintDirty[k] = false;
+              });
+            }
+          }
+          if (typeof markUiPaintSlicesDirty === "function") {
+            markUiPaintSlicesDirty(["done", "forge"]);
+          }
+          saveState({ lists: ["done", "forge"] });
+        } finally {
+          aliyunForgeRealSuppressPush = false;
+        }
+        mergeMs = Date.now() - tMerge0;
+
+        const tRen0 = Date.now();
+        try {
+          if (typeof refreshAllForgeTodayTaskRowsFromDone === "function") {
+            refreshAllForgeTodayTaskRowsFromDone();
+          }
+        } catch (_rf) {}
+        if (typeof render === "function") render();
+        renderMs = Date.now() - tRen0;
+        ok = true;
+        aliyunForgeRealAppendLog(
+          "合并完成：upsert/更新 " + mergedCount + "，tombstone 生效 " + tombstoneApplied
+        );
+        return {
+          ok: true,
+          docId: docId,
+          mergedCount: mergedCount,
+          tombstoneApplied: tombstoneApplied
+        };
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        aliyunForgeRealAppendLog("拉取失败: " + errMsg);
+        return { ok: false, error: errMsg };
+      } finally {
+        lt.stop();
+        aliyunForgeRealLogReport({
+          ok: ok,
+          reason: "manual pull",
+          docId: docId,
+          payloadKB: payloadKB,
+          uploadMs: 0,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: renderMs,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          mergedCount: mergedCount,
+          tombstoneApplied: tombstoneApplied,
+          error: errMsg || undefined
+        });
+      }
+    }
+
+    try {
+      window.runAliyunForgeRealPullAndMerge = runAliyunForgeRealPullAndMerge;
+      window.isAliyunForgeRealSyncEnabled = isAliyunForgeRealSyncEnabled;
+    } catch (_forgeWin) {}
+
     function serializeStateForCloud() {
       try {
         return cloudSyncPerfJsonStringify(state);
@@ -120853,15 +121424,19 @@
       }
       const dateKey = selectedDoneDate || formatDateInputValue(new Date());
       const ts = habitDateToCompletedAt(dateKey);
-      state.done.unshift({
+      const newItem = {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: "【Forge·Body】" + rowKeyForMeta + suffix + " · " + amt,
         createdAt: ts,
         completedAt: ts,
         forgeBodyMeta: { dateKey: dateKey, amount: amt, rowKey: rowKeyForMeta }
-      });
+      };
+      state.done.unshift(newItem);
       saveStateWithCloudPulseImmediate();
       scheduleCloudSyncFullPushAfterCheckin();
+      try {
+        notifyAliyunForgeRealUpsert("checkin-body", newItem);
+      } catch (_aliyunForgeErr) {}
       finalizeForgeCheckinUiAfterAppend(rowEl);
     }
 
@@ -120886,15 +121461,19 @@
         count: count
       };
       if (minutesParsed != null) forgeMindMeta.minutes = minutesParsed;
-      state.done.unshift({
+      const newItem = {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: "【Forge·Mind】" + label + " · " + amt,
         createdAt: ts,
         completedAt: ts,
         forgeMindMeta: forgeMindMeta
-      });
+      };
+      state.done.unshift(newItem);
       saveStateWithCloudPulseImmediate();
       scheduleCloudSyncFullPushAfterCheckin();
+      try {
+        notifyAliyunForgeRealUpsert("checkin-mind", newItem);
+      } catch (_aliyunForgeErr) {}
       finalizeForgeCheckinUiAfterAppend(rowEl);
     }
 
@@ -122524,6 +123103,11 @@
       if (removed.manualDone) {
         notifyAliyunDoneRealTombstone("toggle", removed.id, removed);
       }
+      if (isAliyunForgeRealItem(removed)) {
+        try {
+          notifyAliyunForgeRealTombstone("toggle", removed.id, removed);
+        } catch (_aliyunForgeTombErr) {}
+      }
     }
 
     function createStopNotItem(text, dateStr) {
@@ -122934,6 +123518,11 @@
       /* Done 手动条目删除：本地+trash 已完成；阿里云 tombstone，不物理删云端文档 */
       if (listName === "done" && task && task.manualDone) {
         notifyAliyunDoneRealTombstone("delete", task.id, task);
+      }
+      if (listName === "done" && task && isAliyunForgeRealItem(task)) {
+        try {
+          notifyAliyunForgeRealTombstone("delete", task.id, task);
+        } catch (_aliyunForgeDelErr) {}
       }
     }
 
