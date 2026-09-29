@@ -94024,7 +94024,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260929tp";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260929sp1";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -103077,6 +103077,174 @@
     const aliyunDoneRealPullBtn = document.getElementById("aliyunDoneRealPullBtn");
     const cloudSyncOpenAliyunExpBtn = document.getElementById("cloudSyncOpenAliyunExpBtn");
 
+
+    /**
+     * —— 阿里云正式切换 Step1：持久化总开关（可回滚）——
+     * 默认关。打开后自动启用已验证 6 域，并在启动时串行拉取合并。
+     * 控制台：window.setAliyunSyncPrimaryEnabled(true|false)
+     * 查询：window.isAliyunSyncPrimaryEnabled()
+     * 手动再拉：await window.runAliyunSyncPrimaryBootPull()
+     * 不改 UI、不改 Firebase 写入优先级、不删 Firebase。
+     */
+    const ALIYUN_SYNC_PRIMARY_STORAGE_KEY = "todo-app-aliyun-sync-primary-v1";
+    const ALIYUN_SYNC_PRIMARY_DOMAIN_WINDOW_FLAGS = [
+      "__ALIYUN_DONE_REAL_SYNC_ENABLED",
+      "__ALIYUN_HABIT_REAL_SYNC_ENABLED",
+      "__ALIYUN_FORGE_REAL_SYNC_ENABLED",
+      "__ALIYUN_ANNIV_REAL_SYNC_ENABLED",
+      "__ALIYUN_SPRINT_REAL_SYNC_ENABLED",
+      "__ALIYUN_TODAY_PLAN_REAL_SYNC_ENABLED"
+    ];
+    let aliyunSyncPrimaryBootPullStarted = false;
+
+    function readAliyunSyncPrimaryFromStorage() {
+      try {
+        const v = localStorage.getItem(ALIYUN_SYNC_PRIMARY_STORAGE_KEY);
+        return v === "1" || v === "true";
+      } catch (_ls) {
+        return false;
+      }
+    }
+
+    function writeAliyunSyncPrimaryToStorage(enabled) {
+      try {
+        localStorage.setItem(ALIYUN_SYNC_PRIMARY_STORAGE_KEY, enabled ? "1" : "0");
+      } catch (_ls) {}
+    }
+
+    function isAliyunSyncPrimaryEnabled() {
+      try {
+        if (window.__ALIYUN_SYNC_PRIMARY_ENABLED === true) return true;
+        if (window.__ALIYUN_SYNC_PRIMARY_ENABLED === false) return false;
+      } catch (_w) {}
+      return readAliyunSyncPrimaryFromStorage();
+    }
+
+    /** 总开：把 6 域 window 旗标一并打开；总关：一并清掉（可回滚到「全关」） */
+    function applyAliyunSyncPrimaryDomainWindowFlags(enabled) {
+      const on = !!enabled;
+      for (let i = 0; i < ALIYUN_SYNC_PRIMARY_DOMAIN_WINDOW_FLAGS.length; i++) {
+        const key = ALIYUN_SYNC_PRIMARY_DOMAIN_WINDOW_FLAGS[i];
+        try {
+          window[key] = on;
+        } catch (_wf) {}
+      }
+      try {
+        if (aliyunDoneRealSyncToggle) {
+          aliyunDoneRealSyncToggle.checked = on;
+        }
+      } catch (_tg) {}
+    }
+
+    function setAliyunSyncPrimaryEnabled(enabled) {
+      const on = !!enabled;
+      try {
+        window.__ALIYUN_SYNC_PRIMARY_ENABLED = on;
+      } catch (_w) {}
+      writeAliyunSyncPrimaryToStorage(on);
+      applyAliyunSyncPrimaryDomainWindowFlags(on);
+      try {
+        console.log(
+          "[aliyun-sync-primary]",
+          on ? "已开启（6 域启用；刷新后自动拉取）" : "已关闭（6 域旗标清除）"
+        );
+      } catch (_c) {}
+      return on;
+    }
+
+    /** 启动拉取：串行 6 域，互不影响失败；仅总开关开时执行 */
+    async function runAliyunSyncPrimaryBootPull() {
+      if (!isAliyunSyncPrimaryEnabled()) {
+        try {
+          console.log("[aliyun-sync-primary] boot pull skipped: primary off");
+        } catch (_c) {}
+        return { ok: false, skipped: true };
+      }
+      applyAliyunSyncPrimaryDomainWindowFlags(true);
+      const domains = [
+        { id: "done", run: typeof runAliyunDoneRealPullAndMerge === "function" ? runAliyunDoneRealPullAndMerge : null },
+        { id: "habit", run: typeof runAliyunHabitRealPullAndMerge === "function" ? runAliyunHabitRealPullAndMerge : null },
+        { id: "forge", run: typeof runAliyunForgeRealPullAndMerge === "function" ? runAliyunForgeRealPullAndMerge : null },
+        { id: "anniv", run: typeof runAliyunAnnivRealPullAndMerge === "function" ? runAliyunAnnivRealPullAndMerge : null },
+        { id: "sprint", run: typeof runAliyunSprintRealPullAndMerge === "function" ? runAliyunSprintRealPullAndMerge : null },
+        {
+          id: "todayPlan",
+          run: typeof runAliyunTodayPlanRealPullAndMerge === "function" ? runAliyunTodayPlanRealPullAndMerge : null
+        }
+      ];
+      const results = {};
+      let allOk = true;
+      try {
+        console.log("[aliyun-sync-primary] boot pull start");
+      } catch (_c0) {}
+      for (let i = 0; i < domains.length; i++) {
+        const d = domains[i];
+        if (!d.run) {
+          results[d.id] = { ok: false, error: "missing-fn" };
+          allOk = false;
+          continue;
+        }
+        try {
+          const r = await d.run();
+          results[d.id] = r && typeof r === "object" ? r : { ok: true, raw: r };
+          if (r && r.ok === false) allOk = false;
+        } catch (err) {
+          allOk = false;
+          results[d.id] = {
+            ok: false,
+            error: err && err.message ? err.message : String(err)
+          };
+        }
+      }
+      const report = { ok: allOk, results: results };
+      try {
+        window.__aliyunSyncPrimaryBootPullReport = report;
+        console.log("[aliyun-sync-primary] boot pull done", report);
+      } catch (_w) {}
+      return report;
+    }
+
+    function scheduleAliyunSyncPrimaryBootPull() {
+      if (!isAliyunSyncPrimaryEnabled()) return;
+      if (aliyunSyncPrimaryBootPullStarted) return;
+      aliyunSyncPrimaryBootPullStarted = true;
+      applyAliyunSyncPrimaryDomainWindowFlags(true);
+      const start = function () {
+        Promise.resolve(runAliyunSyncPrimaryBootPull()).catch(function (err) {
+          try {
+            console.warn("[aliyun-sync-primary] boot pull reject", err);
+          } catch (_c) {}
+        });
+      };
+      const afterPaint = function () {
+        if (typeof requestIdleCallback === "function") {
+          requestIdleCallback(start, { timeout: 2000 });
+        } else {
+          window.setTimeout(start, 300);
+        }
+      };
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(afterPaint);
+        });
+      } else {
+        window.setTimeout(afterPaint, 0);
+      }
+    }
+
+    try {
+      window.isAliyunSyncPrimaryEnabled = isAliyunSyncPrimaryEnabled;
+      window.setAliyunSyncPrimaryEnabled = setAliyunSyncPrimaryEnabled;
+      window.runAliyunSyncPrimaryBootPull = runAliyunSyncPrimaryBootPull;
+      /* 冷启动：若 localStorage 已开，立刻打上 6 域旗标（拉取仍等 schedule） */
+      if (readAliyunSyncPrimaryFromStorage()) {
+        try {
+          window.__ALIYUN_SYNC_PRIMARY_ENABLED = true;
+        } catch (_w) {}
+        applyAliyunSyncPrimaryDomainWindowFlags(true);
+      }
+    } catch (_primaryWin) {}
+
     /**
      * Done List 最小真实同步实验开关（可回滚）。
      * 默认 false；实验时勾选面板，或 window.__ALIYUN_DONE_REAL_SYNC_ENABLED = true。
@@ -103085,6 +103253,7 @@
     const ALIYUN_DONE_REAL_SYNC_ENABLED = false;
 
     function isAliyunDoneRealSyncEnabled() {
+      if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) return true;
       /* 面板勾选为权威来源（面板关闭后 DOM 仍在）；避免仅写 window 失败时静默跳过 */
       if (aliyunDoneRealSyncToggle && aliyunDoneRealSyncToggle.checked) return true;
       try {
@@ -105062,6 +105231,11 @@
       }
     }
 
+    try {
+      window.runAliyunDoneRealPullAndMerge = runAliyunDoneRealPullAndMerge;
+      window.isAliyunDoneRealSyncEnabled = isAliyunDoneRealSyncEnabled;
+    } catch (_doneWin) {}
+
     if (aliyunDoneRealSyncToggle) {
       syncAliyunDoneRealToggleUi();
       aliyunDoneRealSyncToggle.addEventListener("change", function () {
@@ -105102,6 +105276,7 @@
     let aliyunHabitRealSuppressPush = false;
 
     function isAliyunHabitRealSyncEnabled() {
+      if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) return true;
       try {
         if (window.__ALIYUN_HABIT_REAL_SYNC_ENABLED === true) return true;
       } catch (_w) {}
@@ -105640,6 +105815,7 @@
     let aliyunForgeRealSuppressPush = false;
 
     function isAliyunForgeRealSyncEnabled() {
+      if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) return true;
       try {
         if (window.__ALIYUN_FORGE_REAL_SYNC_ENABLED === true) return true;
       } catch (_w) {}
@@ -106212,6 +106388,7 @@
     let aliyunAnnivRealSuppressPush = false;
 
     function isAliyunAnnivRealSyncEnabled() {
+      if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) return true;
       try {
         if (window.__ALIYUN_ANNIV_REAL_SYNC_ENABLED === true) return true;
       } catch (_w) {}
@@ -106904,6 +107081,7 @@
     let aliyunSprintRealSuppressPush = false;
 
     function isAliyunSprintRealSyncEnabled() {
+      if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) return true;
       try {
         if (window.__ALIYUN_SPRINT_REAL_SYNC_ENABLED === true) return true;
       } catch (_w) {}
@@ -107562,6 +107740,7 @@
     let aliyunTodayPlanRealSuppressPush = false;
 
     function isAliyunTodayPlanRealSyncEnabled() {
+      if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) return true;
       try {
         if (window.__ALIYUN_TODAY_PLAN_REAL_SYNC_ENABLED === true) return true;
       } catch (_w) {}
@@ -160742,6 +160921,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             void initCloudSync();
           } catch (bootstrapSyncErr) {
             console.warn("initCloudSync 失败:", bootstrapSyncErr);
+          }
+          try {
+            if (typeof scheduleAliyunSyncPrimaryBootPull === "function") {
+              scheduleAliyunSyncPrimaryBootPull();
+            }
+          } catch (primaryBootErr) {
+            console.warn("[aliyun-sync-primary] schedule boot 失败:", primaryBootErr);
           }
         };
         let warmed = null;
