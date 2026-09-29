@@ -2,74 +2,88 @@
 
 > 测试分支：`cursor/aliyun-dhf-integrate-d4ec`  
 > 稳定业务基线：`71b89a3` · tag：`stable/aliyun-dhf-integrate-go`  
-> Firebase 全程保留回退；**不动 `main`**，直至正式切换方案落地。
+> **正式切换稳定节点（Step1+2）**：`5a8b9c4`（本文件之上的 docs commit 仅记进度）  
+> Firebase 全程保留回退；**不动 `main`**；**默认 dualWrite=true**（暂不改默认单写）。
 
-更新时间：2026-09-29（正式切换 Step2：双写默认开 · 待本机一轮验证）
+更新时间：2026-09-29（Step2 验证通过 · 冻结 · 下一步：单写 soak 方案）
 
 ---
 
 ## 阶段结论
 
-**6 个核心高频模块全部通过轻验证**（增/改/删/连续操作 · POST 201 / ok=true / longTask>50=0 · 无明显卡顿、覆盖、丢失、重复）。
+**6 个核心高频模块全部通过轻验证**；**正式切换 Step1 + Step2 已通过**。
 
-| # | 模块 | 状态 | 文档 / 开关 |
-|---|---|---|---|
-| 1 | **Done** | **已通过**（跨机闭环） | Done 域信封 · 既有开关 |
-| 2 | **Habit** | **已通过**（跨机闭环） | Habit 域信封 · 既有开关 |
-| 3 | **Forge** | **已通过**（跨机闭环） | Forge 域信封 · 既有开关 |
-| 4 | **十二周年** | **已通过** | `aliyun-anniv-real-v1-{room}` · `__ALIYUN_ANNIV_REAL_SYNC_ENABLED` |
-| 5 | **3-Day Sprint** | **已通过** | `aliyun-sprint-real-v1-{room}` · `__ALIYUN_SPRINT_REAL_SYNC_ENABLED` |
-| 6 | **今日计划** | **已通过**（聚合层 marks-only） | `aliyun-today-plan-real-v1-{room}` · `__ALIYUN_TODAY_PLAN_REAL_SYNC_ENABLED` |
+| # | 模块 | 状态 |
+|---|---|---|
+| 1 | **Done** | **已通过**（跨机闭环） |
+| 2 | **Habit** | **已通过**（跨机闭环） |
+| 3 | **Forge** | **已通过**（跨机闭环） |
+| 4 | **十二周年** | **已通过** |
+| 5 | **3-Day Sprint** | **已通过** |
+| 6 | **今日计划** | **已通过**（聚合层 marks-only） |
 
-> **实验验证阶段到此冻结。** 不再扩大测试范围、不清理云端测试文档、不额外加模块。下一阶段见文末「正式切换」。
+---
+
+## 正式切换
+
+| Step | 内容 | 状态 |
+|---|---|---|
+| **1** | 持久化总开关 + 开则启用 6 域 + 启动串行拉取 | **已通过** |
+| **2** | Firebase 可选双写（**默认 true**）；关则 6 域仅写阿里云 | **已通过** |
+| **3** | 阿里云单写 soak（本机关双写日常用）→ 再议是否改默认 / 合入 `main` | **未开工** |
+
+### Step2 验证记录（2026-09-29）
+- `dualWrite=true`：阿里云 + Firebase 双写正常
+- `dualWrite=false`：6 域仅写阿里云，POST 201 / ok=true
+- 切回 `true`：Firebase 双写立即恢复
+- 回退机制有效
+
+### 控制台（无新 UI）
+
+```js
+// 总开关（默认关）
+window.setAliyunSyncPrimaryEnabled(true|false)
+window.isAliyunSyncPrimaryEnabled()
+
+// Firebase 双写（默认 true；暂不改默认）
+window.setAliyunSyncPrimaryDualWriteFirebase(true|false)
+window.isAliyunSyncPrimaryDualWriteFirebaseEnabled()
+
+// 启动拉取报告
+window.__aliyunSyncPrimaryBootPullReport
+```
+
+| 键 | 含义 |
+|---|---|
+| `todo-app-aliyun-sync-primary-v1` | 总开关；仅 `"1"`/`"true"` 为开 |
+| `todo-app-aliyun-sync-primary-dual-write-v1` | 双写；缺省/`"1"` = 开；仅 `"0"`/`"false"` = 关 |
+
+### Step3 · 阿里云单写 soak（最小方案 · 未改代码）
+
+目标：在 **不改默认、不动 `main`、不删 Firebase** 的前提下，本机用单写跑一段时间，确认可长期依赖后再议「默认 dualWrite=false」。
+
+1. 保持总开关开：`setAliyunSyncPrimaryEnabled(true)`
+2. **仅本机**关双写：`setAliyunSyncPrimaryDualWriteFirebase(false)`（不改仓库默认）
+3. 日常用 1～2 天：6 域增删改 + 刷新后 boot pull + 可选第二台只读拉阿里云
+4. 通过标准：无丢失/覆盖/重复；阿里云 POST 稳定；随时 `dualWrite=true` 或关总开关可回退
+5. soak 通过后再开独立 commit 讨论：是否把缺省改为 `dualWrite=false`（仍保留一键双写）
 
 ---
 
 ## 实现摘要（已冻结）
 
-| 模块 | 信封策略 | 写钩 |
+| 模块 | 信封 | 写钩 |
 |---|---|---|
-| Done / Habit / Forge | 分域 items（+ tombstones 视实现） | 各域既有 save / 删除路径 |
+| Done / Habit / Forge | 分域 items（+ tombstones） | 各域既有路径 |
 | 十二周年 | items + tombstones | `saveStateAfterAnniversaryWeekChange` |
 | 3-Day Sprint | weeklyPlan items + tombstones | `saveWeeklyPlanTasksForWeek` / `deleteWeeklyPlanTask` |
-| 今日计划 | **仅 marks**（不复制来源正文） | `noteCloudSyncTodayPlanPulseTaskId` |
+| 今日计划 | 仅 marks | `noteCloudSyncTodayPlanPulseTaskId` |
 
-共同模式：默认关 → 80ms 队列 → GET 信封 → mutate → POST `/smoke`；拉取 `runAliyun*RealPullAndMerge`；Firebase 路径未删。
+共同：默认域开关关；总开关开则启用；80ms 队列 → GET → mutate → POST；Firebase 代码保留。
 
----
-
-## 正式切换（进行中）
-
-| Step | 内容 | 状态 |
-|---|---|---|
-| **1** | 持久化总开关 + 开则启用 6 域 + 启动串行拉取 | **已通过** |
-| **2** | Firebase 可选双写（默认开）；关双写则 pulse 剥离 6 域 / 全量保留远端旧值 | **已接入 · 待一轮验证** |
-| 3 | 是否默认阿里云单写 → soak → 议合入 `main` | 未决定 |
-
-### Step1 用法（控制台 · 无新 UI）
-```js
-window.setAliyunSyncPrimaryEnabled(true)   // 持久化；刷新后自动开 6 域并拉取
-// 控制台期望：[aliyun-sync-primary] boot pull start → boot pull done
-window.__aliyunSyncPrimaryBootPullReport   // 6 域 ok
-window.setAliyunSyncPrimaryEnabled(false)  // 回滚关总开关
-```
-键：`localStorage["todo-app-aliyun-sync-primary-v1"]`（仅 `"1"` 为开；缺省/其它 = 关）
-
-### Step2 用法（写入优先级 · 双写默认 true）
-```js
-window.setAliyunSyncPrimaryEnabled(true)
-window.isAliyunSyncPrimaryDualWriteFirebaseEnabled() // 期望 true（缺省安全双写）
-// Ctrl+F5，角标含 v20260929sp2
-// 改 Habit/Done → 阿里云 POST + Firebase 仍可能带 6 域（双写开）
-window.setAliyunSyncPrimaryDualWriteFirebase(false)  // 关双写：pulse 不再带 6 域；全量用远端旧值占位
-// 再改一条 → 应有阿里云 POST；Firebase pulse 无 done/habit/forge/weeklyPlan/todayPlanMarks/anniversaryTw*
-window.setAliyunSyncPrimaryDualWriteFirebase(true)   // 回滚双写
-```
-键：`localStorage["todo-app-aliyun-sync-primary-dual-write-v1"]`（缺省/`"1"` = 开；仅 `"0"`/`"false"` = 关）
-
-## 约束（继续有效）
+## 约束
 
 - 不动 `main`
-- 不改无关 UI / 不重构
-- 不为测试而扩测
-- 正式切换前保留 Firebase 全路径；Step2 **未删** Firebase，仅可选剥离 6 域上传
+- 不改无关 UI / 不重构 / 不为测试扩测
+- **默认 dualWrite 保持 true**，直至 soak 明确结论
+- 不清理云端测试文档
