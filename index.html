@@ -105855,6 +105855,125 @@
     try {
       window.runAliyunHabitRealPullAndMerge = runAliyunHabitRealPullAndMerge;
       window.isAliyunHabitRealSyncEnabled = isAliyunHabitRealSyncEnabled;
+      /**
+       * 只读诊断：对比本机 habitCheckins vs 阿里云 Habit 信封，定位「部分同步」缺哪几条。
+       * 用法：await window.diagnoseAliyunHabitPartialSync()
+       * 不写云端、不改 state。
+       */
+      window.diagnoseAliyunHabitPartialSync = async function diagnoseAliyunHabitPartialSync() {
+        const base = aliyunHabitRealBaseUrl();
+        const docId = aliyunHabitRealDocId();
+        const report = {
+          docId: docId,
+          roomId: String(cloudSyncRoomId || ""),
+          localSlotCount: 0,
+          cloudSlotCount: 0,
+          onlyLocal: [],
+          onlyCloud: [],
+          bothButPreferLocal: [],
+          bothPreferRemoteOrEqual: [],
+          uploadFilterNote:
+            "上传路径 notifyAliyunHabitRealAfterCheckinSave 仅推「今天」且 revisedAt 在 120s 内的槽；更早/其他日期不会进云端。"
+        };
+        const localSlots = {};
+        const hc =
+          state.habitCheckins && typeof state.habitCheckins === "object" ? state.habitCheckins : {};
+        Object.keys(hc).forEach(function (dk) {
+          const day = hc[dk];
+          if (!day || typeof day !== "object") return;
+          Object.keys(day).forEach(function (hk) {
+            if (hk === "dailyThreeWinsDoneSuppressed") return;
+            const id = aliyunHabitRealSlotId(dk, hk);
+            localSlots[id] = day[hk];
+          });
+        });
+        report.localSlotCount = Object.keys(localSlots).length;
+
+        if (!base || aliyunExpHasForbiddenSecret(base)) {
+          report.error = !base ? "缺少 Function URL" : "URL 疑似 AccessKey";
+          console.log("[aliyun-habit-diag]", report);
+          return report;
+        }
+        const getRes = await aliyunExpFetchJson(
+          "GET",
+          base + "/smoke/" + encodeURIComponent(docId),
+          null
+        );
+        let cloudItems = {};
+        if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+          report.cloudEmpty = true;
+        } else if (!getRes.ok) {
+          report.error = "GET HTTP " + getRes.status;
+        } else {
+          const row = getRes.data && getRes.data.data;
+          const attrs = (row && (row.attrs || row)) || {};
+          const env = aliyunHabitRealParseEnvelope(
+            attrs.payload != null ? attrs.payload : attrs
+          );
+          cloudItems = (env && env.items) || {};
+        }
+        report.cloudSlotCount = Object.keys(cloudItems).length;
+
+        const allIds = new Set(
+          Object.keys(localSlots).concat(Object.keys(cloudItems))
+        );
+        allIds.forEach(function (id) {
+          const hasL = Object.prototype.hasOwnProperty.call(localSlots, id);
+          const hasC = Object.prototype.hasOwnProperty.call(cloudItems, id);
+          const parsed = aliyunHabitRealParseSlotId(id);
+          const row = {
+            id: id,
+            dateKey: parsed && parsed.dateKey,
+            habitKey: parsed && parsed.habitKey,
+            localRev: aliyunHabitRealSlotTs(localSlots[id]),
+            cloudRev: aliyunHabitRealSlotTs(cloudItems[id]),
+            localChecked:
+              typeof isHabitCheckinValueChecked === "function"
+                ? isHabitCheckinValueChecked(localSlots[id])
+                : null,
+            cloudChecked:
+              typeof isHabitCheckinValueChecked === "function"
+                ? isHabitCheckinValueChecked(cloudItems[id])
+                : null
+          };
+          if (hasL && !hasC) {
+            report.onlyLocal.push(row);
+            return;
+          }
+          if (!hasL && hasC) {
+            report.onlyCloud.push(row);
+            return;
+          }
+          const merged = mergeHabitCheckinValueForSync(localSlots[id], cloudItems[id]);
+          const preferLocal =
+            JSON.stringify(merged) === JSON.stringify(localSlots[id]) &&
+            JSON.stringify(merged) !== JSON.stringify(cloudItems[id]);
+          if (preferLocal) report.bothButPreferLocal.push(row);
+          else report.bothPreferRemoteOrEqual.push(row);
+        });
+
+        try {
+          console.log("[aliyun-habit-diag] summary", {
+            docId: report.docId,
+            local: report.localSlotCount,
+            cloud: report.cloudSlotCount,
+            onlyLocal: report.onlyLocal.length,
+            onlyCloud: report.onlyCloud.length,
+            preferLocal: report.bothButPreferLocal.length
+          });
+          console.log("[aliyun-habit-diag] onlyLocal (本机有、云端无 → 未上传成功)", report.onlyLocal);
+          console.log(
+            "[aliyun-habit-diag] onlyCloud (云端有、本机无 → 拉取/合并未进本机)",
+            report.onlyCloud
+          );
+          console.log(
+            "[aliyun-habit-diag] bothButPreferLocal (两侧都有但合并留本机 → 云端新值被 LWW 丢掉)",
+            report.bothButPreferLocal
+          );
+          console.log("[aliyun-habit-diag]", report.uploadFilterNote);
+        } catch (_c) {}
+        return report;
+      };
     } catch (_habWin) {}
 
     function aliyunExpLog(lines, msg) {
