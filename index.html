@@ -94977,7 +94977,7 @@
         placeholder='{"apiKey":"","projectId":"","databaseURL":""}'
       ></textarea>
       <label for="cloudSyncRoomInput">同步房间 ID（两端保持一致）</label>
-      <input id="cloudSyncRoomInput" type="text" placeholder="kurt-main-room" />
+      <input id="cloudSyncRoomInput" type="text" placeholder="default-room" />
       <div class="cloud-sync-panel-actions">
         <button id="cloudSyncPasteJsonBtn" class="btn" type="button">粘贴并校验 JSON</button>
         <button id="cloudSyncFillExampleBtn" class="btn" type="button">一键填充示例</button>
@@ -95399,7 +95399,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930v";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930w";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -104205,7 +104205,13 @@
         return;
       }
       const cfg = getCloudSyncConfig();
-      /* 显示与阿里云 doc 一致的有效房间，避免空键时面板误填 kurt-main-room 导致换房失同步 */
+      /* 打开面板前先清误触残留，避免输入框/文案继续显示 kurt-main-room */
+      try {
+        if (typeof healAliyunPrimaryLegacyKurtMainRoom === "function") {
+          healAliyunPrimaryLegacyKurtMainRoom("open-panel");
+        }
+      } catch (_healPanel) {}
+      /* 显示与阿里云 doc 一致的有效房间（来源：localStorage todo-app-cloud-room-v1） */
       const storedRoom = String(localStorage.getItem(CLOUD_SYNC_ROOM_KEY) || "").trim();
       const room =
         storedRoom ||
@@ -104685,6 +104691,45 @@
       room = room.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
       return room || ALIYUN_SYNC_ROOM_FALLBACK;
     }
+
+    /**
+     * 平板误触旧面板后 localStorage 常留下 kurt-main-room（仅此键，不在 IndexedDB）。
+     * 阿里云主路径下自动改回 default-room，避免刷新后继续读到旧房。
+     */
+    function healAliyunPrimaryLegacyKurtMainRoom(reason) {
+      if (typeof isAliyunSyncPrimaryEnabled !== "function" || !isAliyunSyncPrimaryEnabled()) {
+        return { healed: false, roomId: getAliyunSyncRoomIdForDocs() };
+      }
+      let raw = "";
+      try {
+        raw = String(
+          (typeof cloudSyncRoomId === "string" && cloudSyncRoomId) ||
+            localStorage.getItem(CLOUD_SYNC_ROOM_KEY) ||
+            ""
+        ).trim();
+      } catch (_r) {
+        raw = "";
+      }
+      if (raw !== "kurt-main-room") {
+        return { healed: false, roomId: getAliyunSyncRoomIdForDocs(), raw: raw };
+      }
+      const target = ALIYUN_SYNC_ROOM_FALLBACK;
+      try {
+        localStorage.setItem(CLOUD_SYNC_ROOM_KEY, target);
+        cloudSyncRoomId = target;
+      } catch (_w) {}
+      try {
+        console.log(
+          "[aliyun-sync-primary] heal legacy kurt-main-room → " +
+            target +
+            " (" +
+            String(reason || "boot") +
+            ")；来源键=" +
+            CLOUD_SYNC_ROOM_KEY
+        );
+      } catch (_c) {}
+      return { healed: true, roomId: target, raw: raw, sourceKey: CLOUD_SYNC_ROOM_KEY };
+    }
     /** 主路径开启且双写关：剥离 6 核心域；其它域仍可由 Firebase 处理（默认软跳过 Firebase） */
     const ALIYUN_PRIMARY_FIREBASE_OMIT_KEYS = [
       "done",
@@ -104897,6 +104942,10 @@
       writeAliyunSyncPrimaryDualWriteToStorage(false);
       applyAliyunSyncPrimaryDomainWindowFlags(true);
 
+      /* 未显式传 roomId 时也清掉误触残留 kurt-main-room → default-room */
+      if (opts.roomId == null || !String(opts.roomId).trim()) {
+        healAliyunPrimaryLegacyKurtMainRoom(why);
+      }
       if (opts.roomId != null && String(opts.roomId).trim()) {
         const rid = String(opts.roomId)
           .trim()
@@ -105383,6 +105432,7 @@
       window.recoverAliyunPrimaryAfterLegacyFirebaseMisclick =
         recoverAliyunPrimaryAfterLegacyFirebaseMisclick;
       window.getAliyunSyncRoomIdForDocs = getAliyunSyncRoomIdForDocs;
+      window.healAliyunPrimaryLegacyKurtMainRoom = healAliyunPrimaryLegacyKurtMainRoom;
       if (isAliyunSyncPrimaryEnabled()) {
         try {
           window.__ALIYUN_SYNC_PRIMARY_ENABLED = true;
@@ -105393,6 +105443,7 @@
           window.__ALIYUN_SYNC_PRIMARY_DUAL_WRITE_FIREBASE = false;
           window.__FIREBASE_SYNC_FORCE_ENABLED = false;
         } catch (_healSw) {}
+        healAliyunPrimaryLegacyKurtMainRoom("primary-boot");
         if (typeof clearCloudSyncPendingUpload === "function") clearCloudSyncPendingUpload();
         if (cloudSyncLastErrorMsg) cloudSyncLastErrorMsg = "";
         if (typeof paintAliyunSyncPrimaryBadgeInitial === "function") {
@@ -105400,9 +105451,11 @@
         }
         try {
           console.log(
-            "[aliyun-sync-primary] 正式站默认主路径已启用；房间=" +
+            "[aliyun-sync-primary] 正式站默认主路径已启用；房间来源键=" +
+              CLOUD_SYNC_ROOM_KEY +
+              " 有效房间=" +
               getAliyunSyncRoomIdForDocs() +
-              "；误触恢复: recoverAliyunPrimaryAfterLegacyFirebaseMisclick({ roomId: \"与手机相同的房间\" })"
+              "；误触恢复: recoverAliyunPrimaryAfterLegacyFirebaseMisclick({ roomId: \"default-room\" })"
           );
         } catch (_c) {}
       }
