@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
@@ -95335,7 +95335,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930h";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930j";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -105442,6 +105442,32 @@
       aliyunExpLogArea.scrollTop = aliyunExpLogArea.scrollHeight;
     }
 
+    /** 诊断：压缩 checkin 槽字段，便于对照 skippedNoRev / 上传链路 */
+    function aliyunHabitRealSummarizeSlotValue(val) {
+      if (val === true) return { kind: "true" };
+      if (val === false || val == null) return { kind: val === false ? "false" : "null" };
+      if (typeof val !== "object") return { kind: typeof val };
+      const stamps = Array.isArray(val.stamps)
+        ? val.stamps
+            .map(function (t) {
+              return Number(t);
+            })
+            .filter(function (t) {
+              return Number.isFinite(t) && t > 0;
+            })
+        : [];
+      return {
+        times: Number(val.times) || 0,
+        revisedAt: Number(val.revisedAt) || 0,
+        stampAt: Number(val.stampAt) || 0,
+        stampsLen: stamps.length,
+        stampsHead: stamps.length ? stamps[0] : 0,
+        stampsTail: stamps.length ? stamps[stamps.length - 1] : 0,
+        cleared: val.cleared === true,
+        hasRemark: typeof val.remark === "string" && !!val.remark.trim()
+      };
+    }
+
     function aliyunHabitRealPerfMark(name) {
       try {
         if (typeof performance !== "undefined" && typeof performance.mark === "function") {
@@ -105622,7 +105648,9 @@
             " suppress=" +
             aliyunHabitRealSuppressPush +
             " reason=" +
-            (reason || "")
+            (reason || "") +
+            " id=" +
+            (mutation && mutation.id ? mutation.id : "")
         );
         return;
       }
@@ -105641,7 +105669,9 @@
           " id=" +
           mutation.id +
           " queueLen=" +
-          aliyunHabitRealQueue.length
+          aliyunHabitRealQueue.length +
+          " habitKey=" +
+          String(mutation.habitKey || "")
       );
       if (aliyunHabitRealFlushTimer) clearTimeout(aliyunHabitRealFlushTimer);
       aliyunHabitRealFlushTimer = setTimeout(function () {
@@ -105656,7 +105686,19 @@
     }
 
     function notifyAliyunHabitRealUpsert(reason, dateKey, habitKey, value) {
-      if (!isAliyunHabitRealSyncEnabled() || aliyunHabitRealSuppressPush) return;
+      if (!isAliyunHabitRealSyncEnabled() || aliyunHabitRealSuppressPush) {
+        aliyunHabitRealAppendLog(
+          "upsert skip: disabledOrSuppress enabled=" +
+            isAliyunHabitRealSyncEnabled() +
+            " suppress=" +
+            aliyunHabitRealSuppressPush +
+            " id=" +
+            aliyunHabitRealSlotId(dateKey, habitKey) +
+            " reason=" +
+            (reason || "")
+        );
+        return;
+      }
       const dk = String(dateKey || "");
       const hk = String(habitKey || "");
       if (!dk || !hk || hk === "dailyThreeWinsDoneSuppressed") return;
@@ -105666,7 +105708,12 @@
       const ts = aliyunHabitRealSlotTs(cloned);
       if (!(ts > 0)) {
         aliyunHabitRealAppendLog(
-          "upsert skip: no revisedAt id=" + id + " reason=" + (reason || "")
+          "upsert skip: no revisedAt id=" +
+            id +
+            " reason=" +
+            (reason || "") +
+            " slot=" +
+            JSON.stringify(aliyunHabitRealSummarizeSlotValue(value))
         );
         return;
       }
@@ -105686,7 +105733,17 @@
      * 不做整包 state；不碰 Forge。
      */
     function notifyAliyunHabitRealAfterCheckinSave(reason) {
-      if (!isAliyunHabitRealSyncEnabled() || aliyunHabitRealSuppressPush) return;
+      if (!isAliyunHabitRealSyncEnabled() || aliyunHabitRealSuppressPush) {
+        aliyunHabitRealAppendLog(
+          "after-checkin SKIP: enabled=" +
+            isAliyunHabitRealSyncEnabled() +
+            " suppress=" +
+            aliyunHabitRealSuppressPush +
+            " reason=" +
+            (reason || "")
+        );
+        return;
+      }
       const dateKey = formatDateInputValue(new Date());
       const day =
         state.habitCheckins && typeof state.habitCheckins === "object"
@@ -105701,6 +105758,9 @@
       let n = 0;
       let skippedAge = 0;
       let skippedNoRev = 0;
+      const queuedIds = [];
+      const noRevKeys = [];
+      const ageKeys = [];
       for (let i = 0; i < keys.length; i++) {
         const habitKey = keys[i];
         if (habitKey === "dailyThreeWinsDoneSuppressed") continue;
@@ -105711,13 +105771,16 @@
             : Number(val && val.revisedAt) || 0;
         if (!(rev > 0)) {
           skippedNoRev += 1;
+          noRevKeys.push(habitKey);
           continue;
         }
         if (!(now - rev < 120000)) {
           skippedAge += 1;
+          ageKeys.push(habitKey + "(ageMs=" + (now - rev) + ")");
           continue;
         }
         notifyAliyunHabitRealUpsert(reason || "checkin", dateKey, habitKey, val);
+        queuedIds.push(habitKey);
         n += 1;
       }
       aliyunHabitRealAppendLog(
@@ -105731,12 +105794,45 @@
           dateKey +
           " (仅上传今日近2分钟修订槽)"
       );
+      if (queuedIds.length) {
+        aliyunHabitRealAppendLog("after-checkin queuedKeys=" + queuedIds.join(","));
+      }
+      if (noRevKeys.length) {
+        aliyunHabitRealAppendLog(
+          "after-checkin skippedNoRevKeys=" +
+            noRevKeys.slice(0, 12).join(",") +
+            (noRevKeys.length > 12 ? "…" : "")
+        );
+      }
+      if (ageKeys.length) {
+        aliyunHabitRealAppendLog(
+          "after-checkin skippedAgeKeys=" +
+            ageKeys.slice(0, 8).join(",") +
+            (ageKeys.length > 8 ? "…" : "")
+        );
+      }
     }
 
     async function flushAliyunHabitRealQueue() {
-      if (aliyunHabitRealFlushing) return;
+      if (aliyunHabitRealFlushing) {
+        aliyunHabitRealAppendLog(
+          "flush defer: already flushing queueLen=" + aliyunHabitRealQueue.length
+        );
+        return;
+      }
       if (!aliyunHabitRealQueue.length) return;
       if (!isAliyunHabitRealSyncEnabled() || aliyunHabitRealSuppressPush) {
+        const dropped = aliyunHabitRealQueue.map(function (q) {
+          return q && q.mutation && q.mutation.id ? q.mutation.id : "?";
+        });
+        aliyunHabitRealAppendLog(
+          "flush DROP queue: enabled=" +
+            isAliyunHabitRealSyncEnabled() +
+            " suppress=" +
+            aliyunHabitRealSuppressPush +
+            " dropped=" +
+            dropped.join(",")
+        );
         aliyunHabitRealQueue = [];
         return;
       }
@@ -105745,8 +105841,18 @@
       const reason = batch.length ? batch[batch.length - 1].reason : "flush";
       const base = aliyunHabitRealBaseUrl();
       const docId = aliyunHabitRealDocId();
+      const batchIds = batch.map(function (q) {
+        return q && q.mutation && q.mutation.id ? q.mutation.id : "?";
+      });
       aliyunHabitRealAppendLog(
-        "flush start: reason=" + reason + " batch=" + batch.length + " docId=" + docId
+        "flush start: reason=" +
+          reason +
+          " batch=" +
+          batch.length +
+          " docId=" +
+          docId +
+          " ids=" +
+          batchIds.join(",")
       );
       const lt = aliyunHabitRealStartLtObserver();
       const tAll = Date.now();
@@ -105759,6 +105865,7 @@
       let httpStatus = null;
       let ok = false;
       let errMsg = "";
+      let envAfterApply = null;
       try {
         if (!base || aliyunExpHasForbiddenSecret(base)) {
           throw new Error(!base ? "缺少 Function URL" : "URL 疑似含 AccessKey");
@@ -105787,6 +105894,17 @@
         env.roomId = String(cloudSyncRoomId || env.roomId || "");
         env.envelopeUpdatedAt = Date.now();
         mergeMs = Date.now() - tMerge0;
+        envAfterApply = env;
+        const missingAfterApply = batchIds.filter(function (id) {
+          return id && id !== "?" && !(env.items && env.items[id]);
+        });
+        if (missingAfterApply.length) {
+          aliyunHabitRealAppendLog(
+            "flush apply MISS ids(not in env after mutate)=" + missingAfterApply.join(",")
+          );
+        } else {
+          aliyunHabitRealAppendLog("flush apply ok: all batch ids present in env");
+        }
 
         let bodyJson = "";
         try {
@@ -105815,6 +105933,44 @@
           );
         }
         ok = true;
+        /* 回读确认：这批 id 是否真的落在云端文档 */
+        try {
+          const tVerify0 = Date.now();
+          const verifyRes = await aliyunExpFetchJson(
+            "GET",
+            base + "/smoke/" + encodeURIComponent(docId),
+            null
+          );
+          networkWaitMs += Date.now() - tVerify0;
+          if (verifyRes.ok && verifyRes.data && verifyRes.data.data) {
+            const vrow = verifyRes.data.data;
+            const vattrs = vrow.attrs || vrow;
+            const venv = aliyunHabitRealParseEnvelope(
+              vattrs.payload != null ? vattrs.payload : vattrs
+            );
+            const cloudMissing = batchIds.filter(function (id) {
+              return id && id !== "?" && !(venv.items && venv.items[id]);
+            });
+            const cloudPresent = batchIds.filter(function (id) {
+              return id && id !== "?" && venv.items && venv.items[id];
+            });
+            aliyunHabitRealAppendLog(
+              "flush verify GET: present=" +
+                cloudPresent.join(",") +
+                " missing=" +
+                (cloudMissing.length ? cloudMissing.join(",") : "(none)")
+            );
+          } else {
+            aliyunHabitRealAppendLog(
+              "flush verify GET failed status=" + (verifyRes && verifyRes.status)
+            );
+          }
+        } catch (_verifyErr) {
+          aliyunHabitRealAppendLog(
+            "flush verify error: " +
+              (_verifyErr && _verifyErr.message ? _verifyErr.message : String(_verifyErr))
+          );
+        }
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
         ok = false;
@@ -105843,6 +105999,7 @@
           Promise.resolve(flushAliyunHabitRealQueue()).catch(function () {});
         }
       }
+      void envAfterApply;
     }
 
     /** 实验拉取：只 merge habitCheckins，不全量 reload / 不换整包 state */
@@ -108773,6 +108930,36 @@
       finalizeHabitCheckinUiAfterPunch();
       /* 阿里云 Habit：本地 UI 已更新后再后台 enqueue；绝不 await 网络 */
       try {
+        if (typeof aliyunHabitRealAppendLog === "function") {
+          const dk =
+            typeof formatDateInputValue === "function"
+              ? formatDateInputValue(new Date())
+              : "";
+          const day =
+            state.habitCheckins && typeof state.habitCheckins === "object"
+              ? state.habitCheckins[dk]
+              : null;
+          const optSnap = {};
+          if (day && typeof day === "object" && typeof isHabitOptionalRemarkKey === "function") {
+            Object.keys(day).forEach(function (hk) {
+              if (!isHabitOptionalRemarkKey(hk)) return;
+              optSnap[hk] =
+                typeof aliyunHabitRealSummarizeSlotValue === "function"
+                  ? aliyunHabitRealSummarizeSlotValue(day[hk])
+                  : { raw: true };
+            });
+          }
+          aliyunHabitRealAppendLog(
+            "pre-notify after punch: suppress=" +
+              !!aliyunHabitRealSuppressPush +
+              " enabled=" +
+              (typeof isAliyunHabitRealSyncEnabled === "function"
+                ? isAliyunHabitRealSyncEnabled()
+                : "?") +
+              " optionalRemarkToday=" +
+              JSON.stringify(optSnap)
+          );
+        }
         if (typeof notifyAliyunHabitRealAfterCheckinSave === "function") {
           notifyAliyunHabitRealAfterCheckinSave("checkin");
         }
@@ -115732,6 +115919,50 @@
               : "";
           const o = { times: n };
           if (rm) o.remark = rm;
+          /*
+           * 保留原修订/打卡时刻，避免 Done→checkin 重建变成无 revisedAt，
+           * 进而被 notifyAliyunHabitRealAfterCheckinSave 的 skippedNoRev 挡掉。
+           * 缺时刻时只从 Done 真实 completedAt/stampAt 回填，不用 Date.now()。
+           */
+          if (prev && typeof prev === "object") {
+            const prevRev = Number(prev.revisedAt);
+            if (Number.isFinite(prevRev) && prevRev > 0) o.revisedAt = prevRev;
+            const prevStampAt = Number(prev.stampAt);
+            if (Number.isFinite(prevStampAt) && prevStampAt > 0) o.stampAt = prevStampAt;
+            if (Array.isArray(prev.stamps) && prev.stamps.length) {
+              o.stamps = prev.stamps
+                .map(function (t) {
+                  return Number(t);
+                })
+                .filter(function (t) {
+                  return Number.isFinite(t) && t > 0 && !isSyntheticHabitNoonAt(t);
+                });
+            }
+          }
+          const doneClockBag = [];
+          rows.forEach(function (row) {
+            const s = row && row.habitMeta ? Number(row.habitMeta.stampAt) : NaN;
+            const c = Number(row && row.completedAt);
+            if (Number.isFinite(s) && s > 0) doneClockBag.push(s);
+            if (Number.isFinite(c) && c > 0) doneClockBag.push(c);
+          });
+          const doneKept = doneClockBag.filter(function (t) {
+            return Number.isFinite(Number(t)) && Number(t) > 0 && !isSyntheticHabitNoonAt(t);
+          });
+          if (!(Number(o.stampAt) > 0) && doneKept.length) {
+            o.stampAt = Math.min.apply(null, doneKept);
+          }
+          if ((!Array.isArray(o.stamps) || !o.stamps.length) && doneKept.length) {
+            o.stamps = doneKept.slice();
+          }
+          if (!(Number(o.revisedAt) > 0)) {
+            const clockForRev = Number(o.stampAt) > 0
+              ? Number(o.stampAt)
+              : doneKept.length
+                ? Math.max.apply(null, doneKept)
+                : 0;
+            if (clockForRev > 0) o.revisedAt = clockForRev;
+          }
           rebuilt = o;
         }
       } else {
@@ -117325,6 +117556,22 @@
       nextObj.stamps = prevStamps.concat([nowStamp]);
       nextObj.stampAt = nextObj.stamps[0];
       state.habitCheckins[dateKey][habitKey] = stampHabitCheckinRevision(nextObj);
+      try {
+        if (typeof aliyunHabitRealAppendLog === "function") {
+          aliyunHabitRealAppendLog(
+            "optional-remark punch: key=" +
+              habitKey +
+              " date=" +
+              dateKey +
+              " slot=" +
+              JSON.stringify(
+                typeof aliyunHabitRealSummarizeSlotValue === "function"
+                  ? aliyunHabitRealSummarizeSlotValue(state.habitCheckins[dateKey][habitKey])
+                  : state.habitCheckins[dateKey][habitKey]
+              )
+          );
+        }
+      } catch (_optPunchLog) {}
       syncHabitReadingToDone(habitKey, dateKey, preservedRemark, nextTimes, nowStamp);
       saveStateAfterHabitCheckin();
     }
