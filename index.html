@@ -95227,7 +95227,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930b";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -101514,7 +101514,15 @@
         next.moveBreakDay = mergeMoveBreakDayForSync(prev.moveBreakDay, next.moveBreakDay);
       }
       /* 打卡 pulse 为整包覆盖：他端未打卡快照不得盖掉本端已打卡 */
-      next.habitCheckins = mergeHabitCheckinsForSync(prev.habitCheckins, next.habitCheckins);
+      /* 阿里云 Habit 主路径开启时：Firebase 合并不得改写本机 habitCheckins */
+      if (typeof isAliyunHabitRealSyncEnabled === "function" && isAliyunHabitRealSyncEnabled()) {
+        next.habitCheckins =
+          prev.habitCheckins && typeof prev.habitCheckins === "object"
+            ? JSON.parse(JSON.stringify(prev.habitCheckins))
+            : {};
+      } else {
+        next.habitCheckins = mergeHabitCheckinsForSync(prev.habitCheckins, next.habitCheckins);
+      }
       /* 阿里云 Done 主路径开启时：Firebase 合并不得改写本机 Done */
       if (typeof isAliyunDoneRealSyncEnabled === "function" && isAliyunDoneRealSyncEnabled()) {
         next.done = Array.isArray(prev.done) ? prev.done.slice() : [];
@@ -102449,7 +102457,11 @@
         if (pulseState.forge && typeof pulseState.forge === "object") {
           if (mergeCloudSyncForgePulseIntoState(pulseState.forge)) changed = true;
         }
-        if (pulseState.habitCheckins && typeof pulseState.habitCheckins === "object") {
+        if (
+          pulseState.habitCheckins &&
+          typeof pulseState.habitCheckins === "object" &&
+          !(typeof isAliyunHabitRealSyncEnabled === "function" && isAliyunHabitRealSyncEnabled())
+        ) {
           const nextHc = mergeHabitCheckinsForSync(state.habitCheckins, pulseState.habitCheckins);
           try {
             if (JSON.stringify(state.habitCheckins) !== JSON.stringify(nextHc)) {
@@ -104324,18 +104336,21 @@
     const aliyunDoneRealPullBtn = document.getElementById("aliyunDoneRealPullBtn");
 
     /**
-     * —— 阿里云正式接入（main · Done-only）——
-     * 默认关。打开后仅启用 Done 域；启动时延迟拉取。
+     * —— 阿里云正式接入（main · Done + Habit）——
+     * 默认关。打开后启用 Done + habitCheckins；启动时串行延迟拉取。
      * 控制台：window.setAliyunSyncPrimaryEnabled(true|false)
      * 双写：setAliyunSyncPrimaryDualWriteFirebase(true|false)
-     *   缺省 false（Done 从 Firebase 剥离，优先流畅）；显式 true 可临时双写回退。
-     * 不删旧库 / 不删 Firebase 数据。
+     *   缺省 false（已迁域从 Firebase 剥离，优先流畅）；显式 true 可临时双写回退。
+     * 不删旧库 / 不删 Firebase 数据。不接 Forge / TodayPlan / Sprint。
      */
     const ALIYUN_SYNC_PRIMARY_STORAGE_KEY = "todo-app-aliyun-sync-primary-v1";
     const ALIYUN_SYNC_PRIMARY_DUAL_WRITE_STORAGE_KEY = "todo-app-aliyun-sync-primary-dual-write-v1";
-    /** main 本阶段仅剥离 Done；其它域仍走 Firebase */
-    const ALIYUN_PRIMARY_FIREBASE_OMIT_KEYS = ["done"];
-    const ALIYUN_SYNC_PRIMARY_DOMAIN_WINDOW_FLAGS = ["__ALIYUN_DONE_REAL_SYNC_ENABLED"];
+    /** Stage2：剥离 Done + habitCheckins；其它域仍走 Firebase */
+    const ALIYUN_PRIMARY_FIREBASE_OMIT_KEYS = ["done", "habitCheckins"];
+    const ALIYUN_SYNC_PRIMARY_DOMAIN_WINDOW_FLAGS = [
+      "__ALIYUN_DONE_REAL_SYNC_ENABLED",
+      "__ALIYUN_HABIT_REAL_SYNC_ENABLED"
+    ];
     let aliyunSyncPrimaryBootPullStarted = false;
 
     function readAliyunSyncPrimaryFromStorage() {
@@ -104400,26 +104415,40 @@
         console.log(
           "[aliyun-sync-primary]",
           on
-            ? "Firebase 双写：开（Done 仍进 Firebase）"
-            : "Firebase 双写：关（Done 仅写阿里云；全量上传保留云端旧 Done 以免清空）"
+            ? "Firebase 双写：开（Done/Habit 仍进 Firebase）"
+            : "Firebase 双写：关（Done/Habit 仅写阿里云；全量上传保留云端旧值以免清空）"
         );
       } catch (_c) {}
       return on;
     }
 
-    /** Done 已启用阿里云且未开双写 → 上传侧剥离 done */
+    /** 已启用阿里云且未开双写 → 按域剥离（Done / habitCheckins） */
     function shouldOmitAliyunPrimaryDomainsFromFirebaseUpload() {
+      if (isAliyunSyncPrimaryDualWriteFirebaseEnabled()) return false;
       const doneOn =
         typeof isAliyunDoneRealSyncEnabled === "function" && isAliyunDoneRealSyncEnabled();
-      if (!doneOn) return false;
-      return !isAliyunSyncPrimaryDualWriteFirebaseEnabled();
+      const habitOn =
+        typeof isAliyunHabitRealSyncEnabled === "function" && isAliyunHabitRealSyncEnabled();
+      return !!(doneOn || habitOn);
+    }
+
+    function aliyunPrimaryOmitKeysActive() {
+      const keys = [];
+      if (typeof isAliyunDoneRealSyncEnabled === "function" && isAliyunDoneRealSyncEnabled()) {
+        keys.push("done");
+      }
+      if (typeof isAliyunHabitRealSyncEnabled === "function" && isAliyunHabitRealSyncEnabled()) {
+        keys.push("habitCheckins");
+      }
+      return keys;
     }
 
     function omitAliyunPrimaryDomainsFromPulseState(pulseState) {
       if (!pulseState || typeof pulseState !== "object") return pulseState;
       if (!shouldOmitAliyunPrimaryDomainsFromFirebaseUpload()) return pulseState;
-      for (let i = 0; i < ALIYUN_PRIMARY_FIREBASE_OMIT_KEYS.length; i++) {
-        delete pulseState[ALIYUN_PRIMARY_FIREBASE_OMIT_KEYS[i]];
+      const keys = aliyunPrimaryOmitKeysActive();
+      for (let i = 0; i < keys.length; i++) {
+        delete pulseState[keys[i]];
       }
       return pulseState;
     }
@@ -104439,8 +104468,9 @@
       } catch (_rem) {
         remoteState = null;
       }
-      for (let i = 0; i < ALIYUN_PRIMARY_FIREBASE_OMIT_KEYS.length; i++) {
-        const key = ALIYUN_PRIMARY_FIREBASE_OMIT_KEYS[i];
+      const keys = aliyunPrimaryOmitKeysActive();
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
         if (
           remoteState &&
           Object.prototype.hasOwnProperty.call(remoteState, key) &&
@@ -104479,7 +104509,9 @@
       try {
         console.log(
           "[aliyun-sync-primary]",
-          on ? "已开启（Done-only；刷新后自动拉取）" : "已关闭（Done 旗标清除，回退 Firebase）"
+          on
+            ? "已开启（Done+Habit；刷新后自动拉取）"
+            : "已关闭（Done/Habit 旗标清除，回退 Firebase）"
         );
       } catch (_c) {}
       if (on) scheduleAliyunSyncPrimaryBootPull();
@@ -104498,12 +104530,17 @@
         {
           id: "done",
           run: typeof runAliyunDoneRealPullAndMerge === "function" ? runAliyunDoneRealPullAndMerge : null
+        },
+        {
+          id: "habit",
+          run:
+            typeof runAliyunHabitRealPullAndMerge === "function" ? runAliyunHabitRealPullAndMerge : null
         }
       ];
       const results = {};
       let allOk = true;
       try {
-        console.log("[aliyun-sync-primary] boot pull start (Done-only)");
+        console.log("[aliyun-sync-primary] boot pull start (Done+Habit)");
       } catch (_c0) {}
       for (let i = 0; i < domains.length; i++) {
         const d = domains[i];
@@ -105261,6 +105298,564 @@
       });
     }
 
+
+    /**
+     * —— Habit 打卡单域真实同步（阿里云实验，可回滚）——
+     * 仅 state.habitCheckins；默认关；不改 UI。
+     * 启用：window.__ALIYUN_HABIT_REAL_SYNC_ENABLED = true
+     * 拉取：await window.runAliyunHabitRealPullAndMerge()
+     * 不接 Forge / 其它模块；Firebase·IndexedDB 旧路径保留。
+     */
+    const ALIYUN_HABIT_REAL_KIND = "habit-real-v1";
+    const ALIYUN_HABIT_REAL_PERF_PREFIX = "aliyun-habit-real:";
+    const ALIYUN_HABIT_REAL_SYNC_ENABLED = false;
+    let aliyunHabitRealQueue = [];
+    let aliyunHabitRealFlushTimer = null;
+    let aliyunHabitRealFlushing = false;
+    let aliyunHabitRealLastReport = null;
+    let aliyunHabitRealSuppressPush = false;
+
+    function isAliyunHabitRealSyncEnabled() {
+      if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) return true;
+      try {
+        if (window.__ALIYUN_HABIT_REAL_SYNC_ENABLED === true) return true;
+      } catch (_w) {}
+      return ALIYUN_HABIT_REAL_SYNC_ENABLED === true;
+    }
+
+    function aliyunHabitRealAppendLog(msg) {
+      const line = "[habit] " + String(msg || "");
+      try {
+        console.log("[aliyun-habit-real]", line);
+      } catch (_c) {}
+      if (!aliyunExpLogArea) return;
+      const prev = String(aliyunExpLogArea.value || "");
+      aliyunExpLogArea.value = prev ? prev + "\n" + line : line;
+      aliyunExpLogArea.scrollTop = aliyunExpLogArea.scrollHeight;
+    }
+
+    function aliyunHabitRealPerfMark(name) {
+      try {
+        if (typeof performance !== "undefined" && typeof performance.mark === "function") {
+          performance.mark(ALIYUN_HABIT_REAL_PERF_PREFIX + name);
+        }
+      } catch (_m) {}
+    }
+
+    function aliyunHabitRealDocId() {
+      const room = String(
+        cloudSyncRoomId ||
+          (typeof localStorage !== "undefined" && localStorage.getItem(CLOUD_SYNC_ROOM_KEY)) ||
+          "default-room"
+      )
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]/g, "_")
+        .slice(0, 64);
+      return "aliyun-habit-real-v1-" + (room || "default-room");
+    }
+
+    function aliyunHabitRealBaseUrl() {
+      return String((aliyunExpUrlInput && aliyunExpUrlInput.value) || ALIYUN_EXP_DEFAULT_URL)
+        .trim()
+        .replace(/\/+$/, "");
+    }
+
+    function aliyunHabitRealSlotId(dateKey, habitKey) {
+      return String(dateKey || "") + "|" + String(habitKey || "");
+    }
+
+    function aliyunHabitRealParseSlotId(id) {
+      const s = String(id || "");
+      const i = s.indexOf("|");
+      if (i <= 0 || i >= s.length - 1) return null;
+      return { dateKey: s.slice(0, i), habitKey: s.slice(i + 1) };
+    }
+
+    function aliyunHabitRealCloneSlotValue(val) {
+      if (val === true) return { times: 1 };
+      if (val === false || val == null) {
+        return { cleared: true, times: 0, revisedAt: 0 };
+      }
+      if (typeof isHabitCheckinClearedMarker === "function" && isHabitCheckinClearedMarker(val)) {
+        return {
+          cleared: true,
+          times: 0,
+          revisedAt: Number(val.revisedAt) || 0
+        };
+      }
+      if (typeof val !== "object") return { times: 1, revisedAt: Date.now() };
+      try {
+        return JSON.parse(JSON.stringify(val));
+      } catch (_e) {
+        return Object.assign({}, val);
+      }
+    }
+
+    function aliyunHabitRealSlotTs(val) {
+      if (val == null || val === false) return 0;
+      if (val === true) return 0;
+      if (typeof val !== "object") return 0;
+      return Math.max(
+        typeof getHabitCheckinRevisionTime === "function" ? getHabitCheckinRevisionTime(val) : 0,
+        Number(val.stampAt) || 0,
+        Number(val.updatedAt) || 0,
+        Number(val.revisedAt) || 0
+      );
+    }
+
+    function aliyunHabitRealEmptyEnvelope() {
+      return {
+        kind: ALIYUN_HABIT_REAL_KIND,
+        roomId: String(cloudSyncRoomId || ""),
+        envelopeUpdatedAt: Date.now(),
+        items: {}
+      };
+    }
+
+    function aliyunHabitRealParseEnvelope(rawPayload) {
+      let p = rawPayload;
+      if (typeof p === "string") {
+        try {
+          p = JSON.parse(p);
+        } catch (_e) {
+          return aliyunHabitRealEmptyEnvelope();
+        }
+      }
+      if (!p || typeof p !== "object") return aliyunHabitRealEmptyEnvelope();
+      const env = aliyunHabitRealEmptyEnvelope();
+      env.roomId = p.roomId != null ? String(p.roomId) : env.roomId;
+      env.envelopeUpdatedAt = Number(p.envelopeUpdatedAt) || 0;
+      if (p.items && typeof p.items === "object") env.items = p.items;
+      return env;
+    }
+
+    function aliyunHabitRealApplyMutationToEnvelope(env, mutation) {
+      if (!env || !mutation) return env;
+      const id = String(mutation.id || "");
+      if (!id || !aliyunHabitRealParseSlotId(id)) return env;
+      if (mutation.op !== "upsert") return env;
+      const next = aliyunHabitRealCloneSlotValue(mutation.value);
+      const nextTs = Math.max(aliyunHabitRealSlotTs(next), Number(mutation.updatedAt) || 0);
+      if (!(nextTs > 0)) return env;
+      if (!next.revisedAt) next.revisedAt = nextTs;
+      const prev = env.items && env.items[id];
+      const prevTs = aliyunHabitRealSlotTs(prev);
+      if (nextTs < prevTs) return env;
+      if (!env.items) env.items = {};
+      env.items[id] = next;
+      env.envelopeUpdatedAt = Math.max(Number(env.envelopeUpdatedAt) || 0, nextTs);
+      env.kind = ALIYUN_HABIT_REAL_KIND;
+      return env;
+    }
+
+    function aliyunHabitRealStartLtObserver() {
+      const bucket = { count: 0, maxMs: 0, over50: 0 };
+      let obs = null;
+      try {
+        if (typeof PerformanceObserver === "undefined") return { bucket: bucket, stop: function () {} };
+        obs = new PerformanceObserver(function (list) {
+          const entries = list.getEntries() || [];
+          for (let i = 0; i < entries.length; i++) {
+            const d = Number(entries[i].duration) || 0;
+            bucket.count += 1;
+            if (d > bucket.maxMs) bucket.maxMs = d;
+            if (d > 50) bucket.over50 += 1;
+          }
+        });
+        obs.observe({ entryTypes: ["longtask"] });
+      } catch (_lt) {}
+      return {
+        bucket: bucket,
+        stop: function () {
+          try {
+            if (obs) obs.disconnect();
+          } catch (_d) {}
+        }
+      };
+    }
+
+    function aliyunHabitRealLogReport(report) {
+      aliyunHabitRealLastReport = report;
+      try {
+        window.__aliyunHabitRealLastReport = report;
+      } catch (_w) {}
+      aliyunHabitRealAppendLog("—— Habit 真实同步 " + (report.reason || "") + " ——");
+      aliyunHabitRealAppendLog(
+        "ok=" +
+          !!report.ok +
+          " docId=" +
+          (report.docId || "") +
+          (report.httpStatus != null ? " HTTP=" + report.httpStatus : "")
+      );
+      aliyunHabitRealAppendLog(
+        "payloadKB=" +
+          (report.payloadKB != null ? report.payloadKB : "?") +
+          " upload=" +
+          (report.uploadMs != null ? report.uploadMs + "ms" : "?") +
+          " download=" +
+          (report.downloadMs != null ? report.downloadMs + "ms" : "?") +
+          " merge=" +
+          (report.mergeMs != null ? report.mergeMs + "ms" : "?") +
+          " render=" +
+          (report.renderMs != null ? report.renderMs + "ms" : "?")
+      );
+      if (report.longTaskOver50 != null) {
+        aliyunHabitRealAppendLog(
+          "longTask>50=" + report.longTaskOver50 + " maxMs=" + (report.longTaskMaxMs || 0)
+        );
+      }
+      if (report.error) aliyunHabitRealAppendLog("error: " + report.error);
+    }
+
+    function scheduleAliyunHabitRealSync(reason, mutation) {
+      if (!isAliyunHabitRealSyncEnabled() || aliyunHabitRealSuppressPush) {
+        aliyunHabitRealAppendLog(
+          "schedule skip: flag=" +
+            isAliyunHabitRealSyncEnabled() +
+            " suppress=" +
+            aliyunHabitRealSuppressPush +
+            " reason=" +
+            (reason || "")
+        );
+        return;
+      }
+      if (!mutation || !mutation.id) {
+        aliyunHabitRealAppendLog("schedule skip: missing mutation.id reason=" + (reason || ""));
+        return;
+      }
+      aliyunHabitRealQueue.push({
+        reason: reason || "unknown",
+        mutation: mutation,
+        queuedAt: Date.now()
+      });
+      aliyunHabitRealAppendLog(
+        "schedule ok: reason=" +
+          (reason || "") +
+          " id=" +
+          mutation.id +
+          " queueLen=" +
+          aliyunHabitRealQueue.length
+      );
+      if (aliyunHabitRealFlushTimer) clearTimeout(aliyunHabitRealFlushTimer);
+      aliyunHabitRealFlushTimer = setTimeout(function () {
+        aliyunHabitRealFlushTimer = null;
+        Promise.resolve(flushAliyunHabitRealQueue()).catch(function (err) {
+          aliyunHabitRealAppendLog(
+            "flush promise reject: " + (err && err.message ? err.message : String(err))
+          );
+          console.warn("[aliyun-habit-real] flush", err);
+        });
+      }, 80);
+    }
+
+    function notifyAliyunHabitRealUpsert(reason, dateKey, habitKey, value) {
+      if (!isAliyunHabitRealSyncEnabled() || aliyunHabitRealSuppressPush) return;
+      const dk = String(dateKey || "");
+      const hk = String(habitKey || "");
+      if (!dk || !hk || hk === "dailyThreeWinsDoneSuppressed") return;
+      const id = aliyunHabitRealSlotId(dk, hk);
+      const cloned = aliyunHabitRealCloneSlotValue(value);
+      const ts = aliyunHabitRealSlotTs(cloned) || Date.now();
+      if (!cloned.revisedAt) cloned.revisedAt = ts;
+      scheduleAliyunHabitRealSync(reason || "slot", {
+        op: "upsert",
+        id: id,
+        dateKey: dk,
+        habitKey: hk,
+        value: cloned,
+        updatedAt: ts
+      });
+    }
+
+    /**
+     * 打卡保存后：只推今日「刚修订」的槽（revisedAt 近 2 分钟），避免旧空槽误盖云端。
+     * 不做整包 state；不碰 Forge。
+     */
+    function notifyAliyunHabitRealAfterCheckinSave(reason) {
+      if (!isAliyunHabitRealSyncEnabled() || aliyunHabitRealSuppressPush) return;
+      const dateKey = formatDateInputValue(new Date());
+      const day =
+        state.habitCheckins && typeof state.habitCheckins === "object"
+          ? state.habitCheckins[dateKey]
+          : null;
+      if (!day || typeof day !== "object") {
+        aliyunHabitRealAppendLog("after-checkin: 今日无槽位 date=" + dateKey);
+        return;
+      }
+      const now = Date.now();
+      const keys = Object.keys(day);
+      let n = 0;
+      for (let i = 0; i < keys.length; i++) {
+        const habitKey = keys[i];
+        if (habitKey === "dailyThreeWinsDoneSuppressed") continue;
+        const val = day[habitKey];
+        const rev =
+          typeof getHabitCheckinRevisionTime === "function"
+            ? getHabitCheckinRevisionTime(val)
+            : Number(val && val.revisedAt) || 0;
+        if (!(rev > 0 && now - rev < 120000)) continue;
+        notifyAliyunHabitRealUpsert(reason || "checkin", dateKey, habitKey, val);
+        n += 1;
+      }
+      aliyunHabitRealAppendLog("after-checkin: queuedSlots=" + n + " date=" + dateKey);
+    }
+
+    async function flushAliyunHabitRealQueue() {
+      if (aliyunHabitRealFlushing) return;
+      if (!aliyunHabitRealQueue.length) return;
+      if (!isAliyunHabitRealSyncEnabled() || aliyunHabitRealSuppressPush) {
+        aliyunHabitRealQueue = [];
+        return;
+      }
+      aliyunHabitRealFlushing = true;
+      const batch = aliyunHabitRealQueue.splice(0, aliyunHabitRealQueue.length);
+      const reason = batch.length ? batch[batch.length - 1].reason : "flush";
+      const base = aliyunHabitRealBaseUrl();
+      const docId = aliyunHabitRealDocId();
+      aliyunHabitRealAppendLog(
+        "flush start: reason=" + reason + " batch=" + batch.length + " docId=" + docId
+      );
+      const lt = aliyunHabitRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let uploadMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let payloadKB = 0;
+      let httpStatus = null;
+      let ok = false;
+      let errMsg = "";
+      try {
+        if (!base || aliyunExpHasForbiddenSecret(base)) {
+          throw new Error(!base ? "缺少 Function URL" : "URL 疑似含 AccessKey");
+        }
+        aliyunHabitRealPerfMark("flush-start");
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson("GET", base + "/smoke/" + encodeURIComponent(docId), null);
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+
+        const tParse0 = Date.now();
+        let env = aliyunHabitRealEmptyEnvelope();
+        if (getRes.ok && getRes.data && getRes.data.data) {
+          const row = getRes.data.data;
+          const attrs = row.attrs || row;
+          env = aliyunHabitRealParseEnvelope(attrs.payload != null ? attrs.payload : attrs);
+        } else if (getRes.status !== 404 && !(getRes.data && getRes.data.error === "not_found")) {
+          console.warn("[aliyun-habit-real] GET status", getRes.status, getRes.data);
+        }
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        for (let i = 0; i < batch.length; i++) {
+          aliyunHabitRealApplyMutationToEnvelope(env, batch[i].mutation);
+        }
+        env.roomId = String(cloudSyncRoomId || env.roomId || "");
+        env.envelopeUpdatedAt = Date.now();
+        mergeMs = Date.now() - tMerge0;
+
+        let bodyJson = "";
+        try {
+          bodyJson = JSON.stringify({ id: docId, payload: env });
+        } catch (_ser) {
+          throw new Error("envelope serialize failed");
+        }
+        payloadKB = Math.round((bodyJson.length / 1024) * 10) / 10;
+
+        const tUp0 = Date.now();
+        const putRes = await aliyunExpFetchJson("POST", base + "/smoke", JSON.parse(bodyJson));
+        uploadMs = Date.now() - tUp0;
+        networkWaitMs += uploadMs;
+        httpStatus = putRes.status;
+        aliyunHabitRealAppendLog(
+          "flush POST status=" + putRes.status + " uploadMs=" + uploadMs + " payloadKB=" + payloadKB
+        );
+        if (!putRes.ok) {
+          throw new Error(
+            "upload HTTP " +
+              putRes.status +
+              " " +
+              (putRes.data && (putRes.data.error || putRes.data.message)
+                ? putRes.data.error || putRes.data.message
+                : "")
+          );
+        }
+        ok = true;
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        ok = false;
+      } finally {
+        lt.stop();
+        aliyunHabitRealFlushing = false;
+        aliyunHabitRealLogReport({
+          ok: ok,
+          reason: reason,
+          docId: docId,
+          httpStatus: httpStatus,
+          payloadKB: payloadKB,
+          uploadMs: uploadMs,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: 0,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          error: errMsg || undefined
+        });
+        if (aliyunHabitRealQueue.length) {
+          Promise.resolve(flushAliyunHabitRealQueue()).catch(function () {});
+        }
+      }
+    }
+
+    /** 实验拉取：只 merge habitCheckins，不全量 reload / 不换整包 state */
+    async function runAliyunHabitRealPullAndMerge() {
+      if (!isAliyunHabitRealSyncEnabled()) {
+        aliyunHabitRealAppendLog(
+          "Habit 真实同步未启用：请设 window.__ALIYUN_HABIT_REAL_SYNC_ENABLED=true"
+        );
+        return { ok: false, error: "disabled" };
+      }
+      const base = aliyunHabitRealBaseUrl();
+      const docId = aliyunHabitRealDocId();
+      if (!base || aliyunExpHasForbiddenSecret(base)) {
+        aliyunHabitRealAppendLog(!base ? "请填写 Function URL" : "中止：URL 疑似 AccessKey");
+        return { ok: false, error: "bad-url" };
+      }
+      const lt = aliyunHabitRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let renderMs = 0;
+      let payloadKB = 0;
+      let ok = false;
+      let errMsg = "";
+      let mergedDates = 0;
+      try {
+        aliyunHabitRealAppendLog("拉取 Habit docId=" + docId);
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson("GET", base + "/smoke/" + encodeURIComponent(docId), null);
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+        if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+          aliyunHabitRealAppendLog("云端尚无 Habit 文档（首次写入前正常）");
+          ok = true;
+          return { ok: true, empty: true, docId: docId };
+        }
+        if (!getRes.ok) {
+          throw new Error("GET HTTP " + getRes.status);
+        }
+        const tParse0 = Date.now();
+        const row = getRes.data && getRes.data.data;
+        const attrs = (row && (row.attrs || row)) || {};
+        const payloadRaw = attrs.payload != null ? attrs.payload : attrs;
+        let payloadStr = "";
+        try {
+          payloadStr = typeof payloadRaw === "string" ? payloadRaw : JSON.stringify(payloadRaw);
+        } catch (_ps) {
+          payloadStr = "";
+        }
+        payloadKB = Math.round((payloadStr.length / 1024) * 10) / 10;
+        const env = aliyunHabitRealParseEnvelope(payloadRaw);
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        const remoteHc = {};
+        const itemIds = Object.keys(env.items || {});
+        for (let i = 0; i < itemIds.length; i++) {
+          const parsed = aliyunHabitRealParseSlotId(itemIds[i]);
+          if (!parsed) continue;
+          if (!remoteHc[parsed.dateKey]) remoteHc[parsed.dateKey] = {};
+          remoteHc[parsed.dateKey][parsed.habitKey] = env.items[itemIds[i]];
+        }
+        mergedDates = Object.keys(remoteHc).length;
+        aliyunHabitRealSuppressPush = true;
+        const prevCloudSuppress = cloudSyncSuppressPush;
+        cloudSyncSuppressPush = true;
+        try {
+          state.habitCheckins = mergeHabitCheckinsForSync(state.habitCheckins, remoteHc);
+          if (typeof markHabitCheckinsSubTabDirty === "function") markHabitCheckinsSubTabDirty();
+          if (uiPaintDirty == null) {
+            uiPaintDirty = {};
+            if (typeof UI_PAINT_SLICE_KEYS !== "undefined") {
+              UI_PAINT_SLICE_KEYS.forEach(function (k) {
+                uiPaintDirty[k] = false;
+              });
+            }
+          }
+          if (typeof markUiPaintSlicesDirty === "function") markUiPaintSlicesDirty(["habit"]);
+          /* 只落本机；Habit 云写走阿里云，勿因 saveState 再推 Firebase 全量 */
+          saveState({ lists: ["habit"] });
+        } finally {
+          cloudSyncSuppressPush = prevCloudSuppress;
+          aliyunHabitRealSuppressPush = false;
+        }
+        mergeMs = Date.now() - tMerge0;
+
+        const tRen0 = Date.now();
+        const paintHabit = function () {
+          if (typeof finalizeHabitCheckinUiAfterPunch === "function") {
+            finalizeHabitCheckinUiAfterPunch();
+          } else if (typeof render === "function") {
+            render();
+          }
+        };
+        if (typeof requestAnimationFrame === "function") {
+          await new Promise(function (resolve) {
+            requestAnimationFrame(function () {
+              try {
+                paintHabit();
+              } finally {
+                resolve();
+              }
+            });
+          });
+        } else {
+          paintHabit();
+        }
+        renderMs = Date.now() - tRen0;
+        ok = true;
+        aliyunHabitRealAppendLog(
+          "合并完成：云端日期数 " + mergedDates + "，槽位数 " + itemIds.length
+        );
+        return { ok: true, docId: docId, mergedDates: mergedDates, slots: itemIds.length };
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        aliyunHabitRealAppendLog("拉取失败: " + errMsg);
+        return { ok: false, error: errMsg };
+      } finally {
+        lt.stop();
+        aliyunHabitRealLogReport({
+          ok: ok,
+          reason: "manual pull",
+          docId: docId,
+          payloadKB: payloadKB,
+          uploadMs: 0,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: renderMs,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          mergedDates: mergedDates,
+          error: errMsg || undefined
+        });
+      }
+    }
+
+    try {
+      window.runAliyunHabitRealPullAndMerge = runAliyunHabitRealPullAndMerge;
+      window.isAliyunHabitRealSyncEnabled = isAliyunHabitRealSyncEnabled;
+    } catch (_habWin) {}
 
     function aliyunExpLog(lines, msg) {
       lines.push(String(msg || ""));
@@ -107830,6 +108425,12 @@
       habitCheckinClearGuardUntil = Date.now() + 450;
       scheduleCloudSyncFullPushAfterCheckin();
       finalizeHabitCheckinUiAfterPunch();
+      /* 阿里云 Habit：本地 UI 已更新后再后台 enqueue；绝不 await 网络 */
+      try {
+        if (typeof notifyAliyunHabitRealAfterCheckinSave === "function") {
+          notifyAliyunHabitRealAfterCheckinSave("checkin");
+        }
+      } catch (_aliyunHabitErr) {}
     }
 
     /** pulse 合并后：先补 Done 再 reconcile；habitCheckins 已在 mergeCloudSyncPulseIntoState 合并，勿再 Math.max 覆盖 */
@@ -110410,6 +111011,17 @@
             });
           }
           mergeDetailTime("apply", "reMerge_habitCheckins", function () {
+            if (typeof isAliyunHabitRealSyncEnabled === "function" && isAliyunHabitRealSyncEnabled()) {
+              try {
+                merged.habitCheckins =
+                  state.habitCheckins && typeof state.habitCheckins === "object"
+                    ? JSON.parse(JSON.stringify(state.habitCheckins))
+                    : {};
+              } catch (_hcKeep) {
+                merged.habitCheckins = state.habitCheckins || {};
+              }
+              return;
+            }
             merged.habitCheckins = mergeHabitCheckinsForSync(state.habitCheckins, merged.habitCheckins);
           });
           const tsLive =
