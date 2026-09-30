@@ -95491,7 +95491,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930m";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930n";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -104102,6 +104102,12 @@
       if (m.includes("离线")) return "离线";
       if (m.includes("过大") || m.toLowerCase().includes("too_large")) return "数据过大";
       if (m.includes("存储已满") || m.includes("quota") || m.includes("QuotaExceeded")) return "本地存储已满";
+      /* 阿里云主路径角标文案：同步异常（非 Firebase「同步错误」） */
+      try {
+        if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) {
+          return "同步异常";
+        }
+      } catch (_aliyunBadge) {}
       return "同步错误";
     }
 
@@ -104883,6 +104889,9 @@
         );
       } catch (_c) {}
       if (on) {
+        if (typeof paintAliyunSyncPrimaryBadgeInitial === "function") {
+          paintAliyunSyncPrimaryBadgeInitial();
+        }
         scheduleAliyunSyncPrimaryBootPull();
         startAliyunSyncPrimaryForegroundPoll();
       } else {
@@ -105071,6 +105080,69 @@
       return false;
     }
 
+    /**
+     * 右上角角标 · 阿里云主路径三态（只改展示，不改拉取/上传逻辑、不加网络）。
+     * 已同步 · HH:MM | 同步中… | 同步异常
+     */
+    function paintAliyunSyncPrimaryBadgeSyncing() {
+      if (typeof isAliyunSyncPrimaryEnabled !== "function" || !isAliyunSyncPrimaryEnabled()) return;
+      setCloudSyncStatus("同步中…", "status-syncing");
+    }
+
+    function paintAliyunSyncPrimaryBadgeOk() {
+      if (typeof isAliyunSyncPrimaryEnabled !== "function" || !isAliyunSyncPrimaryEnabled()) return;
+      cloudSyncLastErrorMsg = "";
+      if (typeof markCloudSyncSuccess === "function") markCloudSyncSuccess();
+      setCloudSyncStatus(buildCloudSyncConnectedBadgeText(), "status-connected");
+    }
+
+    function paintAliyunSyncPrimaryBadgeError(errMsg) {
+      if (typeof isAliyunSyncPrimaryEnabled !== "function" || !isAliyunSyncPrimaryEnabled()) return;
+      cloudSyncLastErrorMsg = String(errMsg || "阿里云同步失败");
+      setCloudSyncStatus("同步异常", "status-error");
+    }
+
+    /** 启动时：有上次成功时间则先显示已同步；否则显示同步中（等待 boot 拉取） */
+    function paintAliyunSyncPrimaryBadgeInitial() {
+      if (typeof isAliyunSyncPrimaryEnabled !== "function" || !isAliyunSyncPrimaryEnabled()) return;
+      if (getCloudSyncLastSuccessAt() > 0) {
+        setCloudSyncStatus(buildCloudSyncConnectedBadgeText(), "status-connected");
+      } else {
+        paintAliyunSyncPrimaryBadgeSyncing();
+      }
+    }
+
+    /**
+     * 单域 flush/手动拉取报告 → 角标（编排拉取进行中时跳过，避免 6 域闪烁）。
+     */
+    function noteAliyunSyncPrimaryBadgeFromDomainReport(report) {
+      if (typeof isAliyunSyncPrimaryEnabled !== "function" || !isAliyunSyncPrimaryEnabled()) return;
+      if (aliyunSyncPrimaryPullInFlight) return;
+      if (!report || report.skipped) return;
+      if (report.error === "disabled") return;
+      if (report.ok) {
+        paintAliyunSyncPrimaryBadgeOk();
+        return;
+      }
+      if (report.ok === false) {
+        paintAliyunSyncPrimaryBadgeError(report.error);
+      }
+    }
+
+    function aliyunSyncPrimaryFirstErrorFromBootReport(report) {
+      if (!report || !report.results || typeof report.results !== "object") {
+        return "阿里云同步失败";
+      }
+      const ids = ["done", "habit", "forge", "anniv", "sprint", "todayPlan"];
+      for (let i = 0; i < ids.length; i++) {
+        const r = report.results[ids[i]];
+        if (r && r.ok === false) {
+          return r.error || ids[i] + " 同步失败";
+        }
+      }
+      return "阿里云同步失败";
+    }
+
     async function runAliyunSyncPrimaryNearRealtimePull(reason) {
       if (!isAliyunSyncPrimaryEnabled()) {
         return { ok: false, skipped: true, reason: "primary-off" };
@@ -105087,12 +105159,31 @@
         return { ok: false, skipped: true, reason: "flush-busy" };
       }
       aliyunSyncPrimaryPullInFlight = true;
+      /*
+       * 5s 静默轮询：已是「已同步」时不切到「同步中…」，避免绿↔蓝闪烁伤流畅性。
+       * boot / 回前台 / 异常恢复仍显示同步中。
+       */
+      const pullReason = reason || "poll";
+      const quietPoll =
+        pullReason === "poll" &&
+        cloudSyncMachineStatus === "synced" &&
+        getCloudSyncLastSuccessAt() > 0;
+      if (!quietPoll) paintAliyunSyncPrimaryBadgeSyncing();
       try {
         try {
-          console.log("[aliyun-sync-primary] near-realtime pull:", reason || "poll");
+          console.log("[aliyun-sync-primary] near-realtime pull:", pullReason);
         } catch (_c) {}
         /* 复用启动串行拉取；域内指纹未变会跳过 merge/render */
-        return await runAliyunSyncPrimaryBootPull();
+        const report = await runAliyunSyncPrimaryBootPull();
+        if (report && report.ok) {
+          paintAliyunSyncPrimaryBadgeOk();
+        } else if (report && !report.skipped) {
+          paintAliyunSyncPrimaryBadgeError(aliyunSyncPrimaryFirstErrorFromBootReport(report));
+        }
+        return report;
+      } catch (err) {
+        paintAliyunSyncPrimaryBadgeError(err && err.message ? err.message : String(err));
+        throw err;
       } finally {
         aliyunSyncPrimaryPullInFlight = false;
       }
@@ -105180,6 +105271,9 @@
           window.__ALIYUN_SYNC_PRIMARY_ENABLED = true;
         } catch (_w) {}
         applyAliyunSyncPrimaryDomainWindowFlags(true);
+        if (typeof paintAliyunSyncPrimaryBadgeInitial === "function") {
+          paintAliyunSyncPrimaryBadgeInitial();
+        }
         try {
           console.log(
             "[aliyun-sync-primary] 正式站默认主路径已启用；回退: setAliyunSyncPrimaryEnabled(false)"
@@ -105391,6 +105485,9 @@
       try {
         window.__aliyunDoneRealLastReport = report;
       } catch (_w) {}
+      if (typeof noteAliyunSyncPrimaryBadgeFromDomainReport === "function") {
+        noteAliyunSyncPrimaryBadgeFromDomainReport(report);
+      }
       aliyunDoneRealAppendLog("—— Done 真实同步 " + (report.reason || "") + " ——");
       aliyunDoneRealAppendLog(
         "ok=" +
@@ -105525,6 +105622,9 @@
         return;
       }
       aliyunDoneRealFlushing = true;
+      if (typeof paintAliyunSyncPrimaryBadgeSyncing === "function") {
+        paintAliyunSyncPrimaryBadgeSyncing();
+      }
       const batch = aliyunDoneRealQueue.slice();
       aliyunDoneRealQueue = [];
       const reason = batch
@@ -106087,6 +106187,9 @@
       try {
         window.__aliyunHabitRealLastReport = report;
       } catch (_w) {}
+      if (typeof noteAliyunSyncPrimaryBadgeFromDomainReport === "function") {
+        noteAliyunSyncPrimaryBadgeFromDomainReport(report);
+      }
       aliyunHabitRealAppendLog("—— Habit 真实同步 " + (report.reason || "") + " ——");
       aliyunHabitRealAppendLog(
         "ok=" +
@@ -106312,6 +106415,9 @@
         return;
       }
       aliyunHabitRealFlushing = true;
+      if (typeof paintAliyunSyncPrimaryBadgeSyncing === "function") {
+        paintAliyunSyncPrimaryBadgeSyncing();
+      }
       const batch = aliyunHabitRealQueue.splice(0, aliyunHabitRealQueue.length);
       const reason = batch.length ? batch[batch.length - 1].reason : "flush";
       const base = aliyunHabitRealBaseUrl();
@@ -107061,6 +107167,9 @@
       try {
         window.__aliyunForgeRealLastReport = report;
       } catch (_w) {}
+      if (typeof noteAliyunSyncPrimaryBadgeFromDomainReport === "function") {
+        noteAliyunSyncPrimaryBadgeFromDomainReport(report);
+      }
       aliyunForgeRealAppendLog("—— Forge 真实同步 " + (report.reason || "") + " ——");
       aliyunForgeRealAppendLog(
         "ok=" +
@@ -107152,6 +107261,9 @@
         return;
       }
       aliyunForgeRealFlushing = true;
+      if (typeof paintAliyunSyncPrimaryBadgeSyncing === "function") {
+        paintAliyunSyncPrimaryBadgeSyncing();
+      }
       const batch = aliyunForgeRealQueue.splice(0, aliyunForgeRealQueue.length);
       const reason = batch.length ? batch[batch.length - 1].reason : "flush";
       const base = aliyunForgeRealBaseUrl();
@@ -107656,6 +107768,9 @@
       try {
         window.__aliyunAnnivRealLastReport = report;
       } catch (_w) {}
+      if (typeof noteAliyunSyncPrimaryBadgeFromDomainReport === "function") {
+        noteAliyunSyncPrimaryBadgeFromDomainReport(report);
+      }
       aliyunAnnivRealAppendLog("—— Anniv 真实同步 " + (report.reason || "") + " ——");
       aliyunAnnivRealAppendLog(
         "ok=" +
@@ -107791,6 +107906,9 @@
         return;
       }
       aliyunAnnivRealFlushing = true;
+      if (typeof paintAliyunSyncPrimaryBadgeSyncing === "function") {
+        paintAliyunSyncPrimaryBadgeSyncing();
+      }
       const batch = aliyunAnnivRealQueue.splice(0, aliyunAnnivRealQueue.length);
       const reason = batch.length ? batch[batch.length - 1].reason : "flush";
       const base = aliyunAnnivRealBaseUrl();
@@ -108361,6 +108479,9 @@
       try {
         window.__aliyunSprintRealLastReport = report;
       } catch (_w) {}
+      if (typeof noteAliyunSyncPrimaryBadgeFromDomainReport === "function") {
+        noteAliyunSyncPrimaryBadgeFromDomainReport(report);
+      }
       aliyunSprintRealAppendLog("—— Sprint 真实同步 " + (report.reason || "") + " ——");
       aliyunSprintRealAppendLog(
         "ok=" +
@@ -108489,6 +108610,9 @@
         return;
       }
       aliyunSprintRealFlushing = true;
+      if (typeof paintAliyunSyncPrimaryBadgeSyncing === "function") {
+        paintAliyunSyncPrimaryBadgeSyncing();
+      }
       const batch = aliyunSprintRealQueue.splice(0, aliyunSprintRealQueue.length);
       const reason = batch.length ? batch[batch.length - 1].reason : "flush";
       const base = aliyunSprintRealBaseUrl();
@@ -109005,6 +109129,9 @@
       try {
         window.__aliyunTodayPlanRealLastReport = report;
       } catch (_w) {}
+      if (typeof noteAliyunSyncPrimaryBadgeFromDomainReport === "function") {
+        noteAliyunSyncPrimaryBadgeFromDomainReport(report);
+      }
       aliyunTodayPlanRealAppendLog("—— TodayPlan 真实同步 " + (report.reason || "") + " ——");
       aliyunTodayPlanRealAppendLog(
         "ok=" +
@@ -109088,6 +109215,9 @@
         return;
       }
       aliyunTodayPlanRealFlushing = true;
+      if (typeof paintAliyunSyncPrimaryBadgeSyncing === "function") {
+        paintAliyunSyncPrimaryBadgeSyncing();
+      }
       const batch = aliyunTodayPlanRealQueue.splice(0, aliyunTodayPlanRealQueue.length);
       const reason = batch.length ? batch[batch.length - 1].reason : "flush";
       const base = aliyunTodayPlanRealBaseUrl();
