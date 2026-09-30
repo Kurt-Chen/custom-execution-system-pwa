@@ -95399,7 +95399,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930r";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930s";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -105320,6 +105320,20 @@
           listKey: item.todoListMeta.listKey != null ? String(item.todoListMeta.listKey) : ""
         };
       }
+      /* Rule of 100 时间轴行：与 manualDone 一样走 Done 域；标签文案靠 text【Rule of 100】，meta 供派生打卡 */
+      if (item.rule100Meta && typeof item.rule100Meta === "object") {
+        const m = item.rule100Meta;
+        const meta = {
+          key: m.key != null ? String(m.key) : "",
+          date: m.date != null ? String(m.date) : "",
+          kind: m.kind != null ? String(m.kind) : "day"
+        };
+        if (m.hoursDelta != null && Number.isFinite(Number(m.hoursDelta))) {
+          meta.hoursDelta = Number(m.hoursDelta);
+        }
+        if (m.unit != null && String(m.unit)) meta.unit = String(m.unit);
+        out.rule100Meta = meta;
+      }
       return out;
     }
 
@@ -105329,7 +105343,9 @@
         roomId: String(cloudSyncRoomId || ""),
         envelopeUpdatedAt: Date.now(),
         items: {},
-        tombstones: {}
+        tombstones: {},
+        /* Sex Training / Mind / Body 整点确认：原 Firebase pulse.moveBreakDay，主路径挂 Done 信封 */
+        moveBreakDay: null
       };
     }
 
@@ -105348,6 +105364,12 @@
       env.envelopeUpdatedAt = Number(p.envelopeUpdatedAt) || 0;
       if (p.items && typeof p.items === "object") env.items = p.items;
       if (p.tombstones && typeof p.tombstones === "object") env.tombstones = p.tombstones;
+      if (p.moveBreakDay && typeof p.moveBreakDay === "object") {
+        env.moveBreakDay =
+          typeof normalizeMoveBreakDayValue === "function"
+            ? normalizeMoveBreakDayValue(p.moveBreakDay)
+            : p.moveBreakDay;
+      }
       return env;
     }
 
@@ -105389,6 +105411,16 @@
         if (env.tombstones) delete env.tombstones[id];
         if (!env.items) env.items = {};
         env.items[id] = item;
+      } else if (mutation.op === "moveBreakDay" && mutation.moveBreakDay) {
+        /* Sex Training 等：并入信封顶层，不占 items */
+        const incoming =
+          typeof normalizeMoveBreakDayValue === "function"
+            ? normalizeMoveBreakDayValue(mutation.moveBreakDay)
+            : mutation.moveBreakDay;
+        env.moveBreakDay =
+          typeof mergeMoveBreakDayForSync === "function"
+            ? mergeMoveBreakDayForSync(env.moveBreakDay, incoming)
+            : incoming;
       }
       env.envelopeUpdatedAt = Math.max(Number(env.envelopeUpdatedAt) || 0, now);
       env.kind = ALIYUN_DONE_REAL_KIND;
@@ -105543,6 +105575,36 @@
         id: sid,
         deletedAt: deletedAt,
         reason: reason
+      });
+    }
+
+    /** Sex Training / Mind / Body：把 state.moveBreakDay 挂到 Done 信封顶层上传 */
+    function notifyAliyunDoneRealMoveBreakDay(reason) {
+      if (!isAliyunDoneRealSyncEnabled()) return;
+      let mb = null;
+      try {
+        mb =
+          typeof normalizeMoveBreakDayValue === "function"
+            ? normalizeMoveBreakDayValue(state.moveBreakDay)
+            : state.moveBreakDay && typeof state.moveBreakDay === "object"
+              ? state.moveBreakDay
+              : null;
+      } catch (_mb) {
+        mb = null;
+      }
+      if (!mb || typeof mb !== "object") return;
+      aliyunDoneRealAppendLog(
+        "notify moveBreakDay: reason=" +
+          (reason || "") +
+          " dateKey=" +
+          (mb.dateKey || "") +
+          " count=" +
+          (mb.count || 0)
+      );
+      scheduleAliyunDoneRealSync(reason || "moveBreakDay", {
+        op: "moveBreakDay",
+        id: "__moveBreakDay__",
+        moveBreakDay: mb
       });
     }
 
@@ -105794,6 +105856,8 @@
             if (remote.outcomeScore != null) next.outcomeScore = remote.outcomeScore;
             else if (local.outcomeScore != null) next.outcomeScore = local.outcomeScore;
             if (local.manualDone || remote.manualDone) next.manualDone = true;
+            if (remote.rule100Meta) next.rule100Meta = remote.rule100Meta;
+            else if (local.rule100Meta) next.rule100Meta = local.rule100Meta;
             Object.keys(next).forEach(function (k) {
               local[k] = next[k];
             });
@@ -105815,6 +105879,26 @@
           });
           delete localById[tid];
           tombstoneApplied += 1;
+        }
+        /* Sex Training：信封顶层 moveBreakDay → state（原 Firebase pulse 路径在主路径下已跳过） */
+        let moveBreakMerged = false;
+        if (env.moveBreakDay && typeof env.moveBreakDay === "object") {
+          const prevMb = state.moveBreakDay;
+          const nextMb =
+            typeof mergeMoveBreakDayForSync === "function"
+              ? mergeMoveBreakDayForSync(prevMb, env.moveBreakDay)
+              : env.moveBreakDay;
+          let sameMb = false;
+          try {
+            sameMb = JSON.stringify(prevMb || {}) === JSON.stringify(nextMb || {});
+          } catch (_mbEq) {
+            sameMb = false;
+          }
+          if (!sameMb) {
+            state.moveBreakDay = nextMb;
+            moveBreakMerged = true;
+            mergedCount += 1;
+          }
         }
         mergeMs = Date.now() - tMerge0;
 
@@ -105853,12 +105937,21 @@
           } else {
             render();
           }
+          if (moveBreakMerged && typeof renderDoneMoveHourlySlogan === "function") {
+            try {
+              renderDoneMoveHourlySlogan();
+            } catch (_mbRen) {}
+          }
           renderMs = Date.now() - tRen0;
         }
         aliyunSyncPrimaryMarkPullFingerprint("done", donePullFp);
         ok = true;
         aliyunDoneRealAppendLog(
-          "合并完成：upsert/更新 " + mergedCount + "，tombstone 生效 " + tombstoneApplied
+          "合并完成：upsert/更新 " +
+            mergedCount +
+            "，tombstone 生效 " +
+            tombstoneApplied +
+            (moveBreakMerged ? "，moveBreakDay 已合并" : "")
         );
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
@@ -105890,6 +105983,8 @@
 
     try {
       window.runAliyunDoneRealPullAndMerge = runAliyunDoneRealPullAndMerge;
+      window.notifyAliyunDoneRealMoveBreakDay = notifyAliyunDoneRealMoveBreakDay;
+      window.notifyAliyunDoneRealUpsert = notifyAliyunDoneRealUpsert;
       window.isAliyunDoneRealSyncEnabled = isAliyunDoneRealSyncEnabled;
     } catch (_doneWin) {}
 
@@ -110470,6 +110565,7 @@
       window.runAliyunRule100RealPullAndMerge = runAliyunRule100RealPullAndMerge;
       window.isAliyunRule100RealSyncEnabled = isAliyunRule100RealSyncEnabled;
       window.notifyAliyunRule100RealAfterLocalChange = notifyAliyunRule100RealAfterLocalChange;
+      window.syncRule100ToDone = syncRule100ToDone;
     } catch (_r100Win) {}
 
 
@@ -122835,9 +122931,21 @@
     }
 
     function removeRule100DoneCopy(ruleKey, dateStr) {
-      state.done = state.done.filter(
-        (item) => !(item.rule100Meta && item.rule100Meta.key === ruleKey && item.rule100Meta.date === dateStr)
-      );
+      const removed = [];
+      state.done = state.done.filter(function (item) {
+        if (item && item.rule100Meta && item.rule100Meta.key === ruleKey && item.rule100Meta.date === dateStr) {
+          removed.push(item);
+          return false;
+        }
+        return true;
+      });
+      if (typeof notifyAliyunDoneRealTombstone === "function") {
+        removed.forEach(function (it) {
+          try {
+            notifyAliyunDoneRealTombstone("rule100-remove", it.id, it);
+          } catch (_r100Rm) {}
+        });
+      }
     }
 
     /** 百日「按天」打卡：取消单日或删一条 Done 时只移除一行（小时单位卡仍用 removeRule100HoursFromSlotsRight） */
@@ -122848,16 +122956,34 @@
         return m.kind !== "hours";
       });
       if (idx === -1) return false;
+      const removed = state.done[idx];
       state.done.splice(idx, 1);
+      if (removed && typeof notifyAliyunDoneRealTombstone === "function") {
+        try {
+          notifyAliyunDoneRealTombstone("rule100-day-undo", removed.id, removed);
+        } catch (_r100DayUndo) {}
+      }
       return true;
     }
 
     function purgeRule100DoneForKey(ruleKey) {
       const rk = String(ruleKey || "");
       if (!rk) return;
+      const removed = [];
       state.done = state.done.filter(function (item) {
-        return !(item.rule100Meta && String(item.rule100Meta.key) === rk);
+        if (item && item.rule100Meta && String(item.rule100Meta.key) === rk) {
+          removed.push(item);
+          return false;
+        }
+        return true;
       });
+      if (typeof notifyAliyunDoneRealTombstone === "function") {
+        removed.forEach(function (it) {
+          try {
+            notifyAliyunDoneRealTombstone("rule100-purge", it.id, it);
+          } catch (_r100Purge) {}
+        });
+      }
     }
 
     function closeAllRule100CardMenus() {
@@ -122956,12 +123082,19 @@
     }
 
     function syncRule100ToDone(ruleKey, dateStr, title) {
-      state.done.unshift({
+      const newItem = {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: "【Rule of 100】" + title,
         completedAt: Date.now(),
+        updatedAt: Date.now(),
         rule100Meta: { key: ruleKey, date: dateStr, kind: "day" }
-      });
+      };
+      state.done.unshift(newItem);
+      if (typeof notifyAliyunDoneRealUpsert === "function") {
+        try {
+          notifyAliyunDoneRealUpsert("rule100-day", newItem);
+        } catch (_r100DoneUp) {}
+      }
     }
 
     /** Closed List 独立完成：若条目含周计划镜像（mirrorOf）则与周计划互相同步完成；否则仅同步 My Done，不回写周计划/备忘录/其它模块 */
@@ -123756,7 +123889,7 @@
       const uLabel = getRule100UnitLabel(unit);
       const t = title && String(title).trim() ? String(title).trim() : "自定义100" + uLabel;
       const rk = ruleKey && String(ruleKey) ? String(ruleKey) : "rule100D";
-      state.done.unshift({
+      const newItem = {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text:
           "【Rule of 100】" +
@@ -123768,6 +123901,7 @@
           formatRule100HoursLabel(newTotal) +
           "/100）",
         completedAt: Date.now(),
+        updatedAt: Date.now(),
         rule100Meta: {
           key: rk,
           date: formatDateInputValue(new Date()),
@@ -123775,7 +123909,13 @@
           hoursDelta: hoursAdded,
           unit: u
         }
-      });
+      };
+      state.done.unshift(newItem);
+      if (typeof notifyAliyunDoneRealUpsert === "function") {
+        try {
+          notifyAliyunDoneRealUpsert("rule100-hours", newItem);
+        } catch (_r100HrsUp) {}
+      }
     }
 
     /** 从 Done 去掉一条「今日」的百单位类记录（unshift 最新在前，用于格子取消一格时配对撤销） */
@@ -123787,7 +123927,13 @@
         return m.kind === "hours" || m.kind == null;
       });
       if (idx >= 0) {
+        const removed = state.done[idx];
         state.done.splice(idx, 1);
+        if (removed && typeof notifyAliyunDoneRealTombstone === "function") {
+          try {
+            notifyAliyunDoneRealTombstone("rule100-hours-undo", removed.id, removed);
+          } catch (_r100HrsUndo) {}
+        }
         return true;
       }
       return false;
@@ -170776,6 +170922,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       day.ackedKindByHour[String(hour)] = getDoneMoveHourlyKind(hour).id;
       day.count = Math.max(prevCount + 1, day.ackedHours.length);
       saveState();
+      /* 阿里云主路径：Firebase pulse 已 soft-skip，改走 Done 信封顶层 moveBreakDay */
+      if (typeof notifyAliyunDoneRealMoveBreakDay === "function") {
+        try {
+          notifyAliyunDoneRealMoveBreakDay("ack-move-hourly");
+        } catch (_mbAliyun) {}
+      }
       flushCloudSyncPulseImmediate();
       cloudSyncLastFullPushAt = 0;
       if (typeof scheduleCloudSyncFullPushDeferred === "function") {
