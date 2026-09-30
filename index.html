@@ -95399,7 +95399,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930aa";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930ab";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -104760,7 +104760,14 @@
       "rule100UnitProjectKeys",
       "closedList",
       "memo",
-      "hatersDoubtersLog"
+      "hatersDoubtersLog",
+      "ageGoals",
+      "moneyGoalLabels",
+      "goalWhys",
+      "projectTasks",
+      "kineticCountdowns",
+      "readingPlan",
+      "life4000Weeks"
     ];
     const ALIYUN_SYNC_PRIMARY_DOMAIN_WINDOW_FLAGS = [
       "__ALIYUN_DONE_REAL_SYNC_ENABLED",
@@ -104771,7 +104778,8 @@
       "__ALIYUN_TODAY_PLAN_REAL_SYNC_ENABLED",
       "__ALIYUN_AMB_REAL_SYNC_ENABLED",
       "__ALIYUN_RULE100_REAL_SYNC_ENABLED",
-      "__ALIYUN_LISTS_REAL_SYNC_ENABLED"
+      "__ALIYUN_LISTS_REAL_SYNC_ENABLED",
+      "__ALIYUN_GOALS_REAL_SYNC_ENABLED"
     ];
     let aliyunSyncPrimaryBootPullStarted = false;
 
@@ -105038,7 +105046,7 @@
         console.log(
           "[aliyun-sync-primary]",
           on
-            ? "已开启（9 域含 AMB/Rule100/Lists；刷新后自动拉取；默认跳过 Firebase 启动）"
+            ? "已开启（10 域含 AMB/Rule100/Lists/Goals；刷新后自动拉取；默认跳过 Firebase 启动）"
             : "已关闭（域旗标清除，回退 Firebase 主路径）"
         );
       } catch (_c) {}
@@ -105108,12 +105116,19 @@
             typeof runAliyunListsRealPullAndMerge === "function"
               ? runAliyunListsRealPullAndMerge
               : null
+        },
+        {
+          id: "goals",
+          run:
+            typeof runAliyunGoalsRealPullAndMerge === "function"
+              ? runAliyunGoalsRealPullAndMerge
+              : null
         }
       ];
       const results = {};
       let allOk = true;
       try {
-        console.log("[aliyun-sync-primary] boot pull start (9 domains, +Lists)");
+        console.log("[aliyun-sync-primary] boot pull start (10 domains, +Goals)");
       } catch (_c0) {}
       for (let i = 0; i < domains.length; i++) {
         const d = domains[i];
@@ -105268,6 +105283,14 @@
         )
           return true;
       } catch (_lists) {}
+      try {
+        if (
+          aliyunGoalsRealFlushing ||
+          aliyunGoalsRealSuppressPush ||
+          aliyunGoalsRealPendingReason
+        )
+          return true;
+      } catch (_goals) {}
       return false;
     }
 
@@ -111467,6 +111490,637 @@
       window.notifyAliyunListsRealAfterLocalChange = notifyAliyunListsRealAfterLocalChange;
     } catch (_listsWin) {}
 
+    /**
+     * —— Goals 域真实同步（阿里云，批 5）——
+     * ageGoals / moneyGoalLabels / goalWhys / projectTasks /
+     * kineticCountdowns / readingPlan / life4000Weeks。
+     * Firebase 主路径软跳过后上述字段无独立域 → 跨端不同步。
+     * 复用既有 merge*；快照信封 + 指纹跳过；不改 5s 轮询 / UI。
+     */
+    const ALIYUN_GOALS_REAL_KIND = "goals-real-v1";
+    const ALIYUN_GOALS_REAL_PERF_PREFIX = "aliyun-goals-real:";
+    const ALIYUN_GOALS_REAL_SYNC_ENABLED = false;
+    let aliyunGoalsRealFlushTimer = null;
+    let aliyunGoalsRealFlushing = false;
+    let aliyunGoalsRealPendingReason = "";
+    let aliyunGoalsRealLastReport = null;
+    let aliyunGoalsRealSuppressPush = false;
+
+    function isAliyunGoalsRealSyncEnabled() {
+      if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) return true;
+      try {
+        if (window.__ALIYUN_GOALS_REAL_SYNC_ENABLED === true) return true;
+      } catch (_w) {}
+      return ALIYUN_GOALS_REAL_SYNC_ENABLED === true;
+    }
+
+    function aliyunGoalsRealAppendLog(msg) {
+      try {
+        console.log("[aliyun-goals-real]", msg);
+      } catch (_c) {}
+    }
+
+    function aliyunGoalsRealPerfMark(name) {
+      try {
+        if (typeof performance !== "undefined" && performance.mark) {
+          performance.mark(ALIYUN_GOALS_REAL_PERF_PREFIX + name);
+        }
+      } catch (_p) {}
+    }
+
+    function aliyunGoalsRealDocId() {
+      return "aliyun-goals-real-v1-" + getAliyunSyncRoomIdForDocs();
+    }
+
+    function aliyunGoalsRealBaseUrl() {
+      let u = String((aliyunExpUrlInput && aliyunExpUrlInput.value) || ALIYUN_EXP_DEFAULT_URL).trim();
+      while (u.length && u.charAt(u.length - 1) === "/") u = u.slice(0, -1);
+      return u;
+    }
+
+    function aliyunGoalsRealDeepClone(val, fallback) {
+      try {
+        return JSON.parse(JSON.stringify(val));
+      } catch (_e) {
+        return fallback;
+      }
+    }
+
+    function aliyunGoalsRealCloneSliceFromState() {
+      const books =
+        state.readingPlan && Array.isArray(state.readingPlan.books) ? state.readingPlan.books : [];
+      return {
+        ageGoals: aliyunGoalsRealDeepClone(state.ageGoals, {}),
+        moneyGoalLabels: aliyunGoalsRealDeepClone(state.moneyGoalLabels, {}),
+        goalWhys: aliyunGoalsRealDeepClone(state.goalWhys, {}),
+        projectTasks: aliyunGoalsRealDeepClone(state.projectTasks, { quoteApp: [] }),
+        kineticCountdowns: aliyunGoalsRealDeepClone(state.kineticCountdowns, []),
+        readingPlan: { books: aliyunGoalsRealDeepClone(books, []) },
+        life4000Weeks: aliyunGoalsRealDeepClone(state.life4000Weeks, {
+          name: "",
+          birthDate: "",
+          birthLunarText: "",
+          lastDoneTuesdayKey: ""
+        })
+      };
+    }
+
+    function aliyunGoalsRealEmptyEnvelope() {
+      return {
+        kind: ALIYUN_GOALS_REAL_KIND,
+        roomId: String(cloudSyncRoomId || ""),
+        envelopeUpdatedAt: Date.now(),
+        ageGoals: {},
+        moneyGoalLabels: {},
+        goalWhys: {},
+        projectTasks: { quoteApp: [] },
+        kineticCountdowns: [],
+        readingPlan: { books: [] },
+        life4000Weeks: { name: "", birthDate: "", birthLunarText: "", lastDoneTuesdayKey: "" }
+      };
+    }
+
+    function aliyunGoalsRealParseEnvelope(rawPayload) {
+      let p = rawPayload;
+      if (typeof p === "string") {
+        try {
+          p = JSON.parse(p);
+        } catch (_e) {
+          return aliyunGoalsRealEmptyEnvelope();
+        }
+      }
+      if (!p || typeof p !== "object") return aliyunGoalsRealEmptyEnvelope();
+      const env = aliyunGoalsRealEmptyEnvelope();
+      env.roomId = p.roomId != null ? String(p.roomId) : env.roomId;
+      env.envelopeUpdatedAt = Number(p.envelopeUpdatedAt) || 0;
+      if (p.ageGoals && typeof p.ageGoals === "object") env.ageGoals = p.ageGoals;
+      if (p.moneyGoalLabels && typeof p.moneyGoalLabels === "object") env.moneyGoalLabels = p.moneyGoalLabels;
+      if (p.goalWhys && typeof p.goalWhys === "object") env.goalWhys = p.goalWhys;
+      if (p.projectTasks && typeof p.projectTasks === "object") env.projectTasks = p.projectTasks;
+      if (Array.isArray(p.kineticCountdowns)) env.kineticCountdowns = p.kineticCountdowns;
+      if (p.readingPlan && typeof p.readingPlan === "object") {
+        env.readingPlan = {
+          books: Array.isArray(p.readingPlan.books) ? p.readingPlan.books : []
+        };
+      }
+      if (p.life4000Weeks && typeof p.life4000Weeks === "object") env.life4000Weeks = p.life4000Weeks;
+      env.kind = ALIYUN_GOALS_REAL_KIND;
+      return env;
+    }
+
+    function aliyunGoalsRealSliceFingerprint(slice) {
+      let s = "";
+      try {
+        s = JSON.stringify({
+          ageGoals: slice.ageGoals || {},
+          moneyGoalLabels: slice.moneyGoalLabels || {},
+          goalWhys: slice.goalWhys || {},
+          projectTasks: slice.projectTasks || {},
+          kineticCountdowns: slice.kineticCountdowns || [],
+          readingPlan: slice.readingPlan || { books: [] },
+          life4000Weeks: slice.life4000Weeks || {}
+        });
+      } catch (_e) {
+        s = "";
+      }
+      return typeof aliyunSyncPrimaryPayloadFingerprint === "function"
+        ? aliyunSyncPrimaryPayloadFingerprint(s)
+        : String(s.length);
+    }
+
+    function aliyunGoalsRealSlotContentScore(slot) {
+      if (slot == null) return 0;
+      if (typeof slot === "string") return String(slot).trim().length;
+      if (typeof slot !== "object") return 0;
+      let n = 0;
+      ["title", "detail", "why", "giveUp", "cost", "text"].forEach(function (k) {
+        if (typeof slot[k] === "string") n += slot[k].trim().length;
+      });
+      return n;
+    }
+
+    function aliyunGoalsRealMergeAgeGoals(loc, rem) {
+      const a = loc && typeof loc === "object" ? loc : {};
+      const b = rem && typeof rem === "object" ? rem : {};
+      const out = {};
+      const keys = {};
+      Object.keys(a).forEach(function (k) {
+        keys[k] = true;
+      });
+      Object.keys(b).forEach(function (k) {
+        keys[k] = true;
+      });
+      Object.keys(keys).forEach(function (k) {
+        const la = Array.isArray(a[k]) ? a[k] : [];
+        const ra = Array.isArray(b[k]) ? b[k] : [];
+        const n = Math.max(la.length, ra.length);
+        const slots = [];
+        for (let i = 0; i < n; i++) {
+          const ls = la[i];
+          const rs = ra[i];
+          const lScore = aliyunGoalsRealSlotContentScore(ls);
+          const rScore = aliyunGoalsRealSlotContentScore(rs);
+          if (lScore === 0 && rScore === 0) {
+            slots.push(ls != null ? ls : rs != null ? rs : "");
+          } else if (lScore >= rScore) {
+            slots.push(ls);
+          } else {
+            slots.push(rs);
+          }
+        }
+        out[k] = slots;
+      });
+      return out;
+    }
+
+    function aliyunGoalsRealMergeStringMap(loc, rem) {
+      const a = loc && typeof loc === "object" ? loc : {};
+      const b = rem && typeof rem === "object" ? rem : {};
+      const out = {};
+      const keys = {};
+      Object.keys(a).forEach(function (k) {
+        keys[k] = true;
+      });
+      Object.keys(b).forEach(function (k) {
+        keys[k] = true;
+      });
+      Object.keys(keys).forEach(function (k) {
+        const lv = typeof a[k] === "string" ? a[k] : a[k] != null ? String(a[k]) : "";
+        const rv = typeof b[k] === "string" ? b[k] : b[k] != null ? String(b[k]) : "";
+        if (lv && !rv) out[k] = lv;
+        else if (!lv && rv) out[k] = rv;
+        else if (lv && rv) out[k] = lv.length >= rv.length ? lv : rv;
+      });
+      return out;
+    }
+
+    function aliyunGoalsRealMergeLife4000(loc, rem) {
+      const a = loc && typeof loc === "object" ? loc : {};
+      const b = rem && typeof rem === "object" ? rem : {};
+      const pickStr = function (l, r) {
+        const ls = typeof l === "string" ? l : "";
+        const rs = typeof r === "string" ? r : "";
+        if (ls && !rs) return ls;
+        if (!ls && rs) return rs;
+        return ls.length >= rs.length ? ls : rs;
+      };
+      const locKey = typeof a.lastDoneTuesdayKey === "string" ? a.lastDoneTuesdayKey : "";
+      const remKey = typeof b.lastDoneTuesdayKey === "string" ? b.lastDoneTuesdayKey : "";
+      return {
+        name: pickStr(a.name, b.name),
+        birthDate: pickStr(a.birthDate, b.birthDate),
+        birthLunarText: pickStr(a.birthLunarText, b.birthLunarText),
+        lastDoneTuesdayKey: locKey >= remKey ? locKey : remKey
+      };
+    }
+
+    function aliyunGoalsRealBuildMergedSlice(localSlice, remoteSlice) {
+      const loc = localSlice && typeof localSlice === "object" ? localSlice : {};
+      const rem = remoteSlice && typeof remoteSlice === "object" ? remoteSlice : {};
+      const ts =
+        state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
+      const projectMerged =
+        typeof mergeProjectTasksForSync === "function"
+          ? mergeProjectTasksForSync(loc.projectTasks, rem.projectTasks)
+          : loc.projectTasks || { quoteApp: [] };
+      if (projectMerged && Array.isArray(projectMerged.quoteApp) && typeof omitTombstonedIdRecords === "function") {
+        projectMerged.quoteApp = omitTombstonedIdRecords(projectMerged.quoteApp, ts);
+      }
+      const kineticMerged =
+        typeof mergeIdRecordArraysPreferLocalOnTie === "function"
+          ? mergeIdRecordArraysPreferLocalOnTie(
+              Array.isArray(loc.kineticCountdowns) ? loc.kineticCountdowns : [],
+              Array.isArray(rem.kineticCountdowns) ? rem.kineticCountdowns : []
+            )
+          : Array.isArray(loc.kineticCountdowns)
+            ? loc.kineticCountdowns.slice()
+            : [];
+      const locBooks =
+        loc.readingPlan && Array.isArray(loc.readingPlan.books) ? loc.readingPlan.books : [];
+      const remBooks =
+        rem.readingPlan && Array.isArray(rem.readingPlan.books) ? rem.readingPlan.books : [];
+      const booksMerged =
+        typeof mergeReadingPlanBooksForSync === "function"
+          ? mergeReadingPlanBooksForSync(locBooks, remBooks, ts)
+          : locBooks.slice();
+      return {
+        ageGoals: aliyunGoalsRealMergeAgeGoals(loc.ageGoals, rem.ageGoals),
+        moneyGoalLabels: aliyunGoalsRealMergeStringMap(loc.moneyGoalLabels, rem.moneyGoalLabels),
+        goalWhys: aliyunGoalsRealMergeStringMap(loc.goalWhys, rem.goalWhys),
+        projectTasks: projectMerged,
+        kineticCountdowns:
+          typeof omitTombstonedIdRecords === "function"
+            ? omitTombstonedIdRecords(kineticMerged, ts)
+            : kineticMerged,
+        readingPlan: {
+          books:
+            typeof omitTombstonedIdRecords === "function"
+              ? omitTombstonedIdRecords(booksMerged, ts)
+              : booksMerged
+        },
+        life4000Weeks: aliyunGoalsRealMergeLife4000(loc.life4000Weeks, rem.life4000Weeks)
+      };
+    }
+
+    function aliyunGoalsRealApplySliceToState(slice) {
+      if (!slice || typeof slice !== "object") return false;
+      const before = aliyunGoalsRealSliceFingerprint(aliyunGoalsRealCloneSliceFromState());
+      const afterFp = aliyunGoalsRealSliceFingerprint(slice);
+      if (before === afterFp) return false;
+      state.ageGoals = slice.ageGoals && typeof slice.ageGoals === "object" ? slice.ageGoals : {};
+      state.moneyGoalLabels =
+        slice.moneyGoalLabels && typeof slice.moneyGoalLabels === "object" ? slice.moneyGoalLabels : {};
+      state.goalWhys = slice.goalWhys && typeof slice.goalWhys === "object" ? slice.goalWhys : {};
+      state.projectTasks =
+        slice.projectTasks && typeof slice.projectTasks === "object"
+          ? slice.projectTasks
+          : { quoteApp: [] };
+      state.kineticCountdowns = Array.isArray(slice.kineticCountdowns) ? slice.kineticCountdowns : [];
+      state.readingPlan = {
+        books:
+          slice.readingPlan && Array.isArray(slice.readingPlan.books) ? slice.readingPlan.books : []
+      };
+      state.life4000Weeks =
+        slice.life4000Weeks && typeof slice.life4000Weeks === "object"
+          ? slice.life4000Weeks
+          : { name: "", birthDate: "", birthLunarText: "", lastDoneTuesdayKey: "" };
+      return true;
+    }
+
+    function aliyunGoalsRealPaintLocalUiAfterMerge() {
+      try {
+        if (typeof render === "function") render();
+      } catch (_r) {}
+    }
+
+    function aliyunGoalsRealStartLtObserver() {
+      const bucket = { count: 0, maxMs: 0, over50: 0 };
+      let obs = null;
+      try {
+        if (typeof PerformanceObserver === "undefined") return { bucket: bucket, stop: function () {} };
+        obs = new PerformanceObserver(function (list) {
+          const entries = list.getEntries() || [];
+          for (let i = 0; i < entries.length; i++) {
+            const d = Number(entries[i].duration) || 0;
+            bucket.count += 1;
+            if (d > bucket.maxMs) bucket.maxMs = d;
+            if (d > 50) bucket.over50 += 1;
+          }
+        });
+        obs.observe({ entryTypes: ["longtask"] });
+      } catch (_lt) {}
+      return {
+        bucket: bucket,
+        stop: function () {
+          try {
+            if (obs) obs.disconnect();
+          } catch (_d) {}
+        }
+      };
+    }
+
+    function aliyunGoalsRealLogReport(report) {
+      aliyunGoalsRealLastReport = report;
+      try {
+        window.__aliyunGoalsRealLastReport = report;
+      } catch (_w) {}
+      if (typeof noteAliyunSyncPrimaryBadgeFromDomainReport === "function") {
+        noteAliyunSyncPrimaryBadgeFromDomainReport(report);
+      }
+      aliyunGoalsRealAppendLog(
+        "report ok=" +
+          !!(report && report.ok) +
+          " reason=" +
+          ((report && report.reason) || "") +
+          (report && report.error ? " err=" + report.error : "")
+      );
+    }
+
+    function scheduleAliyunGoalsRealSync(reason) {
+      if (!isAliyunGoalsRealSyncEnabled() || aliyunGoalsRealSuppressPush) return;
+      aliyunGoalsRealPendingReason = reason || "local-change";
+      if (aliyunGoalsRealFlushTimer) clearTimeout(aliyunGoalsRealFlushTimer);
+      aliyunGoalsRealFlushTimer = setTimeout(function () {
+        aliyunGoalsRealFlushTimer = null;
+        Promise.resolve(flushAliyunGoalsRealQueue()).catch(function (err) {
+          aliyunGoalsRealAppendLog(
+            "flush reject: " + (err && err.message ? err.message : String(err))
+          );
+        });
+      }, 120);
+    }
+
+    function notifyAliyunGoalsRealAfterLocalChange(reason) {
+      scheduleAliyunGoalsRealSync(reason || "local-change");
+    }
+
+    async function flushAliyunGoalsRealQueue() {
+      if (aliyunGoalsRealFlushing) return;
+      if (!aliyunGoalsRealPendingReason) return;
+      if (!isAliyunGoalsRealSyncEnabled() || aliyunGoalsRealSuppressPush) {
+        aliyunGoalsRealPendingReason = "";
+        return;
+      }
+      aliyunGoalsRealFlushing = true;
+      const reason = aliyunGoalsRealPendingReason || "flush";
+      aliyunGoalsRealPendingReason = "";
+      const base = aliyunGoalsRealBaseUrl();
+      const docId = aliyunGoalsRealDocId();
+      aliyunGoalsRealAppendLog("flush start: reason=" + reason + " docId=" + docId);
+      const lt = aliyunGoalsRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let uploadMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let payloadKB = 0;
+      let httpStatus = null;
+      let ok = false;
+      let errMsg = "";
+      try {
+        if (!base || aliyunExpHasForbiddenSecret(base)) {
+          throw new Error(!base ? "缺少 Function URL" : "URL 疑似含 AccessKey");
+        }
+        aliyunGoalsRealPerfMark("flush-start");
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson(
+          "GET",
+          base + "/smoke/" + encodeURIComponent(docId),
+          null
+        );
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+
+        const tParse0 = Date.now();
+        let remoteEnv = aliyunGoalsRealEmptyEnvelope();
+        if (getRes.ok && getRes.data && getRes.data.data) {
+          const row = getRes.data.data;
+          const attrs = row.attrs || row;
+          remoteEnv = aliyunGoalsRealParseEnvelope(attrs.payload != null ? attrs.payload : attrs);
+        } else if (getRes.status !== 404 && !(getRes.data && getRes.data.error === "not_found")) {
+          console.warn("[aliyun-goals-real] GET status", getRes.status, getRes.data);
+        }
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        const localSlice = aliyunGoalsRealCloneSliceFromState();
+        const mergedSlice = aliyunGoalsRealBuildMergedSlice(localSlice, remoteEnv);
+        const env = aliyunGoalsRealEmptyEnvelope();
+        env.roomId = String(cloudSyncRoomId || env.roomId || "");
+        env.envelopeUpdatedAt = Date.now();
+        env.ageGoals = mergedSlice.ageGoals;
+        env.moneyGoalLabels = mergedSlice.moneyGoalLabels;
+        env.goalWhys = mergedSlice.goalWhys;
+        env.projectTasks = mergedSlice.projectTasks;
+        env.kineticCountdowns = mergedSlice.kineticCountdowns;
+        env.readingPlan = mergedSlice.readingPlan;
+        env.life4000Weeks = mergedSlice.life4000Weeks;
+        aliyunGoalsRealSuppressPush = true;
+        const prevCloudSuppress = cloudSyncSuppressPush;
+        cloudSyncSuppressPush = true;
+        try {
+          if (aliyunGoalsRealApplySliceToState(mergedSlice)) {
+            if (typeof markHeavyModulesDepDirty === "function") markHeavyModulesDepDirty();
+            saveState({ lists: ["goals", "kinetic", "weeklyPlan"], skipUiPaintDirty: true });
+          }
+        } finally {
+          cloudSyncSuppressPush = prevCloudSuppress;
+          aliyunGoalsRealSuppressPush = false;
+        }
+        mergeMs = Date.now() - tMerge0;
+
+        let bodyJson = "";
+        try {
+          bodyJson = JSON.stringify({ id: docId, payload: env });
+        } catch (_ser) {
+          throw new Error("envelope serialize failed");
+        }
+        payloadKB = Math.round((bodyJson.length / 1024) * 10) / 10;
+
+        const tUp0 = Date.now();
+        const putRes = await aliyunExpFetchJson("POST", base + "/smoke", JSON.parse(bodyJson));
+        uploadMs = Date.now() - tUp0;
+        networkWaitMs += uploadMs;
+        httpStatus = putRes.status;
+        if (!putRes.ok) {
+          throw new Error(
+            "upload HTTP " +
+              putRes.status +
+              " " +
+              (putRes.data && (putRes.data.error || putRes.data.message)
+                ? putRes.data.error || putRes.data.message
+                : "")
+          );
+        }
+        try {
+          aliyunSyncPrimaryMarkPullFingerprint(
+            "goals",
+            aliyunGoalsRealSliceFingerprint(mergedSlice)
+          );
+        } catch (_fp) {}
+        ok = true;
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        ok = false;
+      } finally {
+        lt.stop();
+        aliyunGoalsRealFlushing = false;
+        aliyunGoalsRealLogReport({
+          ok: ok,
+          reason: reason,
+          docId: docId,
+          httpStatus: httpStatus,
+          payloadKB: payloadKB,
+          uploadMs: uploadMs,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: 0,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          error: errMsg || undefined
+        });
+        if (aliyunGoalsRealPendingReason) {
+          Promise.resolve(flushAliyunGoalsRealQueue()).catch(function () {});
+        }
+      }
+    }
+
+    async function runAliyunGoalsRealPullAndMerge() {
+      if (!isAliyunGoalsRealSyncEnabled()) {
+        aliyunGoalsRealAppendLog("Goals 真实同步未启用");
+        return { ok: false, error: "disabled" };
+      }
+      const base = aliyunGoalsRealBaseUrl();
+      const docId = aliyunGoalsRealDocId();
+      if (!base || aliyunExpHasForbiddenSecret(base)) {
+        return { ok: false, error: "bad-url" };
+      }
+      const lt = aliyunGoalsRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let renderMs = 0;
+      let payloadKB = 0;
+      let ok = false;
+      let errMsg = "";
+      let changed = false;
+      try {
+        aliyunGoalsRealAppendLog("拉取 Goals docId=" + docId);
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson(
+          "GET",
+          base + "/smoke/" + encodeURIComponent(docId),
+          null
+        );
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+        if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+          ok = true;
+          return { ok: true, empty: true, docId: docId };
+        }
+        if (!getRes.ok) throw new Error("GET HTTP " + getRes.status);
+
+        const tParse0 = Date.now();
+        const row = getRes.data && getRes.data.data;
+        const attrs = (row && (row.attrs || row)) || {};
+        const payloadRaw = attrs.payload != null ? attrs.payload : attrs;
+        let payloadStr = "";
+        try {
+          payloadStr = typeof payloadRaw === "string" ? payloadRaw : JSON.stringify(payloadRaw);
+        } catch (_ps) {
+          payloadStr = "";
+        }
+        payloadKB = Math.round((payloadStr.length / 1024) * 10) / 10;
+        const pullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
+        if (aliyunSyncPrimaryIsUnchangedPull("goals", pullFp)) {
+          ok = true;
+          aliyunGoalsRealAppendLog("拉取无变化，跳过 merge/render");
+          return { ok: true, unchanged: true, docId: docId };
+        }
+        const remoteEnv = aliyunGoalsRealParseEnvelope(payloadRaw);
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        const localSlice = aliyunGoalsRealCloneSliceFromState();
+        const mergedSlice = aliyunGoalsRealBuildMergedSlice(localSlice, remoteEnv);
+        aliyunGoalsRealSuppressPush = true;
+        const prevCloudSuppress = cloudSyncSuppressPush;
+        cloudSyncSuppressPush = true;
+        try {
+          changed = aliyunGoalsRealApplySliceToState(mergedSlice);
+          if (changed) {
+            if (typeof markHeavyModulesDepDirty === "function") markHeavyModulesDepDirty();
+            saveState({ lists: ["goals", "kinetic", "weeklyPlan"], skipUiPaintDirty: true });
+          }
+        } finally {
+          cloudSyncSuppressPush = prevCloudSuppress;
+          aliyunGoalsRealSuppressPush = false;
+        }
+        mergeMs = Date.now() - tMerge0;
+
+        const tRen0 = Date.now();
+        aliyunSyncPrimaryMarkPullFingerprint("goals", pullFp);
+        if (changed) {
+          const paintGoals = function () {
+            try {
+              aliyunGoalsRealPaintLocalUiAfterMerge();
+            } catch (_p) {}
+          };
+          if (typeof requestAnimationFrame === "function") {
+            await new Promise(function (resolve) {
+              requestAnimationFrame(function () {
+                paintGoals();
+                resolve();
+              });
+            });
+          } else {
+            paintGoals();
+          }
+        }
+        renderMs = Date.now() - tRen0;
+        ok = true;
+        return { ok: true, docId: docId, changed: changed };
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        aliyunGoalsRealAppendLog("拉取失败: " + errMsg);
+        return { ok: false, error: errMsg };
+      } finally {
+        lt.stop();
+        aliyunGoalsRealLogReport({
+          ok: ok,
+          reason: "pull",
+          docId: docId,
+          payloadKB: payloadKB,
+          uploadMs: 0,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: renderMs,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          changed: changed,
+          error: errMsg || undefined
+        });
+      }
+    }
+
+    try {
+      window.runAliyunGoalsRealPullAndMerge = runAliyunGoalsRealPullAndMerge;
+      window.isAliyunGoalsRealSyncEnabled = isAliyunGoalsRealSyncEnabled;
+      window.notifyAliyunGoalsRealAfterLocalChange = notifyAliyunGoalsRealAfterLocalChange;
+    } catch (_goalsWin) {}
+
+
 
 
     function aliyunExpLog(lines, msg) {
@@ -116240,7 +116894,18 @@
           ts
         );
       });
+      const aliyunGoalsKeepLocal =
+        typeof isAliyunGoalsRealSyncEnabled === "function" && isAliyunGoalsRealSyncEnabled();
       base.kineticCountdowns = mergeDetailTime("field", "kineticCountdowns", function () {
+        if (aliyunGoalsKeepLocal) {
+          try {
+            return Array.isArray(state.kineticCountdowns)
+              ? JSON.parse(JSON.stringify(state.kineticCountdowns))
+              : [];
+          } catch (_kKeep) {
+            return Array.isArray(state.kineticCountdowns) ? state.kineticCountdowns.slice() : [];
+          }
+        }
         return omitTombstonedIdRecords(
           mergeIdRecordArraysPreferLocalOnTie(
             state.kineticCountdowns,
@@ -116256,6 +116921,17 @@
         ? remoteState.readingPlan.books
         : [];
       base.readingPlan = mergeDetailTime("field", "readingPlan", function () {
+        if (aliyunGoalsKeepLocal) {
+          try {
+            return state.readingPlan && typeof state.readingPlan === "object"
+              ? JSON.parse(JSON.stringify(state.readingPlan))
+              : { books: [] };
+          } catch (_rpKeep) {
+            return state.readingPlan && typeof state.readingPlan === "object"
+              ? state.readingPlan
+              : { books: [] };
+          }
+        }
         return {
           books: omitTombstonedIdRecords(
             mergeReadingPlanBooksForSync(localReadingBooks, remoteReadingBooks, ts),
@@ -116325,6 +117001,17 @@
         );
       });
       base.projectTasks = mergeDetailTime("field", "projectTasks", function () {
+        if (aliyunGoalsKeepLocal) {
+          try {
+            return state.projectTasks && typeof state.projectTasks === "object"
+              ? JSON.parse(JSON.stringify(state.projectTasks))
+              : { quoteApp: [] };
+          } catch (_ptKeep) {
+            return state.projectTasks && typeof state.projectTasks === "object"
+              ? state.projectTasks
+              : { quoteApp: [] };
+          }
+        }
         return mergeProjectTasksForSync(state.projectTasks, remoteState.projectTasks);
       });
       if (base.projectTasks && Array.isArray(base.projectTasks.quoteApp)) {
@@ -116528,6 +117215,27 @@
 
       if (serverNewer) {
         mergeDetailTime("field", "goalsServerNewer", function () {
+          if (aliyunGoalsKeepLocal) {
+            try {
+              base.ageGoals =
+                state.ageGoals && typeof state.ageGoals === "object"
+                  ? JSON.parse(JSON.stringify(state.ageGoals))
+                  : {};
+              base.moneyGoalLabels =
+                state.moneyGoalLabels && typeof state.moneyGoalLabels === "object"
+                  ? JSON.parse(JSON.stringify(state.moneyGoalLabels))
+                  : {};
+              base.goalWhys =
+                state.goalWhys && typeof state.goalWhys === "object"
+                  ? JSON.parse(JSON.stringify(state.goalWhys))
+                  : {};
+            } catch (_gKeep) {
+              base.ageGoals = state.ageGoals || {};
+              base.moneyGoalLabels = state.moneyGoalLabels || {};
+              base.goalWhys = state.goalWhys || {};
+            }
+            return;
+          }
           base.ageGoals = remoteState.ageGoals && typeof remoteState.ageGoals === "object" ? remoteState.ageGoals : {};
           base.moneyGoalLabels =
             remoteState.moneyGoalLabels && typeof remoteState.moneyGoalLabels === "object"
@@ -118749,6 +119457,28 @@
                 listsArr ? "save:" + listsArr.join("+") : "save:all"
               );
             } catch (_listsNotify) {}
+          }
+        }
+        if (
+          !cloudSyncSuppressPush &&
+          !opts.fromHygiene &&
+          typeof notifyAliyunGoalsRealAfterLocalChange === "function" &&
+          typeof isAliyunGoalsRealSyncEnabled === "function" &&
+          isAliyunGoalsRealSyncEnabled()
+        ) {
+          const gLists = Array.isArray(opts.lists) ? opts.lists : null;
+          const touchGoals =
+            !gLists ||
+            gLists.indexOf("goals") >= 0 ||
+            gLists.indexOf("kinetic") >= 0 ||
+            gLists.indexOf("weeklyPlan") >= 0 ||
+            gLists.indexOf("purpose") >= 0;
+          if (touchGoals) {
+            try {
+              notifyAliyunGoalsRealAfterLocalChange(
+                gLists ? "save:" + gLists.join("+") : "save:all"
+              );
+            } catch (_goalsNotify) {}
           }
         }
         if (!cloudSyncSuppressPush) {
