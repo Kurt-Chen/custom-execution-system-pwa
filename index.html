@@ -95335,7 +95335,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930k";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930l";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -99740,6 +99740,12 @@
         if (getCloudSyncConfig() && !cloudSyncReady && !cloudSyncInitInFlight) {
           window.setTimeout(() => {
             if (getCloudSyncConfig() && !cloudSyncReady && !cloudSyncInitInFlight) {
+              if (
+                typeof shouldSkipFirebaseCloudSyncBootForAliyunPrimary === "function" &&
+                shouldSkipFirebaseCloudSyncBootForAliyunPrimary()
+              ) {
+                return;
+              }
               void initCloudSync();
             }
           }, 400);
@@ -99764,7 +99770,14 @@
         refresh();
         refreshCloudSyncPulseFromServer();
         if (getCloudSyncConfig() && !cloudSyncReady && !cloudSyncInitInFlight) {
-          void initCloudSync();
+          if (
+            !(
+              typeof shouldSkipFirebaseCloudSyncBootForAliyunPrimary === "function" &&
+              shouldSkipFirebaseCloudSyncBootForAliyunPrimary()
+            )
+          ) {
+            void initCloudSync();
+          }
         }
         if (hiddenMs >= CLOUD_SYNC_LONG_IDLE_MS) {
           requestCloudSyncSafetyPull("foreground-long");
@@ -100747,6 +100760,12 @@
       if (taskId == null || String(taskId).trim() === "") return;
       if (!cloudSyncPulseTodayPlanTaskIds) cloudSyncPulseTodayPlanTaskIds = new Set();
       cloudSyncPulseTodayPlanTaskIds.add(String(taskId));
+      /* 阿里云今日计划聚合层：只推 todayPlanDate 标记，不复制任务正文 */
+      try {
+        if (typeof notifyAliyunTodayPlanRealMarkUpsert === "function") {
+          notifyAliyunTodayPlanRealMarkUpsert(taskId, "today-plan-pulse");
+        }
+      } catch (_todayPush) {}
     }
 
     function buildCloudSyncTodayPlanMarksPulseSlice() {
@@ -101560,6 +101579,19 @@
       Object.keys(annKeys).forEach(function (sk) {
         const p = prev[sk];
         const n = next[sk];
+        if (
+          typeof isAliyunAnnivRealSyncEnabled === "function" &&
+          isAliyunAnnivRealSyncEnabled()
+        ) {
+          if (p) {
+            try {
+              next[sk] = JSON.parse(JSON.stringify(p));
+            } catch (_annSt) {
+              next[sk] = p;
+            }
+          }
+          return;
+        }
         if (!n && p) {
           next[sk] = p;
           return;
@@ -101573,7 +101605,18 @@
         const mergedGoals = Object.assign({}, pGoals, nGoals);
         next[sk] = Object.assign({}, p, n, { weeks: mergedWeeks, weekGoals: mergedGoals });
       });
-      if (!next.weeklyPlan && prev.weeklyPlan) next.weeklyPlan = prev.weeklyPlan;
+      if (
+        typeof isAliyunSprintRealSyncEnabled === "function" &&
+        isAliyunSprintRealSyncEnabled()
+      ) {
+        if (prev.weeklyPlan) {
+          try {
+            next.weeklyPlan = JSON.parse(JSON.stringify(prev.weeklyPlan));
+          } catch (_wpSt) {
+            next.weeklyPlan = prev.weeklyPlan;
+          }
+        }
+      } else if (!next.weeklyPlan && prev.weeklyPlan) next.weeklyPlan = prev.weeklyPlan;
       else if (prev.weeklyPlan && next.weeklyPlan) {
         const stickyTsWp =
           next.syncTombstones && typeof next.syncTombstones === "object"
@@ -101587,7 +101630,20 @@
           stickyTsWp
         );
       }
-      if (prev.todayPlanMarks || next.todayPlanMarks) {
+      if (
+        typeof isAliyunTodayPlanRealSyncEnabled === "function" &&
+        isAliyunTodayPlanRealSyncEnabled()
+      ) {
+        if (prev.todayPlanMarks) {
+          try {
+            next.todayPlanMarks = JSON.parse(JSON.stringify(prev.todayPlanMarks));
+          } catch (_tpmSt) {
+            next.todayPlanMarks = prev.todayPlanMarks;
+          }
+        } else {
+          delete next.todayPlanMarks;
+        }
+      } else if (prev.todayPlanMarks || next.todayPlanMarks) {
         const mergedMarks = mergeTodayPlanMarksMapsForSticky(
           prev.todayPlanMarks,
           next.todayPlanMarks
@@ -101777,6 +101833,12 @@
       if (typeof syncSprintFinishHourTaskMarquee === "function") {
         syncSprintFinishHourTaskMarquee();
       }
+      /* 阿里云十二周年：默认随主路径；不阻塞 UI */
+      try {
+        if (typeof notifyAliyunAnnivRealWeekUpsert === "function") {
+          notifyAliyunAnnivRealWeekUpsert(moduleKey, weekNum, "anniversary-week-change");
+        }
+      } catch (_annivPush) {}
       /* Editing Shield：仍在 Edit/Create 时保留 pendingRender；解锁后由 flushTaskTitleIxPendingRender 合并刷一次 */
       if (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) {
         renderDeferredWhileEditing = true;
@@ -102581,10 +102643,21 @@
             changed = true;
           }
         }
-        if (pulseState.weeklyPlan && typeof pulseState.weeklyPlan === "object") {
+        if (
+          pulseState.weeklyPlan &&
+          typeof pulseState.weeklyPlan === "object" &&
+          !(typeof isAliyunSprintRealSyncEnabled === "function" && isAliyunSprintRealSyncEnabled())
+        ) {
           if (mergeCloudSyncWeeklyPlanPulseIntoState(pulseState.weeklyPlan)) changed = true;
         }
-        if (pulseState.todayPlanMarks && typeof pulseState.todayPlanMarks === "object") {
+        if (
+          pulseState.todayPlanMarks &&
+          typeof pulseState.todayPlanMarks === "object" &&
+          !(
+            typeof isAliyunTodayPlanRealSyncEnabled === "function" &&
+            isAliyunTodayPlanRealSyncEnabled()
+          )
+        ) {
           if (mergeCloudSyncTodayPlanMarksIntoState(pulseState.todayPlanMarks)) changed = true;
         }
         if (
@@ -102638,6 +102711,9 @@
         Object.keys(pulseState).forEach(function (sk) {
           if (!/^anniversaryTw\d+$/i.test(sk)) return;
           if (!pulseState[sk] || typeof pulseState[sk] !== "object") return;
+          if (typeof isAliyunAnnivRealSyncEnabled === "function" && isAliyunAnnivRealSyncEnabled()) {
+            return;
+          }
           const mk = "tw" + String(sk).replace(/^anniversaryTw/i, "");
           if (mergeCloudSyncAnniversaryModulePulseIntoState(mk, pulseState[sk])) changed = true;
         });
@@ -104444,29 +104520,48 @@
     const aliyunDoneRealPullBtn = document.getElementById("aliyunDoneRealPullBtn");
 
     /**
-     * —— 阿里云正式接入（main · Done + Habit）——
-     * 默认关。打开后启用 Done + habitCheckins；启动时串行延迟拉取。
-     * 控制台：window.setAliyunSyncPrimaryEnabled(true|false)
+     * —— 阿里云正式接入（正式站默认主路径 · 6 核心域）——
+     * 默认开：Done + Habit + Forge + 十二周年 + 3-Day Sprint + 今日计划 marks。
+     * 启动时串行延迟拉取（准实时，避开首屏）。
+     * 控制台：window.setAliyunSyncPrimaryEnabled(true|false) 快速回退
      * 双写：setAliyunSyncPrimaryDualWriteFirebase(true|false)
-     *   缺省 false（已迁域从 Firebase 剥离，优先流畅）；显式 true 可临时双写回退。
-     * 不删旧库 / 不删 Firebase 数据。不接 Forge / TodayPlan / Sprint。
+     *   缺省 false（6 域不写 Firebase，避免双路卡顿）；显式 true 可临时双写。
+     * 默认软跳过 Firebase 启动（primary 开且 dualWrite 关）；
+     *   回退：关总开关，或 dualWrite=true，或 window.__FIREBASE_SYNC_FORCE_ENABLED=true。
+     * 不删旧库 / 不删 Firebase 代码与配置。
      */
     const ALIYUN_SYNC_PRIMARY_STORAGE_KEY = "todo-app-aliyun-sync-primary-v1";
     const ALIYUN_SYNC_PRIMARY_DUAL_WRITE_STORAGE_KEY = "todo-app-aliyun-sync-primary-dual-write-v1";
-    /** Stage2：剥离 Done + habitCheckins；其它域仍走 Firebase */
-    const ALIYUN_PRIMARY_FIREBASE_OMIT_KEYS = ["done", "habitCheckins"];
+    /** 主路径开启且双写关：剥离 6 核心域；其它域仍可由 Firebase 处理（默认软跳过 Firebase） */
+    const ALIYUN_PRIMARY_FIREBASE_OMIT_KEYS = [
+      "done",
+      "habitCheckins",
+      "forge",
+      "weeklyPlan",
+      "todayPlanMarks",
+      "anniversaryTw020",
+      "anniversaryTw021",
+      "anniversaryTw022"
+    ];
     const ALIYUN_SYNC_PRIMARY_DOMAIN_WINDOW_FLAGS = [
       "__ALIYUN_DONE_REAL_SYNC_ENABLED",
-      "__ALIYUN_HABIT_REAL_SYNC_ENABLED"
+      "__ALIYUN_HABIT_REAL_SYNC_ENABLED",
+      "__ALIYUN_FORGE_REAL_SYNC_ENABLED",
+      "__ALIYUN_ANNIV_REAL_SYNC_ENABLED",
+      "__ALIYUN_SPRINT_REAL_SYNC_ENABLED",
+      "__ALIYUN_TODAY_PLAN_REAL_SYNC_ENABLED"
     ];
     let aliyunSyncPrimaryBootPullStarted = false;
 
     function readAliyunSyncPrimaryFromStorage() {
       try {
         const v = localStorage.getItem(ALIYUN_SYNC_PRIMARY_STORAGE_KEY);
+        /* 正式站默认主路径：缺省键视为开；仅显式 "0"/"false" 关闭以回退 Firebase */
+        if (v == null || v === "") return true;
+        if (v === "0" || v === "false") return false;
         return v === "1" || v === "true";
       } catch (_ls) {
-        return false;
+        return true;
       }
     }
 
@@ -104523,44 +104618,36 @@
         console.log(
           "[aliyun-sync-primary]",
           on
-            ? "Firebase 双写：开（Done/Habit 仍进 Firebase）"
-            : "Firebase 双写：关（Done/Habit 仅写阿里云；全量上传保留云端旧值以免清空）"
+            ? "Firebase 双写：开（6 域仍进 Firebase；并允许 Firebase 启动）"
+            : "Firebase 双写：关（6 域仅写阿里云；默认跳过 Firebase 启动）"
         );
       } catch (_c) {}
       return on;
     }
 
-    /** 已启用阿里云且未开双写 → 按域剥离（Done / habitCheckins） */
+    /** 总开关开且双写关 → 剥离 6 核心域（不碰 Closed List 等） */
     function shouldOmitAliyunPrimaryDomainsFromFirebaseUpload() {
-      if (isAliyunSyncPrimaryDualWriteFirebaseEnabled()) return false;
-      const doneOn =
-        typeof isAliyunDoneRealSyncEnabled === "function" && isAliyunDoneRealSyncEnabled();
-      const habitOn =
-        typeof isAliyunHabitRealSyncEnabled === "function" && isAliyunHabitRealSyncEnabled();
-      return !!(doneOn || habitOn);
-    }
-
-    function aliyunPrimaryOmitKeysActive() {
-      const keys = [];
-      if (typeof isAliyunDoneRealSyncEnabled === "function" && isAliyunDoneRealSyncEnabled()) {
-        keys.push("done");
-      }
-      if (typeof isAliyunHabitRealSyncEnabled === "function" && isAliyunHabitRealSyncEnabled()) {
-        keys.push("habitCheckins");
-      }
-      return keys;
+      return (
+        typeof isAliyunSyncPrimaryEnabled === "function" &&
+        isAliyunSyncPrimaryEnabled() &&
+        typeof isAliyunSyncPrimaryDualWriteFirebaseEnabled === "function" &&
+        !isAliyunSyncPrimaryDualWriteFirebaseEnabled()
+      );
     }
 
     function omitAliyunPrimaryDomainsFromPulseState(pulseState) {
       if (!pulseState || typeof pulseState !== "object") return pulseState;
       if (!shouldOmitAliyunPrimaryDomainsFromFirebaseUpload()) return pulseState;
-      const keys = aliyunPrimaryOmitKeysActive();
-      for (let i = 0; i < keys.length; i++) {
-        delete pulseState[keys[i]];
+      for (let i = 0; i < ALIYUN_PRIMARY_FIREBASE_OMIT_KEYS.length; i++) {
+        delete pulseState[ALIYUN_PRIMARY_FIREBASE_OMIT_KEYS[i]];
       }
       return pulseState;
     }
 
+    /**
+     * 全量上传：v2/core 为整包 set，不能直接 delete（会清空云端）。
+     * 双写关时用缓存远端快照覆盖 6 域，使本次 set 不推进这些域。
+     */
     function preserveAliyunPrimaryDomainsFromRemoteOnFullUpload(upload) {
       if (!upload || typeof upload !== "object") return upload;
       if (!shouldOmitAliyunPrimaryDomainsFromFirebaseUpload()) return upload;
@@ -104576,9 +104663,8 @@
       } catch (_rem) {
         remoteState = null;
       }
-      const keys = aliyunPrimaryOmitKeysActive();
-      for (let i = 0; i < keys.length; i++) {
-        const key = keys[i];
+      for (let i = 0; i < ALIYUN_PRIMARY_FIREBASE_OMIT_KEYS.length; i++) {
+        const key = ALIYUN_PRIMARY_FIREBASE_OMIT_KEYS[i];
         if (
           remoteState &&
           Object.prototype.hasOwnProperty.call(remoteState, key) &&
@@ -104590,8 +104676,26 @@
             upload[key] = remoteState[key];
           }
         }
+        /* 无远端缓存时保留本机字段，避免首次全量误清空云端 */
       }
       return upload;
+    }
+
+    /** 阿里云主路径且未双写时，默认不启动 Firebase，避免双路争抢卡顿 */
+    function shouldSkipFirebaseCloudSyncBootForAliyunPrimary() {
+      try {
+        if (window.__FIREBASE_SYNC_FORCE_ENABLED === true) return false;
+      } catch (_w) {}
+      if (typeof isAliyunSyncPrimaryEnabled !== "function" || !isAliyunSyncPrimaryEnabled()) {
+        return false;
+      }
+      if (
+        typeof isAliyunSyncPrimaryDualWriteFirebaseEnabled === "function" &&
+        isAliyunSyncPrimaryDualWriteFirebaseEnabled()
+      ) {
+        return false;
+      }
+      return true;
     }
 
     function applyAliyunSyncPrimaryDomainWindowFlags(enabled) {
@@ -104618,8 +104722,8 @@
         console.log(
           "[aliyun-sync-primary]",
           on
-            ? "已开启（Done+Habit；刷新后自动拉取）"
-            : "已关闭（Done/Habit 旗标清除，回退 Firebase）"
+            ? "已开启（6 域；刷新后自动拉取；默认跳过 Firebase 启动）"
+            : "已关闭（6 域旗标清除，回退 Firebase 主路径）"
         );
       } catch (_c) {}
       if (on) scheduleAliyunSyncPrimaryBootPull();
@@ -104643,12 +104747,31 @@
           id: "habit",
           run:
             typeof runAliyunHabitRealPullAndMerge === "function" ? runAliyunHabitRealPullAndMerge : null
+        },
+        {
+          id: "forge",
+          run: typeof runAliyunForgeRealPullAndMerge === "function" ? runAliyunForgeRealPullAndMerge : null
+        },
+        {
+          id: "anniv",
+          run: typeof runAliyunAnnivRealPullAndMerge === "function" ? runAliyunAnnivRealPullAndMerge : null
+        },
+        {
+          id: "sprint",
+          run: typeof runAliyunSprintRealPullAndMerge === "function" ? runAliyunSprintRealPullAndMerge : null
+        },
+        {
+          id: "todayPlan",
+          run:
+            typeof runAliyunTodayPlanRealPullAndMerge === "function"
+              ? runAliyunTodayPlanRealPullAndMerge
+              : null
         }
       ];
       const results = {};
       let allOk = true;
       try {
-        console.log("[aliyun-sync-primary] boot pull start (Done+Habit)");
+        console.log("[aliyun-sync-primary] boot pull start (6 domains)");
       } catch (_c0) {}
       for (let i = 0; i < domains.length; i++) {
         const d = domains[i];
@@ -104714,11 +104837,18 @@
       window.isAliyunSyncPrimaryDualWriteFirebaseEnabled = isAliyunSyncPrimaryDualWriteFirebaseEnabled;
       window.setAliyunSyncPrimaryDualWriteFirebase = setAliyunSyncPrimaryDualWriteFirebase;
       window.runAliyunSyncPrimaryBootPull = runAliyunSyncPrimaryBootPull;
-      if (readAliyunSyncPrimaryFromStorage()) {
+      window.shouldSkipFirebaseCloudSyncBootForAliyunPrimary =
+        shouldSkipFirebaseCloudSyncBootForAliyunPrimary;
+      if (isAliyunSyncPrimaryEnabled()) {
         try {
           window.__ALIYUN_SYNC_PRIMARY_ENABLED = true;
         } catch (_w) {}
         applyAliyunSyncPrimaryDomainWindowFlags(true);
+        try {
+          console.log(
+            "[aliyun-sync-primary] 正式站默认主路径已启用；回退: setAliyunSyncPrimaryEnabled(false)"
+          );
+        } catch (_c) {}
       }
     } catch (_primaryWin) {}
 
@@ -106396,6 +106526,2457 @@
         return report;
       };
     } catch (_habWin) {}
+
+    /**
+     * —— Forge 打卡单域真实同步（阿里云实验，可回滚）——
+     * 仅 Done 中带 forgeBodyMeta / forgeMindMeta 的行；不同步 state.forge 设置。
+     * 默认关；无新 UI。启用：window.__ALIYUN_FORGE_REAL_SYNC_ENABLED = true
+     * 拉取：await window.runAliyunForgeRealPullAndMerge()
+     * 独立 kind，不走 Done 阿里云信封（避免丢掉 meta）；不碰 Habit。
+     */
+    const ALIYUN_FORGE_REAL_KIND = "forge-real-v1";
+    const ALIYUN_FORGE_REAL_PERF_PREFIX = "aliyun-forge-real:";
+    const ALIYUN_FORGE_REAL_SYNC_ENABLED = false;
+    let aliyunForgeRealQueue = [];
+    let aliyunForgeRealFlushTimer = null;
+    let aliyunForgeRealFlushing = false;
+    let aliyunForgeRealLastReport = null;
+    let aliyunForgeRealSuppressPush = false;
+
+    function isAliyunForgeRealSyncEnabled() {
+      if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) return true;
+      try {
+        if (window.__ALIYUN_FORGE_REAL_SYNC_ENABLED === true) return true;
+      } catch (_w) {}
+      return ALIYUN_FORGE_REAL_SYNC_ENABLED === true;
+    }
+
+    function isAliyunForgeRealItem(item) {
+      return !!(item && typeof item === "object" && (item.forgeBodyMeta || item.forgeMindMeta));
+    }
+
+    function aliyunForgeRealAppendLog(msg) {
+      const line = "[forge] " + String(msg || "");
+      try {
+        console.log("[aliyun-forge-real]", line);
+      } catch (_c) {}
+      if (!aliyunExpLogArea) return;
+      const prev = String(aliyunExpLogArea.value || "");
+      aliyunExpLogArea.value = prev ? prev + "\n" + line : line;
+      aliyunExpLogArea.scrollTop = aliyunExpLogArea.scrollHeight;
+    }
+
+    function aliyunForgeRealPerfMark(name) {
+      try {
+        if (typeof performance !== "undefined" && typeof performance.mark === "function") {
+          performance.mark(ALIYUN_FORGE_REAL_PERF_PREFIX + name);
+        }
+      } catch (_m) {}
+    }
+
+    function aliyunForgeRealDocId() {
+      const room = String(
+        cloudSyncRoomId ||
+          (typeof localStorage !== "undefined" && localStorage.getItem(CLOUD_SYNC_ROOM_KEY)) ||
+          "default-room"
+      )
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]/g, "_")
+        .slice(0, 64);
+      return "aliyun-forge-real-v1-" + (room || "default-room");
+    }
+
+    function aliyunForgeRealBaseUrl() {
+      return String((aliyunExpUrlInput && aliyunExpUrlInput.value) || ALIYUN_EXP_DEFAULT_URL)
+        .trim()
+        .replace(/\/+$/, "");
+    }
+
+    function aliyunForgeRealItemTs(item) {
+      if (!item || typeof item !== "object") return 0;
+      return Math.max(
+        Number(item.updatedAt) || 0,
+        Number(item.completedAt) || 0,
+        Number(item.createdAt) || 0,
+        Number(item.deletedAt) || 0
+      );
+    }
+
+    /** 保留 forge*Meta；无 meta 则拒绝（不进 Done 普通信封） */
+    function aliyunForgeRealCloneItemForCloud(item) {
+      if (!isAliyunForgeRealItem(item)) return null;
+      const id = item.id != null ? String(item.id) : "";
+      if (!id) return null;
+      const out = {
+        id: id,
+        text: String(item.text != null ? item.text : ""),
+        createdAt: Number(item.createdAt) || 0,
+        completedAt: Number(item.completedAt) || 0,
+        updatedAt: aliyunForgeRealItemTs(item) || Date.now(),
+        deleted: false
+      };
+      try {
+        if (item.forgeBodyMeta && typeof item.forgeBodyMeta === "object") {
+          out.forgeBodyMeta = JSON.parse(JSON.stringify(item.forgeBodyMeta));
+        }
+        if (item.forgeMindMeta && typeof item.forgeMindMeta === "object") {
+          out.forgeMindMeta = JSON.parse(JSON.stringify(item.forgeMindMeta));
+        }
+      } catch (_metaErr) {
+        if (item.forgeBodyMeta) out.forgeBodyMeta = Object.assign({}, item.forgeBodyMeta);
+        if (item.forgeMindMeta) out.forgeMindMeta = Object.assign({}, item.forgeMindMeta);
+      }
+      return out;
+    }
+
+    function aliyunForgeRealEmptyEnvelope() {
+      return {
+        kind: ALIYUN_FORGE_REAL_KIND,
+        roomId: String(cloudSyncRoomId || ""),
+        envelopeUpdatedAt: Date.now(),
+        items: {},
+        tombstones: {}
+      };
+    }
+
+    function aliyunForgeRealParseEnvelope(rawPayload) {
+      let p = rawPayload;
+      if (typeof p === "string") {
+        try {
+          p = JSON.parse(p);
+        } catch (_e) {
+          return aliyunForgeRealEmptyEnvelope();
+        }
+      }
+      if (!p || typeof p !== "object") return aliyunForgeRealEmptyEnvelope();
+      const env = aliyunForgeRealEmptyEnvelope();
+      env.roomId = p.roomId != null ? String(p.roomId) : env.roomId;
+      env.envelopeUpdatedAt = Number(p.envelopeUpdatedAt) || 0;
+      if (p.items && typeof p.items === "object") env.items = p.items;
+      if (p.tombstones && typeof p.tombstones === "object") env.tombstones = p.tombstones;
+      return env;
+    }
+
+    function aliyunForgeRealApplyMutationToEnvelope(env, mutation) {
+      if (!env || !mutation) return env;
+      const id = String(mutation.id || "");
+      if (!id) return env;
+      const now = Date.now();
+      if (mutation.op === "tombstone") {
+        const ts = Number(mutation.deletedAt) || now;
+        const prevItem = env.items && env.items[id];
+        const prevTs = aliyunForgeRealItemTs(prevItem);
+        const prevTomb = env.tombstones && env.tombstones[id];
+        const prevTombTs = aliyunForgeRealItemTs(prevTomb);
+        if (ts < prevTs || ts < prevTombTs) return env;
+        if (env.items) delete env.items[id];
+        if (!env.tombstones) env.tombstones = {};
+        env.tombstones[id] = {
+          id: id,
+          deleted: true,
+          deletedAt: ts,
+          updatedAt: ts,
+          reason: mutation.reason || "delete"
+        };
+      } else if (mutation.op === "upsert" && mutation.item) {
+        const item = mutation.item;
+        const ts = aliyunForgeRealItemTs(item) || now;
+        item.updatedAt = ts;
+        item.deleted = false;
+        const prevItem = env.items && env.items[id];
+        const prevTs = aliyunForgeRealItemTs(prevItem);
+        const prevTomb = env.tombstones && env.tombstones[id];
+        const prevTombTs = aliyunForgeRealItemTs(prevTomb);
+        if (ts < prevTs || ts < prevTombTs) return env;
+        if (env.tombstones) delete env.tombstones[id];
+        if (!env.items) env.items = {};
+        env.items[id] = item;
+      }
+      env.envelopeUpdatedAt = Math.max(Number(env.envelopeUpdatedAt) || 0, now);
+      env.kind = ALIYUN_FORGE_REAL_KIND;
+      return env;
+    }
+
+    function aliyunForgeRealStartLtObserver() {
+      const bucket = { count: 0, maxMs: 0, over50: 0 };
+      let obs = null;
+      try {
+        if (typeof PerformanceObserver === "undefined") return { bucket: bucket, stop: function () {} };
+        obs = new PerformanceObserver(function (list) {
+          const entries = list.getEntries() || [];
+          for (let i = 0; i < entries.length; i++) {
+            const d = Number(entries[i].duration) || 0;
+            bucket.count += 1;
+            if (d > bucket.maxMs) bucket.maxMs = d;
+            if (d > 50) bucket.over50 += 1;
+          }
+        });
+        obs.observe({ entryTypes: ["longtask"] });
+      } catch (_lt) {}
+      return {
+        bucket: bucket,
+        stop: function () {
+          try {
+            if (obs) obs.disconnect();
+          } catch (_d) {}
+        }
+      };
+    }
+
+    function aliyunForgeRealLogReport(report) {
+      aliyunForgeRealLastReport = report;
+      try {
+        window.__aliyunForgeRealLastReport = report;
+      } catch (_w) {}
+      aliyunForgeRealAppendLog("—— Forge 真实同步 " + (report.reason || "") + " ——");
+      aliyunForgeRealAppendLog(
+        "ok=" +
+          !!report.ok +
+          " docId=" +
+          (report.docId || "") +
+          (report.httpStatus != null ? " HTTP=" + report.httpStatus : "")
+      );
+      aliyunForgeRealAppendLog(
+        "payloadKB=" +
+          (report.payloadKB != null ? report.payloadKB : "?") +
+          " upload=" +
+          (report.uploadMs != null ? report.uploadMs + "ms" : "?") +
+          " download=" +
+          (report.downloadMs != null ? report.downloadMs + "ms" : "?") +
+          " merge=" +
+          (report.mergeMs != null ? report.mergeMs + "ms" : "?") +
+          " render=" +
+          (report.renderMs != null ? report.renderMs + "ms" : "?")
+      );
+      if (report.longTaskOver50 != null) {
+        aliyunForgeRealAppendLog(
+          "longTask>50=" + report.longTaskOver50 + " maxMs=" + (report.longTaskMaxMs || 0)
+        );
+      }
+      if (report.error) aliyunForgeRealAppendLog("error: " + report.error);
+    }
+
+    function scheduleAliyunForgeRealSync(reason, mutation) {
+      if (!isAliyunForgeRealSyncEnabled() || aliyunForgeRealSuppressPush) return;
+      if (!mutation || !mutation.id) {
+        aliyunForgeRealAppendLog("schedule skip: missing id reason=" + (reason || ""));
+        return;
+      }
+      aliyunForgeRealQueue.push({
+        reason: reason || "unknown",
+        mutation: mutation,
+        queuedAt: Date.now()
+      });
+      aliyunForgeRealAppendLog(
+        "schedule ok: reason=" +
+          (reason || "") +
+          " id=" +
+          mutation.id +
+          " op=" +
+          (mutation.op || "") +
+          " queueLen=" +
+          aliyunForgeRealQueue.length
+      );
+      if (aliyunForgeRealFlushTimer) clearTimeout(aliyunForgeRealFlushTimer);
+      aliyunForgeRealFlushTimer = setTimeout(function () {
+        aliyunForgeRealFlushTimer = null;
+        Promise.resolve(flushAliyunForgeRealQueue()).catch(function (err) {
+          aliyunForgeRealAppendLog(
+            "flush reject: " + (err && err.message ? err.message : String(err))
+          );
+          console.warn("[aliyun-forge-real] flush", err);
+        });
+      }, 80);
+    }
+
+    function notifyAliyunForgeRealUpsert(reason, item) {
+      if (!isAliyunForgeRealSyncEnabled() || aliyunForgeRealSuppressPush) return;
+      const cloned = aliyunForgeRealCloneItemForCloud(item);
+      if (!cloned) return;
+      if (!cloned.updatedAt) cloned.updatedAt = Date.now();
+      scheduleAliyunForgeRealSync(reason, { op: "upsert", id: cloned.id, item: cloned });
+    }
+
+    function notifyAliyunForgeRealTombstone(reason, id, itemOpt) {
+      if (!isAliyunForgeRealSyncEnabled() || aliyunForgeRealSuppressPush) return;
+      const sid = id != null ? String(id) : "";
+      if (!sid) return;
+      if (itemOpt && !isAliyunForgeRealItem(itemOpt) && !itemOpt.deleted) return;
+      const deletedAt = Math.max(aliyunForgeRealItemTs(itemOpt), Date.now());
+      scheduleAliyunForgeRealSync(reason, {
+        op: "tombstone",
+        id: sid,
+        deletedAt: deletedAt,
+        reason: reason || "delete"
+      });
+    }
+
+    async function flushAliyunForgeRealQueue() {
+      if (aliyunForgeRealFlushing) return;
+      if (!aliyunForgeRealQueue.length) return;
+      if (!isAliyunForgeRealSyncEnabled() || aliyunForgeRealSuppressPush) {
+        aliyunForgeRealQueue = [];
+        return;
+      }
+      aliyunForgeRealFlushing = true;
+      const batch = aliyunForgeRealQueue.splice(0, aliyunForgeRealQueue.length);
+      const reason = batch.length ? batch[batch.length - 1].reason : "flush";
+      const base = aliyunForgeRealBaseUrl();
+      const docId = aliyunForgeRealDocId();
+      aliyunForgeRealAppendLog(
+        "flush start: reason=" + reason + " batch=" + batch.length + " docId=" + docId
+      );
+      const lt = aliyunForgeRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let uploadMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let payloadKB = 0;
+      let httpStatus = null;
+      let ok = false;
+      let errMsg = "";
+      try {
+        if (!base || aliyunExpHasForbiddenSecret(base)) {
+          throw new Error(!base ? "缺少 Function URL" : "URL 疑似含 AccessKey");
+        }
+        aliyunForgeRealPerfMark("flush-start");
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson("GET", base + "/smoke/" + encodeURIComponent(docId), null);
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+
+        const tParse0 = Date.now();
+        let env = aliyunForgeRealEmptyEnvelope();
+        if (getRes.ok && getRes.data && getRes.data.data) {
+          const row = getRes.data.data;
+          const attrs = row.attrs || row;
+          env = aliyunForgeRealParseEnvelope(attrs.payload != null ? attrs.payload : attrs);
+        } else if (getRes.status !== 404 && !(getRes.data && getRes.data.error === "not_found")) {
+          console.warn("[aliyun-forge-real] GET status", getRes.status, getRes.data);
+        }
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        for (let i = 0; i < batch.length; i++) {
+          aliyunForgeRealApplyMutationToEnvelope(env, batch[i].mutation);
+        }
+        env.roomId = String(cloudSyncRoomId || env.roomId || "");
+        env.envelopeUpdatedAt = Date.now();
+        mergeMs = Date.now() - tMerge0;
+
+        let bodyJson = "";
+        try {
+          bodyJson = JSON.stringify({ id: docId, payload: env });
+        } catch (_ser) {
+          throw new Error("envelope serialize failed");
+        }
+        payloadKB = Math.round((bodyJson.length / 1024) * 10) / 10;
+
+        const tUp0 = Date.now();
+        const putRes = await aliyunExpFetchJson("POST", base + "/smoke", JSON.parse(bodyJson));
+        uploadMs = Date.now() - tUp0;
+        networkWaitMs += uploadMs;
+        httpStatus = putRes.status;
+        aliyunForgeRealAppendLog(
+          "flush POST status=" + putRes.status + " uploadMs=" + uploadMs + " payloadKB=" + payloadKB
+        );
+        if (!putRes.ok) {
+          throw new Error(
+            "upload HTTP " +
+              putRes.status +
+              " " +
+              (putRes.data && (putRes.data.error || putRes.data.message)
+                ? putRes.data.error || putRes.data.message
+                : "")
+          );
+        }
+        ok = true;
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        ok = false;
+      } finally {
+        lt.stop();
+        aliyunForgeRealFlushing = false;
+        aliyunForgeRealLogReport({
+          ok: ok,
+          reason: reason,
+          docId: docId,
+          httpStatus: httpStatus,
+          payloadKB: payloadKB,
+          uploadMs: uploadMs,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: 0,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          error: errMsg || undefined
+        });
+        if (aliyunForgeRealQueue.length) {
+          Promise.resolve(flushAliyunForgeRealQueue()).catch(function () {});
+        }
+      }
+    }
+
+    /** 实验拉取：只 merge Forge 打卡行进 state.done，不动其它 Done / Habit / forge 设置 */
+    async function runAliyunForgeRealPullAndMerge() {
+      if (!isAliyunForgeRealSyncEnabled()) {
+        aliyunForgeRealAppendLog(
+          "Forge 真实同步未启用：请设 window.__ALIYUN_FORGE_REAL_SYNC_ENABLED=true"
+        );
+        return { ok: false, error: "disabled" };
+      }
+      const base = aliyunForgeRealBaseUrl();
+      const docId = aliyunForgeRealDocId();
+      if (!base || aliyunExpHasForbiddenSecret(base)) {
+        aliyunForgeRealAppendLog(!base ? "请填写 Function URL" : "中止：URL 疑似 AccessKey");
+        return { ok: false, error: "bad-url" };
+      }
+      const lt = aliyunForgeRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let renderMs = 0;
+      let payloadKB = 0;
+      let ok = false;
+      let errMsg = "";
+      let mergedCount = 0;
+      let tombstoneApplied = 0;
+      try {
+        aliyunForgeRealAppendLog("拉取 Forge docId=" + docId);
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson("GET", base + "/smoke/" + encodeURIComponent(docId), null);
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+        if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+          aliyunForgeRealAppendLog("云端尚无 Forge 文档（首次写入前正常）");
+          ok = true;
+          return { ok: true, empty: true, docId: docId };
+        }
+        if (!getRes.ok) throw new Error("GET HTTP " + getRes.status);
+
+        const tParse0 = Date.now();
+        const row = getRes.data && getRes.data.data;
+        const attrs = (row && (row.attrs || row)) || {};
+        const payloadRaw = attrs.payload != null ? attrs.payload : attrs;
+        let payloadStr = "";
+        try {
+          payloadStr = typeof payloadRaw === "string" ? payloadRaw : JSON.stringify(payloadRaw);
+        } catch (_ps) {
+          payloadStr = "";
+        }
+        payloadKB = Math.round((payloadStr.length / 1024) * 10) / 10;
+        const env = aliyunForgeRealParseEnvelope(payloadRaw);
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        if (!Array.isArray(state.done)) state.done = [];
+        const localById = {};
+        for (let i = 0; i < state.done.length; i++) {
+          const it = state.done[i];
+          if (it && it.id != null) localById[String(it.id)] = it;
+        }
+        const remoteItems = env.items || {};
+        const remoteTombs = env.tombstones || {};
+        const remoteIds = Object.keys(remoteItems);
+        aliyunForgeRealSuppressPush = true;
+        try {
+          for (let r = 0; r < remoteIds.length; r++) {
+            const rid = remoteIds[r];
+            const remote = remoteItems[rid];
+            if (!remote || remote.deleted || !isAliyunForgeRealItem(remote)) continue;
+            const local = localById[rid];
+            const rTs = aliyunForgeRealItemTs(remote);
+            const lTs = aliyunForgeRealItemTs(local);
+            const tomb = remoteTombs[rid];
+            const tTs = aliyunForgeRealItemTs(tomb);
+            if (tTs > rTs && tTs > lTs) continue;
+            if (local && lTs > rTs) continue;
+            const accept = aliyunForgeRealCloneItemForCloud(remote);
+            if (!accept) continue;
+            accept.updatedAt = rTs || Date.now();
+            if (!local) {
+              state.done.unshift(accept);
+              localById[rid] = accept;
+              mergedCount += 1;
+              continue;
+            }
+            if (rTs >= lTs) {
+              Object.keys(accept).forEach(function (k) {
+                local[k] = accept[k];
+              });
+              local.updatedAt = Math.max(rTs, lTs);
+              mergedCount += 1;
+            }
+          }
+          const tombIds = Object.keys(remoteTombs);
+          for (let t = 0; t < tombIds.length; t++) {
+            const tid = tombIds[t];
+            const tomb = remoteTombs[tid];
+            const tTs = aliyunForgeRealItemTs(tomb);
+            const local = localById[tid];
+            if (!local || !isAliyunForgeRealItem(local)) continue;
+            const lTs = aliyunForgeRealItemTs(local);
+            if (tTs < lTs) continue;
+            state.done = state.done.filter(function (d) {
+              return !(d && String(d.id) === tid);
+            });
+            delete localById[tid];
+            tombstoneApplied += 1;
+          }
+          if (uiPaintDirty == null) {
+            uiPaintDirty = {};
+            if (typeof UI_PAINT_SLICE_KEYS !== "undefined") {
+              UI_PAINT_SLICE_KEYS.forEach(function (k) {
+                uiPaintDirty[k] = false;
+              });
+            }
+          }
+          if (typeof markUiPaintSlicesDirty === "function") {
+            markUiPaintSlicesDirty(["done", "forge"]);
+          }
+          saveState({ lists: ["done", "forge"] });
+        } finally {
+          aliyunForgeRealSuppressPush = false;
+        }
+        mergeMs = Date.now() - tMerge0;
+
+        const tRen0 = Date.now();
+        try {
+          if (typeof refreshAllForgeTodayTaskRowsFromDone === "function") {
+            refreshAllForgeTodayTaskRowsFromDone();
+          }
+        } catch (_rf) {}
+        if (typeof render === "function") render();
+        renderMs = Date.now() - tRen0;
+        ok = true;
+        aliyunForgeRealAppendLog(
+          "合并完成：upsert/更新 " + mergedCount + "，tombstone 生效 " + tombstoneApplied
+        );
+        return {
+          ok: true,
+          docId: docId,
+          mergedCount: mergedCount,
+          tombstoneApplied: tombstoneApplied
+        };
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        aliyunForgeRealAppendLog("拉取失败: " + errMsg);
+        return { ok: false, error: errMsg };
+      } finally {
+        lt.stop();
+        aliyunForgeRealLogReport({
+          ok: ok,
+          reason: "manual pull",
+          docId: docId,
+          payloadKB: payloadKB,
+          uploadMs: 0,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: renderMs,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          mergedCount: mergedCount,
+          tombstoneApplied: tombstoneApplied,
+          error: errMsg || undefined
+        });
+      }
+    }
+
+    try {
+      window.runAliyunForgeRealPullAndMerge = runAliyunForgeRealPullAndMerge;
+      window.isAliyunForgeRealSyncEnabled = isAliyunForgeRealSyncEnabled;
+    } catch (_forgeWin) {}
+
+    /**
+     * —— 十二周年（tw020/021/022）单域真实同步（阿里云实验，可回滚）——
+     * 只同步 weeks 任务树（主任务+subs）；不改 UI；Firebase 仍推全量。
+     * 默认关。启用：window.__ALIYUN_ANNIV_REAL_SYNC_ENABLED = true
+     * 拉取：await window.runAliyunAnnivRealPullAndMerge()
+     * 文档：aliyun-anniv-real-v1-{room} · kind anniv-real-v1 · items+tombstones（同 Forge）
+     */
+    const ALIYUN_ANNIV_REAL_KIND = "anniv-real-v1";
+    const ALIYUN_ANNIV_REAL_PERF_PREFIX = "aliyun-anniv-real:";
+    const ALIYUN_ANNIV_REAL_SYNC_ENABLED = false;
+    const ALIYUN_ANNIV_REAL_MODULES = ["tw020", "tw021", "tw022"];
+    let aliyunAnnivRealQueue = [];
+    let aliyunAnnivRealFlushTimer = null;
+    let aliyunAnnivRealFlushing = false;
+    let aliyunAnnivRealLastReport = null;
+    let aliyunAnnivRealSuppressPush = false;
+
+    function isAliyunAnnivRealSyncEnabled() {
+      if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) return true;
+      try {
+        if (window.__ALIYUN_ANNIV_REAL_SYNC_ENABLED === true) return true;
+      } catch (_w) {}
+      return ALIYUN_ANNIV_REAL_SYNC_ENABLED === true;
+    }
+
+    function aliyunAnnivRealAppendLog(msg) {
+      const line = "[anniv] " + String(msg || "");
+      try {
+        console.log("[aliyun-anniv-real]", line);
+      } catch (_c) {}
+      if (!aliyunExpLogArea) return;
+      const prev = String(aliyunExpLogArea.value || "");
+      aliyunExpLogArea.value = prev ? prev + "\n" + line : line;
+      aliyunExpLogArea.scrollTop = aliyunExpLogArea.scrollHeight;
+    }
+
+    function aliyunAnnivRealPerfMark(name) {
+      try {
+        if (typeof performance !== "undefined" && typeof performance.mark === "function") {
+          performance.mark(ALIYUN_ANNIV_REAL_PERF_PREFIX + name);
+        }
+      } catch (_m) {}
+    }
+
+    function aliyunAnnivRealDocId() {
+      const room = String(
+        cloudSyncRoomId ||
+          (typeof localStorage !== "undefined" && localStorage.getItem(CLOUD_SYNC_ROOM_KEY)) ||
+          "default-room"
+      )
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]/g, "_")
+        .slice(0, 64);
+      return "aliyun-anniv-real-v1-" + (room || "default-room");
+    }
+
+    function aliyunAnnivRealBaseUrl() {
+      return String((aliyunExpUrlInput && aliyunExpUrlInput.value) || ALIYUN_EXP_DEFAULT_URL)
+        .trim()
+        .replace(/\/+$/, "");
+    }
+
+    function aliyunAnnivRealItemTs(item) {
+      if (!item || typeof item !== "object") return 0;
+      return Math.max(
+        Number(item.updatedAt) || 0,
+        Number(item.deadlineUpdatedAt) || 0,
+        Number(item.deletedAt) || 0,
+        Number(item.createdAt) || 0
+      );
+    }
+
+    function aliyunAnnivRealNormalizeModule(moduleKey) {
+      const mk = String(moduleKey || "").toLowerCase();
+      if (ALIYUN_ANNIV_REAL_MODULES.indexOf(mk) >= 0) return mk;
+      return "";
+    }
+
+    /** 云端任务快照：module + weekNum + 任务字段（含 subs） */
+    function aliyunAnnivRealCloneTaskForCloud(moduleKey, weekNum, task) {
+      const mk = aliyunAnnivRealNormalizeModule(moduleKey);
+      if (!mk || !task || typeof task !== "object") return null;
+      const id = task.id != null ? String(task.id) : "";
+      if (!id) return null;
+      let cloned;
+      try {
+        cloned =
+          typeof cloneTwTaskForMerge === "function"
+            ? cloneTwTaskForMerge(task)
+            : JSON.parse(JSON.stringify(task));
+      } catch (_c) {
+        cloned = {
+          id: id,
+          text: String(task.text != null ? task.text : ""),
+          done: Boolean(task.done),
+          subs: Array.isArray(task.subs) ? task.subs.slice() : []
+        };
+      }
+      cloned.id = id;
+      cloned.module = mk;
+      cloned.weekNum = String(weekNum);
+      const ts = Math.max(aliyunAnnivRealItemTs(cloned), aliyunAnnivRealItemTs(task), Date.now());
+      cloned.updatedAt = ts;
+      cloned.deleted = false;
+      return cloned;
+    }
+
+    function aliyunAnnivRealEmptyEnvelope() {
+      return {
+        kind: ALIYUN_ANNIV_REAL_KIND,
+        roomId: String(cloudSyncRoomId || ""),
+        envelopeUpdatedAt: Date.now(),
+        items: {},
+        tombstones: {}
+      };
+    }
+
+    function aliyunAnnivRealParseEnvelope(rawPayload) {
+      let p = rawPayload;
+      if (typeof p === "string") {
+        try {
+          p = JSON.parse(p);
+        } catch (_e) {
+          return aliyunAnnivRealEmptyEnvelope();
+        }
+      }
+      if (!p || typeof p !== "object") return aliyunAnnivRealEmptyEnvelope();
+      const env = aliyunAnnivRealEmptyEnvelope();
+      env.roomId = p.roomId != null ? String(p.roomId) : env.roomId;
+      env.envelopeUpdatedAt = Number(p.envelopeUpdatedAt) || 0;
+      if (p.items && typeof p.items === "object") env.items = p.items;
+      if (p.tombstones && typeof p.tombstones === "object") env.tombstones = p.tombstones;
+      return env;
+    }
+
+    function aliyunAnnivRealApplyMutationToEnvelope(env, mutation) {
+      if (!env || !mutation) return env;
+      const id = String(mutation.id || "");
+      if (!id) return env;
+      const now = Date.now();
+      if (mutation.op === "tombstone") {
+        const ts = Number(mutation.deletedAt) || now;
+        const prevItem = env.items && env.items[id];
+        const prevTs = aliyunAnnivRealItemTs(prevItem);
+        const prevTomb = env.tombstones && env.tombstones[id];
+        const prevTombTs = aliyunAnnivRealItemTs(prevTomb);
+        if (ts < prevTs || ts < prevTombTs) return env;
+        if (env.items) delete env.items[id];
+        if (!env.tombstones) env.tombstones = {};
+        env.tombstones[id] = {
+          id: id,
+          deleted: true,
+          deletedAt: ts,
+          updatedAt: ts,
+          reason: mutation.reason || "delete",
+          module: mutation.module || (prevItem && prevItem.module) || "",
+          weekNum:
+            mutation.weekNum != null
+              ? String(mutation.weekNum)
+              : prevItem
+                ? String(prevItem.weekNum || "")
+                : ""
+        };
+      } else if (mutation.op === "upsert" && mutation.item) {
+        const item = mutation.item;
+        const ts = aliyunAnnivRealItemTs(item) || now;
+        item.updatedAt = ts;
+        item.deleted = false;
+        const prevItem = env.items && env.items[id];
+        const prevTs = aliyunAnnivRealItemTs(prevItem);
+        const prevTomb = env.tombstones && env.tombstones[id];
+        const prevTombTs = aliyunAnnivRealItemTs(prevTomb);
+        if (ts < prevTs || ts < prevTombTs) return env;
+        if (env.tombstones) delete env.tombstones[id];
+        if (!env.items) env.items = {};
+        env.items[id] = item;
+      }
+      env.envelopeUpdatedAt = Math.max(Number(env.envelopeUpdatedAt) || 0, now);
+      env.kind = ALIYUN_ANNIV_REAL_KIND;
+      return env;
+    }
+
+    function aliyunAnnivRealStartLtObserver() {
+      const bucket = { count: 0, maxMs: 0, over50: 0 };
+      let obs = null;
+      try {
+        if (typeof PerformanceObserver === "undefined") return { bucket: bucket, stop: function () {} };
+        obs = new PerformanceObserver(function (list) {
+          const entries = list.getEntries() || [];
+          for (let i = 0; i < entries.length; i++) {
+            const d = Number(entries[i].duration) || 0;
+            bucket.count += 1;
+            if (d > bucket.maxMs) bucket.maxMs = d;
+            if (d > 50) bucket.over50 += 1;
+          }
+        });
+        obs.observe({ entryTypes: ["longtask"] });
+      } catch (_lt) {}
+      return {
+        bucket: bucket,
+        stop: function () {
+          try {
+            if (obs) obs.disconnect();
+          } catch (_d) {}
+        }
+      };
+    }
+
+    function aliyunAnnivRealLogReport(report) {
+      aliyunAnnivRealLastReport = report;
+      try {
+        window.__aliyunAnnivRealLastReport = report;
+      } catch (_w) {}
+      aliyunAnnivRealAppendLog("—— Anniv 真实同步 " + (report.reason || "") + " ——");
+      aliyunAnnivRealAppendLog(
+        "ok=" +
+          !!report.ok +
+          " docId=" +
+          (report.docId || "") +
+          (report.httpStatus != null ? " HTTP=" + report.httpStatus : "")
+      );
+      aliyunAnnivRealAppendLog(
+        "payloadKB=" +
+          (report.payloadKB != null ? report.payloadKB : "?") +
+          " upload=" +
+          (report.uploadMs != null ? report.uploadMs + "ms" : "?") +
+          " download=" +
+          (report.downloadMs != null ? report.downloadMs + "ms" : "?") +
+          " merge=" +
+          (report.mergeMs != null ? report.mergeMs + "ms" : "?") +
+          " render=" +
+          (report.renderMs != null ? report.renderMs + "ms" : "?")
+      );
+      if (report.longTaskOver50 != null) {
+        aliyunAnnivRealAppendLog(
+          "longTask>50=" + report.longTaskOver50 + " maxMs=" + (report.longTaskMaxMs || 0)
+        );
+      }
+      if (report.error) aliyunAnnivRealAppendLog("error: " + report.error);
+    }
+
+    function scheduleAliyunAnnivRealSync(reason, mutation) {
+      if (!isAliyunAnnivRealSyncEnabled() || aliyunAnnivRealSuppressPush) return;
+      if (!mutation || !mutation.id) {
+        aliyunAnnivRealAppendLog("schedule skip: missing id reason=" + (reason || ""));
+        return;
+      }
+      aliyunAnnivRealQueue.push({
+        reason: reason || "unknown",
+        mutation: mutation,
+        queuedAt: Date.now()
+      });
+      aliyunAnnivRealAppendLog(
+        "schedule ok: reason=" +
+          (reason || "") +
+          " id=" +
+          mutation.id +
+          " op=" +
+          (mutation.op || "") +
+          " queueLen=" +
+          aliyunAnnivRealQueue.length
+      );
+      if (aliyunAnnivRealFlushTimer) clearTimeout(aliyunAnnivRealFlushTimer);
+      aliyunAnnivRealFlushTimer = setTimeout(function () {
+        aliyunAnnivRealFlushTimer = null;
+        Promise.resolve(flushAliyunAnnivRealQueue()).catch(function (err) {
+          aliyunAnnivRealAppendLog(
+            "flush reject: " + (err && err.message ? err.message : String(err))
+          );
+          console.warn("[aliyun-anniv-real] flush", err);
+        });
+      }, 80);
+    }
+
+    function notifyAliyunAnnivRealUpsert(reason, moduleKey, weekNum, task) {
+      if (!isAliyunAnnivRealSyncEnabled() || aliyunAnnivRealSuppressPush) return;
+      const cloned = aliyunAnnivRealCloneTaskForCloud(moduleKey, weekNum, task);
+      if (!cloned) return;
+      scheduleAliyunAnnivRealSync(reason, { op: "upsert", id: cloned.id, item: cloned });
+    }
+
+    /** 周任务增删改共用入口：把该周现存主任务全部 upsert（含 subs 快照） */
+    function notifyAliyunAnnivRealWeekUpsert(moduleKey, weekNum, reason) {
+      if (!isAliyunAnnivRealSyncEnabled() || aliyunAnnivRealSuppressPush) return;
+      const mk = aliyunAnnivRealNormalizeModule(moduleKey);
+      if (!mk) return;
+      let tasks = [];
+      try {
+        if (typeof getAnniversaryTwWeekTasks === "function") {
+          tasks = getAnniversaryTwWeekTasks(mk, weekNum) || [];
+        } else {
+          const mod =
+            typeof getAnniversaryTwStateModule === "function"
+              ? getAnniversaryTwStateModule(mk)
+              : null;
+          const arr = mod && mod.weeks ? mod.weeks[String(weekNum)] : null;
+          tasks = Array.isArray(arr) ? arr : [];
+        }
+      } catch (_t) {
+        tasks = [];
+      }
+      for (let i = 0; i < tasks.length; i++) {
+        notifyAliyunAnnivRealUpsert(reason || "week-change", mk, weekNum, tasks[i]);
+      }
+    }
+
+    function notifyAliyunAnnivRealTombstone(reason, id, taskOpt, moduleKey, weekNum) {
+      if (!isAliyunAnnivRealSyncEnabled() || aliyunAnnivRealSuppressPush) return;
+      const sid = id != null ? String(id) : "";
+      if (!sid) return;
+      const deletedAt = Math.max(aliyunAnnivRealItemTs(taskOpt), Date.now());
+      scheduleAliyunAnnivRealSync(reason, {
+        op: "tombstone",
+        id: sid,
+        deletedAt: deletedAt,
+        reason: reason || "delete",
+        module: aliyunAnnivRealNormalizeModule(moduleKey) || (taskOpt && taskOpt.module) || "",
+        weekNum:
+          weekNum != null
+            ? String(weekNum)
+            : taskOpt && taskOpt.weekNum != null
+              ? String(taskOpt.weekNum)
+              : ""
+      });
+    }
+
+    /** 主任务删除：主 id + 子 id 记阿里云 tombstone（与 Firebase syncTombstones 对齐） */
+    function notifyAliyunAnnivRealTaskDelete(task, moduleKey, weekNum) {
+      if (!isAliyunAnnivRealSyncEnabled() || aliyunAnnivRealSuppressPush) return;
+      if (!task || task.id == null) return;
+      notifyAliyunAnnivRealTombstone("anniv-task-delete", task.id, task, moduleKey, weekNum);
+      if (!Array.isArray(task.subs)) return;
+      for (let i = 0; i < task.subs.length; i++) {
+        const s = task.subs[i];
+        if (s && s.id != null) {
+          notifyAliyunAnnivRealTombstone("anniv-sub-delete-with-parent", s.id, s, moduleKey, weekNum);
+        }
+      }
+    }
+
+    async function flushAliyunAnnivRealQueue() {
+      if (aliyunAnnivRealFlushing) return;
+      if (!aliyunAnnivRealQueue.length) return;
+      if (!isAliyunAnnivRealSyncEnabled() || aliyunAnnivRealSuppressPush) {
+        aliyunAnnivRealQueue = [];
+        return;
+      }
+      aliyunAnnivRealFlushing = true;
+      const batch = aliyunAnnivRealQueue.splice(0, aliyunAnnivRealQueue.length);
+      const reason = batch.length ? batch[batch.length - 1].reason : "flush";
+      const base = aliyunAnnivRealBaseUrl();
+      const docId = aliyunAnnivRealDocId();
+      aliyunAnnivRealAppendLog(
+        "flush start: reason=" + reason + " batch=" + batch.length + " docId=" + docId
+      );
+      const lt = aliyunAnnivRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let uploadMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let payloadKB = 0;
+      let httpStatus = null;
+      let ok = false;
+      let errMsg = "";
+      try {
+        if (!base || aliyunExpHasForbiddenSecret(base)) {
+          throw new Error(!base ? "缺少 Function URL" : "URL 疑似含 AccessKey");
+        }
+        aliyunAnnivRealPerfMark("flush-start");
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson(
+          "GET",
+          base + "/smoke/" + encodeURIComponent(docId),
+          null
+        );
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+
+        const tParse0 = Date.now();
+        let env = aliyunAnnivRealEmptyEnvelope();
+        if (getRes.ok && getRes.data && getRes.data.data) {
+          const row = getRes.data.data;
+          const attrs = row.attrs || row;
+          env = aliyunAnnivRealParseEnvelope(attrs.payload != null ? attrs.payload : attrs);
+        } else if (getRes.status !== 404 && !(getRes.data && getRes.data.error === "not_found")) {
+          console.warn("[aliyun-anniv-real] GET status", getRes.status, getRes.data);
+        }
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        for (let i = 0; i < batch.length; i++) {
+          aliyunAnnivRealApplyMutationToEnvelope(env, batch[i].mutation);
+        }
+        env.roomId = String(cloudSyncRoomId || env.roomId || "");
+        env.envelopeUpdatedAt = Date.now();
+        mergeMs = Date.now() - tMerge0;
+
+        let bodyJson = "";
+        try {
+          bodyJson = JSON.stringify({ id: docId, payload: env });
+        } catch (_ser) {
+          throw new Error("envelope serialize failed");
+        }
+        payloadKB = Math.round((bodyJson.length / 1024) * 10) / 10;
+
+        const tUp0 = Date.now();
+        const putRes = await aliyunExpFetchJson("POST", base + "/smoke", JSON.parse(bodyJson));
+        uploadMs = Date.now() - tUp0;
+        networkWaitMs += uploadMs;
+        httpStatus = putRes.status;
+        aliyunAnnivRealAppendLog(
+          "flush POST status=" + putRes.status + " uploadMs=" + uploadMs + " payloadKB=" + payloadKB
+        );
+        if (!putRes.ok) {
+          throw new Error(
+            "upload HTTP " +
+              putRes.status +
+              " " +
+              (putRes.data && (putRes.data.error || putRes.data.message)
+                ? putRes.data.error || putRes.data.message
+                : "")
+          );
+        }
+        ok = true;
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        ok = false;
+      } finally {
+        lt.stop();
+        aliyunAnnivRealFlushing = false;
+        aliyunAnnivRealLogReport({
+          ok: ok,
+          reason: reason,
+          docId: docId,
+          httpStatus: httpStatus,
+          payloadKB: payloadKB,
+          uploadMs: uploadMs,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: 0,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          error: errMsg || undefined
+        });
+        if (aliyunAnnivRealQueue.length) {
+          Promise.resolve(flushAliyunAnnivRealQueue()).catch(function () {});
+        }
+      }
+    }
+
+    /** 实验拉取：只 merge 十二周年 weeks 任务；不动 Habit/Forge/Done */
+    async function runAliyunAnnivRealPullAndMerge() {
+      if (!isAliyunAnnivRealSyncEnabled()) {
+        aliyunAnnivRealAppendLog(
+          "Anniv 真实同步未启用：请设 window.__ALIYUN_ANNIV_REAL_SYNC_ENABLED=true"
+        );
+        return { ok: false, error: "disabled" };
+      }
+      const base = aliyunAnnivRealBaseUrl();
+      const docId = aliyunAnnivRealDocId();
+      if (!base || aliyunExpHasForbiddenSecret(base)) {
+        aliyunAnnivRealAppendLog(!base ? "请填写 Function URL" : "中止：URL 疑似 AccessKey");
+        return { ok: false, error: "bad-url" };
+      }
+      const lt = aliyunAnnivRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let renderMs = 0;
+      let payloadKB = 0;
+      let ok = false;
+      let errMsg = "";
+      let mergedCount = 0;
+      let tombstoneApplied = 0;
+      try {
+        aliyunAnnivRealAppendLog("拉取 Anniv docId=" + docId);
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson(
+          "GET",
+          base + "/smoke/" + encodeURIComponent(docId),
+          null
+        );
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+        if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+          aliyunAnnivRealAppendLog("云端尚无 Anniv 文档（首次写入前正常）");
+          ok = true;
+          return { ok: true, empty: true, docId: docId };
+        }
+        if (!getRes.ok) throw new Error("GET HTTP " + getRes.status);
+
+        const tParse0 = Date.now();
+        const row = getRes.data && getRes.data.data;
+        const attrs = (row && (row.attrs || row)) || {};
+        const payloadRaw = attrs.payload != null ? attrs.payload : attrs;
+        let payloadStr = "";
+        try {
+          payloadStr = typeof payloadRaw === "string" ? payloadRaw : JSON.stringify(payloadRaw);
+        } catch (_ps) {
+          payloadStr = "";
+        }
+        payloadKB = Math.round((payloadStr.length / 1024) * 10) / 10;
+        const env = aliyunAnnivRealParseEnvelope(payloadRaw);
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        const remoteItems = env.items || {};
+        const remoteTombs = env.tombstones || {};
+        const remoteIds = Object.keys(remoteItems);
+        const touchedModules = {};
+        aliyunAnnivRealSuppressPush = true;
+        try {
+          for (let r = 0; r < remoteIds.length; r++) {
+            const rid = remoteIds[r];
+            const remote = remoteItems[rid];
+            if (!remote || remote.deleted) continue;
+            const mk = aliyunAnnivRealNormalizeModule(remote.module);
+            const weekKey = String(remote.weekNum != null ? remote.weekNum : "");
+            if (!mk || !weekKey) continue;
+            const tomb = remoteTombs[rid];
+            const rTs = aliyunAnnivRealItemTs(remote);
+            const tTs = aliyunAnnivRealItemTs(tomb);
+            if (tTs > rTs) continue;
+
+            if (typeof normalizeAnniversaryTwModuleStateByKey === "function") {
+              normalizeAnniversaryTwModuleStateByKey(mk);
+            }
+            const mod =
+              typeof getAnniversaryTwStateModule === "function"
+                ? getAnniversaryTwStateModule(mk)
+                : null;
+            if (!mod || !mod.weeks || typeof mod.weeks !== "object") continue;
+            if (!Array.isArray(mod.weeks[weekKey])) mod.weeks[weekKey] = [];
+            const arr = mod.weeks[weekKey];
+            let localIdx = -1;
+            let local = null;
+            for (let i = 0; i < arr.length; i++) {
+              if (arr[i] && String(arr[i].id) === rid) {
+                localIdx = i;
+                local = arr[i];
+                break;
+              }
+            }
+            const lTs = aliyunAnnivRealItemTs(local);
+            if (local && lTs > rTs) continue;
+
+            const mergedTask =
+              typeof mergeTwOneTask === "function"
+                ? mergeTwOneTask(remote, local || {}, true, { moduleKey: mk, weekNum: weekKey })
+                : typeof cloneTwTaskForMerge === "function"
+                  ? cloneTwTaskForMerge(remote)
+                  : remote;
+            mergedTask.id = rid;
+            mergedTask.updatedAt =
+              Math.max(rTs, lTs, Number(mergedTask.updatedAt) || 0) || Date.now();
+            if (localIdx >= 0) {
+              arr[localIdx] = mergedTask;
+            } else {
+              arr.push(mergedTask);
+            }
+            touchedModules[mk] = true;
+            mergedCount += 1;
+          }
+
+          const tombIds = Object.keys(remoteTombs);
+          for (let t = 0; t < tombIds.length; t++) {
+            const tid = tombIds[t];
+            const tomb = remoteTombs[tid];
+            const tTs = aliyunAnnivRealItemTs(tomb);
+            const hintMk = aliyunAnnivRealNormalizeModule(tomb && tomb.module);
+            const modulesToScan = hintMk ? [hintMk] : ALIYUN_ANNIV_REAL_MODULES.slice();
+            for (let mi = 0; mi < modulesToScan.length; mi++) {
+              const mk = modulesToScan[mi];
+              if (typeof normalizeAnniversaryTwModuleStateByKey === "function") {
+                normalizeAnniversaryTwModuleStateByKey(mk);
+              }
+              const mod =
+                typeof getAnniversaryTwStateModule === "function"
+                  ? getAnniversaryTwStateModule(mk)
+                  : null;
+              if (!mod || !mod.weeks) continue;
+              const weekKeys = Object.keys(mod.weeks);
+              for (let wi = 0; wi < weekKeys.length; wi++) {
+                const wk = weekKeys[wi];
+                const arr = mod.weeks[wk];
+                if (!Array.isArray(arr)) continue;
+                let removed = false;
+                const next = [];
+                for (let i = 0; i < arr.length; i++) {
+                  const task = arr[i];
+                  if (!task) continue;
+                  if (String(task.id) === tid) {
+                    const lTs = aliyunAnnivRealItemTs(task);
+                    if (tTs >= lTs) {
+                      removed = true;
+                      continue;
+                    }
+                  }
+                  if (Array.isArray(task.subs) && task.subs.length) {
+                    const before = task.subs.length;
+                    task.subs = task.subs.filter(function (s) {
+                      if (!s || s.id == null) return true;
+                      if (String(s.id) !== tid) return true;
+                      return aliyunAnnivRealItemTs(s) > tTs;
+                    });
+                    if (task.subs.length !== before) {
+                      removed = true;
+                      task.updatedAt = Math.max(aliyunAnnivRealItemTs(task), tTs);
+                    }
+                  }
+                  next.push(task);
+                }
+                if (removed) {
+                  mod.weeks[wk] = next;
+                  touchedModules[mk] = true;
+                  tombstoneApplied += 1;
+                }
+              }
+            }
+          }
+
+          saveState({ lists: ["closedList", "done"] });
+        } finally {
+          aliyunAnnivRealSuppressPush = false;
+        }
+        mergeMs = Date.now() - tMerge0;
+
+        const tRen0 = Date.now();
+        try {
+          const mks = Object.keys(touchedModules);
+          for (let i = 0; i < mks.length; i++) {
+            const mk = mks[i];
+            if (mk === "tw020" && typeof renderAnniversaryTw020 === "function") renderAnniversaryTw020();
+            else if (mk === "tw021" && typeof renderAnniversaryTw021 === "function")
+              renderAnniversaryTw021();
+            else if (mk === "tw022" && typeof renderAnniversaryTw022 === "function")
+              renderAnniversaryTw022();
+            else if (typeof renderAnniversaryTwModule === "function") renderAnniversaryTwModule(mk);
+          }
+        } catch (_rf) {
+          if (typeof render === "function") render();
+        }
+        renderMs = Date.now() - tRen0;
+        ok = true;
+        aliyunAnnivRealAppendLog(
+          "合并完成：upsert/更新 " + mergedCount + "，tombstone 生效 " + tombstoneApplied
+        );
+        return {
+          ok: true,
+          docId: docId,
+          mergedCount: mergedCount,
+          tombstoneApplied: tombstoneApplied
+        };
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        aliyunAnnivRealAppendLog("拉取失败: " + errMsg);
+        return { ok: false, error: errMsg };
+      } finally {
+        lt.stop();
+        aliyunAnnivRealLogReport({
+          ok: ok,
+          reason: "manual pull",
+          docId: docId,
+          payloadKB: payloadKB,
+          uploadMs: 0,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: renderMs,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          mergedCount: mergedCount,
+          tombstoneApplied: tombstoneApplied,
+          error: errMsg || undefined
+        });
+      }
+    }
+
+    try {
+      window.runAliyunAnnivRealPullAndMerge = runAliyunAnnivRealPullAndMerge;
+      window.isAliyunAnnivRealSyncEnabled = isAliyunAnnivRealSyncEnabled;
+    } catch (_annivWin) {}
+
+    /**
+     * —— 3-Day Sprint（state.weeklyPlan）单域真实同步（阿里云实验，可回滚）——
+     * 只同步周计划任务树（含 microTasks / todayPlanDate）；不改 UI；Firebase 仍推全量。
+     * 默认关。启用：window.__ALIYUN_SPRINT_REAL_SYNC_ENABLED = true
+     * 拉取：await window.runAliyunSprintRealPullAndMerge()
+     * 文档：aliyun-sprint-real-v1-{room} · kind sprint-real-v1 · items+tombstones（同 Forge/Anniv）
+     */
+    const ALIYUN_SPRINT_REAL_KIND = "sprint-real-v1";
+    const ALIYUN_SPRINT_REAL_PERF_PREFIX = "aliyun-sprint-real:";
+    const ALIYUN_SPRINT_REAL_SYNC_ENABLED = false;
+    let aliyunSprintRealQueue = [];
+    let aliyunSprintRealFlushTimer = null;
+    let aliyunSprintRealFlushing = false;
+    let aliyunSprintRealLastReport = null;
+    let aliyunSprintRealSuppressPush = false;
+
+    function isAliyunSprintRealSyncEnabled() {
+      if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) return true;
+      try {
+        if (window.__ALIYUN_SPRINT_REAL_SYNC_ENABLED === true) return true;
+      } catch (_w) {}
+      return ALIYUN_SPRINT_REAL_SYNC_ENABLED === true;
+    }
+
+    function aliyunSprintRealAppendLog(msg) {
+      const line = "[sprint] " + String(msg || "");
+      try {
+        console.log("[aliyun-sprint-real]", line);
+      } catch (_c) {}
+      if (!aliyunExpLogArea) return;
+      const prev = String(aliyunExpLogArea.value || "");
+      aliyunExpLogArea.value = prev ? prev + "\n" + line : line;
+      aliyunExpLogArea.scrollTop = aliyunExpLogArea.scrollHeight;
+    }
+
+    function aliyunSprintRealPerfMark(name) {
+      try {
+        if (typeof performance !== "undefined" && typeof performance.mark === "function") {
+          performance.mark(ALIYUN_SPRINT_REAL_PERF_PREFIX + name);
+        }
+      } catch (_m) {}
+    }
+
+    function aliyunSprintRealDocId() {
+      const room = String(
+        cloudSyncRoomId ||
+          (typeof localStorage !== "undefined" && localStorage.getItem(CLOUD_SYNC_ROOM_KEY)) ||
+          "default-room"
+      )
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]/g, "_")
+        .slice(0, 64);
+      return "aliyun-sprint-real-v1-" + (room || "default-room");
+    }
+
+    function aliyunSprintRealBaseUrl() {
+      return String((aliyunExpUrlInput && aliyunExpUrlInput.value) || ALIYUN_EXP_DEFAULT_URL)
+        .trim()
+        .replace(/\/+$/, "");
+    }
+
+    function aliyunSprintRealItemTs(item) {
+      if (!item || typeof item !== "object") return 0;
+      return Math.max(
+        Number(item.updatedAt) || 0,
+        Number(item.deadlineUpdatedAt) || 0,
+        Number(item.completedAt) || 0,
+        Number(item.statusAt) || 0,
+        Number(item.deletedAt) || 0,
+        Number(item.createdAt) || 0
+      );
+    }
+
+    function aliyunSprintRealNormalizeWeekKey(weekKey) {
+      const k = String(weekKey || "").trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(k)) return k;
+      return "";
+    }
+
+    /** 云端任务快照：weekKey + normalizeWeeklyPlanTask 字段 */
+    function aliyunSprintRealCloneTaskForCloud(weekKey, task) {
+      const wk = aliyunSprintRealNormalizeWeekKey(weekKey);
+      if (!wk || !task || typeof task !== "object") return null;
+      const id = task.id != null ? String(task.id) : "";
+      if (!id) return null;
+      let cloned;
+      try {
+        cloned =
+          typeof normalizeWeeklyPlanTask === "function"
+            ? normalizeWeeklyPlanTask(task)
+            : JSON.parse(JSON.stringify(task));
+      } catch (_c) {
+        cloned = {
+          id: id,
+          text: String(task.text != null ? task.text : ""),
+          lane: task.lane === "work" || task.lane === "open" ? task.lane : "life",
+          mainDone: Boolean(task.mainDone),
+          microTasks: Array.isArray(task.microTasks) ? task.microTasks.slice() : []
+        };
+      }
+      cloned.id = id;
+      cloned.weekKey = wk;
+      const ts = Math.max(aliyunSprintRealItemTs(cloned), aliyunSprintRealItemTs(task), Date.now());
+      cloned.updatedAt = ts;
+      cloned.deleted = false;
+      return cloned;
+    }
+
+    function aliyunSprintRealEmptyEnvelope() {
+      return {
+        kind: ALIYUN_SPRINT_REAL_KIND,
+        roomId: String(cloudSyncRoomId || ""),
+        envelopeUpdatedAt: Date.now(),
+        items: {},
+        tombstones: {}
+      };
+    }
+
+    function aliyunSprintRealParseEnvelope(rawPayload) {
+      let p = rawPayload;
+      if (typeof p === "string") {
+        try {
+          p = JSON.parse(p);
+        } catch (_e) {
+          return aliyunSprintRealEmptyEnvelope();
+        }
+      }
+      if (!p || typeof p !== "object") return aliyunSprintRealEmptyEnvelope();
+      const env = aliyunSprintRealEmptyEnvelope();
+      env.roomId = p.roomId != null ? String(p.roomId) : env.roomId;
+      env.envelopeUpdatedAt = Number(p.envelopeUpdatedAt) || 0;
+      if (p.items && typeof p.items === "object") env.items = p.items;
+      if (p.tombstones && typeof p.tombstones === "object") env.tombstones = p.tombstones;
+      return env;
+    }
+
+    function aliyunSprintRealApplyMutationToEnvelope(env, mutation) {
+      if (!env || !mutation) return env;
+      const id = String(mutation.id || "");
+      if (!id) return env;
+      const now = Date.now();
+      if (mutation.op === "tombstone") {
+        const ts = Number(mutation.deletedAt) || now;
+        const prevItem = env.items && env.items[id];
+        const prevTs = aliyunSprintRealItemTs(prevItem);
+        const prevTomb = env.tombstones && env.tombstones[id];
+        const prevTombTs = aliyunSprintRealItemTs(prevTomb);
+        if (ts < prevTs || ts < prevTombTs) return env;
+        if (env.items) delete env.items[id];
+        if (!env.tombstones) env.tombstones = {};
+        env.tombstones[id] = {
+          id: id,
+          deleted: true,
+          deletedAt: ts,
+          updatedAt: ts,
+          reason: mutation.reason || "delete",
+          weekKey:
+            mutation.weekKey != null
+              ? String(mutation.weekKey)
+              : prevItem
+                ? String(prevItem.weekKey || "")
+                : ""
+        };
+      } else if (mutation.op === "upsert" && mutation.item) {
+        const item = mutation.item;
+        const ts = aliyunSprintRealItemTs(item) || now;
+        item.updatedAt = ts;
+        item.deleted = false;
+        const prevItem = env.items && env.items[id];
+        const prevTs = aliyunSprintRealItemTs(prevItem);
+        const prevTomb = env.tombstones && env.tombstones[id];
+        const prevTombTs = aliyunSprintRealItemTs(prevTomb);
+        if (ts < prevTs || ts < prevTombTs) return env;
+        if (env.tombstones) delete env.tombstones[id];
+        if (!env.items) env.items = {};
+        env.items[id] = item;
+      }
+      env.envelopeUpdatedAt = Math.max(Number(env.envelopeUpdatedAt) || 0, now);
+      env.kind = ALIYUN_SPRINT_REAL_KIND;
+      return env;
+    }
+
+    function aliyunSprintRealStartLtObserver() {
+      const bucket = { count: 0, maxMs: 0, over50: 0 };
+      let obs = null;
+      try {
+        if (typeof PerformanceObserver === "undefined") return { bucket: bucket, stop: function () {} };
+        obs = new PerformanceObserver(function (list) {
+          const entries = list.getEntries() || [];
+          for (let i = 0; i < entries.length; i++) {
+            const d = Number(entries[i].duration) || 0;
+            bucket.count += 1;
+            if (d > bucket.maxMs) bucket.maxMs = d;
+            if (d > 50) bucket.over50 += 1;
+          }
+        });
+        obs.observe({ entryTypes: ["longtask"] });
+      } catch (_lt) {}
+      return {
+        bucket: bucket,
+        stop: function () {
+          try {
+            if (obs) obs.disconnect();
+          } catch (_d) {}
+        }
+      };
+    }
+
+    function aliyunSprintRealLogReport(report) {
+      aliyunSprintRealLastReport = report;
+      try {
+        window.__aliyunSprintRealLastReport = report;
+      } catch (_w) {}
+      aliyunSprintRealAppendLog("—— Sprint 真实同步 " + (report.reason || "") + " ——");
+      aliyunSprintRealAppendLog(
+        "ok=" +
+          !!report.ok +
+          " docId=" +
+          (report.docId || "") +
+          (report.httpStatus != null ? " HTTP=" + report.httpStatus : "")
+      );
+      aliyunSprintRealAppendLog(
+        "payloadKB=" +
+          (report.payloadKB != null ? report.payloadKB : "?") +
+          " upload=" +
+          (report.uploadMs != null ? report.uploadMs + "ms" : "?") +
+          " download=" +
+          (report.downloadMs != null ? report.downloadMs + "ms" : "?") +
+          " merge=" +
+          (report.mergeMs != null ? report.mergeMs + "ms" : "?") +
+          " render=" +
+          (report.renderMs != null ? report.renderMs + "ms" : "?")
+      );
+      if (report.longTaskOver50 != null) {
+        aliyunSprintRealAppendLog(
+          "longTask>50=" + report.longTaskOver50 + " maxMs=" + (report.longTaskMaxMs || 0)
+        );
+      }
+      if (report.error) aliyunSprintRealAppendLog("error: " + report.error);
+    }
+
+    function scheduleAliyunSprintRealSync(reason, mutation) {
+      if (!isAliyunSprintRealSyncEnabled() || aliyunSprintRealSuppressPush) return;
+      if (!mutation || !mutation.id) {
+        aliyunSprintRealAppendLog("schedule skip: missing id reason=" + (reason || ""));
+        return;
+      }
+      aliyunSprintRealQueue.push({
+        reason: reason || "unknown",
+        mutation: mutation,
+        queuedAt: Date.now()
+      });
+      aliyunSprintRealAppendLog(
+        "schedule ok: reason=" +
+          (reason || "") +
+          " id=" +
+          mutation.id +
+          " op=" +
+          (mutation.op || "") +
+          " queueLen=" +
+          aliyunSprintRealQueue.length
+      );
+      if (aliyunSprintRealFlushTimer) clearTimeout(aliyunSprintRealFlushTimer);
+      aliyunSprintRealFlushTimer = setTimeout(function () {
+        aliyunSprintRealFlushTimer = null;
+        Promise.resolve(flushAliyunSprintRealQueue()).catch(function (err) {
+          aliyunSprintRealAppendLog(
+            "flush reject: " + (err && err.message ? err.message : String(err))
+          );
+          console.warn("[aliyun-sprint-real] flush", err);
+        });
+      }, 80);
+    }
+
+    function notifyAliyunSprintRealUpsert(reason, weekKey, task) {
+      if (!isAliyunSprintRealSyncEnabled() || aliyunSprintRealSuppressPush) return;
+      const cloned = aliyunSprintRealCloneTaskForCloud(weekKey, task);
+      if (!cloned) return;
+      scheduleAliyunSprintRealSync(reason, { op: "upsert", id: cloned.id, item: cloned });
+    }
+
+    /** 周桶增删改共用入口：把该 sprint 周现存任务全部 upsert */
+    function notifyAliyunSprintRealWeekUpsert(weekKey, reason) {
+      if (!isAliyunSprintRealSyncEnabled() || aliyunSprintRealSuppressPush) return;
+      const wk = aliyunSprintRealNormalizeWeekKey(weekKey);
+      if (!wk) return;
+      let tasks = [];
+      try {
+        if (typeof getWeeklyPlanTasksForWeekKey === "function") {
+          tasks = getWeeklyPlanTasksForWeekKey(wk) || [];
+        } else if (state.weeklyPlan && Array.isArray(state.weeklyPlan[wk])) {
+          tasks = state.weeklyPlan[wk];
+        }
+      } catch (_t) {
+        tasks = [];
+      }
+      for (let i = 0; i < tasks.length; i++) {
+        notifyAliyunSprintRealUpsert(reason || "week-change", wk, tasks[i]);
+      }
+    }
+
+    function notifyAliyunSprintRealTombstone(reason, id, taskOpt, weekKey) {
+      if (!isAliyunSprintRealSyncEnabled() || aliyunSprintRealSuppressPush) return;
+      const sid = id != null ? String(id) : "";
+      if (!sid) return;
+      const deletedAt = Math.max(aliyunSprintRealItemTs(taskOpt), Date.now());
+      scheduleAliyunSprintRealSync(reason, {
+        op: "tombstone",
+        id: sid,
+        deletedAt: deletedAt,
+        reason: reason || "delete",
+        weekKey:
+          weekKey != null
+            ? String(weekKey)
+            : taskOpt && taskOpt.weekKey != null
+              ? String(taskOpt.weekKey)
+              : ""
+      });
+    }
+
+    function notifyAliyunSprintRealTaskDelete(task, weekKey) {
+      if (!isAliyunSprintRealSyncEnabled() || aliyunSprintRealSuppressPush) return;
+      if (!task || task.id == null) return;
+      notifyAliyunSprintRealTombstone("sprint-task-delete", task.id, task, weekKey);
+      if (!Array.isArray(task.microTasks)) return;
+      for (let i = 0; i < task.microTasks.length; i++) {
+        const m = task.microTasks[i];
+        if (m && m.id != null) {
+          notifyAliyunSprintRealTombstone("sprint-micro-delete-with-parent", m.id, m, weekKey);
+        }
+      }
+    }
+
+    async function flushAliyunSprintRealQueue() {
+      if (aliyunSprintRealFlushing) return;
+      if (!aliyunSprintRealQueue.length) return;
+      if (!isAliyunSprintRealSyncEnabled() || aliyunSprintRealSuppressPush) {
+        aliyunSprintRealQueue = [];
+        return;
+      }
+      aliyunSprintRealFlushing = true;
+      const batch = aliyunSprintRealQueue.splice(0, aliyunSprintRealQueue.length);
+      const reason = batch.length ? batch[batch.length - 1].reason : "flush";
+      const base = aliyunSprintRealBaseUrl();
+      const docId = aliyunSprintRealDocId();
+      aliyunSprintRealAppendLog(
+        "flush start: reason=" + reason + " batch=" + batch.length + " docId=" + docId
+      );
+      const lt = aliyunSprintRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let uploadMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let payloadKB = 0;
+      let httpStatus = null;
+      let ok = false;
+      let errMsg = "";
+      try {
+        if (!base || aliyunExpHasForbiddenSecret(base)) {
+          throw new Error(!base ? "缺少 Function URL" : "URL 疑似含 AccessKey");
+        }
+        aliyunSprintRealPerfMark("flush-start");
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson(
+          "GET",
+          base + "/smoke/" + encodeURIComponent(docId),
+          null
+        );
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+
+        const tParse0 = Date.now();
+        let env = aliyunSprintRealEmptyEnvelope();
+        if (getRes.ok && getRes.data && getRes.data.data) {
+          const row = getRes.data.data;
+          const attrs = row.attrs || row;
+          env = aliyunSprintRealParseEnvelope(attrs.payload != null ? attrs.payload : attrs);
+        } else if (getRes.status !== 404 && !(getRes.data && getRes.data.error === "not_found")) {
+          console.warn("[aliyun-sprint-real] GET status", getRes.status, getRes.data);
+        }
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        for (let i = 0; i < batch.length; i++) {
+          aliyunSprintRealApplyMutationToEnvelope(env, batch[i].mutation);
+        }
+        env.roomId = String(cloudSyncRoomId || env.roomId || "");
+        env.envelopeUpdatedAt = Date.now();
+        mergeMs = Date.now() - tMerge0;
+
+        let bodyJson = "";
+        try {
+          bodyJson = JSON.stringify({ id: docId, payload: env });
+        } catch (_ser) {
+          throw new Error("envelope serialize failed");
+        }
+        payloadKB = Math.round((bodyJson.length / 1024) * 10) / 10;
+
+        const tUp0 = Date.now();
+        const putRes = await aliyunExpFetchJson("POST", base + "/smoke", JSON.parse(bodyJson));
+        uploadMs = Date.now() - tUp0;
+        networkWaitMs += uploadMs;
+        httpStatus = putRes.status;
+        aliyunSprintRealAppendLog(
+          "flush POST status=" + putRes.status + " uploadMs=" + uploadMs + " payloadKB=" + payloadKB
+        );
+        if (!putRes.ok) {
+          throw new Error(
+            "upload HTTP " +
+              putRes.status +
+              " " +
+              (putRes.data && (putRes.data.error || putRes.data.message)
+                ? putRes.data.error || putRes.data.message
+                : "")
+          );
+        }
+        ok = true;
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        ok = false;
+      } finally {
+        lt.stop();
+        aliyunSprintRealFlushing = false;
+        aliyunSprintRealLogReport({
+          ok: ok,
+          reason: reason,
+          docId: docId,
+          httpStatus: httpStatus,
+          payloadKB: payloadKB,
+          uploadMs: uploadMs,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: 0,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          error: errMsg || undefined
+        });
+        if (aliyunSprintRealQueue.length) {
+          Promise.resolve(flushAliyunSprintRealQueue()).catch(function () {});
+        }
+      }
+    }
+
+    /** 实验拉取：只 merge weeklyPlan 任务；不动 Habit/Forge/Done/Anniv */
+    async function runAliyunSprintRealPullAndMerge() {
+      if (!isAliyunSprintRealSyncEnabled()) {
+        aliyunSprintRealAppendLog(
+          "Sprint 真实同步未启用：请设 window.__ALIYUN_SPRINT_REAL_SYNC_ENABLED=true"
+        );
+        return { ok: false, error: "disabled" };
+      }
+      const base = aliyunSprintRealBaseUrl();
+      const docId = aliyunSprintRealDocId();
+      if (!base || aliyunExpHasForbiddenSecret(base)) {
+        aliyunSprintRealAppendLog(!base ? "请填写 Function URL" : "中止：URL 疑似 AccessKey");
+        return { ok: false, error: "bad-url" };
+      }
+      const lt = aliyunSprintRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let renderMs = 0;
+      let payloadKB = 0;
+      let ok = false;
+      let errMsg = "";
+      let mergedCount = 0;
+      let tombstoneApplied = 0;
+      try {
+        aliyunSprintRealAppendLog("拉取 Sprint docId=" + docId);
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson(
+          "GET",
+          base + "/smoke/" + encodeURIComponent(docId),
+          null
+        );
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+        if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+          aliyunSprintRealAppendLog("云端尚无 Sprint 文档（首次写入前正常）");
+          ok = true;
+          return { ok: true, empty: true, docId: docId };
+        }
+        if (!getRes.ok) throw new Error("GET HTTP " + getRes.status);
+
+        const tParse0 = Date.now();
+        const row = getRes.data && getRes.data.data;
+        const attrs = (row && (row.attrs || row)) || {};
+        const payloadRaw = attrs.payload != null ? attrs.payload : attrs;
+        let payloadStr = "";
+        try {
+          payloadStr = typeof payloadRaw === "string" ? payloadRaw : JSON.stringify(payloadRaw);
+        } catch (_ps) {
+          payloadStr = "";
+        }
+        payloadKB = Math.round((payloadStr.length / 1024) * 10) / 10;
+        const env = aliyunSprintRealParseEnvelope(payloadRaw);
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") state.weeklyPlan = {};
+        const remoteItems = env.items || {};
+        const remoteTombs = env.tombstones || {};
+        const remoteIds = Object.keys(remoteItems);
+        aliyunSprintRealSuppressPush = true;
+        try {
+          for (let r = 0; r < remoteIds.length; r++) {
+            const rid = remoteIds[r];
+            const remote = remoteItems[rid];
+            if (!remote || remote.deleted) continue;
+            const wk = aliyunSprintRealNormalizeWeekKey(remote.weekKey);
+            if (!wk) continue;
+            const tomb = remoteTombs[rid];
+            const rTs = aliyunSprintRealItemTs(remote);
+            const tTs = aliyunSprintRealItemTs(tomb);
+            if (tTs > rTs) continue;
+
+            if (!Array.isArray(state.weeklyPlan[wk])) state.weeklyPlan[wk] = [];
+            const arr = state.weeklyPlan[wk];
+            let localIdx = -1;
+            let local = null;
+            for (let i = 0; i < arr.length; i++) {
+              if (arr[i] && String(arr[i].id) === rid) {
+                localIdx = i;
+                local = arr[i];
+                break;
+              }
+            }
+            const lTs = aliyunSprintRealItemTs(local);
+            if (local && lTs > rTs) continue;
+
+            const mergedTask =
+              typeof mergeWeeklyPlanOneTaskForSync === "function"
+                ? mergeWeeklyPlanOneTaskForSync(local || {}, remote, true)
+                : typeof normalizeWeeklyPlanTask === "function"
+                  ? normalizeWeeklyPlanTask(remote)
+                  : remote;
+            if (!mergedTask) continue;
+            mergedTask.id = rid;
+            mergedTask.updatedAt =
+              Math.max(rTs, lTs, Number(mergedTask.updatedAt) || 0) || Date.now();
+            if (localIdx >= 0) arr[localIdx] = mergedTask;
+            else arr.push(mergedTask);
+            mergedCount += 1;
+          }
+
+          const tombIds = Object.keys(remoteTombs);
+          for (let t = 0; t < tombIds.length; t++) {
+            const tid = tombIds[t];
+            const tomb = remoteTombs[tid];
+            const tTs = aliyunSprintRealItemTs(tomb);
+            const hintWk = aliyunSprintRealNormalizeWeekKey(tomb && tomb.weekKey);
+            const weekKeys = hintWk
+              ? [hintWk]
+              : Object.keys(state.weeklyPlan || {});
+            for (let wi = 0; wi < weekKeys.length; wi++) {
+              const wk = weekKeys[wi];
+              const arr = state.weeklyPlan[wk];
+              if (!Array.isArray(arr)) continue;
+              let removed = false;
+              const next = [];
+              for (let i = 0; i < arr.length; i++) {
+                const task = arr[i];
+                if (!task) continue;
+                if (String(task.id) === tid) {
+                  if (tTs >= aliyunSprintRealItemTs(task)) {
+                    removed = true;
+                    continue;
+                  }
+                }
+                if (Array.isArray(task.microTasks) && task.microTasks.length) {
+                  const before = task.microTasks.length;
+                  task.microTasks = task.microTasks.filter(function (m) {
+                    if (!m || m.id == null) return true;
+                    if (String(m.id) !== tid) return true;
+                    return aliyunSprintRealItemTs(m) > tTs;
+                  });
+                  if (task.microTasks.length !== before) {
+                    removed = true;
+                    task.updatedAt = Math.max(aliyunSprintRealItemTs(task), tTs);
+                  }
+                }
+                next.push(task);
+              }
+              if (removed) {
+                state.weeklyPlan[wk] = next;
+                tombstoneApplied += 1;
+              }
+            }
+          }
+
+          saveState({ lists: ["weeklyPlan", "done", "closedList"] });
+        } finally {
+          aliyunSprintRealSuppressPush = false;
+        }
+        mergeMs = Date.now() - tMerge0;
+
+        const tRen0 = Date.now();
+        try {
+          if (typeof refreshWeeklyPlanListAfterStructureChange === "function") {
+            refreshWeeklyPlanListAfterStructureChange();
+          } else if (typeof render === "function") {
+            render();
+          }
+        } catch (_rf) {
+          if (typeof render === "function") render();
+        }
+        renderMs = Date.now() - tRen0;
+        ok = true;
+        aliyunSprintRealAppendLog(
+          "合并完成：upsert/更新 " + mergedCount + "，tombstone 生效 " + tombstoneApplied
+        );
+        return {
+          ok: true,
+          docId: docId,
+          mergedCount: mergedCount,
+          tombstoneApplied: tombstoneApplied
+        };
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        aliyunSprintRealAppendLog("拉取失败: " + errMsg);
+        return { ok: false, error: errMsg };
+      } finally {
+        lt.stop();
+        aliyunSprintRealLogReport({
+          ok: ok,
+          reason: "manual pull",
+          docId: docId,
+          payloadKB: payloadKB,
+          uploadMs: 0,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: renderMs,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          mergedCount: mergedCount,
+          tombstoneApplied: tombstoneApplied,
+          error: errMsg || undefined
+        });
+      }
+    }
+
+    try {
+      window.runAliyunSprintRealPullAndMerge = runAliyunSprintRealPullAndMerge;
+      window.isAliyunSprintRealSyncEnabled = isAliyunSprintRealSyncEnabled;
+    } catch (_sprintWin) {}
+
+    /**
+     * —— 今日计划聚合层真实同步（阿里云实验，可回滚）——
+     * 只同步 todayPlanDate 标记（taskId → date），不复制 Closed/Sprint 任务正文。
+     * 拉取时对已有 weeklyPlan 任务写回标记；来源实体仍由 Sprint/Closed/Firebase 负责。
+     * 默认关。启用：window.__ALIYUN_TODAY_PLAN_REAL_SYNC_ENABLED = true
+     * 拉取：await window.runAliyunTodayPlanRealPullAndMerge()
+     * 文档：aliyun-today-plan-real-v1-{room} · kind today-plan-real-v1 · marks（无整任务拷贝）
+     */
+    const ALIYUN_TODAY_PLAN_REAL_KIND = "today-plan-real-v1";
+    const ALIYUN_TODAY_PLAN_REAL_PERF_PREFIX = "aliyun-today-plan-real:";
+    const ALIYUN_TODAY_PLAN_REAL_SYNC_ENABLED = false;
+    let aliyunTodayPlanRealQueue = [];
+    let aliyunTodayPlanRealFlushTimer = null;
+    let aliyunTodayPlanRealFlushing = false;
+    let aliyunTodayPlanRealLastReport = null;
+    let aliyunTodayPlanRealSuppressPush = false;
+
+    function isAliyunTodayPlanRealSyncEnabled() {
+      if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) return true;
+      try {
+        if (window.__ALIYUN_TODAY_PLAN_REAL_SYNC_ENABLED === true) return true;
+      } catch (_w) {}
+      return ALIYUN_TODAY_PLAN_REAL_SYNC_ENABLED === true;
+    }
+
+    function aliyunTodayPlanRealAppendLog(msg) {
+      const line = "[today-plan] " + String(msg || "");
+      try {
+        console.log("[aliyun-today-plan-real]", line);
+      } catch (_c) {}
+      if (!aliyunExpLogArea) return;
+      const prev = String(aliyunExpLogArea.value || "");
+      aliyunExpLogArea.value = prev ? prev + "\n" + line : line;
+      aliyunExpLogArea.scrollTop = aliyunExpLogArea.scrollHeight;
+    }
+
+    function aliyunTodayPlanRealPerfMark(name) {
+      try {
+        if (typeof performance !== "undefined" && typeof performance.mark === "function") {
+          performance.mark(ALIYUN_TODAY_PLAN_REAL_PERF_PREFIX + name);
+        }
+      } catch (_m) {}
+    }
+
+    function aliyunTodayPlanRealDocId() {
+      const room = String(
+        cloudSyncRoomId ||
+          (typeof localStorage !== "undefined" && localStorage.getItem(CLOUD_SYNC_ROOM_KEY)) ||
+          "default-room"
+      )
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]/g, "_")
+        .slice(0, 64);
+      return "aliyun-today-plan-real-v1-" + (room || "default-room");
+    }
+
+    function aliyunTodayPlanRealBaseUrl() {
+      return String((aliyunExpUrlInput && aliyunExpUrlInput.value) || ALIYUN_EXP_DEFAULT_URL)
+        .trim()
+        .replace(/\/+$/, "");
+    }
+
+    function aliyunTodayPlanRealMarkTs(mark) {
+      if (!mark || typeof mark !== "object") return 0;
+      return Math.max(Number(mark.updatedAt) || 0, Number(mark.deletedAt) || 0);
+    }
+
+    function aliyunTodayPlanRealNormalizeDate(value) {
+      if (typeof normalizeWeeklyPlanTodayPlanDate === "function") {
+        return normalizeWeeklyPlanTodayPlanDate(value);
+      }
+      if (typeof value !== "string") return "";
+      const s = value.trim();
+      return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : "";
+    }
+
+    /** 只打包标记，不含任务 text/lane/microTasks */
+    function aliyunTodayPlanRealCloneMarkForCloud(taskId, dateOpt, updatedAtOpt) {
+      const id = taskId != null ? String(taskId) : "";
+      if (!id) return null;
+      let date = dateOpt != null ? aliyunTodayPlanRealNormalizeDate(dateOpt) : "";
+      let updatedAt = Number(updatedAtOpt) || 0;
+      if (dateOpt == null || updatedAtOpt == null) {
+        try {
+          const raw =
+            typeof findWeeklyPlanTaskRaw === "function" ? findWeeklyPlanTaskRaw(id) : null;
+          if (raw) {
+            if (dateOpt == null) {
+              date = Object.prototype.hasOwnProperty.call(raw, "todayPlanDate")
+                ? aliyunTodayPlanRealNormalizeDate(raw.todayPlanDate)
+                : "";
+            }
+            if (!updatedAt) updatedAt = Number(raw.updatedAt) || 0;
+          }
+        } catch (_rawErr) {}
+      }
+      updatedAt = Math.max(updatedAt, Date.now());
+      return {
+        id: id,
+        date: date,
+        updatedAt: updatedAt,
+        source: "weeklyPlan"
+      };
+    }
+
+    function aliyunTodayPlanRealEmptyEnvelope() {
+      return {
+        kind: ALIYUN_TODAY_PLAN_REAL_KIND,
+        roomId: String(cloudSyncRoomId || ""),
+        envelopeUpdatedAt: Date.now(),
+        marks: {}
+      };
+    }
+
+    function aliyunTodayPlanRealParseEnvelope(rawPayload) {
+      let p = rawPayload;
+      if (typeof p === "string") {
+        try {
+          p = JSON.parse(p);
+        } catch (_e) {
+          return aliyunTodayPlanRealEmptyEnvelope();
+        }
+      }
+      if (!p || typeof p !== "object") return aliyunTodayPlanRealEmptyEnvelope();
+      const env = aliyunTodayPlanRealEmptyEnvelope();
+      env.roomId = p.roomId != null ? String(p.roomId) : env.roomId;
+      env.envelopeUpdatedAt = Number(p.envelopeUpdatedAt) || 0;
+      if (p.marks && typeof p.marks === "object") env.marks = p.marks;
+      /* 兼容误用 items 形状 */
+      if ((!env.marks || !Object.keys(env.marks).length) && p.items && typeof p.items === "object") {
+        env.marks = p.items;
+      }
+      return env;
+    }
+
+    function aliyunTodayPlanRealApplyMutationToEnvelope(env, mutation) {
+      if (!env || !mutation) return env;
+      const id = String(mutation.id || "");
+      if (!id) return env;
+      const now = Date.now();
+      if (mutation.op === "upsert" && mutation.mark) {
+        const mark = mutation.mark;
+        const ts = aliyunTodayPlanRealMarkTs(mark) || now;
+        mark.updatedAt = ts;
+        mark.id = id;
+        mark.date = aliyunTodayPlanRealNormalizeDate(mark.date);
+        const prev = env.marks && env.marks[id];
+        const prevTs = aliyunTodayPlanRealMarkTs(prev);
+        if (ts < prevTs) return env;
+        if (!env.marks) env.marks = {};
+        env.marks[id] = mark;
+      }
+      env.envelopeUpdatedAt = Math.max(Number(env.envelopeUpdatedAt) || 0, now);
+      env.kind = ALIYUN_TODAY_PLAN_REAL_KIND;
+      return env;
+    }
+
+    function aliyunTodayPlanRealStartLtObserver() {
+      const bucket = { count: 0, maxMs: 0, over50: 0 };
+      let obs = null;
+      try {
+        if (typeof PerformanceObserver === "undefined") return { bucket: bucket, stop: function () {} };
+        obs = new PerformanceObserver(function (list) {
+          const entries = list.getEntries() || [];
+          for (let i = 0; i < entries.length; i++) {
+            const d = Number(entries[i].duration) || 0;
+            bucket.count += 1;
+            if (d > bucket.maxMs) bucket.maxMs = d;
+            if (d > 50) bucket.over50 += 1;
+          }
+        });
+        obs.observe({ entryTypes: ["longtask"] });
+      } catch (_lt) {}
+      return {
+        bucket: bucket,
+        stop: function () {
+          try {
+            if (obs) obs.disconnect();
+          } catch (_d) {}
+        }
+      };
+    }
+
+    function aliyunTodayPlanRealLogReport(report) {
+      aliyunTodayPlanRealLastReport = report;
+      try {
+        window.__aliyunTodayPlanRealLastReport = report;
+      } catch (_w) {}
+      aliyunTodayPlanRealAppendLog("—— TodayPlan 真实同步 " + (report.reason || "") + " ——");
+      aliyunTodayPlanRealAppendLog(
+        "ok=" +
+          !!report.ok +
+          " docId=" +
+          (report.docId || "") +
+          (report.httpStatus != null ? " HTTP=" + report.httpStatus : "")
+      );
+      aliyunTodayPlanRealAppendLog(
+        "payloadKB=" +
+          (report.payloadKB != null ? report.payloadKB : "?") +
+          " upload=" +
+          (report.uploadMs != null ? report.uploadMs + "ms" : "?") +
+          " download=" +
+          (report.downloadMs != null ? report.downloadMs + "ms" : "?") +
+          " merge=" +
+          (report.mergeMs != null ? report.mergeMs + "ms" : "?") +
+          " render=" +
+          (report.renderMs != null ? report.renderMs + "ms" : "?")
+      );
+      if (report.longTaskOver50 != null) {
+        aliyunTodayPlanRealAppendLog(
+          "longTask>50=" + report.longTaskOver50 + " maxMs=" + (report.longTaskMaxMs || 0)
+        );
+      }
+      if (report.error) aliyunTodayPlanRealAppendLog("error: " + report.error);
+    }
+
+    function scheduleAliyunTodayPlanRealSync(reason, mutation) {
+      if (!isAliyunTodayPlanRealSyncEnabled() || aliyunTodayPlanRealSuppressPush) return;
+      if (!mutation || !mutation.id) {
+        aliyunTodayPlanRealAppendLog("schedule skip: missing id reason=" + (reason || ""));
+        return;
+      }
+      aliyunTodayPlanRealQueue.push({
+        reason: reason || "unknown",
+        mutation: mutation,
+        queuedAt: Date.now()
+      });
+      aliyunTodayPlanRealAppendLog(
+        "schedule ok: reason=" +
+          (reason || "") +
+          " id=" +
+          mutation.id +
+          " op=" +
+          (mutation.op || "") +
+          " date=" +
+          (mutation.mark && mutation.mark.date != null ? mutation.mark.date : "") +
+          " queueLen=" +
+          aliyunTodayPlanRealQueue.length
+      );
+      if (aliyunTodayPlanRealFlushTimer) clearTimeout(aliyunTodayPlanRealFlushTimer);
+      aliyunTodayPlanRealFlushTimer = setTimeout(function () {
+        aliyunTodayPlanRealFlushTimer = null;
+        Promise.resolve(flushAliyunTodayPlanRealQueue()).catch(function (err) {
+          aliyunTodayPlanRealAppendLog(
+            "flush reject: " + (err && err.message ? err.message : String(err))
+          );
+          console.warn("[aliyun-today-plan-real] flush", err);
+        });
+      }, 80);
+    }
+
+    /** 加入/移出今日：只 upsert 标记 */
+    function notifyAliyunTodayPlanRealMarkUpsert(taskId, reason) {
+      if (!isAliyunTodayPlanRealSyncEnabled() || aliyunTodayPlanRealSuppressPush) return;
+      const mark = aliyunTodayPlanRealCloneMarkForCloud(taskId);
+      if (!mark) return;
+      scheduleAliyunTodayPlanRealSync(reason || "today-plan-mark", {
+        op: "upsert",
+        id: mark.id,
+        mark: mark
+      });
+    }
+
+    async function flushAliyunTodayPlanRealQueue() {
+      if (aliyunTodayPlanRealFlushing) return;
+      if (!aliyunTodayPlanRealQueue.length) return;
+      if (!isAliyunTodayPlanRealSyncEnabled() || aliyunTodayPlanRealSuppressPush) {
+        aliyunTodayPlanRealQueue = [];
+        return;
+      }
+      aliyunTodayPlanRealFlushing = true;
+      const batch = aliyunTodayPlanRealQueue.splice(0, aliyunTodayPlanRealQueue.length);
+      const reason = batch.length ? batch[batch.length - 1].reason : "flush";
+      const base = aliyunTodayPlanRealBaseUrl();
+      const docId = aliyunTodayPlanRealDocId();
+      aliyunTodayPlanRealAppendLog(
+        "flush start: reason=" + reason + " batch=" + batch.length + " docId=" + docId
+      );
+      const lt = aliyunTodayPlanRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let uploadMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let payloadKB = 0;
+      let httpStatus = null;
+      let ok = false;
+      let errMsg = "";
+      try {
+        if (!base || aliyunExpHasForbiddenSecret(base)) {
+          throw new Error(!base ? "缺少 Function URL" : "URL 疑似含 AccessKey");
+        }
+        aliyunTodayPlanRealPerfMark("flush-start");
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson(
+          "GET",
+          base + "/smoke/" + encodeURIComponent(docId),
+          null
+        );
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+
+        const tParse0 = Date.now();
+        let env = aliyunTodayPlanRealEmptyEnvelope();
+        if (getRes.ok && getRes.data && getRes.data.data) {
+          const row = getRes.data.data;
+          const attrs = row.attrs || row;
+          env = aliyunTodayPlanRealParseEnvelope(attrs.payload != null ? attrs.payload : attrs);
+        } else if (getRes.status !== 404 && !(getRes.data && getRes.data.error === "not_found")) {
+          console.warn("[aliyun-today-plan-real] GET status", getRes.status, getRes.data);
+        }
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        for (let i = 0; i < batch.length; i++) {
+          aliyunTodayPlanRealApplyMutationToEnvelope(env, batch[i].mutation);
+        }
+        env.roomId = String(cloudSyncRoomId || env.roomId || "");
+        env.envelopeUpdatedAt = Date.now();
+        mergeMs = Date.now() - tMerge0;
+
+        let bodyJson = "";
+        try {
+          bodyJson = JSON.stringify({ id: docId, payload: env });
+        } catch (_ser) {
+          throw new Error("envelope serialize failed");
+        }
+        payloadKB = Math.round((bodyJson.length / 1024) * 10) / 10;
+
+        const tUp0 = Date.now();
+        const putRes = await aliyunExpFetchJson("POST", base + "/smoke", JSON.parse(bodyJson));
+        uploadMs = Date.now() - tUp0;
+        networkWaitMs += uploadMs;
+        httpStatus = putRes.status;
+        aliyunTodayPlanRealAppendLog(
+          "flush POST status=" + putRes.status + " uploadMs=" + uploadMs + " payloadKB=" + payloadKB
+        );
+        if (!putRes.ok) {
+          throw new Error(
+            "upload HTTP " +
+              putRes.status +
+              " " +
+              (putRes.data && (putRes.data.error || putRes.data.message)
+                ? putRes.data.error || putRes.data.message
+                : "")
+          );
+        }
+        ok = true;
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        ok = false;
+      } finally {
+        lt.stop();
+        aliyunTodayPlanRealFlushing = false;
+        aliyunTodayPlanRealLogReport({
+          ok: ok,
+          reason: reason,
+          docId: docId,
+          httpStatus: httpStatus,
+          payloadKB: payloadKB,
+          uploadMs: uploadMs,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: 0,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          error: errMsg || undefined
+        });
+        if (aliyunTodayPlanRealQueue.length) {
+          Promise.resolve(flushAliyunTodayPlanRealQueue()).catch(function () {});
+        }
+      }
+    }
+
+    /** 实验拉取：只把 marks 写回本地 weeklyPlan.todayPlanDate；不创建/覆盖任务正文 */
+    async function runAliyunTodayPlanRealPullAndMerge() {
+      if (!isAliyunTodayPlanRealSyncEnabled()) {
+        aliyunTodayPlanRealAppendLog(
+          "TodayPlan 真实同步未启用：请设 window.__ALIYUN_TODAY_PLAN_REAL_SYNC_ENABLED=true"
+        );
+        return { ok: false, error: "disabled" };
+      }
+      const base = aliyunTodayPlanRealBaseUrl();
+      const docId = aliyunTodayPlanRealDocId();
+      if (!base || aliyunExpHasForbiddenSecret(base)) {
+        aliyunTodayPlanRealAppendLog(!base ? "请填写 Function URL" : "中止：URL 疑似 AccessKey");
+        return { ok: false, error: "bad-url" };
+      }
+      const lt = aliyunTodayPlanRealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let renderMs = 0;
+      let payloadKB = 0;
+      let ok = false;
+      let errMsg = "";
+      let mergedCount = 0;
+      let skippedMissing = 0;
+      try {
+        aliyunTodayPlanRealAppendLog("拉取 TodayPlan docId=" + docId);
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson(
+          "GET",
+          base + "/smoke/" + encodeURIComponent(docId),
+          null
+        );
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+        if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+          aliyunTodayPlanRealAppendLog("云端尚无 TodayPlan 文档（首次写入前正常）");
+          ok = true;
+          return { ok: true, empty: true, docId: docId };
+        }
+        if (!getRes.ok) throw new Error("GET HTTP " + getRes.status);
+
+        const tParse0 = Date.now();
+        const row = getRes.data && getRes.data.data;
+        const attrs = (row && (row.attrs || row)) || {};
+        const payloadRaw = attrs.payload != null ? attrs.payload : attrs;
+        let payloadStr = "";
+        try {
+          payloadStr = typeof payloadRaw === "string" ? payloadRaw : JSON.stringify(payloadRaw);
+        } catch (_ps) {
+          payloadStr = "";
+        }
+        payloadKB = Math.round((payloadStr.length / 1024) * 10) / 10;
+        const env = aliyunTodayPlanRealParseEnvelope(payloadRaw);
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        const marks = env.marks || {};
+        const markIds = Object.keys(marks);
+        aliyunTodayPlanRealSuppressPush = true;
+        try {
+          for (let i = 0; i < markIds.length; i++) {
+            const tid = markIds[i];
+            const mark = marks[tid];
+            if (!mark || typeof mark !== "object") continue;
+            const remDate = aliyunTodayPlanRealNormalizeDate(
+              mark.date != null ? mark.date : mark.todayPlanDate
+            );
+            const remU = aliyunTodayPlanRealMarkTs(mark);
+            const raw =
+              typeof findWeeklyPlanTaskRaw === "function" ? findWeeklyPlanTaskRaw(tid) : null;
+            if (!raw) {
+              skippedMissing += 1;
+              continue;
+            }
+            const locHas = Object.prototype.hasOwnProperty.call(raw, "todayPlanDate");
+            const locDate = locHas ? aliyunTodayPlanRealNormalizeDate(raw.todayPlanDate) : "";
+            const locU = Number(raw.updatedAt) || 0;
+            if (remU < locU) continue;
+            if (remU === locU && remDate === locDate) continue;
+            raw.todayPlanDate = remDate;
+            if (remU > 0) raw.updatedAt = Math.max(locU, remU);
+            mergedCount += 1;
+          }
+          if (mergedCount) {
+            saveState({ skipUiPaintDirty: true, lists: ["weeklyPlan"] });
+          }
+        } finally {
+          aliyunTodayPlanRealSuppressPush = false;
+        }
+        mergeMs = Date.now() - tMerge0;
+
+        const tRen0 = Date.now();
+        try {
+          if (mergedCount && typeof paintTodayPlanPanel === "function") {
+            paintTodayPlanPanel();
+          }
+        } catch (_rf) {}
+        renderMs = Date.now() - tRen0;
+        ok = true;
+        aliyunTodayPlanRealAppendLog(
+          "合并完成：标记更新 " +
+            mergedCount +
+            "，来源任务缺失跳过 " +
+            skippedMissing +
+            "（聚合层不复制正文）"
+        );
+        return {
+          ok: true,
+          docId: docId,
+          mergedCount: mergedCount,
+          skippedMissing: skippedMissing
+        };
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        aliyunTodayPlanRealAppendLog("拉取失败: " + errMsg);
+        return { ok: false, error: errMsg };
+      } finally {
+        lt.stop();
+        aliyunTodayPlanRealLogReport({
+          ok: ok,
+          reason: "manual pull",
+          docId: docId,
+          payloadKB: payloadKB,
+          uploadMs: 0,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: renderMs,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          mergedCount: mergedCount,
+          skippedMissing: skippedMissing,
+          error: errMsg || undefined
+        });
+      }
+    }
+
+    try {
+      window.runAliyunTodayPlanRealPullAndMerge = runAliyunTodayPlanRealPullAndMerge;
+      window.isAliyunTodayPlanRealSyncEnabled = isAliyunTodayPlanRealSyncEnabled;
+    } catch (_todayWin) {}
+
 
     function aliyunExpLog(lines, msg) {
       lines.push(String(msg || ""));
@@ -108373,13 +110954,19 @@
     }
 
     /** 十二周年主任务删除：主 id + 子任务 id 均记 tombstone，避免云并集复活 */
-    function recordAnniversaryTwTaskDeleteTombstones(task) {
+    function recordAnniversaryTwTaskDeleteTombstones(task, moduleKey, weekNum) {
       if (!task || task.id == null) return;
       recordSyncTombstone(task.id);
-      if (!Array.isArray(task.subs)) return;
-      task.subs.forEach(function (s) {
-        if (s && s.id != null) recordSyncTombstone(s.id);
-      });
+      if (Array.isArray(task.subs)) {
+        task.subs.forEach(function (s) {
+          if (s && s.id != null) recordSyncTombstone(s.id);
+        });
+      }
+      try {
+        if (typeof notifyAliyunAnnivRealTaskDelete === "function") {
+          notifyAliyunAnnivRealTaskDelete(task, moduleKey, weekNum);
+        }
+      } catch (_annivTomb) {}
     }
 
     /** 垃圾箱恢复十二周年任务/子任务时清除 tombstone */
@@ -110874,6 +113461,9 @@
       const ts = base.syncTombstones;
 
       base.done = mergeDetailTime("field", "done", function () {
+        if (typeof isAliyunDoneRealSyncEnabled === "function" && isAliyunDoneRealSyncEnabled()) {
+          return Array.isArray(state.done) ? state.done.slice() : [];
+        }
         return omitTombstonedIdRecords(
           mergeDoneArraysForSync(state.done, remoteState.done, serverNewer),
           ts
@@ -110957,6 +113547,15 @@
         return mergeMoveBreakDayForSync(state.moveBreakDay, remoteState.moveBreakDay);
       });
       base.habitCheckins = mergeDetailTime("field", "habitCheckins", function () {
+        if (typeof isAliyunHabitRealSyncEnabled === "function" && isAliyunHabitRealSyncEnabled()) {
+          try {
+            return state.habitCheckins && typeof state.habitCheckins === "object"
+              ? JSON.parse(JSON.stringify(state.habitCheckins))
+              : {};
+          } catch (_hcKeep) {
+            return state.habitCheckins || {};
+          }
+        }
         return mergeHabitCheckinsForSync(state.habitCheckins, remoteState.habitCheckins);
       });
       base.dailyWinTomorrowRef = mergeDetailTime("field", "dailyWinTomorrowRef", function () {
@@ -110997,7 +113596,18 @@
       }
 
       const anniversaryTwPreferRemote = serverNewer;
+      const aliyunAnnivKeepLocal =
+        typeof isAliyunAnnivRealSyncEnabled === "function" && isAliyunAnnivRealSyncEnabled();
       base.anniversaryTw020 = mergeDetailTime("field", "anniversaryTw020", function () {
+        if (aliyunAnnivKeepLocal) {
+          try {
+            return state.anniversaryTw020 && typeof state.anniversaryTw020 === "object"
+              ? JSON.parse(JSON.stringify(state.anniversaryTw020))
+              : state.anniversaryTw020;
+          } catch (_a20) {
+            return state.anniversaryTw020;
+          }
+        }
         return mergeAnniversaryTw020ModuleForSync(
           state.anniversaryTw020,
           remoteState.anniversaryTw020,
@@ -111007,6 +113617,15 @@
         );
       });
       base.anniversaryTw021 = mergeDetailTime("field", "anniversaryTw021", function () {
+        if (aliyunAnnivKeepLocal) {
+          try {
+            return state.anniversaryTw021 && typeof state.anniversaryTw021 === "object"
+              ? JSON.parse(JSON.stringify(state.anniversaryTw021))
+              : state.anniversaryTw021;
+          } catch (_a21) {
+            return state.anniversaryTw021;
+          }
+        }
         return mergeAnniversaryTwAnchorModuleForSync(
           state.anniversaryTw021,
           remoteState.anniversaryTw021,
@@ -111016,6 +113635,15 @@
         );
       });
       base.anniversaryTw022 = mergeDetailTime("field", "anniversaryTw022", function () {
+        if (aliyunAnnivKeepLocal) {
+          try {
+            return state.anniversaryTw022 && typeof state.anniversaryTw022 === "object"
+              ? JSON.parse(JSON.stringify(state.anniversaryTw022))
+              : state.anniversaryTw022;
+          } catch (_a22) {
+            return state.anniversaryTw022;
+          }
+        }
         return mergeAnniversaryTwAnchorModuleForSync(
           state.anniversaryTw022,
           remoteState.anniversaryTw022,
@@ -111111,6 +113739,15 @@
       });
 
       base.weeklyPlan = mergeDetailTime("field", "weeklyPlan", function () {
+        if (typeof isAliyunSprintRealSyncEnabled === "function" && isAliyunSprintRealSyncEnabled()) {
+          try {
+            return state.weeklyPlan && typeof state.weeklyPlan === "object"
+              ? JSON.parse(JSON.stringify(state.weeklyPlan))
+              : {};
+          } catch (_wpKeep) {
+            return state.weeklyPlan || {};
+          }
+        }
         return mergeWeeklyPlanBucketsForSync(
           state.weeklyPlan,
           remoteState.weeklyPlan,
@@ -111647,6 +114284,17 @@
             );
           });
           mergeDetailTime("apply", "reMerge_weeklyPlan", function () {
+            if (typeof isAliyunSprintRealSyncEnabled === "function" && isAliyunSprintRealSyncEnabled()) {
+              try {
+                merged.weeklyPlan =
+                  state.weeklyPlan && typeof state.weeklyPlan === "object"
+                    ? JSON.parse(JSON.stringify(state.weeklyPlan))
+                    : {};
+              } catch (_wpKeep2) {
+                merged.weeklyPlan = state.weeklyPlan || {};
+              }
+              return;
+            }
             merged.weeklyPlan = mergeWeeklyPlanBucketsForSync(
               state.weeklyPlan,
               merged.weeklyPlan,
@@ -111655,6 +114303,17 @@
             );
           });
           mergeDetailTime("apply", "reMerge_anniversaryTw020", function () {
+            if (typeof isAliyunAnnivRealSyncEnabled === "function" && isAliyunAnnivRealSyncEnabled()) {
+              try {
+                merged.anniversaryTw020 =
+                  state.anniversaryTw020 && typeof state.anniversaryTw020 === "object"
+                    ? JSON.parse(JSON.stringify(state.anniversaryTw020))
+                    : state.anniversaryTw020;
+              } catch (_a20b) {
+                merged.anniversaryTw020 = state.anniversaryTw020;
+              }
+              return;
+            }
             merged.anniversaryTw020 = mergeAnniversaryTw020ModuleForSync(
               state.anniversaryTw020,
               merged.anniversaryTw020,
@@ -111664,6 +114323,17 @@
             );
           });
           mergeDetailTime("apply", "reMerge_anniversaryTw021", function () {
+            if (typeof isAliyunAnnivRealSyncEnabled === "function" && isAliyunAnnivRealSyncEnabled()) {
+              try {
+                merged.anniversaryTw021 =
+                  state.anniversaryTw021 && typeof state.anniversaryTw021 === "object"
+                    ? JSON.parse(JSON.stringify(state.anniversaryTw021))
+                    : state.anniversaryTw021;
+              } catch (_a21b) {
+                merged.anniversaryTw021 = state.anniversaryTw021;
+              }
+              return;
+            }
             merged.anniversaryTw021 = mergeAnniversaryTwAnchorModuleForSync(
               state.anniversaryTw021,
               merged.anniversaryTw021,
@@ -111673,6 +114343,17 @@
             );
           });
           mergeDetailTime("apply", "reMerge_anniversaryTw022", function () {
+            if (typeof isAliyunAnnivRealSyncEnabled === "function" && isAliyunAnnivRealSyncEnabled()) {
+              try {
+                merged.anniversaryTw022 =
+                  state.anniversaryTw022 && typeof state.anniversaryTw022 === "object"
+                    ? JSON.parse(JSON.stringify(state.anniversaryTw022))
+                    : state.anniversaryTw022;
+              } catch (_a22b) {
+                merged.anniversaryTw022 = state.anniversaryTw022;
+              }
+              return;
+            }
             merged.anniversaryTw022 = mergeAnniversaryTwAnchorModuleForSync(
               state.anniversaryTw022,
               merged.anniversaryTw022,
@@ -123354,15 +126035,21 @@
       }
       const dateKey = selectedDoneDate || formatDateInputValue(new Date());
       const ts = habitDateToCompletedAt(dateKey);
-      state.done.unshift({
+      const newItem = {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: "【Forge·Body】" + rowKeyForMeta + suffix + " · " + amt,
         createdAt: ts,
         completedAt: ts,
         forgeBodyMeta: { dateKey: dateKey, amount: amt, rowKey: rowKeyForMeta }
-      });
+      };
+      state.done.unshift(newItem);
       saveStateWithCloudPulseImmediate();
       scheduleCloudSyncFullPushAfterCheckin();
+      try {
+        if (typeof notifyAliyunForgeRealUpsert === "function") {
+          notifyAliyunForgeRealUpsert("checkin-body", newItem);
+        }
+      } catch (_aliyunForgeErr) {}
       finalizeForgeCheckinUiAfterAppend(rowEl);
     }
 
@@ -123387,15 +126074,21 @@
         count: count
       };
       if (minutesParsed != null) forgeMindMeta.minutes = minutesParsed;
-      state.done.unshift({
+      const newItem = {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: "【Forge·Mind】" + label + " · " + amt,
         createdAt: ts,
         completedAt: ts,
         forgeMindMeta: forgeMindMeta
-      });
+      };
+      state.done.unshift(newItem);
       saveStateWithCloudPulseImmediate();
       scheduleCloudSyncFullPushAfterCheckin();
+      try {
+        if (typeof notifyAliyunForgeRealUpsert === "function") {
+          notifyAliyunForgeRealUpsert("checkin-mind", newItem);
+        }
+      } catch (_aliyunForgeErr) {}
       finalizeForgeCheckinUiAfterAppend(rowEl);
     }
 
@@ -144231,6 +146924,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       state.weeklyPlan[k] = tasks;
       noteCloudSyncWeeklyPlanPulseWeekKey(k);
       saveState({ lists: ["weeklyPlan", "done", "closedList"] });
+      /* 阿里云 3-Day Sprint：默认随主路径；不阻塞 UI */
+      try {
+        if (typeof notifyAliyunSprintRealWeekUpsert === "function") {
+          notifyAliyunSprintRealWeekUpsert(k, "weekly-plan-week-change");
+        }
+      } catch (_sprintPush) {}
     }
 
     /** 周计划结构/完成态变更：本地持久化后立即 pulse，减少跨端漏同步 */
@@ -144412,6 +147111,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       if (hit && hit.id) {
         recordSyncTombstone(hit.id);
+        try {
+          if (typeof notifyAliyunSprintRealTaskDelete === "function") {
+            notifyAliyunSprintRealTaskDelete(hit, weekKey);
+          }
+        } catch (_sprintTomb) {}
       }
       const tasks = tasksAll.filter((t) => t.id !== taskId);
       saveWeeklyPlanTasksForWeek(tasks, weekKey);
@@ -150429,7 +153133,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           payload: deepCloneForTrash(rm),
           meta: { weekNum: weekNum }
         });
-        recordAnniversaryTwTaskDeleteTombstones(rm);
+        recordAnniversaryTwTaskDeleteTombstones(rm, "tw020", weekNum);
       }
       removeAnniversaryClosedListMirrors("tw020", weekNum, taskId);
       state.anniversaryTw020.weeks[key] = arr.filter((x) => x.id !== taskId);
@@ -153728,7 +156432,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           payload: deepCloneForTrash(rm),
           meta: { weekNum: weekNum }
         });
-        recordAnniversaryTwTaskDeleteTombstones(rm);
+        recordAnniversaryTwTaskDeleteTombstones(rm, "tw021", weekNum);
       }
       removeAnniversaryClosedListMirrors("tw021", weekNum, taskId);
       state.anniversaryTw021.weeks[key] = arr.filter((x) => x.id !== taskId);
@@ -153864,7 +156568,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           payload: deepCloneForTrash(rm),
           meta: { weekNum: weekNum, moduleKey: moduleKey }
         });
-        recordAnniversaryTwTaskDeleteTombstones(rm);
+        recordAnniversaryTwTaskDeleteTombstones(rm, moduleKey, weekNum);
       }
       removeAnniversaryClosedListMirrors(moduleKey, weekNum, taskId);
       mod.weeks[key] = arr.filter(function (x) {
@@ -154653,7 +157357,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           payload: deepCloneForTrash(rm),
           meta: { weekNum: weekNum }
         });
-        recordAnniversaryTwTaskDeleteTombstones(rm);
+        recordAnniversaryTwTaskDeleteTombstones(rm, "tw022", weekNum);
       }
       removeAnniversaryClosedListMirrors("tw022", weekNum, taskId);
       state.anniversaryTw022.weeks[key] = arr.filter((x) => x.id !== taskId);
@@ -160919,7 +163623,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const start = function () {
         const go = function () {
           try {
-            void initCloudSync();
+            const skipFb =
+              typeof shouldSkipFirebaseCloudSyncBootForAliyunPrimary === "function" &&
+              shouldSkipFirebaseCloudSyncBootForAliyunPrimary();
+            if (skipFb) {
+              try {
+                console.log(
+                  "[aliyun-sync-primary] 跳过 Firebase 启动（主路径单写）；回退: setAliyunSyncPrimaryEnabled(false) 或 setAliyunSyncPrimaryDualWriteFirebase(true) 或 __FIREBASE_SYNC_FORCE_ENABLED=true"
+                );
+              } catch (_cSkip) {}
+            } else {
+              void initCloudSync();
+            }
           } catch (bootstrapSyncErr) {
             console.warn("initCloudSync 失败:", bootstrapSyncErr);
           }
@@ -161002,7 +163717,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } catch (deferredSyncErr) {
         console.warn("延迟云同步调度失败:", deferredSyncErr);
         try {
-          void initCloudSync();
+          if (
+            !(
+              typeof shouldSkipFirebaseCloudSyncBootForAliyunPrimary === "function" &&
+              shouldSkipFirebaseCloudSyncBootForAliyunPrimary()
+            )
+          ) {
+            void initCloudSync();
+          } else if (typeof scheduleAliyunSyncPrimaryBootPull === "function") {
+            scheduleAliyunSyncPrimaryBootPull();
+          }
         } catch (_e) {}
       }
     })();
