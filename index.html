@@ -95399,7 +95399,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930s";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930u";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -109733,6 +109733,35 @@
       return true;
     }
 
+    /**
+     * AMB 合并后强制刷新「始终向后衡量」相关 UI。
+     * render() 里 renderBackwardMeasure 被 gate 在 paintDailyWinDom，
+     * 而阿里云 pull/flush 常用 skipUiPaintDirty，会导致 state 已合入但面板不刷新。
+     */
+    function aliyunAmbRealPaintLocalUiAfterMerge() {
+      try {
+        if (typeof markUiPaintSlicesDirty === "function") {
+          markUiPaintSlicesDirty(["dailyWin", "habit"]);
+        }
+      } catch (_dirty) {}
+      try {
+        if (typeof renderBackwardMeasure === "function") {
+          renderBackwardMeasure({ forceLists: true });
+        }
+      } catch (_bm) {
+        console.warn("[aliyun-amb-real] renderBackwardMeasure 失败:", _bm);
+      }
+      try {
+        if (typeof renderFuelScore === "function") renderFuelScore();
+      } catch (_fuel) {}
+      try {
+        if (typeof renderSuccessCriteria === "function") renderSuccessCriteria();
+      } catch (_sc) {}
+      try {
+        if (typeof render === "function") render();
+      } catch (_ren) {}
+    }
+
     function aliyunAmbRealStartLtObserver() {
       const bucket = { count: 0, maxMs: 0, over50: 0 };
       let obs = null;
@@ -109856,13 +109885,18 @@
         aliyunAmbRealSuppressPush = true;
         const prevCloudSuppress = cloudSyncSuppressPush;
         cloudSyncSuppressPush = true;
+        let appliedDuringFlush = false;
         try {
           if (aliyunAmbRealApplySliceToState(mergedSlice)) {
+            appliedDuringFlush = true;
             saveState({ lists: ["dailyWin", "habit"], skipUiPaintDirty: true });
           }
         } finally {
           cloudSyncSuppressPush = prevCloudSuppress;
           aliyunAmbRealSuppressPush = false;
+        }
+        if (appliedDuringFlush) {
+          aliyunAmbRealPaintLocalUiAfterMerge();
         }
         mergeMs = Date.now() - tMerge0;
 
@@ -110001,9 +110035,7 @@
         aliyunSyncPrimaryMarkPullFingerprint("amb", ambPullFp);
         if (changed) {
           const paintAmb = function () {
-            try {
-              if (typeof render === "function") render();
-            } catch (_r) {}
+            aliyunAmbRealPaintLocalUiAfterMerge();
           };
           if (typeof requestAnimationFrame === "function") {
             await new Promise(function (resolve) {
@@ -113675,13 +113707,62 @@
       return out;
     }
 
+    /**
+     * Think Day 条目是 q1–q5，不是 items[]。
+     * 若走 normalizeBackwardMeasurePeriodEntry 会在合并时被掏空，导致跨设备「思考日」丢失。
+     */
+    function mergeThinkDayEntryForSync(locRaw, remRaw) {
+      const hasLoc = locRaw && typeof locRaw === "object";
+      const hasRem = remRaw && typeof remRaw === "object";
+      if (!hasLoc && !hasRem) return {};
+      if (!hasLoc) {
+        try {
+          return JSON.parse(JSON.stringify(remRaw));
+        } catch (_r) {
+          return remRaw;
+        }
+      }
+      if (!hasRem) {
+        try {
+          return JSON.parse(JSON.stringify(locRaw));
+        } catch (_l) {
+          return locRaw;
+        }
+      }
+      const lAt = Number(locRaw.updatedAt) || 0;
+      const rAt = Number(remRaw.updatedAt) || 0;
+      const pick = rAt > lAt ? remRaw : locRaw;
+      try {
+        const out = JSON.parse(JSON.stringify(pick));
+        out.updatedAt = Math.max(lAt, rAt);
+        return out;
+      } catch (_c) {
+        return pick;
+      }
+    }
+
+    function mergeThinkDayStoreForSync(locStore, remStore) {
+      const lo = locStore && typeof locStore === "object" ? locStore : {};
+      const ro = remStore && typeof remStore === "object" ? remStore : {};
+      const out = {};
+      const keys = new Set(Object.keys(lo).concat(Object.keys(ro)));
+      keys.forEach(function (pk) {
+        out[pk] = mergeThinkDayEntryForSync(lo[pk], ro[pk]);
+      });
+      return out;
+    }
+
     function mergeBackwardMeasureForSync(loc, rem) {
       const kinds = ["weekly", "monthly", "quarterly", "sprint3", "thinkDay", "yearly", "triennial"];
       const lo = loc && typeof loc === "object" ? loc : {};
       const ro = rem && typeof rem === "object" ? rem : {};
       const out = {};
       kinds.forEach(function (kind) {
-        out[kind] = mergeBackwardMeasureKindStoreForSync(lo[kind], ro[kind]);
+        if (kind === "thinkDay") {
+          out[kind] = mergeThinkDayStoreForSync(lo[kind], ro[kind]);
+        } else {
+          out[kind] = mergeBackwardMeasureKindStoreForSync(lo[kind], ro[kind]);
+        }
       });
       return out;
     }
@@ -160237,12 +160318,26 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return getYearEndDate(getBackwardTriennialEndYear(dueDate) + 3);
     }
 
-    /** 日历上下一个截止日；若该期已填写完成则继续推进（如今日 5/31 已保存 → 显示 6/30） */
+    /**
+     * 已完成的期是否应推进到下一截止日。
+     * 仅当截止日期≤今天才推进（如今日 5/31 已保存 → 显示 6/30）；
+     * 截止日期仍在未来时不推进——避免对端同步到「提前填好的本期」后 UI 跳到下一空期，看起来像没同步。
+     */
+    function shouldAdvancePastCompletedBackwardDue(due, nowRef) {
+      if (!(due instanceof Date) || Number.isNaN(due.getTime())) return true;
+      const now = nowRef instanceof Date ? nowRef : new Date();
+      const today = backwardMeasureLocalNoon(now.getFullYear(), now.getMonth(), now.getDate());
+      const dueDay = backwardMeasureLocalNoon(due.getFullYear(), due.getMonth(), due.getDate());
+      return dueDay.getTime() <= today.getTime();
+    }
+
+    /** 日历上下一个截止日；若该期已填写完成且截止日已到/已过则继续推进 */
     function getEffectiveMonthlyDueDate(ref) {
       let due = getNextMonthEndDueDate(ref);
       for (let guard = 0; guard < 24; guard++) {
         const key = getBackwardMonthKey(due);
         if (!isBackwardMeasurePeriodComplete("monthly", key, due)) return due;
+        if (!shouldAdvancePastCompletedBackwardDue(due, ref)) return due;
         due = getNextMonthEndAfter(due);
       }
       return due;
@@ -160253,6 +160348,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       for (let guard = 0; guard < 52; guard++) {
         const key = formatDateInputValue(due);
         if (!isBackwardMeasurePeriodComplete("weekly", key, due)) return due;
+        if (!shouldAdvancePastCompletedBackwardDue(due, ref)) return due;
         due = getNextWeeklySaturdayAfter(due);
       }
       return due;
@@ -160263,6 +160359,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       for (let guard = 0; guard < 8; guard++) {
         const key = getBackwardQuarterKey(due);
         if (!isBackwardMeasurePeriodComplete("quarterly", key, due)) return due;
+        if (!shouldAdvancePastCompletedBackwardDue(due, ref)) return due;
         due = getNextQuarterEndAfter(due);
       }
       return due;
@@ -160273,6 +160370,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       for (let guard = 0; guard < 8; guard++) {
         const key = getBackwardYearKey(due);
         if (!isBackwardMeasurePeriodComplete("yearly", key, due)) return due;
+        if (!shouldAdvancePastCompletedBackwardDue(due, ref)) return due;
         due = getNextYearEndAfter(due);
       }
       return due;
@@ -160283,6 +160381,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       for (let guard = 0; guard < 6; guard++) {
         const key = getBackwardTriennialKey(due);
         if (!isBackwardMeasurePeriodComplete("triennial", key, due)) return due;
+        if (!shouldAdvancePastCompletedBackwardDue(due, ref)) return due;
         due = getNextTriennialEndAfter(due);
       }
       return due;
