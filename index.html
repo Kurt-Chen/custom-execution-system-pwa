@@ -95399,7 +95399,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930x";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930y";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -106300,7 +106300,7 @@
               return Number.isFinite(t) && t > 0;
             })
         : [];
-      return {
+      const out = {
         times: Number(val.times) || 0,
         revisedAt: Number(val.revisedAt) || 0,
         stampAt: Number(val.stampAt) || 0,
@@ -106310,6 +106310,23 @@
         cleared: val.cleared === true,
         hasRemark: typeof val.remark === "string" && !!val.remark.trim()
       };
+      /* 附加输入值诊断（与 payload 字段一致，勿当「未上传」误判） */
+      [
+        "weightJin",
+        "bodyFatPct",
+        "minutes",
+        "wordCount",
+        "ml",
+        "eggs",
+        "questions",
+        "yuan",
+        "experiments"
+      ].forEach(function (k) {
+        const n = Number(val[k]);
+        if (Number.isFinite(n) && n > 0) out[k] = n;
+      });
+      if (Array.isArray(val.batches) && val.batches.length) out.batchesLen = val.batches.length;
+      return out;
     }
 
     function aliyunHabitRealPerfMark(name) {
@@ -112974,9 +112991,57 @@
         Number(obj.eggs) || 0,
         Number(obj.questions) || 0,
         Number(obj.yuan) || 0,
+        Number(obj.weightJin) || 0,
+        Number(obj.bodyFatPct) || 0,
         Number(obj.times) || 0,
         obj === true ? 1 : 0
       );
+    }
+
+    /**
+     * LWW 胜出侧若只有「已打卡」而缺少对侧附加输入值，补回测量字段，避免盖掉体重/分钟等。
+     * 不清空标记、不抬 revisedAt。
+     */
+    function preserveHabitCheckinMeasurementFields(winner, loser) {
+      if (!winner || typeof winner !== "object") return winner;
+      if (isHabitCheckinClearedMarker(winner)) return winner;
+      if (!loser || typeof loser !== "object") return winner;
+      if (isHabitCheckinClearedMarker(loser)) return winner;
+      const keys = [
+        "weightJin",
+        "bodyFatPct",
+        "wordCount",
+        "minutes",
+        "ml",
+        "eggs",
+        "questions",
+        "yuan",
+        "experiments",
+        "batches",
+        "remark",
+        "stampAt",
+        "stamps"
+      ];
+      let out = null;
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        const wv = winner[k];
+        const lv = loser[k];
+        const wEmpty =
+          wv == null ||
+          wv === "" ||
+          (typeof wv === "number" && !(wv > 0)) ||
+          (Array.isArray(wv) && !wv.length);
+        const lHas =
+          lv != null &&
+          lv !== "" &&
+          (!(typeof lv === "number") || lv > 0) &&
+          (!Array.isArray(lv) || lv.length > 0);
+        if (!wEmpty || !lHas) continue;
+        if (!out) out = Object.assign({}, winner);
+        out[k] = Array.isArray(lv) ? lv.slice() : lv;
+      }
+      return out || winner;
     }
 
     /**
@@ -113110,15 +113175,21 @@
       /* 有真实修订戳就比新旧；不再要求两侧都有戳才进 LWW */
       if ((revL > 0 || revR > 0) && revL !== revR) {
         const newer = revL > revR ? localVal : remoteVal;
-        return newer != null ? newer : false;
+        const older = revL > revR ? remoteVal : localVal;
+        if (newer == null) return false;
+        return preserveHabitCheckinMeasurementFields(newer, older);
       }
       if (!localChecked && !remoteChecked) {
         if (isHabitCheckinClearedMarker(localVal)) return localVal;
         if (isHabitCheckinClearedMarker(remoteVal)) return remoteVal;
         return false;
       }
-      if (localChecked && !remoteChecked) return localVal;
-      if (remoteChecked && !localChecked) return remoteVal;
+      if (localChecked && !remoteChecked) {
+        return preserveHabitCheckinMeasurementFields(localVal, remoteVal);
+      }
+      if (remoteChecked && !localChecked) {
+        return preserveHabitCheckinMeasurementFields(remoteVal, localVal);
+      }
       if (typeof localVal !== "object" || typeof remoteVal !== "object") {
         return localVal != null ? localVal : remoteVal;
       }
@@ -164634,7 +164705,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return changed;
     }
 
-    /** 体重体脂：Done 仍有打卡行但 checkins 被冲掉时，按日补回 true */
+    /**
+     * 体重体脂：Done 仍有打卡行但 checkins 被冲掉时，按 Done meta/文案重建槽位（含 weightJin/bodyFatPct）。
+     * 勿再写成 true，否则附加数值丢失且后续 LWW 可能盖住云端完整槽。
+     */
     function repairWeightBodyFatCheckinsFromDone() {
       const hc = state.habitCheckins;
       if (!hc || typeof hc !== "object") return false;
@@ -164651,13 +164725,66 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           hc[dateStr] = {};
         }
         const cur = hc[dateStr].weightAndBodyFat;
-        if (isWeightBodyFatChecked(cur)) return;
-        if (getHabitDoneRowsForDay("weightAndBodyFat", dateStr).length > 0) {
-          hc[dateStr].weightAndBodyFat = true;
-          changed = true;
-        }
+        const hasMeasure =
+          cur &&
+          typeof cur === "object" &&
+          ((Number(cur.weightJin) > 0) || Number(cur.bodyFatPct) > 0);
+        if (isWeightBodyFatChecked(cur) && hasMeasure) return;
+        if (getHabitDoneRowsForDay("weightAndBodyFat", dateStr).length === 0) return;
+        const before = hc[dateStr].weightAndBodyFat;
+        rebuildHabitCheckinFromDoneList("weightAndBodyFat", dateStr);
+        const after = hc[dateStr].weightAndBodyFat;
+        if (JSON.stringify(before) !== JSON.stringify(after)) changed = true;
       });
       return changed;
+    }
+
+    /** Habit 槽 → My Done：补齐称体重文案与 habitMeta 附加值（供对端 Done/回退读取） */
+    function syncWeightBodyFatFromCheckinToDone(dateStr) {
+      const day = state.habitCheckins && state.habitCheckins[dateStr];
+      const v = day && day.weightAndBodyFat;
+      if (!isWeightBodyFatChecked(v)) return false;
+      const weightJin =
+        typeof getHabitWeightJinFromValue === "function" ? getHabitWeightJinFromValue(v) : null;
+      if (!(Number(weightJin) > 0)) return false;
+      const bodyFatPct =
+        typeof getHabitBodyFatPctFromValue === "function" ? getHabitBodyFatPctFromValue(v) : null;
+      const label =
+        (typeof HABIT_LABELS === "object" && HABIT_LABELS.weightAndBodyFat) || "称体重·测体脂";
+      const fatPart =
+        bodyFatPct != null && typeof formatHabitWeekBodyFatLabel === "function"
+          ? " · " + formatHabitWeekBodyFatLabel(bodyFatPct)
+          : "";
+      const line =
+        "【习惯】" +
+        label +
+        " · " +
+        formatHabitWeekWeightLabel(weightJin) +
+        " 斤" +
+        fatPart;
+      const patchMeta = { weightJin: weightJin };
+      if (bodyFatPct != null) patchMeta.bodyFatPct = bodyFatPct;
+      if (
+        typeof updateLatestHabitDoneRowForDay === "function" &&
+        updateLatestHabitDoneRowForDay("weightAndBodyFat", dateStr, line, patchMeta)
+      ) {
+        return true;
+      }
+      if (getHabitDoneRowsForDay("weightAndBodyFat", dateStr).length > 0) return false;
+      const habitMeta = { key: "weightAndBodyFat", date: dateStr, weightJin: weightJin };
+      if (bodyFatPct != null) habitMeta.bodyFatPct = bodyFatPct;
+      const atMs =
+        typeof habitDoneAtMsFromCheckin === "function" ? habitDoneAtMsFromCheckin(v, dateStr) : 0;
+      state.done.unshift({
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        text: line,
+        completedAt:
+          typeof completedAtForHabitDoneRow === "function"
+            ? completedAtForHabitDoneRow(dateStr, atMs)
+            : Date.now(),
+        habitMeta: habitMeta
+      });
+      return true;
     }
 
     function renderHabitCheckins() {
@@ -166348,7 +166475,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (getHabitDoneRowsForDay(habitKey, dateStr).length > 0) return;
         const v = day[habitKey];
         const atMs = habitDoneAtMsFromCheckin(v, dateStr);
-        if (habitKey === "weightAndBodyFat" || habitKey === "dailyThreeWins") return;
+        if (habitKey === "dailyThreeWins") return;
+        if (habitKey === "weightAndBodyFat") {
+          if (typeof syncWeightBodyFatFromCheckinToDone === "function") {
+            if (syncWeightBodyFatFromCheckinToDone(dateStr)) changed = true;
+          }
+          return;
+        }
         if (isHabitMinutesKey(habitKey) && v && typeof v === "object") {
           const batches = Array.isArray(v.batches) ? v.batches : [];
           const minutes = Number(v.minutes) || batches.reduce(function (a, b) { return a + b; }, 0);
@@ -166461,7 +166594,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (!day || typeof day !== "object") return;
         Object.keys(day).forEach(function (habitKey) {
           if (habitKey === "dailyThreeWinsDoneSuppressed") return;
-          if (habitKey === "weightAndBodyFat" || habitKey === "dailyThreeWins") return;
+          if (habitKey === "dailyThreeWins") return;
+          if (habitKey === "weightAndBodyFat") {
+            if (typeof syncWeightBodyFatFromCheckinToDone === "function") {
+              if (syncWeightBodyFatFromCheckinToDone(dateStr)) changed = true;
+            }
+            return;
+          }
           if (!isHabitCheckedOnDate(dateStr, habitKey)) return;
           const v = day[habitKey];
           const rows = getHabitDoneRowsForDay(habitKey, dateStr);
