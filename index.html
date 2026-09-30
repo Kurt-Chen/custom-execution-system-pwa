@@ -95399,7 +95399,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930o";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930r";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -104617,7 +104617,10 @@
       "dailyWin",
       "dailyWinTomorrowRef",
       "fuelScores",
-      "successCriteria"
+      "successCriteria",
+      "ruleOf100",
+      "rule100DayProjectKeys",
+      "rule100UnitProjectKeys"
     ];
     const ALIYUN_SYNC_PRIMARY_DOMAIN_WINDOW_FLAGS = [
       "__ALIYUN_DONE_REAL_SYNC_ENABLED",
@@ -104626,7 +104629,8 @@
       "__ALIYUN_ANNIV_REAL_SYNC_ENABLED",
       "__ALIYUN_SPRINT_REAL_SYNC_ENABLED",
       "__ALIYUN_TODAY_PLAN_REAL_SYNC_ENABLED",
-      "__ALIYUN_AMB_REAL_SYNC_ENABLED"
+      "__ALIYUN_AMB_REAL_SYNC_ENABLED",
+      "__ALIYUN_RULE100_REAL_SYNC_ENABLED"
     ];
     let aliyunSyncPrimaryBootPullStarted = false;
 
@@ -104799,7 +104803,7 @@
         console.log(
           "[aliyun-sync-primary]",
           on
-            ? "已开启（7 域含 AMB；刷新后自动拉取；默认跳过 Firebase 启动）"
+            ? "已开启（8 域含 AMB/Rule100；刷新后自动拉取；默认跳过 Firebase 启动）"
             : "已关闭（域旗标清除，回退 Firebase 主路径）"
         );
       } catch (_c) {}
@@ -104855,12 +104859,19 @@
         {
           id: "amb",
           run: typeof runAliyunAmbRealPullAndMerge === "function" ? runAliyunAmbRealPullAndMerge : null
+        },
+        {
+          id: "rule100",
+          run:
+            typeof runAliyunRule100RealPullAndMerge === "function"
+              ? runAliyunRule100RealPullAndMerge
+              : null
         }
       ];
       const results = {};
       let allOk = true;
       try {
-        console.log("[aliyun-sync-primary] boot pull start (7 domains, +AMB)");
+        console.log("[aliyun-sync-primary] boot pull start (8 domains, +Rule100)");
       } catch (_c0) {}
       for (let i = 0; i < domains.length; i++) {
         const d = domains[i];
@@ -104999,6 +105010,14 @@
       try {
         if (aliyunAmbRealFlushing || aliyunAmbRealSuppressPush || aliyunAmbRealPendingReason) return true;
       } catch (_amb) {}
+      try {
+        if (
+          aliyunRule100RealFlushing ||
+          aliyunRule100RealSuppressPush ||
+          aliyunRule100RealPendingReason
+        )
+          return true;
+      } catch (_r100) {}
       return false;
     }
 
@@ -105055,7 +105074,7 @@
       if (!report || !report.results || typeof report.results !== "object") {
         return "阿里云同步失败";
       }
-      const ids = ["done", "habit", "forge", "anniv", "sprint", "todayPlan"];
+      const ids = ["done", "habit", "forge", "anniv", "sprint", "todayPlan", "amb", "rule100"];
       for (let i = 0; i < ids.length; i++) {
         const r = report.results[ids[i]];
         if (r && r.ok === false) {
@@ -109939,6 +109958,521 @@
     } catch (_ambWin) {}
 
 
+    /**
+     * —— Rule of 100 域真实同步（阿里云，批 3）——
+     * ruleOf100 / rule100DayProjectKeys / rule100UnitProjectKeys。
+     * 独立域；复用 mergeRuleOf100ObjectForSync + omitTombstonedRuleOf100Keys；
+     * 快照信封 + 指纹跳过；不改 5s 轮询架构。
+     */
+    const ALIYUN_RULE100_REAL_KIND = "rule100-real-v1";
+    const ALIYUN_RULE100_REAL_PERF_PREFIX = "aliyun-rule100-real:";
+    const ALIYUN_RULE100_REAL_SYNC_ENABLED = false;
+    let aliyunRule100RealFlushTimer = null;
+    let aliyunRule100RealFlushing = false;
+    let aliyunRule100RealPendingReason = "";
+    let aliyunRule100RealLastReport = null;
+    let aliyunRule100RealSuppressPush = false;
+
+    function isAliyunRule100RealSyncEnabled() {
+      if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) return true;
+      try {
+        if (window.__ALIYUN_RULE100_REAL_SYNC_ENABLED === true) return true;
+      } catch (_w) {}
+      return ALIYUN_RULE100_REAL_SYNC_ENABLED === true;
+    }
+
+    function aliyunRule100RealAppendLog(msg) {
+      try {
+        console.log("[aliyun-rule100-real]", msg);
+      } catch (_c) {}
+    }
+
+    function aliyunRule100RealPerfMark(name) {
+      try {
+        if (typeof performance !== "undefined" && performance.mark) {
+          performance.mark(ALIYUN_RULE100_REAL_PERF_PREFIX + name);
+        }
+      } catch (_p) {}
+    }
+
+    function aliyunRule100RealDocId() {
+      const room = String(
+        cloudSyncRoomId ||
+          (typeof localStorage !== "undefined" && localStorage.getItem(CLOUD_SYNC_ROOM_KEY)) ||
+          "default-room"
+      )
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]/g, "_")
+        .slice(0, 64);
+      return "aliyun-rule100-real-v1-" + (room || "default-room");
+    }
+
+    function aliyunRule100RealBaseUrl() {
+      return String((aliyunExpUrlInput && aliyunExpUrlInput.value) || ALIYUN_EXP_DEFAULT_URL)
+        .trim()
+        .replace(/\/+$/, "");
+    }
+
+    function aliyunRule100RealDeepClone(val, fallback) {
+      try {
+        return JSON.parse(JSON.stringify(val));
+      } catch (_e) {
+        return fallback;
+      }
+    }
+
+    function aliyunRule100RealCloneSliceFromState() {
+      return {
+        ruleOf100: aliyunRule100RealDeepClone(state.ruleOf100, {}),
+        rule100DayProjectKeys: aliyunRule100RealDeepClone(state.rule100DayProjectKeys, []),
+        rule100UnitProjectKeys: aliyunRule100RealDeepClone(state.rule100UnitProjectKeys, [])
+      };
+    }
+
+    function aliyunRule100RealEmptyEnvelope() {
+      return {
+        kind: ALIYUN_RULE100_REAL_KIND,
+        roomId: String(cloudSyncRoomId || ""),
+        envelopeUpdatedAt: Date.now(),
+        ruleOf100: {},
+        rule100DayProjectKeys: [],
+        rule100UnitProjectKeys: []
+      };
+    }
+
+    function aliyunRule100RealParseEnvelope(rawPayload) {
+      let p = rawPayload;
+      if (typeof p === "string") {
+        try {
+          p = JSON.parse(p);
+        } catch (_e) {
+          return aliyunRule100RealEmptyEnvelope();
+        }
+      }
+      if (!p || typeof p !== "object") return aliyunRule100RealEmptyEnvelope();
+      const env = aliyunRule100RealEmptyEnvelope();
+      env.roomId = p.roomId != null ? String(p.roomId) : env.roomId;
+      env.envelopeUpdatedAt = Number(p.envelopeUpdatedAt) || 0;
+      if (p.ruleOf100 && typeof p.ruleOf100 === "object") env.ruleOf100 = p.ruleOf100;
+      if (Array.isArray(p.rule100DayProjectKeys)) env.rule100DayProjectKeys = p.rule100DayProjectKeys;
+      if (Array.isArray(p.rule100UnitProjectKeys)) env.rule100UnitProjectKeys = p.rule100UnitProjectKeys;
+      env.kind = ALIYUN_RULE100_REAL_KIND;
+      return env;
+    }
+
+    function aliyunRule100RealSliceFingerprint(slice) {
+      let s = "";
+      try {
+        s = JSON.stringify({
+          ruleOf100: slice.ruleOf100 || {},
+          rule100DayProjectKeys: slice.rule100DayProjectKeys || [],
+          rule100UnitProjectKeys: slice.rule100UnitProjectKeys || []
+        });
+      } catch (_e) {
+        s = "";
+      }
+      return typeof aliyunSyncPrimaryPayloadFingerprint === "function"
+        ? aliyunSyncPrimaryPayloadFingerprint(s)
+        : String(s.length);
+    }
+
+    /** 复用 Firebase 已验证的 Rule100 合并；preferRemote=false 与本机改名/折叠平局一致 */
+    function aliyunRule100RealBuildMergedSlice(localSlice, remoteSlice) {
+      const loc = localSlice && typeof localSlice === "object" ? localSlice : {};
+      const rem = remoteSlice && typeof remoteSlice === "object" ? remoteSlice : {};
+      const ts =
+        state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
+      const mergedRo =
+        typeof mergeRuleOf100ObjectForSync === "function"
+          ? mergeRuleOf100ObjectForSync(loc.ruleOf100, rem.ruleOf100, false)
+          : loc.ruleOf100 || {};
+      const dayKeys =
+        typeof mergeRule100KeyArrays === "function"
+          ? mergeRule100KeyArrays(
+              loc.rule100DayProjectKeys,
+              rem.rule100DayProjectKeys,
+              "rule100A",
+              typeof isRule100DayKey === "function" ? isRule100DayKey : function () { return true; }
+            )
+          : Array.isArray(loc.rule100DayProjectKeys)
+            ? loc.rule100DayProjectKeys.slice()
+            : [];
+      const unitKeys =
+        typeof mergeRule100KeyArrays === "function"
+          ? mergeRule100KeyArrays(
+              loc.rule100UnitProjectKeys,
+              rem.rule100UnitProjectKeys,
+              "rule100D",
+              typeof isRule100UnitKey === "function" ? isRule100UnitKey : function () { return true; }
+            )
+          : Array.isArray(loc.rule100UnitProjectKeys)
+            ? loc.rule100UnitProjectKeys.slice()
+            : [];
+      return {
+        ruleOf100:
+          typeof omitTombstonedRuleOf100Keys === "function"
+            ? omitTombstonedRuleOf100Keys(mergedRo, ts)
+            : mergedRo,
+        rule100DayProjectKeys:
+          typeof filterRule100ProjectKeysAfterSyncMerge === "function"
+            ? filterRule100ProjectKeysAfterSyncMerge(
+                dayKeys,
+                ts,
+                typeof isRule100DayKey === "function" ? isRule100DayKey : function () { return true; },
+                "rule100A"
+              )
+            : dayKeys,
+        rule100UnitProjectKeys:
+          typeof filterRule100ProjectKeysAfterSyncMerge === "function"
+            ? filterRule100ProjectKeysAfterSyncMerge(
+                unitKeys,
+                ts,
+                typeof isRule100UnitKey === "function" ? isRule100UnitKey : function () { return true; },
+                "rule100D"
+              )
+            : unitKeys
+      };
+    }
+
+    function aliyunRule100RealApplySliceToState(slice) {
+      if (!slice || typeof slice !== "object") return false;
+      const before = aliyunRule100RealSliceFingerprint(aliyunRule100RealCloneSliceFromState());
+      const after = aliyunRule100RealSliceFingerprint(slice);
+      if (before === after) return false;
+      state.ruleOf100 = slice.ruleOf100 && typeof slice.ruleOf100 === "object" ? slice.ruleOf100 : {};
+      state.rule100DayProjectKeys = Array.isArray(slice.rule100DayProjectKeys)
+        ? slice.rule100DayProjectKeys
+        : [];
+      state.rule100UnitProjectKeys = Array.isArray(slice.rule100UnitProjectKeys)
+        ? slice.rule100UnitProjectKeys
+        : [];
+      return true;
+    }
+
+    function aliyunRule100RealStartLtObserver() {
+      const bucket = { count: 0, maxMs: 0, over50: 0 };
+      let obs = null;
+      try {
+        if (typeof PerformanceObserver === "undefined") return { bucket: bucket, stop: function () {} };
+        obs = new PerformanceObserver(function (list) {
+          const entries = list.getEntries() || [];
+          for (let i = 0; i < entries.length; i++) {
+            const d = Number(entries[i].duration) || 0;
+            bucket.count += 1;
+            if (d > bucket.maxMs) bucket.maxMs = d;
+            if (d > 50) bucket.over50 += 1;
+          }
+        });
+        obs.observe({ entryTypes: ["longtask"] });
+      } catch (_lt) {}
+      return {
+        bucket: bucket,
+        stop: function () {
+          try {
+            if (obs) obs.disconnect();
+          } catch (_d) {}
+        }
+      };
+    }
+
+    function aliyunRule100RealLogReport(report) {
+      aliyunRule100RealLastReport = report;
+      try {
+        window.__aliyunRule100RealLastReport = report;
+      } catch (_w) {}
+      if (typeof noteAliyunSyncPrimaryBadgeFromDomainReport === "function") {
+        noteAliyunSyncPrimaryBadgeFromDomainReport(report);
+      }
+      aliyunRule100RealAppendLog(
+        "report ok=" +
+          !!(report && report.ok) +
+          " reason=" +
+          ((report && report.reason) || "") +
+          (report && report.error ? " err=" + report.error : "")
+      );
+    }
+
+    function scheduleAliyunRule100RealSync(reason) {
+      if (!isAliyunRule100RealSyncEnabled() || aliyunRule100RealSuppressPush) return;
+      aliyunRule100RealPendingReason = reason || "local-change";
+      if (aliyunRule100RealFlushTimer) clearTimeout(aliyunRule100RealFlushTimer);
+      aliyunRule100RealFlushTimer = setTimeout(function () {
+        aliyunRule100RealFlushTimer = null;
+        Promise.resolve(flushAliyunRule100RealQueue()).catch(function (err) {
+          aliyunRule100RealAppendLog(
+            "flush reject: " + (err && err.message ? err.message : String(err))
+          );
+        });
+      }, 120);
+    }
+
+    function notifyAliyunRule100RealAfterLocalChange(reason) {
+      scheduleAliyunRule100RealSync(reason || "local-change");
+    }
+
+    async function flushAliyunRule100RealQueue() {
+      if (aliyunRule100RealFlushing) return;
+      if (!aliyunRule100RealPendingReason) return;
+      if (!isAliyunRule100RealSyncEnabled() || aliyunRule100RealSuppressPush) {
+        aliyunRule100RealPendingReason = "";
+        return;
+      }
+      aliyunRule100RealFlushing = true;
+      const reason = aliyunRule100RealPendingReason || "flush";
+      aliyunRule100RealPendingReason = "";
+      const base = aliyunRule100RealBaseUrl();
+      const docId = aliyunRule100RealDocId();
+      aliyunRule100RealAppendLog("flush start: reason=" + reason + " docId=" + docId);
+      const lt = aliyunRule100RealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let uploadMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let payloadKB = 0;
+      let httpStatus = null;
+      let ok = false;
+      let errMsg = "";
+      try {
+        if (!base || aliyunExpHasForbiddenSecret(base)) {
+          throw new Error(!base ? "缺少 Function URL" : "URL 疑似含 AccessKey");
+        }
+        aliyunRule100RealPerfMark("flush-start");
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson(
+          "GET",
+          base + "/smoke/" + encodeURIComponent(docId),
+          null
+        );
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+
+        const tParse0 = Date.now();
+        let remoteEnv = aliyunRule100RealEmptyEnvelope();
+        if (getRes.ok && getRes.data && getRes.data.data) {
+          const row = getRes.data.data;
+          const attrs = row.attrs || row;
+          remoteEnv = aliyunRule100RealParseEnvelope(attrs.payload != null ? attrs.payload : attrs);
+        } else if (getRes.status !== 404 && !(getRes.data && getRes.data.error === "not_found")) {
+          console.warn("[aliyun-rule100-real] GET status", getRes.status, getRes.data);
+        }
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        const localSlice = aliyunRule100RealCloneSliceFromState();
+        const mergedSlice = aliyunRule100RealBuildMergedSlice(localSlice, remoteEnv);
+        const env = aliyunRule100RealEmptyEnvelope();
+        env.roomId = String(cloudSyncRoomId || env.roomId || "");
+        env.envelopeUpdatedAt = Date.now();
+        env.ruleOf100 = mergedSlice.ruleOf100;
+        env.rule100DayProjectKeys = mergedSlice.rule100DayProjectKeys;
+        env.rule100UnitProjectKeys = mergedSlice.rule100UnitProjectKeys;
+        aliyunRule100RealSuppressPush = true;
+        const prevCloudSuppress = cloudSyncSuppressPush;
+        cloudSyncSuppressPush = true;
+        try {
+          if (aliyunRule100RealApplySliceToState(mergedSlice)) {
+            if (typeof markHeavyModulesDepDirty === "function") markHeavyModulesDepDirty();
+            saveState({ lists: ["habit"], skipUiPaintDirty: true });
+          }
+        } finally {
+          cloudSyncSuppressPush = prevCloudSuppress;
+          aliyunRule100RealSuppressPush = false;
+        }
+        mergeMs = Date.now() - tMerge0;
+
+        let bodyJson = "";
+        try {
+          bodyJson = JSON.stringify({ id: docId, payload: env });
+        } catch (_ser) {
+          throw new Error("envelope serialize failed");
+        }
+        payloadKB = Math.round((bodyJson.length / 1024) * 10) / 10;
+
+        const tUp0 = Date.now();
+        const putRes = await aliyunExpFetchJson("POST", base + "/smoke", JSON.parse(bodyJson));
+        uploadMs = Date.now() - tUp0;
+        networkWaitMs += uploadMs;
+        httpStatus = putRes.status;
+        if (!putRes.ok) {
+          throw new Error(
+            "upload HTTP " +
+              putRes.status +
+              " " +
+              (putRes.data && (putRes.data.error || putRes.data.message)
+                ? putRes.data.error || putRes.data.message
+                : "")
+          );
+        }
+        try {
+          aliyunSyncPrimaryMarkPullFingerprint(
+            "rule100",
+            aliyunRule100RealSliceFingerprint(mergedSlice)
+          );
+        } catch (_fp) {}
+        ok = true;
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        ok = false;
+      } finally {
+        lt.stop();
+        aliyunRule100RealFlushing = false;
+        aliyunRule100RealLogReport({
+          ok: ok,
+          reason: reason,
+          docId: docId,
+          httpStatus: httpStatus,
+          payloadKB: payloadKB,
+          uploadMs: uploadMs,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: 0,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          error: errMsg || undefined
+        });
+        if (aliyunRule100RealPendingReason) {
+          Promise.resolve(flushAliyunRule100RealQueue()).catch(function () {});
+        }
+      }
+    }
+
+    async function runAliyunRule100RealPullAndMerge() {
+      if (!isAliyunRule100RealSyncEnabled()) {
+        aliyunRule100RealAppendLog("Rule100 真实同步未启用");
+        return { ok: false, error: "disabled" };
+      }
+      const base = aliyunRule100RealBaseUrl();
+      const docId = aliyunRule100RealDocId();
+      if (!base || aliyunExpHasForbiddenSecret(base)) {
+        return { ok: false, error: "bad-url" };
+      }
+      const lt = aliyunRule100RealStartLtObserver();
+      const tAll = Date.now();
+      let networkWaitMs = 0;
+      let downloadMs = 0;
+      let parseMs = 0;
+      let mergeMs = 0;
+      let renderMs = 0;
+      let payloadKB = 0;
+      let ok = false;
+      let errMsg = "";
+      let changed = false;
+      try {
+        aliyunRule100RealAppendLog("拉取 Rule100 docId=" + docId);
+        const tDl0 = Date.now();
+        const getRes = await aliyunExpFetchJson(
+          "GET",
+          base + "/smoke/" + encodeURIComponent(docId),
+          null
+        );
+        downloadMs = Date.now() - tDl0;
+        networkWaitMs += downloadMs;
+        if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+          ok = true;
+          return { ok: true, empty: true, docId: docId };
+        }
+        if (!getRes.ok) throw new Error("GET HTTP " + getRes.status);
+
+        const tParse0 = Date.now();
+        const row = getRes.data && getRes.data.data;
+        const attrs = (row && (row.attrs || row)) || {};
+        const payloadRaw = attrs.payload != null ? attrs.payload : attrs;
+        let payloadStr = "";
+        try {
+          payloadStr = typeof payloadRaw === "string" ? payloadRaw : JSON.stringify(payloadRaw);
+        } catch (_ps) {
+          payloadStr = "";
+        }
+        payloadKB = Math.round((payloadStr.length / 1024) * 10) / 10;
+        const pullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
+        if (aliyunSyncPrimaryIsUnchangedPull("rule100", pullFp)) {
+          ok = true;
+          aliyunRule100RealAppendLog("拉取无变化，跳过 merge/render");
+          return { ok: true, unchanged: true, docId: docId };
+        }
+        const remoteEnv = aliyunRule100RealParseEnvelope(payloadRaw);
+        parseMs = Date.now() - tParse0;
+
+        const tMerge0 = Date.now();
+        const localSlice = aliyunRule100RealCloneSliceFromState();
+        const mergedSlice = aliyunRule100RealBuildMergedSlice(localSlice, remoteEnv);
+        aliyunRule100RealSuppressPush = true;
+        const prevCloudSuppress = cloudSyncSuppressPush;
+        cloudSyncSuppressPush = true;
+        try {
+          changed = aliyunRule100RealApplySliceToState(mergedSlice);
+          if (changed) {
+            if (typeof markHeavyModulesDepDirty === "function") markHeavyModulesDepDirty();
+            saveState({ lists: ["habit"], skipUiPaintDirty: true });
+          }
+        } finally {
+          cloudSyncSuppressPush = prevCloudSuppress;
+          aliyunRule100RealSuppressPush = false;
+        }
+        mergeMs = Date.now() - tMerge0;
+
+        const tRen0 = Date.now();
+        aliyunSyncPrimaryMarkPullFingerprint("rule100", pullFp);
+        if (changed) {
+          const paintR100 = function () {
+            try {
+              if (typeof render === "function") render();
+            } catch (_r) {}
+          };
+          if (typeof requestAnimationFrame === "function") {
+            await new Promise(function (resolve) {
+              requestAnimationFrame(function () {
+                paintR100();
+                resolve();
+              });
+            });
+          } else {
+            paintR100();
+          }
+        }
+        renderMs = Date.now() - tRen0;
+        ok = true;
+        return { ok: true, docId: docId, changed: changed };
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        aliyunRule100RealAppendLog("拉取失败: " + errMsg);
+        return { ok: false, error: errMsg };
+      } finally {
+        lt.stop();
+        aliyunRule100RealLogReport({
+          ok: ok,
+          reason: "pull",
+          docId: docId,
+          payloadKB: payloadKB,
+          uploadMs: 0,
+          downloadMs: downloadMs,
+          parseMs: parseMs,
+          mergeMs: mergeMs,
+          renderMs: renderMs,
+          longTaskOver50: lt.bucket.over50,
+          longTaskMaxMs: lt.bucket.maxMs,
+          longTaskCount: lt.bucket.count,
+          networkWaitMs: networkWaitMs,
+          mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
+          changed: changed,
+          error: errMsg || undefined
+        });
+      }
+    }
+
+    try {
+      window.runAliyunRule100RealPullAndMerge = runAliyunRule100RealPullAndMerge;
+      window.isAliyunRule100RealSyncEnabled = isAliyunRule100RealSyncEnabled;
+      window.notifyAliyunRule100RealAfterLocalChange = notifyAliyunRule100RealAfterLocalChange;
+    } catch (_r100Win) {}
+
+
     function aliyunExpLog(lines, msg) {
       lines.push(String(msg || ""));
       if (aliyunExpLogArea) {
@@ -114688,10 +115222,30 @@
         });
       });
 
+      const aliyunRule100KeepLocal =
+        typeof isAliyunRule100RealSyncEnabled === "function" && isAliyunRule100RealSyncEnabled();
       base.ruleOf100 = mergeDetailTime("field", "ruleOf100", function () {
+        if (aliyunRule100KeepLocal) {
+          try {
+            return state.ruleOf100 && typeof state.ruleOf100 === "object"
+              ? JSON.parse(JSON.stringify(state.ruleOf100))
+              : {};
+          } catch (_r100Keep) {
+            return state.ruleOf100 && typeof state.ruleOf100 === "object" ? state.ruleOf100 : {};
+          }
+        }
         return mergeRuleOf100ObjectForSync(state.ruleOf100, remoteState.ruleOf100, serverNewer);
       });
       base.rule100DayProjectKeys = mergeDetailTime("field", "rule100DayProjectKeys", function () {
+        if (aliyunRule100KeepLocal) {
+          try {
+            return Array.isArray(state.rule100DayProjectKeys)
+              ? state.rule100DayProjectKeys.slice()
+              : [];
+          } catch (_dk) {
+            return Array.isArray(state.rule100DayProjectKeys) ? state.rule100DayProjectKeys : [];
+          }
+        }
         return mergeRule100KeyArrays(
           state.rule100DayProjectKeys,
           remoteState.rule100DayProjectKeys,
@@ -114700,6 +115254,15 @@
         );
       });
       base.rule100UnitProjectKeys = mergeDetailTime("field", "rule100UnitProjectKeys", function () {
+        if (aliyunRule100KeepLocal) {
+          try {
+            return Array.isArray(state.rule100UnitProjectKeys)
+              ? state.rule100UnitProjectKeys.slice()
+              : [];
+          } catch (_uk) {
+            return Array.isArray(state.rule100UnitProjectKeys) ? state.rule100UnitProjectKeys : [];
+          }
+        }
         return mergeRule100KeyArrays(
           state.rule100UnitProjectKeys,
           remoteState.rule100UnitProjectKeys,
@@ -114708,19 +115271,21 @@
         );
       });
 
-      base.ruleOf100 = omitTombstonedRuleOf100Keys(base.ruleOf100, ts);
-      base.rule100DayProjectKeys = filterRule100ProjectKeysAfterSyncMerge(
-        base.rule100DayProjectKeys,
-        ts,
-        isRule100DayKey,
-        "rule100A"
-      );
-      base.rule100UnitProjectKeys = filterRule100ProjectKeysAfterSyncMerge(
-        base.rule100UnitProjectKeys,
-        ts,
-        isRule100UnitKey,
-        "rule100D"
-      );
+      if (!aliyunRule100KeepLocal) {
+        base.ruleOf100 = omitTombstonedRuleOf100Keys(base.ruleOf100, ts);
+        base.rule100DayProjectKeys = filterRule100ProjectKeysAfterSyncMerge(
+          base.rule100DayProjectKeys,
+          ts,
+          isRule100DayKey,
+          "rule100A"
+        );
+        base.rule100UnitProjectKeys = filterRule100ProjectKeysAfterSyncMerge(
+          base.rule100UnitProjectKeys,
+          ts,
+          isRule100UnitKey,
+          "rule100D"
+        );
+      }
 
       base.trash = mergeDetailTime("field", "trash", function () {
         return mergeIdRecordArraysPreferLocalOnTie(
@@ -119403,6 +119968,11 @@
       if (typeof bumpDoneFilterToTaskDay === "function") {
         bumpDoneFilterToTaskDay(Date.now());
       }
+      if (typeof notifyAliyunRule100RealAfterLocalChange === "function") {
+        try {
+          notifyAliyunRule100RealAfterLocalChange("rule100-entrepreneur-link");
+        } catch (_r100N) {}
+      }
     }
 
     /** 把日历日落到时间戳；有 sourceTs 时保留其时分秒，避免把全天打卡挤成「现在」 */
@@ -122312,6 +122882,11 @@
         card.classList.remove("collapsed");
       }
       saveState();
+      if (typeof notifyAliyunRule100RealAfterLocalChange === "function") {
+        try {
+          notifyAliyunRule100RealAfterLocalChange("rule100-collapse");
+        } catch (_r100N) {}
+      }
     }
 
     function deleteRule100ProjectCard(key) {
@@ -122373,6 +122948,11 @@
       if (typeof bumpDoneFilterToTaskDay === "function") bumpDoneFilterToTaskDay(Date.now());
       saveState();
       render();
+      if (typeof notifyAliyunRule100RealAfterLocalChange === "function") {
+        try {
+          notifyAliyunRule100RealAfterLocalChange("rule100-delete");
+        } catch (_r100N) {}
+      }
     }
 
     function syncRule100ToDone(ruleKey, dateStr, title) {
@@ -123000,6 +123580,11 @@
       host.appendChild(node);
       saveState();
       render();
+      if (typeof notifyAliyunRule100RealAfterLocalChange === "function") {
+        try {
+          notifyAliyunRule100RealAfterLocalChange("rule100-add-day");
+        } catch (_r100N) {}
+      }
     }
 
     function addRule100UnitProject() {
@@ -123020,6 +123605,11 @@
       host.appendChild(node);
       saveState();
       render();
+      if (typeof notifyAliyunRule100RealAfterLocalChange === "function") {
+        try {
+          notifyAliyunRule100RealAfterLocalChange("rule100-add-unit");
+        } catch (_r100N) {}
+      }
     }
 
     function roundRule100Hours(x) {
@@ -123265,6 +123855,11 @@
       bumpDoneFilterToTaskDay(Date.now());
       saveStateWithCloudPulseImmediate();
       render();
+      if (typeof notifyAliyunRule100RealAfterLocalChange === "function") {
+        try {
+          notifyAliyunRule100RealAfterLocalChange("rule100-hours");
+        } catch (_r100N) {}
+      }
     }
 
     function toggleRule100Checkin(key) {
@@ -123304,6 +123899,11 @@
       }
       saveStateWithCloudPulseImmediate();
       render();
+      if (typeof notifyAliyunRule100RealAfterLocalChange === "function") {
+        try {
+          notifyAliyunRule100RealAfterLocalChange("rule100-checkin");
+        } catch (_r100N) {}
+      }
     }
 
     /** Rule of 100：按天 / 按量左右 Tab，当前全栏面板 */
@@ -166023,6 +166623,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             closeAllRule100CardMenus();
             saveState();
             render();
+            if (typeof notifyAliyunRule100RealAfterLocalChange === "function") {
+              try {
+                notifyAliyunRule100RealAfterLocalChange("rule100-name");
+              } catch (_r100N) {}
+            }
             return;
           }
           if (action === "edit") {
