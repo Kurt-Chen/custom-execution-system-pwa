@@ -95227,7 +95227,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930d";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -105395,12 +105395,10 @@
       if (val == null || val === false) return 0;
       if (val === true) return 0;
       if (typeof val !== "object") return 0;
-      return Math.max(
-        typeof getHabitCheckinRevisionTime === "function" ? getHabitCheckinRevisionTime(val) : 0,
-        Number(val.stampAt) || 0,
-        Number(val.updatedAt) || 0,
-        Number(val.revisedAt) || 0
-      );
+      /* LWW / 上传只认 revisedAt；勿把 stampAt（早起钟点）抬成修订戳 */
+      return typeof getHabitCheckinRevisionTime === "function"
+        ? getHabitCheckinRevisionTime(val)
+        : Number(val.revisedAt) || 0;
     }
 
     function aliyunHabitRealEmptyEnvelope() {
@@ -105436,6 +105434,7 @@
       if (mutation.op !== "upsert") return env;
       const next = aliyunHabitRealCloneSlotValue(mutation.value);
       const nextTs = Math.max(aliyunHabitRealSlotTs(next), Number(mutation.updatedAt) || 0);
+      /* 无真实 revisedAt 的突变不写入信封，避免 stampAt/Date.now 伪新戳污染 LWW */
       if (!(nextTs > 0)) return env;
       if (!next.revisedAt) next.revisedAt = nextTs;
       const prev = env.items && env.items[id];
@@ -105555,7 +105554,14 @@
       if (!dk || !hk || hk === "dailyThreeWinsDoneSuppressed") return;
       const id = aliyunHabitRealSlotId(dk, hk);
       const cloned = aliyunHabitRealCloneSlotValue(value);
-      const ts = aliyunHabitRealSlotTs(cloned) || Date.now();
+      /* 只认已有 revisedAt（用户打卡 stampHabitCheckinRevision）；禁止用 stampAt/now 伪造 */
+      const ts = aliyunHabitRealSlotTs(cloned);
+      if (!(ts > 0)) {
+        aliyunHabitRealAppendLog(
+          "upsert skip: no revisedAt id=" + id + " reason=" + (reason || "")
+        );
+        return;
+      }
       if (!cloned.revisedAt) cloned.revisedAt = ts;
       scheduleAliyunHabitRealSync(reason || "slot", {
         op: "upsert",
@@ -105585,6 +105591,8 @@
       const now = Date.now();
       const keys = Object.keys(day);
       let n = 0;
+      let skippedAge = 0;
+      let skippedNoRev = 0;
       for (let i = 0; i < keys.length; i++) {
         const habitKey = keys[i];
         if (habitKey === "dailyThreeWinsDoneSuppressed") continue;
@@ -105593,11 +105601,28 @@
           typeof getHabitCheckinRevisionTime === "function"
             ? getHabitCheckinRevisionTime(val)
             : Number(val && val.revisedAt) || 0;
-        if (!(rev > 0 && now - rev < 120000)) continue;
+        if (!(rev > 0)) {
+          skippedNoRev += 1;
+          continue;
+        }
+        if (!(now - rev < 120000)) {
+          skippedAge += 1;
+          continue;
+        }
         notifyAliyunHabitRealUpsert(reason || "checkin", dateKey, habitKey, val);
         n += 1;
       }
-      aliyunHabitRealAppendLog("after-checkin: queuedSlots=" + n + " date=" + dateKey);
+      aliyunHabitRealAppendLog(
+        "after-checkin: queuedSlots=" +
+          n +
+          " skippedAge(>120s)=" +
+          skippedAge +
+          " skippedNoRev=" +
+          skippedNoRev +
+          " date=" +
+          dateKey +
+          " (仅上传今日近2分钟修订槽)"
+      );
     }
 
     async function flushAliyunHabitRealQueue() {
@@ -105921,20 +105946,28 @@
           const hasL = Object.prototype.hasOwnProperty.call(localSlots, id);
           const hasC = Object.prototype.hasOwnProperty.call(cloudItems, id);
           const parsed = aliyunHabitRealParseSlotId(id);
+          const locVal = localSlots[id];
+          const cloudVal = cloudItems[id];
+          const locRev = getHabitCheckinRevisionTime(locVal);
+          const cloudRev = getHabitCheckinRevisionTime(cloudVal);
           const row = {
             id: id,
             dateKey: parsed && parsed.dateKey,
             habitKey: parsed && parsed.habitKey,
-            localRev: aliyunHabitRealSlotTs(localSlots[id]),
-            cloudRev: aliyunHabitRealSlotTs(cloudItems[id]),
+            localRev: locRev,
+            cloudRev: cloudRev,
+            localStampAt: locVal && typeof locVal === "object" ? Number(locVal.stampAt) || 0 : 0,
+            cloudStampAt: cloudVal && typeof cloudVal === "object" ? Number(cloudVal.stampAt) || 0 : 0,
             localChecked:
               typeof isHabitCheckinValueChecked === "function"
-                ? isHabitCheckinValueChecked(localSlots[id])
+                ? isHabitCheckinValueChecked(locVal)
                 : null,
             cloudChecked:
               typeof isHabitCheckinValueChecked === "function"
-                ? isHabitCheckinValueChecked(cloudItems[id])
-                : null
+                ? isHabitCheckinValueChecked(cloudVal)
+                : null,
+            localValue: locVal,
+            cloudValue: cloudVal
           };
           if (hasL && !hasC) {
             report.onlyLocal.push(row);
@@ -105944,10 +105977,22 @@
             report.onlyCloud.push(row);
             return;
           }
-          const merged = mergeHabitCheckinValueForSync(localSlots[id], cloudItems[id]);
+          const merged = mergeHabitCheckinValueForSync(locVal, cloudVal);
+          let why = "score-or-equal";
+          if ((locRev > 0 || cloudRev > 0) && locRev !== cloudRev) {
+            why =
+              locRev > cloudRev
+                ? "LWW: local revisedAt newer (" + locRev + ">" + cloudRev + ")"
+                : "LWW: cloud revisedAt newer (" + cloudRev + ">" + locRev + ")";
+          } else if (locRev === 0 && cloudRev === 0) {
+            why = "no-revisedAt-both: score/checked merge";
+          } else if (locRev > 0 && locRev === cloudRev) {
+            why = "same-revisedAt: score/checked merge";
+          }
+          row.why = why;
           const preferLocal =
-            JSON.stringify(merged) === JSON.stringify(localSlots[id]) &&
-            JSON.stringify(merged) !== JSON.stringify(cloudItems[id]);
+            JSON.stringify(merged) === JSON.stringify(locVal) &&
+            JSON.stringify(merged) !== JSON.stringify(cloudVal);
           if (preferLocal) report.bothButPreferLocal.push(row);
           else report.bothPreferRemoteOrEqual.push(row);
         });
@@ -105967,9 +106012,21 @@
             report.onlyCloud
           );
           console.log(
-            "[aliyun-habit-diag] bothButPreferLocal (两侧都有但合并留本机 → 云端新值被 LWW 丢掉)",
-            report.bothButPreferLocal
+            "[aliyun-habit-diag] bothButPreferLocal 明细（dateKey/habitKey/rev/why/local/cloud）:"
           );
+          report.bothButPreferLocal.forEach(function (r) {
+            console.log("[aliyun-habit-diag] preferLocal", {
+              dateKey: r.dateKey,
+              habitKey: r.habitKey,
+              localRev: r.localRev,
+              cloudRev: r.cloudRev,
+              localStampAt: r.localStampAt,
+              cloudStampAt: r.cloudStampAt,
+              why: r.why,
+              localValue: r.localValue,
+              cloudValue: r.cloudValue
+            });
+          });
           console.log("[aliyun-habit-diag]", report.uploadFilterNote);
         } catch (_c) {}
         return report;
@@ -108188,9 +108245,9 @@
 
     /**
      * 同一习惯、同一日：
-     * - 已打卡优先（未打卡 / {cleared} 不得盖掉无修订戳的勾选——打卡路径不写 revisedAt）。
-     * - 仅当两侧都有修订戳时，较新侧胜出（支持「减一次 / 取消」跨设备）。
-     * - 两端都已打卡：无成对修订戳时取较大累计。
+     * - 任一侧有 revisedAt：按修订戳 LWW（缺省视为 0；避免「仅一侧有戳时落入分数并集、本机伪赢」）。
+     * - 两侧都无修订戳：已打卡优先；两端都已打卡则取较大累计。
+     * - cleared + revisedAt 可覆盖对端勾选（支持跨设备减次/取消）。
      */
     function mergeHabitCheckinValueForSync(localVal, remoteVal) {
       if (localVal === true) localVal = { times: 1 };
@@ -108199,18 +108256,18 @@
       const revR = getHabitCheckinRevisionTime(remoteVal);
       const localChecked = isHabitCheckinValueChecked(localVal);
       const remoteChecked = isHabitCheckinValueChecked(remoteVal);
-      if (revL > 0 && revR > 0 && revL !== revR) {
+      /* 有真实修订戳就比新旧；不再要求两侧都有戳才进 LWW */
+      if ((revL > 0 || revR > 0) && revL !== revR) {
         const newer = revL > revR ? localVal : remoteVal;
         return newer != null ? newer : false;
       }
-      /* 只有一侧有修订戳：未打卡 / 旧清空戳不得盖掉已打卡（打卡路径通常不写 revisedAt） */
-      if (localChecked && !remoteChecked) return localVal;
-      if (remoteChecked && !localChecked) return remoteVal;
       if (!localChecked && !remoteChecked) {
         if (isHabitCheckinClearedMarker(localVal)) return localVal;
         if (isHabitCheckinClearedMarker(remoteVal)) return remoteVal;
         return false;
       }
+      if (localChecked && !remoteChecked) return localVal;
+      if (remoteChecked && !localChecked) return remoteVal;
       if (typeof localVal !== "object" || typeof remoteVal !== "object") {
         return localVal != null ? localVal : remoteVal;
       }
