@@ -95433,7 +95433,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930o";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930q";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -109452,6 +109452,8 @@
     let aliyunAmbRealPendingReason = "";
     let aliyunAmbRealLastReport = null;
     let aliyunAmbRealSuppressPush = false;
+    /** 每天三赢删除墓碑（仅 AMB 信封传递；并回写 syncTombstones，避免并集复活旧条） */
+    let aliyunAmbRealDailyWinTombMap = {};
 
     function isAliyunAmbRealSyncEnabled() {
       if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) return true;
@@ -109465,6 +109467,78 @@
       try {
         console.log("[aliyun-amb-real]", msg);
       } catch (_c) {}
+    }
+
+    /** 每天三赢链路诊断：只打摘要，不改业务字段 */
+    function aliyunAmbRealLogDailyWinDiag(node, detail) {
+      let texts = [];
+      try {
+        const arr = Array.isArray(state.dailyWin) ? state.dailyWin : [];
+        texts = arr.slice(0, 6).map(function (x) {
+          return x && x.id
+            ? String(x.id).slice(0, 8) +
+                ":" +
+                String(x.text || "").slice(0, 16) +
+                "(u=" +
+                (Number(x.updatedAt) || 0) +
+                ")"
+            : "?";
+        });
+      } catch (_t) {}
+      aliyunAmbRealAppendLog(
+        "dailyWin[" +
+          node +
+          "] n=" +
+          texts.length +
+          " tombs=" +
+          Object.keys(aliyunAmbRealDailyWinTombMap || {}).length +
+          (detail ? " " + detail : "") +
+          " sample=" +
+          JSON.stringify(texts)
+      );
+    }
+
+    function aliyunAmbRealNoteDailyWinTomb(id, tsOpt) {
+      const sid = String(id || "").trim();
+      if (!sid) return;
+      const t = Number(tsOpt) > 0 ? Number(tsOpt) : Date.now();
+      const prev = Number(aliyunAmbRealDailyWinTombMap[sid]) || 0;
+      aliyunAmbRealDailyWinTombMap[sid] = Math.max(prev, t);
+      try {
+        if (!state.syncTombstones || typeof state.syncTombstones !== "object") {
+          state.syncTombstones = {};
+        }
+        const cur = Number(state.syncTombstones[sid]) || 0;
+        if (t >= cur) state.syncTombstones[sid] = t;
+      } catch (_st) {}
+    }
+
+    function aliyunAmbRealMergeDailyWinTombMaps(a, b) {
+      const out = {};
+      function ingest(src) {
+        if (!src || typeof src !== "object") return;
+        Object.keys(src).forEach(function (k) {
+          const t = Number(src[k]) || 0;
+          if (!k || t <= 0) return;
+          out[k] = Math.max(Number(out[k]) || 0, t);
+        });
+      }
+      ingest(a);
+      ingest(b);
+      return out;
+    }
+
+    function aliyunAmbRealHydrateDailyWinTombsFromTrash() {
+      try {
+        const trash = Array.isArray(state.trash) ? state.trash : [];
+        for (let i = 0; i < trash.length; i++) {
+          const e = trash[i];
+          if (!e || e.sourceList !== "dailyWin" || e.originalId == null) continue;
+          const sid = String(e.originalId);
+          const fromTs = state.syncTombstones && state.syncTombstones[sid];
+          aliyunAmbRealNoteDailyWinTomb(sid, Number(fromTs) || Number(e.deletedAt) || Date.now());
+        }
+      } catch (_h) {}
     }
 
     function aliyunAmbRealPerfMark(name) {
@@ -109502,6 +109576,7 @@
     }
 
     function aliyunAmbRealCloneSliceFromState() {
+      aliyunAmbRealHydrateDailyWinTombsFromTrash();
       return {
         backwardMeasure: aliyunAmbRealDeepClone(
           state.backwardMeasure,
@@ -109512,6 +109587,7 @@
           { weekly: "", monthly: "", quarterly: "", sprint3: "", yearly: "", triennial: "" }
         ),
         dailyWin: aliyunAmbRealDeepClone(state.dailyWin, []),
+        dailyWinTombs: aliyunAmbRealDeepClone(aliyunAmbRealDailyWinTombMap, {}),
         dailyWinTomorrowRef: aliyunAmbRealDeepClone(state.dailyWinTomorrowRef, {}),
         fuelScores: aliyunAmbRealDeepClone(state.fuelScores, []),
         successCriteria: aliyunAmbRealDeepClone(state.successCriteria, [])
@@ -109526,6 +109602,7 @@
         backwardMeasure: { weekly: {}, monthly: {}, quarterly: {}, sprint3: {}, thinkDay: {}, yearly: {}, triennial: {} },
         backwardMeasurePeriod: { weekly: "", monthly: "", quarterly: "", sprint3: "", yearly: "", triennial: "" },
         dailyWin: [],
+        dailyWinTombs: {},
         dailyWinTomorrowRef: {},
         fuelScores: [],
         successCriteria: []
@@ -109550,6 +109627,9 @@
         env.backwardMeasurePeriod = p.backwardMeasurePeriod;
       }
       if (Array.isArray(p.dailyWin)) env.dailyWin = p.dailyWin;
+      if (p.dailyWinTombs && typeof p.dailyWinTombs === "object") {
+        env.dailyWinTombs = p.dailyWinTombs;
+      }
       if (p.dailyWinTomorrowRef && typeof p.dailyWinTomorrowRef === "object") {
         env.dailyWinTomorrowRef = p.dailyWinTomorrowRef;
       }
@@ -109566,6 +109646,7 @@
           backwardMeasure: slice.backwardMeasure || {},
           backwardMeasurePeriod: slice.backwardMeasurePeriod || {},
           dailyWin: slice.dailyWin || [],
+          dailyWinTombs: slice.dailyWinTombs || {},
           dailyWinTomorrowRef: slice.dailyWinTomorrowRef || {},
           fuelScores: slice.fuelScores || [],
           successCriteria: slice.successCriteria || []
@@ -109582,8 +109663,14 @@
     function aliyunAmbRealBuildMergedSlice(localSlice, remoteSlice) {
       const loc = localSlice && typeof localSlice === "object" ? localSlice : {};
       const rem = remoteSlice && typeof remoteSlice === "object" ? remoteSlice : {};
-      const ts =
-        state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
+      const dailyWinTombsMerged = aliyunAmbRealMergeDailyWinTombMaps(
+        aliyunAmbRealMergeDailyWinTombMaps(loc.dailyWinTombs, rem.dailyWinTombs),
+        aliyunAmbRealDailyWinTombMap
+      );
+      const ts = aliyunAmbRealMergeDailyWinTombMaps(
+        state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {},
+        dailyWinTombsMerged
+      );
       const dailyWinMerged =
         typeof mergeIdRecordArraysPreferLocalOnTie === "function"
           ? mergeIdRecordArraysPreferLocalOnTie(
@@ -109602,6 +109689,8 @@
           : Array.isArray(loc.successCriteria)
             ? loc.successCriteria.slice()
             : [];
+      const globalTs =
+        state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
       return {
         backwardMeasure:
           typeof mergeBackwardMeasureForSync === "function"
@@ -109615,12 +109704,13 @@
           typeof omitTombstonedIdRecords === "function"
             ? omitTombstonedIdRecords(dailyWinMerged, ts)
             : dailyWinMerged,
+        dailyWinTombs: dailyWinTombsMerged,
         dailyWinTomorrowRef:
           typeof filterDailyWinTomorrowRefByTombstones === "function" &&
           typeof mergeDailyWinTomorrowRefForSync === "function"
             ? filterDailyWinTomorrowRefByTombstones(
                 mergeDailyWinTomorrowRefForSync(loc.dailyWinTomorrowRef, rem.dailyWinTomorrowRef),
-                ts
+                globalTs
               )
             : loc.dailyWinTomorrowRef || {},
         fuelScores:
@@ -109631,7 +109721,7 @@
               : [],
         successCriteria:
           typeof omitTombstonedIdRecords === "function"
-            ? omitTombstonedIdRecords(successMerged, ts)
+            ? omitTombstonedIdRecords(successMerged, globalTs)
             : successMerged
       };
     }
@@ -109650,6 +109740,23 @@
           : {};
       state.fuelScores = Array.isArray(slice.fuelScores) ? slice.fuelScores : [];
       state.successCriteria = Array.isArray(slice.successCriteria) ? slice.successCriteria : [];
+      if (slice.dailyWinTombs && typeof slice.dailyWinTombs === "object") {
+        aliyunAmbRealDailyWinTombMap = aliyunAmbRealMergeDailyWinTombMaps(
+          aliyunAmbRealDailyWinTombMap,
+          slice.dailyWinTombs
+        );
+        try {
+          if (!state.syncTombstones || typeof state.syncTombstones !== "object") {
+            state.syncTombstones = {};
+          }
+          Object.keys(slice.dailyWinTombs).forEach(function (id) {
+            const t = Number(slice.dailyWinTombs[id]) || 0;
+            if (!id || t <= 0) return;
+            const cur = Number(state.syncTombstones[id]) || 0;
+            if (t >= cur) state.syncTombstones[id] = t;
+          });
+        } catch (_tsApply) {}
+      }
       return true;
     }
 
@@ -109762,6 +109869,10 @@
 
         const tMerge0 = Date.now();
         const localSlice = aliyunAmbRealCloneSliceFromState();
+        aliyunAmbRealLogDailyWinDiag(
+          "1-local-before-flush",
+          "reason=" + reason + " remN=" + (Array.isArray(remoteEnv.dailyWin) ? remoteEnv.dailyWin.length : 0)
+        );
         const mergedSlice = aliyunAmbRealBuildMergedSlice(localSlice, remoteEnv);
         const env = aliyunAmbRealEmptyEnvelope();
         env.roomId = String(cloudSyncRoomId || env.roomId || "");
@@ -109769,9 +109880,17 @@
         env.backwardMeasure = mergedSlice.backwardMeasure;
         env.backwardMeasurePeriod = mergedSlice.backwardMeasurePeriod;
         env.dailyWin = mergedSlice.dailyWin;
+        env.dailyWinTombs = mergedSlice.dailyWinTombs || {};
         env.dailyWinTomorrowRef = mergedSlice.dailyWinTomorrowRef;
         env.fuelScores = mergedSlice.fuelScores;
         env.successCriteria = mergedSlice.successCriteria;
+        aliyunAmbRealLogDailyWinDiag(
+          "2-payload-merged",
+          "mergedN=" +
+            (Array.isArray(env.dailyWin) ? env.dailyWin.length : 0) +
+            " tombs=" +
+            Object.keys(env.dailyWinTombs || {}).length
+        );
         /* 上传前若远端更新了本机未有字段，写回本机（抑制再推） */
         aliyunAmbRealSuppressPush = true;
         const prevCloudSuppress = cloudSyncSuppressPush;
@@ -109809,6 +109928,10 @@
                 : "")
           );
         }
+        aliyunAmbRealLogDailyWinDiag(
+          "3-cloud-uploaded",
+          "HTTP=" + httpStatus + " kb=" + payloadKB
+        );
         try {
           aliyunSyncPrimaryMarkPullFingerprint("amb", aliyunAmbRealSliceFingerprint(mergedSlice));
         } catch (_fp) {}
@@ -109899,6 +110022,13 @@
         }
         const remoteEnv = aliyunAmbRealParseEnvelope(payloadRaw);
         parseMs = Date.now() - tParse0;
+        aliyunAmbRealLogDailyWinDiag(
+          "4-pull-remote",
+          "remN=" +
+            (Array.isArray(remoteEnv.dailyWin) ? remoteEnv.dailyWin.length : 0) +
+            " remTombs=" +
+            Object.keys(remoteEnv.dailyWinTombs || {}).length
+        );
 
         const tMerge0 = Date.now();
         const localSlice = aliyunAmbRealCloneSliceFromState();
@@ -109916,6 +110046,10 @@
           aliyunAmbRealSuppressPush = false;
         }
         mergeMs = Date.now() - tMerge0;
+        aliyunAmbRealLogDailyWinDiag(
+          "5-merge-apply",
+          "changed=" + !!changed + " mergedN=" + (Array.isArray(mergedSlice.dailyWin) ? mergedSlice.dailyWin.length : 0)
+        );
 
         const tRen0 = Date.now();
         aliyunSyncPrimaryMarkPullFingerprint("amb", ambPullFp);
@@ -109937,6 +110071,7 @@
           }
         }
         renderMs = Date.now() - tRen0;
+        aliyunAmbRealLogDailyWinDiag("6-render-done", "renderMs=" + renderMs + " painted=" + !!changed);
         ok = true;
         return { ok: true, docId: docId, changed: changed };
       } catch (err) {
@@ -109970,6 +110105,8 @@
       window.runAliyunAmbRealPullAndMerge = runAliyunAmbRealPullAndMerge;
       window.isAliyunAmbRealSyncEnabled = isAliyunAmbRealSyncEnabled;
       window.notifyAliyunAmbRealAfterLocalChange = notifyAliyunAmbRealAfterLocalChange;
+      window.aliyunAmbRealNoteDailyWinTomb = aliyunAmbRealNoteDailyWinTomb;
+      window.aliyunAmbRealLogDailyWinDiag = aliyunAmbRealLogDailyWinDiag;
     } catch (_ambWin) {}
 
 
@@ -121917,12 +122054,15 @@
 
     function createDailyWin(text, dateStr) {
       const dk = dateStr || getDailyWinTodayDateKey();
+      const now = Date.now();
       return {
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        id: now.toString(36) + Math.random().toString(36).slice(2, 7),
         text: text.trim(),
         completed: false,
         dateKey: dk,
-        createdAt: habitDateToCompletedAt(dk)
+        createdAt: habitDateToCompletedAt(dk),
+        /* AMB 同 id LWW：必须有 updatedAt，否则改文案两端平局永远偏本地 */
+        updatedAt: now
       };
     }
 
@@ -121959,6 +122099,7 @@
         } else {
           const dw = createDailyWin(text, targetDateKey);
           dw.createdAt = (dw.createdAt || now) + i;
+          dw.updatedAt = now + i;
           state.dailyWin.unshift(dw);
         }
       });
@@ -121973,6 +122114,12 @@
       }
       if (dailyWinInput) dailyWinInput.value = "";
       saveState({ lists: ["dailyWin", "habit", "done"] });
+      if (typeof aliyunAmbRealLogDailyWinDiag === "function") {
+        aliyunAmbRealLogDailyWinDiag(
+          "0-local-change",
+          forTomorrow ? "op=tomorrow-add" : "op=add n=" + texts.length
+        );
+      }
       if (typeof notifyAliyunAmbRealAfterLocalChange === "function") {
         notifyAliyunAmbRealAfterLocalChange(forTomorrow ? "dailyWin-tomorrow" : "dailyWin-add");
       }
@@ -129219,6 +129366,12 @@
       if (listName === "dailyWin" && task) {
         const dk = getDailyWinItemDateKey(task);
         if (dk) refreshDailyWinCheckin(dk);
+        if (typeof aliyunAmbRealNoteDailyWinTomb === "function") {
+          try {
+            aliyunAmbRealNoteDailyWinTomb(task.id);
+          } catch (_dwTomb) {}
+        }
+        aliyunAmbRealLogDailyWinDiag("0-local-delete", "id=" + String(task.id || ""));
       }
       if (listName === "closedList") {
         saveState({ lists: ["closedList", "done"] });
@@ -129289,6 +129442,7 @@
         const it = state.dailyWin.find((x) => x.id === id);
         if (!it) return;
         it.text = t;
+        it.updatedAt = Date.now();
         const dk = getDailyWinItemDateKey(it);
         if (dk) {
           refreshDailyWinCheckin(dk);
@@ -129317,8 +129471,13 @@
         paintLists.push("done");
       }
       saveState({ lists: paintLists });
-      if (listName === "dailyWin" && typeof notifyAliyunAmbRealAfterLocalChange === "function") {
-        notifyAliyunAmbRealAfterLocalChange("dailyWin-text");
+      if (listName === "dailyWin") {
+        if (typeof aliyunAmbRealLogDailyWinDiag === "function") {
+          aliyunAmbRealLogDailyWinDiag("0-local-change", "op=text id=" + String(id || ""));
+        }
+        if (typeof notifyAliyunAmbRealAfterLocalChange === "function") {
+          notifyAliyunAmbRealAfterLocalChange("dailyWin-text");
+        }
       }
       render();
     }
