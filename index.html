@@ -95399,7 +95399,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930w";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930x";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -104746,6 +104746,8 @@
       "dailyWinTomorrowRef",
       "fuelScores",
       "successCriteria",
+      "stopDoing",
+      "notToDo",
       "ruleOf100",
       "rule100DayProjectKeys",
       "rule100UnitProjectKeys"
@@ -109714,11 +109716,15 @@
 
 
     /**
-     * —— AMB 域真实同步（阿里云，批 1）——
-     * 统一域：backwardMeasure / backwardMeasurePeriod / dailyWin /
-     * dailyWinTomorrowRef / fuelScores / successCriteria。
-     * 不进 Habit；复用现有 merge*；快照信封 + 指纹跳过；不改 5s 轮询架构。
-     * 启用：主路径开，或 window.__ALIYUN_AMB_REAL_SYNC_ENABLED = true
+     * —— AMB 域真实同步（阿里云）——
+     * UI 反查可编辑 state（给自己写信为静态无 state）：
+     * - backwardMeasure / backwardMeasurePeriod（含 A.M.B 六格 + thinkDay）
+     * - dailyWin / dailyWinTomorrowRef
+     * - fuelScores（清空油箱评分；删除用 fuelScore:{date} tombstone）
+     * - successCriteria
+     * - stopDoing / notToDo（Stop Doing List 在 AMB 页内，主路径下须进本域）
+     * 信封含 tombstones，避免并集合并把对端删除复活。
+     * 不改 5s 轮询 / roomId / Firebase 回退架构。
      */
     const ALIYUN_AMB_REAL_KIND = "amb-real-v1";
     const ALIYUN_AMB_REAL_PERF_PREFIX = "aliyun-amb-real:";
@@ -109755,6 +109761,10 @@
       return "aliyun-amb-real-v1-" + getAliyunSyncRoomIdForDocs();
     }
 
+    /** 清空油箱按日 tombstone 键（删除评分后防止云端旧分复活） */
+    function fuelScoreTombstoneId(dateStr) {
+      return "fuelScore:" + String(dateStr || "");
+    }
 
     function aliyunAmbRealBaseUrl() {
       return String((aliyunExpUrlInput && aliyunExpUrlInput.value) || ALIYUN_EXP_DEFAULT_URL)
@@ -109770,6 +109780,27 @@
       }
     }
 
+    /** 打包 AMB 相关 tombstones（id 列表删除 + fuelScore:日期） */
+    function aliyunAmbRealCloneTombstonesFromState() {
+      const src =
+        state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
+      const out = {};
+      Object.keys(src).forEach(function (k) {
+        const v = Number(src[k]);
+        if (Number.isFinite(v) && v > 0) out[k] = v;
+      });
+      return out;
+    }
+
+    function omitFuelScoresByTombstones(arr, tombstones) {
+      const list = Array.isArray(arr) ? arr : [];
+      const ts = tombstones && typeof tombstones === "object" ? tombstones : {};
+      return list.filter(function (item) {
+        if (!item || typeof item !== "object" || !item.date) return false;
+        return !Object.prototype.hasOwnProperty.call(ts, fuelScoreTombstoneId(item.date));
+      });
+    }
+
     function aliyunAmbRealCloneSliceFromState() {
       return {
         backwardMeasure: aliyunAmbRealDeepClone(
@@ -109783,7 +109814,10 @@
         dailyWin: aliyunAmbRealDeepClone(state.dailyWin, []),
         dailyWinTomorrowRef: aliyunAmbRealDeepClone(state.dailyWinTomorrowRef, {}),
         fuelScores: aliyunAmbRealDeepClone(state.fuelScores, []),
-        successCriteria: aliyunAmbRealDeepClone(state.successCriteria, [])
+        successCriteria: aliyunAmbRealDeepClone(state.successCriteria, []),
+        stopDoing: aliyunAmbRealDeepClone(state.stopDoing, []),
+        notToDo: aliyunAmbRealDeepClone(state.notToDo, []),
+        tombstones: aliyunAmbRealCloneTombstonesFromState()
       };
     }
 
@@ -109797,7 +109831,10 @@
         dailyWin: [],
         dailyWinTomorrowRef: {},
         fuelScores: [],
-        successCriteria: []
+        successCriteria: [],
+        stopDoing: [],
+        notToDo: [],
+        tombstones: {}
       };
     }
 
@@ -109824,6 +109861,9 @@
       }
       if (Array.isArray(p.fuelScores)) env.fuelScores = p.fuelScores;
       if (Array.isArray(p.successCriteria)) env.successCriteria = p.successCriteria;
+      if (Array.isArray(p.stopDoing)) env.stopDoing = p.stopDoing;
+      if (Array.isArray(p.notToDo)) env.notToDo = p.notToDo;
+      if (p.tombstones && typeof p.tombstones === "object") env.tombstones = p.tombstones;
       env.kind = ALIYUN_AMB_REAL_KIND;
       return env;
     }
@@ -109837,7 +109877,10 @@
           dailyWin: slice.dailyWin || [],
           dailyWinTomorrowRef: slice.dailyWinTomorrowRef || {},
           fuelScores: slice.fuelScores || [],
-          successCriteria: slice.successCriteria || []
+          successCriteria: slice.successCriteria || [],
+          stopDoing: slice.stopDoing || [],
+          notToDo: slice.notToDo || [],
+          tombstones: slice.tombstones || {}
         });
       } catch (_e) {
         s = "";
@@ -109847,12 +109890,19 @@
         : String(s.length);
     }
 
-    /** 复用 Firebase 已验证的 AMB 合并函数，避免新 LWW 语义 */
+    /** 复用 Firebase 已验证的 AMB 合并函数，并合入远端 tombstones */
     function aliyunAmbRealBuildMergedSlice(localSlice, remoteSlice) {
       const loc = localSlice && typeof localSlice === "object" ? localSlice : {};
       const rem = remoteSlice && typeof remoteSlice === "object" ? remoteSlice : {};
-      const ts =
+      const localTs =
         state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
+      const ts =
+        typeof mergeSyncTombstoneMaps === "function"
+          ? mergeSyncTombstoneMaps(
+              mergeSyncTombstoneMaps(localTs, loc.tombstones),
+              rem.tombstones
+            )
+          : Object.assign({}, localTs, loc.tombstones || {}, rem.tombstones || {});
       const dailyWinMerged =
         typeof mergeIdRecordArraysPreferLocalOnTie === "function"
           ? mergeIdRecordArraysPreferLocalOnTie(
@@ -109870,6 +109920,30 @@
             )
           : Array.isArray(loc.successCriteria)
             ? loc.successCriteria.slice()
+            : [];
+      const stopMerged =
+        typeof mergeIdRecordArraysPreferLocalOnTie === "function"
+          ? mergeIdRecordArraysPreferLocalOnTie(
+              Array.isArray(loc.stopDoing) ? loc.stopDoing : [],
+              Array.isArray(rem.stopDoing) ? rem.stopDoing : []
+            )
+          : Array.isArray(loc.stopDoing)
+            ? loc.stopDoing.slice()
+            : [];
+      const notToDoMerged =
+        typeof mergeIdRecordArraysPreferLocalOnTie === "function"
+          ? mergeIdRecordArraysPreferLocalOnTie(
+              Array.isArray(loc.notToDo) ? loc.notToDo : [],
+              Array.isArray(rem.notToDo) ? rem.notToDo : []
+            )
+          : Array.isArray(loc.notToDo)
+            ? loc.notToDo.slice()
+            : [];
+      const fuelMerged =
+        typeof mergeFuelScoresForSync === "function"
+          ? mergeFuelScoresForSync(loc.fuelScores, rem.fuelScores)
+          : Array.isArray(loc.fuelScores)
+            ? loc.fuelScores.slice()
             : [];
       return {
         backwardMeasure:
@@ -109892,16 +109966,20 @@
                 ts
               )
             : loc.dailyWinTomorrowRef || {},
-        fuelScores:
-          typeof mergeFuelScoresForSync === "function"
-            ? mergeFuelScoresForSync(loc.fuelScores, rem.fuelScores)
-            : Array.isArray(loc.fuelScores)
-              ? loc.fuelScores.slice()
-              : [],
+        fuelScores: omitFuelScoresByTombstones(fuelMerged, ts),
         successCriteria:
           typeof omitTombstonedIdRecords === "function"
             ? omitTombstonedIdRecords(successMerged, ts)
-            : successMerged
+            : successMerged,
+        stopDoing:
+          typeof omitTombstonedIdRecords === "function"
+            ? omitTombstonedIdRecords(stopMerged, ts)
+            : stopMerged,
+        notToDo:
+          typeof omitTombstonedIdRecords === "function"
+            ? omitTombstonedIdRecords(notToDoMerged, ts)
+            : notToDoMerged,
+        tombstones: ts
       };
     }
 
@@ -109910,6 +109988,12 @@
       const before = aliyunAmbRealSliceFingerprint(aliyunAmbRealCloneSliceFromState());
       const after = aliyunAmbRealSliceFingerprint(slice);
       if (before === after) return false;
+      if (slice.tombstones && typeof slice.tombstones === "object") {
+        state.syncTombstones =
+          typeof mergeSyncTombstoneMaps === "function"
+            ? mergeSyncTombstoneMaps(state.syncTombstones, slice.tombstones)
+            : Object.assign({}, state.syncTombstones || {}, slice.tombstones);
+      }
       state.backwardMeasure = slice.backwardMeasure;
       state.backwardMeasurePeriod = slice.backwardMeasurePeriod;
       state.dailyWin = Array.isArray(slice.dailyWin) ? slice.dailyWin : [];
@@ -109919,18 +110003,19 @@
           : {};
       state.fuelScores = Array.isArray(slice.fuelScores) ? slice.fuelScores : [];
       state.successCriteria = Array.isArray(slice.successCriteria) ? slice.successCriteria : [];
+      state.stopDoing = Array.isArray(slice.stopDoing) ? slice.stopDoing : [];
+      state.notToDo = Array.isArray(slice.notToDo) ? slice.notToDo : [];
       return true;
     }
 
     /**
      * AMB 合并后强制刷新「始终向后衡量」相关 UI。
-     * render() 里 renderBackwardMeasure 被 gate 在 paintDailyWinDom，
-     * 而阿里云 pull/flush 常用 skipUiPaintDirty，会导致 state 已合入但面板不刷新。
+     * render() 里多块被 paint 脏位 gate；pull/flush 常用 skipUiPaintDirty。
      */
     function aliyunAmbRealPaintLocalUiAfterMerge() {
       try {
         if (typeof markUiPaintSlicesDirty === "function") {
-          markUiPaintSlicesDirty(["dailyWin", "habit"]);
+          markUiPaintSlicesDirty(["dailyWin", "habit", "stopDoing", "notToDo"]);
         }
       } catch (_dirty) {}
       try {
@@ -110070,6 +110155,9 @@
         env.dailyWinTomorrowRef = mergedSlice.dailyWinTomorrowRef;
         env.fuelScores = mergedSlice.fuelScores;
         env.successCriteria = mergedSlice.successCriteria;
+        env.stopDoing = mergedSlice.stopDoing;
+        env.notToDo = mergedSlice.notToDo;
+        env.tombstones = mergedSlice.tombstones || {};
         /* 上传前若远端更新了本机未有字段，写回本机（抑制再推） */
         aliyunAmbRealSuppressPush = true;
         const prevCloudSuppress = cloudSyncSuppressPush;
@@ -110078,7 +110166,10 @@
         try {
           if (aliyunAmbRealApplySliceToState(mergedSlice)) {
             appliedDuringFlush = true;
-            saveState({ lists: ["dailyWin", "habit"], skipUiPaintDirty: true });
+            saveState({
+              lists: ["dailyWin", "habit", "stopDoing", "notToDo"],
+              skipUiPaintDirty: true
+            });
           }
         } finally {
           cloudSyncSuppressPush = prevCloudSuppress;
@@ -110212,7 +110303,10 @@
         try {
           changed = aliyunAmbRealApplySliceToState(mergedSlice);
           if (changed) {
-            saveState({ lists: ["dailyWin", "habit"], skipUiPaintDirty: true });
+            saveState({
+              lists: ["dailyWin", "habit", "stopDoing", "notToDo"],
+              skipUiPaintDirty: true
+            });
           }
         } finally {
           cloudSyncSuppressPush = prevCloudSuppress;
@@ -123124,6 +123218,9 @@
       } else {
         state.fuelScores.unshift(newItem);
       }
+      if (typeof clearSyncTombstone === "function") {
+        clearSyncTombstone(fuelScoreTombstoneId(selectedFuelDate));
+      }
       syncFuelScoreToDone(selectedFuelDate, score, note);
       saveState();
       if (typeof notifyAliyunAmbRealAfterLocalChange === "function") {
@@ -129719,6 +129816,9 @@
       if (task.fuelMeta) {
         const dateStr = task.fuelMeta.date;
         state.fuelScores = state.fuelScores.filter((x) => x.date !== dateStr);
+        if (dateStr && typeof recordSyncTombstone === "function") {
+          recordSyncTombstone(fuelScoreTombstoneId(dateStr));
+        }
         state.done.splice(idx, 1);
         saveState();
         if (typeof notifyAliyunAmbRealAfterLocalChange === "function") {
@@ -129902,6 +130002,9 @@
       state.stopDoing.push(s);
       stopDoingInput.value = "";
       saveState();
+      if (typeof notifyAliyunAmbRealAfterLocalChange === "function") {
+        notifyAliyunAmbRealAfterLocalChange("stopDoing-add");
+      }
       render();
       stopDoingInput.focus();
     }
@@ -129930,6 +130033,9 @@
         notToDoUntilInput.value = "";
       }
       saveState();
+      if (typeof notifyAliyunAmbRealAfterLocalChange === "function") {
+        notifyAliyunAmbRealAfterLocalChange("notToDo-add");
+      }
       render();
       notToDoInput.focus();
     }
@@ -130154,7 +130260,11 @@
           }
         }
         if (task.fuelMeta) {
-          state.fuelScores = state.fuelScores.filter((x) => x.date !== task.fuelMeta.date);
+          const fuelDate = task.fuelMeta.date;
+          state.fuelScores = state.fuelScores.filter((x) => x.date !== fuelDate);
+          if (fuelDate && typeof recordSyncTombstone === "function") {
+            recordSyncTombstone(fuelScoreTombstoneId(fuelDate));
+          }
         }
         if (task.memoMeta) {
           const item = state.memo.find((x) => x.id === task.memoMeta.sourceId);
@@ -130252,6 +130362,8 @@
       if (
         (listName === "dailyWin" ||
           listName === "successCriteria" ||
+          listName === "stopDoing" ||
+          listName === "notToDo" ||
           (listName === "done" && task && task.fuelMeta)) &&
         typeof notifyAliyunAmbRealAfterLocalChange === "function"
       ) {
@@ -130272,6 +130384,14 @@
         if (listName === "notToDo" && Object.prototype.hasOwnProperty.call(it, "until")) {
           delete it.until;
         }
+        let paintListsSd = uiPaintSlicesForListName(listName);
+        if (!paintListsSd || !paintListsSd.length) return;
+        saveState({ lists: paintListsSd.slice() });
+        if (typeof notifyAliyunAmbRealAfterLocalChange === "function") {
+          notifyAliyunAmbRealAfterLocalChange(listName + "-text");
+        }
+        render();
+        return;
       } else if (listName === "memo") {
         const it = state.memo.find((x) => x.id === id);
         if (!it) return;
@@ -160784,7 +160904,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         backwardMeasureHoldPeriodAfterSave = { kind: kind, key: key };
       } else {
-        state.backwardMeasure[kind][key] = { items: [], text: "", updatedAt: 0 };
+        /* 清空也要打新 updatedAt，否则 LWW 会被对端旧内容盖回 */
+        state.backwardMeasure[kind][key] = { items: [], text: "", updatedAt: Date.now() };
         if (typeof removeBackwardMeasureDoneCopy === "function") {
           removeBackwardMeasureDoneCopy(kind, key);
         }
