@@ -95399,7 +95399,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930y";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930z";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -112980,64 +112980,108 @@
       return L.dateKey ? L : R;
     }
 
+    /**
+     * Habit 槽上所有「用户可编辑附加输入」字段（非只完成态）。
+     * merge/LWW 保字段与 richness 评分共用，禁止只特判体重体脂。
+     */
+    const HABIT_CHECKIN_USER_INPUT_KEYS = [
+      "weightJin",
+      "bodyFatPct",
+      "wordCount",
+      "minutes",
+      "ml",
+      "eggs",
+      "questions",
+      "yuan",
+      "experiments",
+      "batches",
+      "remark",
+      "stamps",
+      "horizon",
+      "periodKey"
+    ];
+    const HABIT_CHECKIN_NUMERIC_INPUT_KEYS = [
+      "wordCount",
+      "minutes",
+      "ml",
+      "eggs",
+      "questions",
+      "yuan",
+      "experiments",
+      "weightJin",
+      "bodyFatPct"
+    ];
+
+    function habitCheckinFieldHasUserValue(v) {
+      if (v == null || v === "") return false;
+      if (typeof v === "number") return Number.isFinite(v) && v > 0;
+      if (typeof v === "string") return !!v.trim();
+      if (Array.isArray(v)) return v.length > 0;
+      return true;
+    }
+
+    /** 附加输入丰度：>0 表示完整槽；0 表示仅 times/stampAt/revisedAt 等瘦完成态 */
+    function habitCheckinUserInputRichness(obj) {
+      if (!obj || typeof obj !== "object") return 0;
+      if (obj.cleared === true) return 0;
+      let n = 0;
+      for (let i = 0; i < HABIT_CHECKIN_USER_INPUT_KEYS.length; i++) {
+        const k = HABIT_CHECKIN_USER_INPUT_KEYS[i];
+        const v = obj[k];
+        if (!habitCheckinFieldHasUserValue(v)) continue;
+        if (k === "batches" && Array.isArray(v)) {
+          n += Math.min(v.length, 20);
+        } else if (k === "stamps" && Array.isArray(v)) {
+          n += Math.min(v.length, 5);
+        } else {
+          n += 1;
+        }
+      }
+      return n;
+    }
+
+    function isHabitCheckinThinCompletion(obj) {
+      if (obj === true) return true;
+      if (!obj || typeof obj !== "object") return false;
+      if (obj.cleared === true) return false;
+      return habitCheckinUserInputRichness(obj) === 0;
+    }
+
     function mergeHabitCheckinEntrySyncScore(obj) {
       if (!obj || typeof obj !== "object") return obj === true ? 1 : 0;
       if (obj.cleared === true) return 0;
-      return Math.max(
-        Number(obj.wordCount) || 0,
-        Number(obj.minutes) || 0,
-        Number(obj.ml) || 0,
-        Number(obj.experiments) || 0,
-        Number(obj.eggs) || 0,
-        Number(obj.questions) || 0,
-        Number(obj.yuan) || 0,
-        Number(obj.weightJin) || 0,
-        Number(obj.bodyFatPct) || 0,
-        Number(obj.times) || 0,
-        obj === true ? 1 : 0
-      );
+      const richness = habitCheckinUserInputRichness(obj);
+      let numeric = 0;
+      for (let i = 0; i < HABIT_CHECKIN_NUMERIC_INPUT_KEYS.length; i++) {
+        const n = Number(obj[HABIT_CHECKIN_NUMERIC_INPUT_KEYS[i]]);
+        if (Number.isFinite(n) && n > numeric) numeric = n;
+      }
+      const times = Number(obj.times) || 0;
+      if (times > numeric) numeric = times;
+      /*
+       * 完整用户数据优先于瘦完成态：有附加输入时抬一个大档，
+       * 避免「仅 times 很大的瘦对象」盖掉 minutes/batches/体重等。
+       * 两侧都有附加输入时仍主要靠 numeric 比大小。
+       */
+      return (richness > 0 ? 1000000 : 0) + numeric + richness * 0.0001;
     }
 
     /**
-     * LWW 胜出侧若只有「已打卡」而缺少对侧附加输入值，补回测量字段，避免盖掉体重/分钟等。
-     * 不清空标记、不抬 revisedAt。
+     * LWW 胜出侧若缺少对侧用户附加输入，补回字段（全类型，非体重特例）。
+     * 不清空标记、不抬 revisedAt。原则：完整用户数据 > 只有完成状态的瘦对象。
      */
     function preserveHabitCheckinMeasurementFields(winner, loser) {
       if (!winner || typeof winner !== "object") return winner;
       if (isHabitCheckinClearedMarker(winner)) return winner;
       if (!loser || typeof loser !== "object") return winner;
       if (isHabitCheckinClearedMarker(loser)) return winner;
-      const keys = [
-        "weightJin",
-        "bodyFatPct",
-        "wordCount",
-        "minutes",
-        "ml",
-        "eggs",
-        "questions",
-        "yuan",
-        "experiments",
-        "batches",
-        "remark",
-        "stampAt",
-        "stamps"
-      ];
+      const keys = HABIT_CHECKIN_USER_INPUT_KEYS.concat(["stampAt"]);
       let out = null;
       for (let i = 0; i < keys.length; i++) {
         const k = keys[i];
         const wv = winner[k];
         const lv = loser[k];
-        const wEmpty =
-          wv == null ||
-          wv === "" ||
-          (typeof wv === "number" && !(wv > 0)) ||
-          (Array.isArray(wv) && !wv.length);
-        const lHas =
-          lv != null &&
-          lv !== "" &&
-          (!(typeof lv === "number") || lv > 0) &&
-          (!Array.isArray(lv) || lv.length > 0);
-        if (!wEmpty || !lHas) continue;
+        if (habitCheckinFieldHasUserValue(wv) || !habitCheckinFieldHasUserValue(lv)) continue;
         if (!out) out = Object.assign({}, winner);
         out[k] = Array.isArray(lv) ? lv.slice() : lv;
       }
@@ -113177,6 +113221,8 @@
         const newer = revL > revR ? localVal : remoteVal;
         const older = revL > revR ? remoteVal : localVal;
         if (newer == null) return false;
+        /* cleared 仍可盖勾选；较新瘦完成态不得抹掉较旧完整附加输入 */
+        if (isHabitCheckinClearedMarker(newer)) return newer;
         return preserveHabitCheckinMeasurementFields(newer, older);
       }
       if (!localChecked && !remoteChecked) {
@@ -113197,20 +113243,38 @@
       const b = remoteVal;
       const scoreA = mergeHabitCheckinEntrySyncScore(a);
       const scoreB = mergeHabitCheckinEntrySyncScore(b);
-      const primary = scoreA >= scoreB ? a : b;
-      const secondary = scoreA >= scoreB ? b : a;
+      const richA = habitCheckinUserInputRichness(a);
+      const richB = habitCheckinUserInputRichness(b);
+      /* 完整用户数据 > 瘦完成态：一侧有附加输入、另一侧没有时，完整侧作 primary */
+      let primary;
+      let secondary;
+      if (richA > 0 && richB === 0) {
+        primary = a;
+        secondary = b;
+      } else if (richB > 0 && richA === 0) {
+        primary = b;
+        secondary = a;
+      } else if (scoreA >= scoreB) {
+        primary = a;
+        secondary = b;
+      } else {
+        primary = b;
+        secondary = a;
+      }
       const out = Object.assign({}, secondary, primary);
-      ["wordCount", "minutes", "experiments", "eggs", "questions", "yuan", "times"].forEach(function (field) {
+      HABIT_CHECKIN_NUMERIC_INPUT_KEYS.concat(["times"]).forEach(function (field) {
+        if (field === "weightJin" || field === "bodyFatPct") return;
         const av = Number(a[field]);
         const bv = Number(b[field]);
         if (Number.isFinite(av) || Number.isFinite(bv)) {
           out[field] = Math.max(Number.isFinite(av) ? av : 0, Number.isFinite(bv) ? bv : 0);
         }
       });
+      const preferA = primary === a;
       const wJinA = Number(a.weightJin);
       const wJinB = Number(b.weightJin);
       if (Number.isFinite(wJinA) && wJinA > 0 && Number.isFinite(wJinB) && wJinB > 0) {
-        out.weightJin = scoreA >= scoreB ? wJinA : wJinB;
+        out.weightJin = preferA ? wJinA : wJinB;
       } else if (Number.isFinite(wJinA) && wJinA > 0) {
         out.weightJin = wJinA;
       } else if (Number.isFinite(wJinB) && wJinB > 0) {
@@ -113219,11 +113283,17 @@
       const fatA = Number(a.bodyFatPct);
       const fatB = Number(b.bodyFatPct);
       if (Number.isFinite(fatA) && fatA > 0 && Number.isFinite(fatB) && fatB > 0) {
-        out.bodyFatPct = scoreA >= scoreB ? fatA : fatB;
+        out.bodyFatPct = preferA ? fatA : fatB;
       } else if (Number.isFinite(fatA) && fatA > 0) {
         out.bodyFatPct = fatA;
       } else if (Number.isFinite(fatB) && fatB > 0) {
         out.bodyFatPct = fatB;
+      }
+      if (!out.horizon && (a.horizon || b.horizon)) {
+        out.horizon = preferA ? a.horizon || b.horizon : b.horizon || a.horizon;
+      }
+      if (!out.periodKey && (a.periodKey || b.periodKey)) {
+        out.periodKey = preferA ? a.periodKey || b.periodKey : b.periodKey || a.periodKey;
       }
       const stampCandidates = [Number(a.stampAt), Number(b.stampAt)].filter(function (t) {
         return Number.isFinite(t) && t > 0;
@@ -113253,6 +113323,10 @@
           valueKey = "wordCount";
           maxBatch = 9999;
           maxDaily = 999999;
+        } else if (Number.isFinite(out.ml) || a.ml != null || b.ml != null) {
+          valueKey = "ml";
+          maxBatch = 2000;
+          maxDaily = 15000;
         } else if (Number.isFinite(out.eggs) || a.eggs != null || b.eggs != null) {
           valueKey = "eggs";
           maxBatch = 10;
@@ -113294,10 +113368,20 @@
       const remark = rmA.length >= rmB.length ? rmA : rmB;
       if (remark) out.remark = remark;
       else delete out.remark;
-      if (out.wordCount != null || out.minutes != null || out.experiments != null || out.eggs != null || out.questions != null || out.yuan != null) {
+      if (
+        out.wordCount != null ||
+        out.minutes != null ||
+        out.ml != null ||
+        out.experiments != null ||
+        out.eggs != null ||
+        out.questions != null ||
+        out.yuan != null
+      ) {
         let mergeOpts = { valueKey: "minutes", maxBatch: 999, maxDaily: 99999 };
         if (out.wordCount != null) {
           mergeOpts = { valueKey: "wordCount", maxBatch: 9999, maxDaily: 999999 };
+        } else if (out.ml != null) {
+          mergeOpts = { valueKey: "ml", maxBatch: 2000, maxDaily: 15000 };
         } else if (out.eggs != null) {
           mergeOpts = { valueKey: "eggs", maxBatch: 10, maxDaily: 99 };
         } else if (out.questions != null) {
