@@ -110398,7 +110398,7 @@
         if (aliyunSyncPrimaryIsUnchangedPull("amb", ambPullFp)) {
           ok = true;
           aliyunAmbRealAppendLog("拉取无变化，跳过 merge/render");
-          /* 历史：AMB 已在本机但 Done 镜像缺失（迁移漏 bridge）→ 仍做一次廉价 reconcile */
+          /* 仅清理/去重/补 meta，不再为陈旧周期发明今日 Done */
           try {
             if (
               typeof reconcileBackwardMeasureDoneMirrorsFromState === "function" &&
@@ -110406,7 +110406,7 @@
             ) {
               saveState({ lists: ["done"] });
               aliyunAmbRealPaintLocalUiAfterMerge();
-              aliyunAmbRealAppendLog("unchanged pull：已补齐缺失的 AMB→Done 镜像");
+              aliyunAmbRealAppendLog("unchanged pull：已清理 AMB→Done 镜像重复/空周期");
             }
           } catch (_ambRecUnch) {}
           return { ok: true, unchanged: true, docId: docId };
@@ -145551,13 +145551,31 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return "manual:" + String(task.id);
       }
       /**
-       * A.M.B 向后衡量：同一 kind+periodKey 只留一行（本机派生 + Done 域 upsert 可能各写一条）。
+       * A.M.B 向后衡量：同 kind 同日只留一行（文案都是「完成【…】」，叠双即误打卡观感）。
+       * periodKey 仍写在 meta 里供删除/联动；去重按日避免 upsert+旧行/reconcile 叠双。
        */
-      if (task && task.backwardMeasureMeta && typeof task.backwardMeasureMeta === "object") {
-        const bk = String(task.backwardMeasureMeta.kind || "").trim();
-        const bp = String(task.backwardMeasureMeta.periodKey || "").trim();
-        if (bk && bp) return "bm:" + bk + ":" + bp;
-        if (task.id != null) return "bm:" + String(task.id);
+      {
+        const bmKindMeta =
+          task && task.backwardMeasureMeta && typeof task.backwardMeasureMeta === "object"
+            ? String(task.backwardMeasureMeta.kind || "").trim()
+            : "";
+        const bmKindLabel =
+          typeof backwardMeasureKindFromDoneLabelText === "function"
+            ? backwardMeasureKindFromDoneLabelText(task && task.text)
+            : "";
+        const bmKind = bmKindMeta || bmKindLabel;
+        if (bmKind) {
+          const dayTs = task && (task.completedAt || task.createdAt);
+          let dayKey = "";
+          if (dayTs) {
+            try {
+              dayKey = formatDateInputValue(new Date(dayTs));
+            } catch (_bmDayErr) {
+              dayKey = "";
+            }
+          }
+          return "bm:" + bmKind + ":day:" + (dayKey || "unknown");
+        }
       }
       /**
        * 习惯打卡：同日可多次（第 N 次），按 key+date+次数去重。
@@ -162985,29 +163003,51 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
     }
 
-    function syncBackwardMeasureToDone(kind, periodKey) {
+    /**
+     * @param {string} kind
+     * @param {string} periodKey
+     * @param {{ atMs?: number, skipNotify?: boolean }} [opts]
+     *   atMs：完成时间（默认 now）；skipNotify：合并补齐时勿再推 Done 域，避免他端「自动打卡」风暴
+     */
+    function syncBackwardMeasureToDone(kind, periodKey, opts) {
+      opts = opts && typeof opts === "object" ? opts : {};
       const label = BACKWARD_MEASURE_KIND_LABEL[kind] || kind;
       removeBackwardMeasureDoneCopy(kind, periodKey);
-      const now = Date.now();
+      const atMs =
+        Number.isFinite(Number(opts.atMs)) && Number(opts.atMs) > 0 ? Number(opts.atMs) : Date.now();
       const newItem = {
-        id: now.toString(36) + Math.random().toString(36).slice(2, 7),
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: "完成【" + label + "】",
-        completedAt: now,
-        updatedAt: now,
+        completedAt: atMs,
+        updatedAt: atMs,
         backwardMeasureMeta: { kind: kind, periodKey: periodKey }
       };
       state.done.unshift(newItem);
-      /* 阿里云 Done 主路径：须显式 upsert，否则仅本机有、他端 Done List 永远看不到 */
-      if (typeof notifyAliyunDoneRealUpsert === "function") {
+      /* 仅用户主动记录时推 Done 域；reconcile 补齐走 skipNotify，防跨端误打卡 */
+      if (!opts.skipNotify && typeof notifyAliyunDoneRealUpsert === "function") {
         try {
           notifyAliyunDoneRealUpsert("amb-backward", newItem);
         } catch (_ambDoneUp) {}
       }
+      return newItem;
+    }
+
+    function backwardMeasureKindFromDoneLabelText(text) {
+      const m = String(text || "").trim().match(/^完成【(.+?)】$/);
+      if (!m) return "";
+      const label = m[1];
+      const kinds = Object.keys(BACKWARD_MEASURE_KIND_LABEL);
+      for (let i = 0; i < kinds.length; i++) {
+        if (BACKWARD_MEASURE_KIND_LABEL[kinds[i]] === label) return kinds[i];
+      }
+      return "";
     }
 
     /**
-     * AMB 源数据 → Done 镜像补齐/清理（跨设备安全网）。
-     * 有内容的周期缺 Done 则补；已清空的周期去掉残留镜像。不改统计口径。
+     * AMB→Done 安全网（收敛版）：
+     * - 不为陈旧周期「发明」今日打卡（那是自动打卡 bug）
+     * - 仅：给无 meta 的旧 Done 补 meta；清掉已空周期的残留镜像；合并同 kind 同日重复
+     * 跨设备新记录仍靠用户 save 时的 Done 域 upsert。
      */
     function reconcileBackwardMeasureDoneMirrorsFromState() {
       if (!Array.isArray(state.done)) state.done = [];
@@ -163015,14 +163055,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const kinds = ["sprint3", "weekly", "monthly", "quarterly", "yearly", "triennial"];
       const keep = Object.create(null);
       let changed = false;
+
       kinds.forEach(function (kind) {
         const store = state.backwardMeasure && state.backwardMeasure[kind];
         if (!store || typeof store !== "object") return;
         Object.keys(store).forEach(function (periodKey) {
           if (!backwardMeasurePeriodHasContent(store[periodKey])) return;
-          const sig = kind + "\0" + periodKey;
-          keep[sig] = true;
-          const exists = state.done.some(function (d) {
+          keep[kind + "\0" + periodKey] = true;
+          const byMeta = state.done.find(function (d) {
             return (
               d &&
               d.backwardMeasureMeta &&
@@ -163030,12 +163070,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               d.backwardMeasureMeta.periodKey === periodKey
             );
           });
-          if (!exists && typeof syncBackwardMeasureToDone === "function") {
-            syncBackwardMeasureToDone(kind, periodKey);
+          if (byMeta) return;
+          /* 旧镜像可能无 meta：只补字段，不 new 一条（避免今日列表突然多出「自动打卡」） */
+          const label = BACKWARD_MEASURE_KIND_LABEL[kind] || kind;
+          const expectText = "完成【" + label + "】";
+          const legacy = state.done.find(function (d) {
+            if (!d || String(d.text || "") !== expectText) return false;
+            if (d.backwardMeasureMeta && d.backwardMeasureMeta.kind) return false;
+            return true;
+          });
+          if (legacy) {
+            legacy.backwardMeasureMeta = { kind: kind, periodKey: periodKey };
             changed = true;
           }
+          /* 不再对陈旧周期 syncBackwardMeasureToDone(Date.now()) —— 那会表现为未点击却打卡 */
         });
       });
+
       const beforeLen = state.done.length;
       state.done = state.done.filter(function (d) {
         if (!d || !d.backwardMeasureMeta) return true;
@@ -163045,6 +163096,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return Boolean(keep[k + "\0" + p]);
       });
       if (state.done.length !== beforeLen) changed = true;
+
+      /* 同 kind 同日「完成【…】」只留一条（修 upsert+旧行叠双） */
+      if (typeof pruneRedundantDoneEntriesInState === "function") {
+        try {
+          if (pruneRedundantDoneEntriesInState()) changed = true;
+        } catch (_pruneBm) {}
+      }
       return changed;
     }
 
