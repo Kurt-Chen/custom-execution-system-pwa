@@ -14,8 +14,8 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 const sw = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");
 
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001el"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001el"/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001eo"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001eo"/);
 
 /* 序列化必须带镜像 meta */
 assert.match(html, /out\.fuelMeta = meta/);

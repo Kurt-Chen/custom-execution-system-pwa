@@ -95780,7 +95780,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001el";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001eo";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -107154,12 +107154,27 @@
       return { ok: true, v: v, metaId: metaId, payload: payload };
     }
 
-    /** meta 404/坏数据时种子；v 至少为 1，不回退更高版本。 */
+    /**
+     * meta 仅在确认 404/missing 时种子 v=1。
+     * 禁止在 GET/parse 失败时写 v=1 —— 那会把已 bump 的高版本打回 1，
+     * 他端 lastSeen=1 后永久 meta-unchanged，Habit 正文更新再也拉不到。
+     */
     async function aliyunHabitMetaSeedIfNeeded(atOpt) {
       try {
         const fresh = await aliyunHabitMetaFetch();
         if (fresh.ok && !fresh.missing && !fresh.parseError && Number(fresh.v) >= 1) {
           return { ok: true, seeded: false, v: Number(fresh.v) };
+        }
+        if (!(fresh && fresh.ok && fresh.missing)) {
+          aliyunHabitRealAppendLog(
+            "[habit-done-chain] meta-gate seed SKIP not-confirmed-missing err=" +
+              ((fresh && fresh.error) || (fresh && fresh.parseError ? "parse" : "fetch"))
+          );
+          return {
+            ok: false,
+            seeded: false,
+            error: (fresh && fresh.error) || "not-confirmed-missing"
+          };
         }
         const plannedV = 1;
         const wr = await aliyunHabitMetaWriteVersion(plannedV, atOpt);
@@ -107178,7 +107193,7 @@
 
     /**
      * Habit 正文 POST 成功后再 bump 独立 meta。
-     * plannedV = (freshMeta.v || 0) + 1；写入前再取 max 防止旧值回退。
+     * plannedV = max(freshMeta.v, lastSeen) + 1；GET 失败时禁止按 v=0 重写（会钉死 v=1）。
      */
     async function aliyunHabitMetaBumpAfterUpload(atOpt) {
       if (!isAliyunSyncMetaGateEnabled()) return { ok: false, skipped: true, reason: "gate-off" };
@@ -107191,13 +107206,22 @@
           let freshV = 0;
           if (fresh.ok && !fresh.missing && !fresh.parseError) {
             freshV = Number(fresh.v) || 0;
-          } else if (!fresh.missing && fresh.parseError) {
-            aliyunHabitRealAppendLog(
-              "meta-gate bump: fresh parse/GET 异常，按 v=0 重种子+1 attempt=" + attempt
-            );
+          } else if (fresh && fresh.missing) {
             freshV = 0;
+          } else {
+            /* GET/parse 不确定：用 lastSeen 托底，绝不退回 0 导致反复写 v=1 */
+            freshV = Number(aliyunHabitMetaLastSeenV) || 0;
+            aliyunHabitRealAppendLog(
+              "[habit-done-chain] meta-gate bump fetch uncertain floor lastSeen=" +
+                freshV +
+                " attempt=" +
+                attempt +
+                " err=" +
+                ((fresh && fresh.error) || "parse/fetch")
+            );
           }
-          const plannedV = (freshV || 0) + 1;
+          const floorV = Math.max(freshV || 0, Number(aliyunHabitMetaLastSeenV) || 0);
+          const plannedV = floorV + 1;
           const writeV = plannedV;
           const wr = await aliyunHabitMetaWriteVersion(writeV, atOpt);
           if (!wr.ok) {
