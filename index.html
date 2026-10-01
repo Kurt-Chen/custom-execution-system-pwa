@@ -95780,7 +95780,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001ei";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001ej";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -106071,6 +106071,34 @@
           periodKey: bm.periodKey != null ? String(bm.periodKey) : ""
         };
       }
+      /*
+       * 清空油箱 / 预设明天三赢 / 封闭清单 / 备忘录 → Done 镜像：
+       * 必须进阿里云 Done，否则他端只有源域数据、Done List 永远看不到。
+       * Habit 仍走 habitCheckins + pull 后 repair（habitMeta 不作为 Done 主同步路径）。
+       */
+      if (item.fuelMeta && typeof item.fuelMeta === "object") {
+        const fm = item.fuelMeta;
+        const meta = { date: fm.date != null ? String(fm.date) : "" };
+        if (fm.score != null && Number.isFinite(Number(fm.score))) meta.score = Number(fm.score);
+        out.fuelMeta = meta;
+      }
+      if (item.dailyWinTomorrowMeta && typeof item.dailyWinTomorrowMeta === "object") {
+        const dm = item.dailyWinTomorrowMeta;
+        out.dailyWinTomorrowMeta = {
+          targetDateKey: dm.targetDateKey != null ? String(dm.targetDateKey) : "",
+          recordedDateKey: dm.recordedDateKey != null ? String(dm.recordedDateKey) : ""
+        };
+      }
+      if (item.closedListMeta && typeof item.closedListMeta === "object") {
+        out.closedListMeta = {
+          sourceId: item.closedListMeta.sourceId != null ? String(item.closedListMeta.sourceId) : ""
+        };
+      }
+      if (item.memoMeta && typeof item.memoMeta === "object") {
+        out.memoMeta = {
+          sourceId: item.memoMeta.sourceId != null ? String(item.memoMeta.sourceId) : ""
+        };
+      }
       return out;
     }
 
@@ -106597,6 +106625,14 @@
             else if (local.rule100Meta) next.rule100Meta = local.rule100Meta;
             if (remote.backwardMeasureMeta) next.backwardMeasureMeta = remote.backwardMeasureMeta;
             else if (local.backwardMeasureMeta) next.backwardMeasureMeta = local.backwardMeasureMeta;
+            if (remote.fuelMeta) next.fuelMeta = remote.fuelMeta;
+            else if (local.fuelMeta) next.fuelMeta = local.fuelMeta;
+            if (remote.dailyWinTomorrowMeta) next.dailyWinTomorrowMeta = remote.dailyWinTomorrowMeta;
+            else if (local.dailyWinTomorrowMeta) next.dailyWinTomorrowMeta = local.dailyWinTomorrowMeta;
+            if (remote.closedListMeta) next.closedListMeta = remote.closedListMeta;
+            else if (local.closedListMeta) next.closedListMeta = local.closedListMeta;
+            if (remote.memoMeta) next.memoMeta = remote.memoMeta;
+            else if (local.memoMeta) next.memoMeta = local.memoMeta;
             Object.keys(next).forEach(function (k) {
               local[k] = next[k];
             });
@@ -111263,7 +111299,9 @@
       state.notToDo = Array.isArray(slice.notToDo) ? slice.notToDo : [];
       /* AMB 源合入后补齐/清理 Done 镜像（他端仅拉 AMB 也能看到 Done） */
       try {
-        if (typeof reconcileBackwardMeasureDoneMirrorsFromState === "function") {
+        if (typeof reconcileAmbDerivedDoneMirrorsFromState === "function") {
+          reconcileAmbDerivedDoneMirrorsFromState();
+        } else if (typeof reconcileBackwardMeasureDoneMirrorsFromState === "function") {
           reconcileBackwardMeasureDoneMirrorsFromState();
         }
       } catch (_bmDoneRec) {
@@ -111593,15 +111631,21 @@
         if (aliyunSyncPrimaryIsUnchangedPull("amb", ambPullFp)) {
           ok = true;
           aliyunAmbRealAppendLog("拉取无变化，跳过 merge/render");
-          /* 仅清理/去重/补 meta，不再为陈旧周期发明今日 Done */
+          /* 仅清理/去重/补 meta，不再为陈旧周期发明今日 Done；并补齐油箱/预设明天三赢镜像 */
           try {
-            if (
+            let ambDoneRepaired = false;
+            if (typeof reconcileAmbDerivedDoneMirrorsFromState === "function") {
+              ambDoneRepaired = !!reconcileAmbDerivedDoneMirrorsFromState();
+            } else if (
               typeof reconcileBackwardMeasureDoneMirrorsFromState === "function" &&
               reconcileBackwardMeasureDoneMirrorsFromState()
             ) {
+              ambDoneRepaired = true;
+            }
+            if (ambDoneRepaired) {
               saveState({ lists: ["done"] });
               aliyunAmbRealPaintLocalUiAfterMerge();
-              aliyunAmbRealAppendLog("unchanged pull：已清理 AMB→Done 镜像重复/空周期");
+              aliyunAmbRealAppendLog("unchanged pull：已补齐/清理 AMB→Done 镜像");
             }
           } catch (_ambRecUnch) {}
           return { ok: true, unchanged: true, docId: docId };
@@ -112431,6 +112475,14 @@
             ? mergeSyncTombstoneMaps(state.syncTombstones, slice.tombstones)
             : Object.assign({}, state.syncTombstones || {}, slice.tombstones);
       }
+      /* Lists 源合入后补齐 Closed/Memo → Done 镜像（他端仅拉 Lists 也能看到 Done） */
+      try {
+        if (typeof reconcileListsDerivedDoneMirrorsFromState === "function") {
+          reconcileListsDerivedDoneMirrorsFromState();
+        }
+      } catch (_listsDoneRec) {
+        console.warn("[aliyun-lists-real] reconcile Done mirrors 失败:", _listsDoneRec);
+      }
       return true;
     }
 
@@ -112446,6 +112498,11 @@
         }
         return;
       }
+      try {
+        if (typeof markUiPaintSlicesDirty === "function") {
+          markUiPaintSlicesDirty(["closedList", "memo", "done"]);
+        }
+      } catch (_dirty) {}
       try {
         if (typeof refreshClosedListLocalUi === "function") refreshClosedListLocalUi();
       } catch (_cl) {}
@@ -112468,6 +112525,9 @@
       try {
         if (typeof renderTrash === "function") renderTrash();
       } catch (_tr) {}
+      try {
+        if (typeof render === "function") render();
+      } catch (_ren) {}
     }
 
     function aliyunListsRealStartLtObserver() {
@@ -112717,6 +112777,16 @@
         if (aliyunSyncPrimaryIsUnchangedPull("lists", pullFp)) {
           ok = true;
           aliyunListsRealAppendLog("拉取无变化，跳过 merge/render");
+          try {
+            if (
+              typeof reconcileListsDerivedDoneMirrorsFromState === "function" &&
+              reconcileListsDerivedDoneMirrorsFromState()
+            ) {
+              saveState({ lists: ["closedList", "memo", "done"] });
+              aliyunListsRealPaintLocalUiAfterMerge();
+              aliyunListsRealAppendLog("unchanged pull：已补齐 Lists→Done 镜像");
+            }
+          } catch (_listsRecUnch) {}
           return { ok: true, unchanged: true, docId: docId };
         }
         const remoteEnv = aliyunListsRealParseEnvelope(payloadRaw);
@@ -112732,7 +112802,7 @@
           changed = aliyunListsRealApplySliceToState(mergedSlice);
           if (changed) {
             if (typeof markHeavyModulesDepDirty === "function") markHeavyModulesDepDirty();
-            saveState({ lists: ["closedList", "memo", "trash"], skipUiPaintDirty: true });
+            saveState({ lists: ["closedList", "memo", "trash", "done"], skipUiPaintDirty: true });
           }
         } finally {
           cloudSyncSuppressPush = prevCloudSuppress;
@@ -124305,6 +124375,7 @@
      */
     function syncDailyWinTomorrowPresetToDone(targetDateKey, opts) {
       if (!targetDateKey) return false;
+      const skipNotify = opts && opts.skipNotify;
       ensureDailyWinTomorrowRefState();
       const raw = state.dailyWinTomorrowRef[targetDateKey];
       const list = Array.isArray(raw) ? raw : [];
@@ -124317,7 +124388,16 @@
         if (clearDailyWinTomorrowPresetDismissed(list)) changed = true;
         if (idx !== -1) {
           const row = state.done[idx];
-          if (row && row.id != null) recordSyncTombstone(row.id);
+          if (row && row.id != null) {
+            try {
+              recordSyncTombstone(row.id);
+            } catch (_dwTs) {}
+            if (!skipNotify && typeof notifyAliyunDoneRealTombstone === "function") {
+              try {
+                notifyAliyunDoneRealTombstone("dailyWin-tomorrow-remove", row.id, row);
+              } catch (_dwRm) {}
+            }
+          }
           state.done.splice(idx, 1);
           changed = true;
         }
@@ -124329,7 +124409,13 @@
         const text = buildDailyWinTomorrowPresetDoneText(top);
         if (row.text !== text) {
           row.text = text;
+          row.updatedAt = Date.now();
           changed = true;
+        }
+        if (changed && !skipNotify && typeof notifyAliyunDoneRealUpsert === "function") {
+          try {
+            notifyAliyunDoneRealUpsert("dailyWin-tomorrow", row);
+          } catch (_dwUp) {}
         }
         return changed;
       }
@@ -124342,17 +124428,24 @@
         return t > max ? t : max;
       }, 0) || Date.now();
       const recordedDateKey = formatDateInputValue(new Date(recordedAt));
-      state.done.unshift({
+      const newItem = {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: buildDailyWinTomorrowPresetDoneText(top),
         createdAt: recordedAt,
         completedAt: recordedAt,
+        updatedAt: Date.now(),
         dailyWinTomorrowMeta: {
           targetDateKey: targetDateKey,
           recordedDateKey: recordedDateKey
         }
-      });
+      };
+      state.done.unshift(newItem);
       changed = true;
+      if (!skipNotify && typeof notifyAliyunDoneRealUpsert === "function") {
+        try {
+          notifyAliyunDoneRealUpsert("dailyWin-tomorrow", newItem);
+        } catch (_dwAdd) {}
+      }
       if (opts && opts.focusDone) {
         selectedDoneDate = recordedDateKey;
         if (doneDateFilter) doneDateFilter.value = selectedDoneDate;
@@ -124361,7 +124454,7 @@
       return changed;
     }
 
-    function refreshAllDailyWinTomorrowPresetDones() {
+    function refreshAllDailyWinTomorrowPresetDones(opts) {
       ensureDailyWinTomorrowRefState();
       const keys = Object.keys(state.dailyWinTomorrowRef);
       (state.done || []).forEach(function (row) {
@@ -124370,7 +124463,7 @@
       });
       let changed = false;
       keys.forEach(function (dk) {
-        if (syncDailyWinTomorrowPresetToDone(dk)) changed = true;
+        if (syncDailyWinTomorrowPresetToDone(dk, opts)) changed = true;
       });
       return changed;
     }
@@ -126333,31 +126426,92 @@
       persistFuelDayDebounced();
     }
 
-    function removeFuelDoneCopy(dateStr) {
-      state.done = state.done.filter((item) => !(item.fuelMeta && item.fuelMeta.date === dateStr));
+    function removeFuelDoneCopy(dateStr, opts) {
+      const skipNotify = opts && opts.skipNotify;
+      const keepId = opts && opts.keepId != null ? String(opts.keepId) : "";
+      const removed = [];
+      state.done = state.done.filter(function (item) {
+        if (!(item && item.fuelMeta && item.fuelMeta.date === dateStr)) return true;
+        if (keepId && String(item.id) === keepId) return true;
+        removed.push(item);
+        return false;
+      });
+      if (!skipNotify && typeof notifyAliyunDoneRealTombstone === "function") {
+        removed.forEach(function (it) {
+          if (!it || it.id == null) return;
+          try {
+            notifyAliyunDoneRealTombstone("fuel-remove", it.id, it);
+          } catch (_fuelRm) {}
+        });
+      }
+      return removed;
     }
 
-    function syncFuelScoreToDone(dateStr, score, noteText) {
-      removeFuelDoneCopy(dateStr);
+    function syncFuelScoreToDone(dateStr, score, noteText, opts) {
+      const skipNotify = opts && opts.skipNotify;
       let text =
         "【清空油箱】程度 " + score + "/10 · " + getEffortEmotionText(score);
       if (noteText && String(noteText).trim()) {
         text += " · " + String(noteText).trim().slice(0, 120);
       }
-      state.done.unshift({
+      const existing = (state.done || []).find(function (item) {
+        return item && item.fuelMeta && item.fuelMeta.date === dateStr;
+      });
+      if (existing) {
+        existing.text = text;
+        existing.fuelMeta = { date: dateStr, score: score };
+        existing.updatedAt = Date.now();
+        if (!existing.completedAt) {
+          existing.completedAt = habitDateToCompletedAt(dateStr);
+        }
+        /* 同日多余油箱镜像删掉，保留稳定 id 以便阿里云 Done 合并 */
+        removeFuelDoneCopy(dateStr, { keepId: existing.id, skipNotify: skipNotify });
+        if (!skipNotify && typeof notifyAliyunDoneRealUpsert === "function") {
+          try {
+            notifyAliyunDoneRealUpsert("fuel", existing);
+          } catch (_fuelUp) {}
+        }
+        return existing;
+      }
+      const newItem = {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: text,
         completedAt: habitDateToCompletedAt(dateStr),
+        updatedAt: Date.now(),
         fuelMeta: { date: dateStr, score: score }
+      };
+      state.done.unshift(newItem);
+      if (!skipNotify && typeof notifyAliyunDoneRealUpsert === "function") {
+        try {
+          notifyAliyunDoneRealUpsert("fuel", newItem);
+        } catch (_fuelAdd) {}
+      }
+      return newItem;
+    }
+
+    function removeClosedListDoneCopy(sourceId, opts) {
+      const skipNotify = opts && opts.skipNotify;
+      const removed = [];
+      state.done = state.done.filter(function (item) {
+        if (!(item && item.closedListMeta && item.closedListMeta.sourceId === sourceId)) return true;
+        removed.push(item);
+        return false;
       });
+      if (!skipNotify && typeof notifyAliyunDoneRealTombstone === "function") {
+        removed.forEach(function (it) {
+          if (!it || it.id == null) return;
+          try {
+            notifyAliyunDoneRealTombstone("closedList-remove", it.id, it);
+          } catch (_clRm) {}
+        });
+      }
+      return removed;
     }
 
-    function removeClosedListDoneCopy(sourceId) {
-      state.done = state.done.filter((item) => !(item.closedListMeta && item.closedListMeta.sourceId === sourceId));
-    }
-
-    function syncClosedListToDone(item) {
-      removeClosedListDoneCopy(item.id);
+    function syncClosedListToDone(item, opts) {
+      if (!item || item.id == null) return null;
+      const skipNotify = opts && opts.skipNotify;
+      removeClosedListDoneCopy(item.id, { skipNotify: skipNotify });
       const at =
         normalizeWeeklyPlanCompletedAtMs(item && item.completedAt) ||
         normalizeWeeklyPlanCompletedAtMs(item && item.createdAt) ||
@@ -126366,26 +126520,106 @@
           return dk ? habitDateToCompletedAt(dk) : null;
         })() ||
         Date.now();
-      state.done.unshift({
+      const newItem = {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: "【Closed List】" + item.text,
         completedAt: at,
+        updatedAt: Date.now(),
         closedListMeta: { sourceId: item.id }
+      };
+      state.done.unshift(newItem);
+      if (!skipNotify && typeof notifyAliyunDoneRealUpsert === "function") {
+        try {
+          notifyAliyunDoneRealUpsert("closedList", newItem);
+        } catch (_clAdd) {}
+      }
+      return newItem;
+    }
+
+    function removeMemoDoneCopy(sourceId, opts) {
+      const skipNotify = opts && opts.skipNotify;
+      const removed = [];
+      state.done = state.done.filter(function (item) {
+        if (!(item && item.memoMeta && item.memoMeta.sourceId === sourceId)) return true;
+        removed.push(item);
+        return false;
       });
+      if (!skipNotify && typeof notifyAliyunDoneRealTombstone === "function") {
+        removed.forEach(function (it) {
+          if (!it || it.id == null) return;
+          try {
+            notifyAliyunDoneRealTombstone("memo-remove", it.id, it);
+          } catch (_memoRm) {}
+        });
+      }
+      return removed;
     }
 
-    function removeMemoDoneCopy(sourceId) {
-      state.done = state.done.filter((item) => !(item.memoMeta && item.memoMeta.sourceId === sourceId));
-    }
-
-    function syncMemoToDone(item) {
-      removeMemoDoneCopy(item.id);
-      state.done.unshift({
+    function syncMemoToDone(item, opts) {
+      if (!item || item.id == null) return null;
+      const skipNotify = opts && opts.skipNotify;
+      removeMemoDoneCopy(item.id, { skipNotify: skipNotify });
+      const newItem = {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: "【备忘录】" + item.text,
         completedAt: Date.now(),
+        updatedAt: Date.now(),
         memoMeta: { sourceId: item.id }
+      };
+      state.done.unshift(newItem);
+      if (!skipNotify && typeof notifyAliyunDoneRealUpsert === "function") {
+        try {
+          notifyAliyunDoneRealUpsert("memo", newItem);
+        } catch (_memoAdd) {}
+      }
+      return newItem;
+    }
+
+    /**
+     * Lists→Done 安全网：封闭清单 / 备忘录完成态已由 Lists 域同步；
+     * pull 后若 Done 缺镜像则补齐（skipNotify）。本地勾选仍走 upsert。
+     */
+    function reconcileListsDerivedDoneMirrorsFromState() {
+      if (!Array.isArray(state.done)) state.done = [];
+      let changed = false;
+      const closedKeep = Object.create(null);
+      (Array.isArray(state.closedList) ? state.closedList : []).forEach(function (item) {
+        if (!item || item.id == null || !item.completed) return;
+        const sid = String(item.id);
+        closedKeep[sid] = true;
+        const existing = state.done.find(function (d) {
+          return d && d.closedListMeta && String(d.closedListMeta.sourceId) === sid;
+        });
+        if (existing) return;
+        syncClosedListToDone(item, { skipNotify: true });
+        changed = true;
       });
+      const beforeCl = state.done.length;
+      state.done = state.done.filter(function (d) {
+        if (!d || !d.closedListMeta || d.closedListMeta.sourceId == null) return true;
+        return Boolean(closedKeep[String(d.closedListMeta.sourceId)]);
+      });
+      if (state.done.length !== beforeCl) changed = true;
+
+      const memoKeep = Object.create(null);
+      (Array.isArray(state.memo) ? state.memo : []).forEach(function (item) {
+        if (!item || item.id == null || !item.completed) return;
+        const sid = String(item.id);
+        memoKeep[sid] = true;
+        const existing = state.done.find(function (d) {
+          return d && d.memoMeta && String(d.memoMeta.sourceId) === sid;
+        });
+        if (existing) return;
+        syncMemoToDone(item, { skipNotify: true });
+        changed = true;
+      });
+      const beforeMemo = state.done.length;
+      state.done = state.done.filter(function (d) {
+        if (!d || !d.memoMeta || d.memoMeta.sourceId == null) return true;
+        return Boolean(memoKeep[String(d.memoMeta.sourceId)]);
+      });
+      if (state.done.length !== beforeMemo) changed = true;
+      return changed;
     }
 
     function removeRule100DoneCopy(ruleKey, dateStr) {
@@ -132908,6 +133142,11 @@
           recordSyncTombstone(fuelScoreTombstoneId(dateStr));
         }
         state.done.splice(idx, 1);
+        if (typeof notifyAliyunDoneRealTombstone === "function") {
+          try {
+            notifyAliyunDoneRealTombstone("fuel-delete-from-done", task.id, task);
+          } catch (_fuelDoneDel) {}
+        }
         saveState();
         if (typeof notifyAliyunAmbRealAfterLocalChange === "function") {
           notifyAliyunAmbRealAfterLocalChange("fuel-delete-from-done");
@@ -132922,6 +133161,11 @@
           delete item.completedAt;
         }
         state.done.splice(idx, 1);
+        if (typeof notifyAliyunDoneRealTombstone === "function") {
+          try {
+            notifyAliyunDoneRealTombstone("memo-delete-from-done", task.id, task);
+          } catch (_memoDoneDel) {}
+        }
         saveState();
         render();
         return;
@@ -133440,7 +133684,8 @@
       if (
         listName === "done" &&
         task &&
-        task.manualDone &&
+        /* Habit 镜像走 Habit 域；其余进入 Done List 的业务行都要 tombstone */
+        !(task.habitMeta && typeof task.habitMeta === "object") &&
         typeof notifyAliyunDoneRealTombstone === "function"
       ) {
         try {
@@ -147401,6 +147646,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       /* 预设明天三赢：同一目标日只留一行，改文案不另起一条 */
       if (task && task.dailyWinTomorrowMeta && task.dailyWinTomorrowMeta.targetDateKey && task.id != null) {
         return "dwTomorrow:" + String(task.dailyWinTomorrowMeta.targetDateKey);
+      }
+      /* 清空油箱：同一评分日只留一行 */
+      if (task && task.fuelMeta && task.fuelMeta.date) {
+        return "fuel:" + String(task.fuelMeta.date);
+      }
+      /* 备忘录完成镜像：同一 sourceId 只留一行 */
+      if (task && task.memoMeta && task.memoMeta.sourceId) {
+        return "memo:" + String(task.memoMeta.sourceId);
       }
       const stripped = stripDoneTextSourcePrefixesForDedupe(task && task.text != null ? task.text : "");
       if (!stripped) return "";
@@ -165145,6 +165398,93 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return changed;
     }
 
+    /**
+     * 清空油箱 → Done 镜像安全网：
+     * fuelScores 已由 AMB 域同步；pull 后若 Done 缺行则就地补齐（skipNotify，避免拉取风暴）。
+     * 本地提交仍走 syncFuelScoreToDone → notifyAliyunDoneRealUpsert。
+     */
+    function reconcileFuelScoreDoneMirrorsFromState() {
+      if (!Array.isArray(state.done)) state.done = [];
+      const scores = Array.isArray(state.fuelScores) ? state.fuelScores : [];
+      let changed = false;
+      const keepDates = Object.create(null);
+      scores.forEach(function (fs) {
+        if (!fs || !fs.date) return;
+        const s = Number(fs.score);
+        if (!(s >= 1 && s <= 10)) return;
+        const dk = String(fs.date);
+        keepDates[dk] = true;
+        const existing = state.done.find(function (d) {
+          return d && d.fuelMeta && String(d.fuelMeta.date) === dk;
+        });
+        const note = typeof fs.note === "string" ? fs.note : "";
+        let expectText =
+          "【清空油箱】程度 " + s + "/10 · " + getEffortEmotionText(s);
+        if (note.trim()) expectText += " · " + note.trim().slice(0, 120);
+        if (existing) {
+          if (existing.text !== expectText || Number(existing.fuelMeta.score) !== s) {
+            syncFuelScoreToDone(dk, s, note, { skipNotify: true });
+            changed = true;
+          } else {
+            /* 仍可能有同日重复行 */
+            const before = state.done.length;
+            removeFuelDoneCopy(dk, { keepId: existing.id, skipNotify: true });
+            if (state.done.length !== before) changed = true;
+          }
+          return;
+        }
+        syncFuelScoreToDone(dk, s, note, { skipNotify: true });
+        changed = true;
+      });
+      /* 源已无评分：清掉对应 Done 镜像（不 tombstone 云端 Done，避免误伤他端正在写的行；由 prune/源域为准） */
+      const beforeLen = state.done.length;
+      state.done = state.done.filter(function (d) {
+        if (!d || !d.fuelMeta || !d.fuelMeta.date) return true;
+        return Boolean(keepDates[String(d.fuelMeta.date)]);
+      });
+      if (state.done.length !== beforeLen) changed = true;
+      return changed;
+    }
+
+    /**
+     * AMB 相关 Done 镜像总入口：向后衡量 + 清空油箱 + 预设明天三赢。
+     * Habit 打卡镜像仍由 Habit 域 pull 后的 repairHabitDoneMirrorsAfterAliyunHabitPull 负责。
+     */
+    function reconcileAmbDerivedDoneMirrorsFromState() {
+      let changed = false;
+      try {
+        if (
+          typeof reconcileBackwardMeasureDoneMirrorsFromState === "function" &&
+          reconcileBackwardMeasureDoneMirrorsFromState()
+        ) {
+          changed = true;
+        }
+      } catch (_bm) {
+        console.warn("[amb] reconcileBackwardMeasureDoneMirrorsFromState 失败:", _bm);
+      }
+      try {
+        if (
+          typeof reconcileFuelScoreDoneMirrorsFromState === "function" &&
+          reconcileFuelScoreDoneMirrorsFromState()
+        ) {
+          changed = true;
+        }
+      } catch (_fuel) {
+        console.warn("[amb] reconcileFuelScoreDoneMirrorsFromState 失败:", _fuel);
+      }
+      try {
+        if (
+          typeof refreshAllDailyWinTomorrowPresetDones === "function" &&
+          refreshAllDailyWinTomorrowPresetDones({ skipNotify: true })
+        ) {
+          changed = true;
+        }
+      } catch (_dw) {
+        console.warn("[amb] refreshAllDailyWinTomorrowPresetDones 失败:", _dw);
+      }
+      return changed;
+    }
+
     /** 向后衡量：某周期下已保存且正文非空的周期条数（历史累计） */
     function getBackwardMeasureSavedPeriodCount(kind) {
       ensureBackwardMeasureState();
@@ -165691,6 +166031,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       let doneHygieneChanged = refreshAllDailyWinCheckins();
       if (refreshAllDailyWinTomorrowPresetDones()) doneHygieneChanged = true;
+      try {
+        if (
+          typeof reconcileFuelScoreDoneMirrorsFromState === "function" &&
+          reconcileFuelScoreDoneMirrorsFromState()
+        ) {
+          doneHygieneChanged = true;
+        }
+      } catch (_fuelHyg) {}
       if (refreshLife4000DoneEntryTexts()) doneHygieneChanged = true;
       if (dedupeClosedListWeeklyPlanMirrorsInState()) doneHygieneChanged = true;
       if (pruneRedundantDoneEntriesInState()) doneHygieneChanged = true;
@@ -169718,11 +170066,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           persistStateToLocalStorage();
         } catch (_bootRepairErr) {}
       }
-      /* 清掉上一版 reconcile 误造的 AMB→Done 假打卡（升到 af 后仍残留的那条） */
+      /* 清掉上一版 reconcile 误造的 AMB→Done 假打卡（升到 af 后仍残留的那条）；并补齐油箱/预设明天三赢 */
       try {
         if (
-          typeof reconcileBackwardMeasureDoneMirrorsFromState === "function" &&
-          reconcileBackwardMeasureDoneMirrorsFromState()
+          typeof reconcileAmbDerivedDoneMirrorsFromState === "function"
+            ? reconcileAmbDerivedDoneMirrorsFromState()
+            : typeof reconcileBackwardMeasureDoneMirrorsFromState === "function" &&
+              reconcileBackwardMeasureDoneMirrorsFromState()
         ) {
           try {
             persistStateToLocalStorage();
