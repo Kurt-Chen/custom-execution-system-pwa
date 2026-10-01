@@ -95399,7 +95399,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930ak";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930al";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -125374,12 +125374,15 @@
 
     function createDailyWin(text, dateStr) {
       const dk = dateStr || getDailyWinTodayDateKey();
+      const now = Date.now();
       return {
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        id: now.toString(36) + Math.random().toString(36).slice(2, 7),
         text: text.trim(),
         completed: false,
         dateKey: dk,
-        createdAt: habitDateToCompletedAt(dk)
+        createdAt: habitDateToCompletedAt(dk),
+        /* AMB 同 id LWW：必须有 updatedAt，否则改文案两端平局永远偏本地 */
+        updatedAt: now
       };
     }
 
@@ -125411,11 +125414,13 @@
             id: now.toString(36) + Math.random().toString(36).slice(2, 7),
             text: text,
             completed: false,
-            createdAt: now + i
+            createdAt: now + i,
+            updatedAt: now + i
           });
         } else {
           const dw = createDailyWin(text, targetDateKey);
           dw.createdAt = (dw.createdAt || now) + i;
+          dw.updatedAt = now + i;
           state.dailyWin.unshift(dw);
         }
       });
@@ -132863,6 +132868,7 @@
         const it = state.dailyWin.find((x) => x.id === id);
         if (!it) return;
         it.text = t;
+        it.updatedAt = Date.now();
         const dk = getDailyWinItemDateKey(it);
         if (dk) {
           refreshDailyWinCheckin(dk);
