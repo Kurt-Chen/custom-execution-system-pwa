@@ -32522,7 +32522,7 @@
         font-style: normal;
       }
 
-      /* Done List 冲刺上半区跑马灯：字体对齐提醒胶囊；仅播一次；周计划不参与 */
+      /* Done List 冲刺上半区跑马灯：仅占中栏 tagline；左「当前冲刺」/右时段永不隐藏、不参与动画 */
       #doneList.done-time-block-list
         li.done-time-block--sprint-current
         .done-time-block-sprint-insert--top {
@@ -32531,8 +32531,20 @@
 
       #doneList.done-time-block-list
         li.done-time-block--sprint-current
+        .done-time-block-sprint-insert--top
+        > .done-time-block-sprint-tagline {
+        position: relative;
+        min-width: 0;
+        overflow: hidden;
+        contain: paint;
+      }
+
+      /* 只藏中栏静态恐惧公式；禁止再 visibility:hidden 整行左右 */
+      #doneList.done-time-block-list
+        li.done-time-block--sprint-current
         .done-time-block-sprint-insert--top.is-reminder-marquee-playing
-        > :not(.done-sprint-reminder-marquee-overlay) {
+        > .done-time-block-sprint-tagline
+        > .done-time-block-sprint-fear {
         visibility: hidden;
       }
 
@@ -32545,7 +32557,7 @@
         display: flex;
         align-items: center;
         box-sizing: border-box;
-        padding: 0 12px;
+        padding: 0;
         background: #fffbf5;
         border-radius: inherit;
         overflow: hidden;
@@ -32622,11 +32634,12 @@
         }
       }
 
-      /* 顶栏公式跑马灯：整组厚底胶囊滚动；Reality 仅此处换绿色 */
+      /* 顶栏公式跑马灯：只盖中栏；左右静态区保持可见 */
       #doneList.done-time-block-list
         li.done-time-block--sprint-current
         .done-time-block-sprint-insert--top.is-formula-marquee-playing
-        > :not(.done-sprint-formula-marquee-overlay) {
+        > .done-time-block-sprint-tagline
+        > .done-time-block-sprint-fear {
         visibility: hidden;
       }
 
@@ -32639,7 +32652,7 @@
         display: flex;
         align-items: center;
         box-sizing: border-box;
-        padding: 3px 12px 8px;
+        padding: 0;
         background: #fffbf5;
         border-radius: inherit;
         overflow: hidden;
@@ -95961,7 +95974,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001eq";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001er";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -142542,6 +142555,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
+    /** 「当前冲刺」行中栏：跑马灯只挂这里，勿盖住左标签/右时段 */
+    function getSprintTopMarqueeSlot(topEl) {
+      if (!topEl) return null;
+      return (
+        topEl.querySelector(":scope > .done-time-block-sprint-tagline") || topEl
+      );
+    }
+
+    function debugCurrentSprintRowCount(label) {
+      try {
+        if (!window.__DEBUG_CURRENT_SPRINT_ROW) return;
+        console.count(String(label || "current-sprint"));
+      } catch (err) {
+        /* ignore */
+      }
+    }
+
     function clearSprintReminderMarqueeOverlay(topEl) {
       if (!topEl) return;
       topEl.classList.remove("is-reminder-marquee-playing");
@@ -142556,7 +142586,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         )
         .forEach(function (el) {
           if (el.classList.contains("done-sprint-reminder-marquee-overlay")) {
-            const top = el.parentElement;
+            const top = el.closest(".done-time-block-sprint-insert--top");
             if (top) clearSprintReminderMarqueeOverlay(top);
             else el.remove();
             return;
@@ -142832,10 +142862,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      * 避免 render 重挂后看起来像反复刷新。--marquee-duration 只表示单次过场。
      * givenTotal<=0 时按终点线绿胶囊像素速度校准，避免长文案（如「于先存在」）看起来比上下两条慢。
      */
-    function mountSprintReminderMarqueeOverlay(topEl, item, totalDurationSec, elapsedSecOpt) {
+    function mountSprintReminderMarqueeOverlay(topEl, item, totalDurationSec, elapsedSecOpt, forceOpt) {
       if (!topEl || !item) return 0;
+      const slot = getSprintTopMarqueeSlot(topEl);
+      if (!slot) return 0;
+      /* 同一条已健康挂在中栏：禁止 clear+rebuild（整行闪的主因之一） */
+      if (!forceOpt && sprintReminderMarqueeOverlayHealthy(topEl, item.id)) {
+        const trackAlive = topEl.querySelector(".done-sprint-reminder-marquee__track");
+        const dur = trackAlive
+          ? parseFloat(trackAlive.style.getPropertyValue("--marquee-duration")) || 0
+          : 0;
+        return dur > 0 ? dur : sprintReminderMarqueeDurationSec(item.text);
+      }
       clearSprintReminderMarqueeOverlay(topEl);
       topEl.classList.add("is-reminder-marquee-playing");
+      debugCurrentSprintRowCount("current-sprint marquee init");
       const overlay = document.createElement("div");
       overlay.className = "done-sprint-reminder-marquee-overlay";
       overlay.setAttribute("data-marquee-item-id", String(item.id || ""));
@@ -142861,12 +142902,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       const passes = Math.max(1, Number(SPRINT_REMINDER_MARQUEE_PASSES) || 1);
       const givenTotal = Number(totalDurationSec) || 0;
-      /* 挂载前估速并写满 duration；禁止 append 后再测宽改 style（整条横条闪） */
+      /* 挂载前按中栏宽度估速；只 append 到 tagline，不动左/右 */
       let passSec =
         givenTotal > 0
           ? Math.max(1, givenTotal / passes)
           : estimateSprintMarqueePassSecForHost(
-              topEl,
+              slot,
               item.text,
               sprintReminderMarqueeDurationSec(item.text),
               1.45
@@ -142880,7 +142921,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       viewport.appendChild(track);
       overlay.appendChild(viewport);
-      topEl.appendChild(overlay);
+      slot.appendChild(overlay);
       startSprintMarqueeTrackRunning(track);
       return passSec;
     }
@@ -142893,8 +142934,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       );
     }
     /** 跑马灯结束后：清遮罩，并确保顶栏恐惧公式 + 底栏 Your Reality 与播前一致 */
+    /** 跑马灯结束后：只清中栏遮罩；左「当前冲刺」/右时段已存在则绝不重建、不重写 */
     function restoreDoneSprintStripLayoutAfterMarquee() {
       clearAllSprintReminderMarqueeOverlays();
+      if (typeof clearAllSprintFormulaMarqueeOverlays === "function") {
+        clearAllSprintFormulaMarqueeOverlays();
+      }
       document
         .querySelectorAll("#doneList li.done-time-block--sprint-current")
         .forEach(function (blockLi) {
@@ -142906,7 +142951,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             ).forEach(function (n) {
               n.remove();
             });
-            let leftWrap = top.querySelector(".done-time-block-sprint-insert-left");
+            let leftWrap = top.querySelector(":scope > .done-time-block-sprint-insert-left");
             if (!leftWrap) {
               leftWrap = document.createElement("span");
               leftWrap.className = "done-time-block-sprint-insert-left";
@@ -142920,7 +142965,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               leftWrap.appendChild(lab);
               top.insertBefore(leftWrap, top.firstChild);
             }
-            let tagline = top.querySelector(".done-time-block-sprint-tagline");
+            let tagline = top.querySelector(":scope > .done-time-block-sprint-tagline");
             if (!tagline) {
               tagline = document.createElement("span");
               tagline.className =
@@ -142931,16 +142976,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             if (!tagline.querySelector(".done-time-block-sprint-fear")) {
               appendDoneSprintHeadFearFormula(tagline);
             }
-            let rangeEl = top.querySelector(".done-time-block-sprint-range");
+            let rangeEl = top.querySelector(":scope > .done-time-block-sprint-range");
             if (!rangeEl) {
               rangeEl = document.createElement("span");
               rangeEl.className = "done-time-block-sprint-range";
               top.appendChild(rangeEl);
             }
+            /* 时段小时内不变：已有文案则 skip */
             if (!String(rangeEl.textContent || "").trim()) {
               const block =
                 typeof getActiveDoneTimeBlock === "function" ? getActiveDoneTimeBlock() : null;
-              rangeEl.textContent = block && block.range ? block.range : "";
+              const nextRange = block && block.range ? String(block.range) : "";
+              if (nextRange) rangeEl.textContent = nextRange;
             }
           }
           const urgency = blockLi.querySelector(".done-time-block-sprint-urgency");
@@ -143027,9 +143074,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       sprintReminderMarqueeState.playDurationMs = playMs;
       sprintReminderMarqueeState.playEndsAt = sprintReminderMarqueeState.playStartedAt + playMs;
       clearSprintReminderMarqueeFinishTimer();
-      /* 仅 reduceMotion 缩短总时长时才重挂第一条；其它 tops 用最终时长一次挂上 */
+      /* 仅 reduceMotion 缩短总时长时才强制重挂第一条；其它 tops 用最终时长一次挂上 */
       if (reduceMotion && Math.abs(playMs / 1000 - durationSec) > 0.05) {
-        mountSprintReminderMarqueeOverlay(tops[0], item, playMs / 1000, 0);
+        mountSprintReminderMarqueeOverlay(tops[0], item, playMs / 1000, 0, true);
       }
       for (let i = 1; i < tops.length; i++) {
         mountSprintReminderMarqueeOverlay(tops[i], item, playMs / 1000, 0);
@@ -143307,7 +143354,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         )
         .forEach(function (el) {
           if (el.classList.contains("done-sprint-formula-marquee-overlay")) {
-            const top = el.parentElement;
+            const top = el.closest(".done-time-block-sprint-insert--top");
             if (top) clearSprintFormulaMarqueeOverlay(top);
             else el.remove();
             return;
@@ -143537,10 +143584,20 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       track.appendChild(host);
     }
 
-    function mountSprintFormulaMarqueeOverlay(topEl, kind, totalDurationSec, elapsedSecOpt) {
+    function mountSprintFormulaMarqueeOverlay(topEl, kind, totalDurationSec, elapsedSecOpt, forceOpt) {
       if (!topEl || !kind) return 0;
+      const slot = getSprintTopMarqueeSlot(topEl);
+      if (!slot) return 0;
+      if (!forceOpt && sprintFormulaMarqueeOverlayHealthy(topEl, kind)) {
+        const trackAlive = topEl.querySelector(".done-sprint-formula-marquee__track");
+        const dur = trackAlive
+          ? parseFloat(trackAlive.style.getPropertyValue("--marquee-duration")) || 0
+          : 0;
+        return dur > 0 ? dur : sprintFormulaMarqueeDurationSec(kind);
+      }
       clearSprintFormulaMarqueeOverlay(topEl);
       topEl.classList.add("is-formula-marquee-playing");
+      debugCurrentSprintRowCount("current-sprint marquee init");
       const overlay = document.createElement("div");
       overlay.className = "done-sprint-formula-marquee-overlay";
       overlay.setAttribute("data-formula-kind", kind);
@@ -143562,7 +143619,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         givenTotal > 0
           ? Math.max(1, givenTotal / passes)
           : estimateSprintMarqueePassSecForHost(
-              topEl,
+              slot,
               formulaText,
               sprintFormulaMarqueeDurationSec(kind),
               sprintFormulaMarqueeSpeedMul(kind)
@@ -143576,7 +143633,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       viewport.appendChild(track);
       overlay.appendChild(viewport);
-      topEl.appendChild(overlay);
+      slot.appendChild(overlay);
       startSprintMarqueeTrackRunning(track);
       return passSec;
     }
@@ -143625,7 +143682,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       sprintFormulaMarqueeState.playEndsAt = sprintFormulaMarqueeState.playStartedAt + playMs;
       clearSprintFormulaMarqueeFinishTimer();
       if (reduceMotion && Math.abs(playMs / 1000 - durationSec) > 0.05) {
-        mountSprintFormulaMarqueeOverlay(tops[0], kind, playMs / 1000, 0);
+        mountSprintFormulaMarqueeOverlay(tops[0], kind, playMs / 1000, 0, true);
       }
       for (let i = 1; i < tops.length; i++) {
         mountSprintFormulaMarqueeOverlay(tops[i], kind, playMs / 1000, 0);
@@ -145272,6 +145329,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
       const top = document.createElement("div");
       top.className = "done-time-block-sprint-insert done-time-block-sprint-insert--top";
+      debugCurrentSprintRowCount("current-sprint render");
       const leftWrap = document.createElement("span");
       leftWrap.className = "done-time-block-sprint-insert-left";
       const dot = document.createElement("span");
