@@ -14,8 +14,8 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 const sw = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");
 
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001eo"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001eo"/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001ep"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001ep"/);
 
 /* 序列化必须带镜像 meta */
 assert.match(html, /out\.fuelMeta = meta/);
@@ -60,6 +60,9 @@ assert.match(html, /allowRemove: true/);
 assert.match(html, /refreshAllDailyWinTomorrowPresetDones\(\{ skipNotify: true \}\)/);
 assert.match(html, /meta-gate seed SKIP not-confirmed-missing/);
 assert.match(html, /floor lastSeen/);
+assert.match(html, /verify-retry-rmw/);
+assert.match(html, /aliyunHabitRealHealLocalOnlySlotsAfterPull/);
+assert.match(html, /heal onlyLocal→cloud/);
 
 /** 纯逻辑：不足 3 条且无 allowRemove 时不得删已有 Done */
 function planDwTomorrowSync(refCount, hasDone, allowRemove) {

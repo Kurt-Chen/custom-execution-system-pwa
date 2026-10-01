@@ -95780,7 +95780,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001eo";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001ep";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -107480,6 +107480,64 @@
       }, 80);
     }
 
+    /**
+     * pull 合并后：本机有 revisedAt 且已打卡、云端缺/更旧的槽（含 journal）再 upsert。
+     * 对抗 Habit 整包 POST 的 RMW：后写其它槽会盖掉先写的 journal。
+     */
+    function aliyunHabitRealHealLocalOnlySlotsAfterPull(remoteHc) {
+      if (!isAliyunHabitRealSyncEnabled() || aliyunHabitRealSuppressPush) return 0;
+      const dateKey =
+        typeof formatDateInputValue === "function"
+          ? formatDateInputValue(new Date())
+          : "";
+      if (!dateKey) return 0;
+      const localDay =
+        state.habitCheckins && typeof state.habitCheckins === "object"
+          ? state.habitCheckins[dateKey]
+          : null;
+      if (!localDay || typeof localDay !== "object") return 0;
+      const remoteDay =
+        remoteHc && typeof remoteHc === "object" ? remoteHc[dateKey] || {} : {};
+      const keys = Object.keys(localDay);
+      let n = 0;
+      const healed = [];
+      for (let i = 0; i < keys.length; i++) {
+        const habitKey = keys[i];
+        if (habitKey === "dailyThreeWinsDoneSuppressed") continue;
+        const locVal = localDay[habitKey];
+        const locRev =
+          typeof getHabitCheckinRevisionTime === "function"
+            ? getHabitCheckinRevisionTime(locVal)
+            : Number(locVal && locVal.revisedAt) || 0;
+        if (!(locRev > 0)) continue;
+        if (
+          typeof isHabitCheckinValueChecked === "function" &&
+          !isHabitCheckinValueChecked(locVal)
+        ) {
+          continue;
+        }
+        const cloudVal = remoteDay[habitKey];
+        const cloudRev =
+          typeof getHabitCheckinRevisionTime === "function"
+            ? getHabitCheckinRevisionTime(cloudVal)
+            : Number(cloudVal && cloudVal.revisedAt) || 0;
+        const missing = cloudVal == null || cloudVal === false;
+        if (!missing && !(locRev > cloudRev)) continue;
+        notifyAliyunHabitRealUpsert("heal-onlyLocal", dateKey, habitKey, locVal);
+        healed.push(habitKey + (missing ? ":miss" : ":newer"));
+        n += 1;
+      }
+      if (n) {
+        aliyunHabitRealAppendLog(
+          "[habit-done-chain] heal onlyLocal→cloud n=" +
+            n +
+            " keys=" +
+            healed.join(",")
+        );
+      }
+      return n;
+    }
+
     function notifyAliyunHabitRealUpsert(reason, dateKey, habitKey, value) {
       if (!isAliyunHabitRealSyncEnabled() || aliyunHabitRealSuppressPush) {
         aliyunHabitRealAppendLog(
@@ -107764,7 +107822,7 @@
               (_bumpErr && _bumpErr.message ? _bumpErr.message : String(_bumpErr))
           );
         }
-        /* 回读确认：这批 id 是否真的落在云端文档 */
+        /* 回读确认：这批 id 是否真的落在云端文档；缺槽=整包 RMW 被后写盖掉 → 重排队再 POST */
         try {
           const tVerify0 = Date.now();
           const verifyRes = await aliyunExpFetchJson(
@@ -107791,6 +107849,24 @@
                 " missing=" +
                 (cloudMissing.length ? cloudMissing.join(",") : "(none)")
             );
+            if (cloudMissing.length) {
+              const uniqMiss = {};
+              for (let mi = 0; mi < batch.length; mi++) {
+                const mut = batch[mi] && batch[mi].mutation;
+                const mid = mut && mut.id ? String(mut.id) : "";
+                if (!mid || cloudMissing.indexOf(mid) < 0 || uniqMiss[mid]) continue;
+                const retries = Number(mut._verifyRetryCount) || 0;
+                if (retries >= 3) continue;
+                mut._verifyRetryCount = retries + 1;
+                uniqMiss[mid] = true;
+                scheduleAliyunHabitRealSync("verify-retry-rmw", mut);
+              }
+              aliyunHabitRealAppendLog(
+                "[habit-done-chain] step1 verify MISS requeue=" +
+                  Object.keys(uniqMiss).join(",") +
+                  " (整包后写盖槽，重传)"
+              );
+            }
           } else {
             aliyunHabitRealAppendLog(
               "flush verify GET failed status=" + (verifyRes && verifyRes.status)
@@ -108093,6 +108169,15 @@
         } finally {
           cloudSyncSuppressPush = prevCloudSuppress;
           aliyunHabitRealSuppressPush = false;
+        }
+        /* suppress 已关：把本机有、云端缺/更旧的槽（含 journal）回补上云，修 RMW 盖槽 */
+        try {
+          aliyunHabitRealHealLocalOnlySlotsAfterPull(remoteHc);
+        } catch (_healErr) {
+          aliyunHabitRealAppendLog(
+            "[habit-done-chain] heal onlyLocal error: " +
+              (_healErr && _healErr.message ? _healErr.message : String(_healErr))
+          );
         }
         mergeMs = Date.now() - tMerge0;
 
