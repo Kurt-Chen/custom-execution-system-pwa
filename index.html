@@ -106890,6 +106890,327 @@
         .replace(/\/+$/, "");
     }
 
+    /**
+     * Phase 1a · Habit 独立 meta gate（仅 Habit；不改其它域 / FC / merge）。
+     * 5s 只 GET 极小 meta；version 未变则不下 Habit 正文。
+     * 回退：window.setAliyunSyncMetaGateEnabled(false) 后立即恢复每 5s Habit 正文 GET。
+     */
+    const ALIYUN_SYNC_META_GATE_STORAGE_KEY = "todo-app-aliyun-sync-meta-gate-v1";
+    const ALIYUN_HABIT_META_KIND = "domain-meta-v1";
+    const ALIYUN_HABIT_META_SAFETY_FULL_MS = 12 * 60 * 1000;
+    let aliyunHabitMetaLastSeenV = null;
+    let aliyunHabitMetaBootBodyDone = false;
+    let aliyunHabitMetaLastSafetyFullAt = 0;
+
+    function isAliyunSyncMetaGateEnabled() {
+      try {
+        if (window.__ALIYUN_SYNC_META_GATE_ENABLED === false) return false;
+        if (window.__ALIYUN_SYNC_META_GATE_ENABLED === true) return true;
+      } catch (_w) {}
+      try {
+        const v = localStorage.getItem(ALIYUN_SYNC_META_GATE_STORAGE_KEY);
+        if (v === "0" || v === "false") return false;
+        if (v === "1" || v === "true") return true;
+      } catch (_ls) {}
+      /* Phase 1a 默认开；一键关闭即可回旧路径 */
+      return true;
+    }
+
+    function setAliyunSyncMetaGateEnabled(enabled) {
+      const on = !!enabled;
+      try {
+        window.__ALIYUN_SYNC_META_GATE_ENABLED = on;
+      } catch (_w) {}
+      try {
+        localStorage.setItem(ALIYUN_SYNC_META_GATE_STORAGE_KEY, on ? "1" : "0");
+      } catch (_ls) {}
+      if (!on) {
+        /* 关闭后清空门闩状态，避免再打开时误跳过 */
+        aliyunHabitMetaLastSeenV = null;
+        aliyunHabitMetaBootBodyDone = false;
+        aliyunHabitMetaLastSafetyFullAt = 0;
+      }
+      try {
+        console.log(
+          "[aliyun-habit-meta-gate]",
+          on
+            ? "已开启（Habit 5s 只拉 meta；version 变才拉正文；12 分钟安全全量）"
+            : "已关闭（Habit 恢复每 5s 正文 GET 旧路径）"
+        );
+      } catch (_c) {}
+      return on;
+    }
+
+    function aliyunHabitMetaDocId() {
+      return "aliyun-meta-v1-habit-" + getAliyunSyncRoomIdForDocs();
+    }
+
+    function aliyunHabitMetaParsePayload(rawPayload) {
+      let p = rawPayload;
+      if (typeof p === "string") {
+        try {
+          p = JSON.parse(p);
+        } catch (_e) {
+          return null;
+        }
+      }
+      if (!p || typeof p !== "object") return null;
+      const v = Number(p.v);
+      if (!Number.isFinite(v) || v < 0) return null;
+      return {
+        kind: String(p.kind || ALIYUN_HABIT_META_KIND),
+        domain: String(p.domain || "habit"),
+        roomId: p.roomId != null ? String(p.roomId) : "",
+        v: v,
+        at: Number(p.at) || 0
+      };
+    }
+
+    /** GET Habit 独立 meta；不下载 Habit 正文。 */
+    async function aliyunHabitMetaFetch() {
+      const base = aliyunHabitRealBaseUrl();
+      const metaId = aliyunHabitMetaDocId();
+      if (!base || aliyunExpHasForbiddenSecret(base)) {
+        return { ok: false, missing: false, parseError: true, error: "bad-url", metaId: metaId };
+      }
+      const getRes = await aliyunExpFetchJson(
+        "GET",
+        base + "/smoke/" + encodeURIComponent(metaId),
+        null
+      );
+      if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+        return { ok: true, missing: true, parseError: false, v: null, at: 0, metaId: metaId };
+      }
+      if (!getRes.ok) {
+        return {
+          ok: false,
+          missing: false,
+          parseError: true,
+          error: "GET HTTP " + getRes.status,
+          metaId: metaId,
+          status: getRes.status
+        };
+      }
+      const row = getRes.data && getRes.data.data;
+      const attrs = (row && (row.attrs || row)) || {};
+      const parsed = aliyunHabitMetaParsePayload(attrs.payload != null ? attrs.payload : attrs);
+      if (!parsed) {
+        return { ok: false, missing: false, parseError: true, error: "parse", metaId: metaId };
+      }
+      return {
+        ok: true,
+        missing: false,
+        parseError: false,
+        v: parsed.v,
+        at: parsed.at,
+        metaId: metaId,
+        payload: parsed
+      };
+    }
+
+    /**
+     * 决定本轮是否 GET Habit 正文。
+     * 必须先看独立 meta，禁止先下正文再比 hash。
+     */
+    async function aliyunHabitMetaGateDecidePull() {
+      if (!isAliyunSyncMetaGateEnabled()) {
+        return { fetchBody: true, reason: "gate-off" };
+      }
+      const now = Date.now();
+      const needBoot = !aliyunHabitMetaBootBodyDone;
+      const needSafety =
+        !needBoot &&
+        (aliyunHabitMetaLastSafetyFullAt <= 0 ||
+          now - aliyunHabitMetaLastSafetyFullAt >= ALIYUN_HABIT_META_SAFETY_FULL_MS);
+
+      let meta;
+      try {
+        meta = await aliyunHabitMetaFetch();
+      } catch (err) {
+        return {
+          fetchBody: true,
+          reason: "meta-fetch-error",
+          seedNeeded: true,
+          error: err && err.message ? err.message : String(err)
+        };
+      }
+
+      if (!meta.ok || meta.parseError) {
+        return {
+          fetchBody: true,
+          reason: "meta-parse-fail",
+          seedNeeded: true,
+          remoteV: null,
+          error: meta.error
+        };
+      }
+      if (meta.missing) {
+        return {
+          fetchBody: true,
+          reason: needBoot ? "boot-meta-404" : "meta-404",
+          seedNeeded: true,
+          remoteV: null,
+          forceSafety: needSafety
+        };
+      }
+
+      if (needBoot) {
+        return {
+          fetchBody: true,
+          reason: "boot",
+          seedNeeded: false,
+          remoteV: meta.v,
+          forceSafety: false
+        };
+      }
+      if (needSafety) {
+        return {
+          fetchBody: true,
+          reason: "safety-full",
+          seedNeeded: false,
+          remoteV: meta.v,
+          forceSafety: true
+        };
+      }
+      if (aliyunHabitMetaLastSeenV != null && Number(meta.v) === Number(aliyunHabitMetaLastSeenV)) {
+        return {
+          fetchBody: false,
+          reason: "meta-unchanged",
+          seedNeeded: false,
+          remoteV: meta.v
+        };
+      }
+      return {
+        fetchBody: true,
+        reason: "meta-changed",
+        seedNeeded: false,
+        remoteV: meta.v
+      };
+    }
+
+    /** 写入 Habit meta；禁止 version 回退（整包 POST 单域文档，无跨域覆盖）。 */
+    async function aliyunHabitMetaWriteVersion(nextV, atOpt) {
+      const base = aliyunHabitRealBaseUrl();
+      const metaId = aliyunHabitMetaDocId();
+      if (!base || aliyunExpHasForbiddenSecret(base)) {
+        return { ok: false, error: "bad-url" };
+      }
+      const v = Number(nextV);
+      if (!Number.isFinite(v) || v < 1) {
+        return { ok: false, error: "bad-v" };
+      }
+      const payload = {
+        kind: ALIYUN_HABIT_META_KIND,
+        domain: "habit",
+        roomId: String(
+          (typeof getAliyunSyncRoomIdForDocs === "function" && getAliyunSyncRoomIdForDocs()) ||
+            cloudSyncRoomId ||
+            ""
+        ),
+        v: v,
+        at: Number(atOpt) || Date.now()
+      };
+      const putRes = await aliyunExpFetchJson("POST", base + "/smoke", {
+        id: metaId,
+        payload: payload
+      });
+      if (!putRes.ok) {
+        return {
+          ok: false,
+          error: "upload HTTP " + putRes.status,
+          status: putRes.status,
+          v: v,
+          metaId: metaId
+        };
+      }
+      return { ok: true, v: v, metaId: metaId, payload: payload };
+    }
+
+    /** meta 404/坏数据时种子；v 至少为 1，不回退更高版本。 */
+    async function aliyunHabitMetaSeedIfNeeded(atOpt) {
+      try {
+        const fresh = await aliyunHabitMetaFetch();
+        if (fresh.ok && !fresh.missing && !fresh.parseError && Number(fresh.v) >= 1) {
+          return { ok: true, seeded: false, v: Number(fresh.v) };
+        }
+        const plannedV = 1;
+        const wr = await aliyunHabitMetaWriteVersion(plannedV, atOpt);
+        if (!wr.ok) {
+          aliyunHabitRealAppendLog("meta-gate seed FAIL: " + (wr.error || ""));
+          return { ok: false, seeded: false, error: wr.error };
+        }
+        aliyunHabitRealAppendLog("meta-gate seed ok v=" + plannedV + " id=" + wr.metaId);
+        return { ok: true, seeded: true, v: plannedV };
+      } catch (err) {
+        const msg = err && err.message ? err.message : String(err);
+        aliyunHabitRealAppendLog("meta-gate seed error: " + msg);
+        return { ok: false, seeded: false, error: msg };
+      }
+    }
+
+    /**
+     * Habit 正文 POST 成功后再 bump 独立 meta。
+     * plannedV = (freshMeta.v || 0) + 1；写入前再取 max 防止旧值回退。
+     */
+    async function aliyunHabitMetaBumpAfterUpload(atOpt) {
+      if (!isAliyunSyncMetaGateEnabled()) return { ok: false, skipped: true, reason: "gate-off" };
+      try {
+        const fresh = await aliyunHabitMetaFetch();
+        let freshV = 0;
+        if (fresh.ok && !fresh.missing && !fresh.parseError) {
+          freshV = Number(fresh.v) || 0;
+        } else if (!fresh.missing && fresh.parseError) {
+          aliyunHabitRealAppendLog("meta-gate bump: fresh parse/GET 异常，按 v=0 重种子+1");
+          freshV = 0;
+        }
+        const plannedV = (freshV || 0) + 1;
+        /* 禁止回退：单域文档写 plannedV；若并发已写得更高，再读一次取 max 后重写 */
+        let writeV = plannedV;
+        const wr = await aliyunHabitMetaWriteVersion(writeV, atOpt);
+        if (!wr.ok) {
+          aliyunHabitRealAppendLog(
+            "meta-gate bump FAIL plannedV=" + plannedV + " " + (wr.error || "")
+          );
+          return { ok: false, plannedV: plannedV, error: wr.error };
+        }
+        try {
+          const verify = await aliyunHabitMetaFetch();
+          if (verify.ok && !verify.missing && !verify.parseError) {
+            const remoteV = Number(verify.v) || 0;
+            if (remoteV < writeV) {
+              const repairV = writeV;
+              const wr2 = await aliyunHabitMetaWriteVersion(repairV, atOpt);
+              if (wr2.ok) {
+                aliyunHabitMetaLastSeenV = repairV;
+                aliyunHabitRealAppendLog("meta-gate bump repaired v=" + repairV);
+                return { ok: true, v: repairV, repaired: true };
+              }
+            } else if (remoteV > writeV) {
+              /* 并发同域已推到更高：不回退，对齐 lastSeen */
+              aliyunHabitMetaLastSeenV = remoteV;
+              aliyunHabitRealAppendLog(
+                "meta-gate bump concurrent higher remoteV=" + remoteV + " (kept)"
+              );
+              return { ok: true, v: remoteV, concurrentHigher: true };
+            }
+            aliyunHabitMetaLastSeenV = remoteV > 0 ? remoteV : writeV;
+          } else {
+            aliyunHabitMetaLastSeenV = writeV;
+          }
+        } catch (_vf) {
+          aliyunHabitMetaLastSeenV = writeV;
+        }
+        aliyunHabitRealAppendLog(
+          "meta-gate bump ok v=" + aliyunHabitMetaLastSeenV + " id=" + aliyunHabitMetaDocId()
+        );
+        return { ok: true, v: aliyunHabitMetaLastSeenV };
+      } catch (err) {
+        const msg = err && err.message ? err.message : String(err);
+        aliyunHabitRealAppendLog("meta-gate bump error: " + msg);
+        return { ok: false, error: msg };
+      }
+    }
+
     function aliyunHabitRealSlotId(dateKey, habitKey) {
       return String(dateKey || "") + "|" + String(habitKey || "");
     }
@@ -107335,6 +107656,26 @@
           );
         }
         ok = true;
+        /* 正文成功后再 bump Habit 独立 meta（失败不回滚正文；靠 12 分钟安全全量兜底） */
+        try {
+          const bumpAt =
+            envAfterApply && envAfterApply.envelopeUpdatedAt
+              ? envAfterApply.envelopeUpdatedAt
+              : Date.now();
+          const tBump0 = Date.now();
+          const bumpRes = await aliyunHabitMetaBumpAfterUpload(bumpAt);
+          networkWaitMs += Date.now() - tBump0;
+          if (!(bumpRes && bumpRes.ok) && !(bumpRes && bumpRes.skipped)) {
+            aliyunHabitRealAppendLog(
+              "flush meta bump soft-fail: " + ((bumpRes && bumpRes.error) || "unknown")
+            );
+          }
+        } catch (_bumpErr) {
+          aliyunHabitRealAppendLog(
+            "flush meta bump error: " +
+              (_bumpErr && _bumpErr.message ? _bumpErr.message : String(_bumpErr))
+          );
+        }
         /* 回读确认：这批 id 是否真的落在云端文档 */
         try {
           const tVerify0 = Date.now();
@@ -107429,14 +107770,66 @@
       let ok = false;
       let errMsg = "";
       let mergedDates = 0;
+      let metaGateDecision = null;
+      let skippedBodyByMeta = false;
       try {
-        aliyunHabitRealAppendLog("拉取 Habit docId=" + docId);
+        /* Phase 1a：先决 Habit 独立 meta；未变则不下正文（visibility/5s 共用此路径） */
+        if (isAliyunSyncMetaGateEnabled()) {
+          const tMeta0 = Date.now();
+          metaGateDecision = await aliyunHabitMetaGateDecidePull();
+          networkWaitMs += Date.now() - tMeta0;
+          aliyunHabitRealAppendLog(
+            "meta-gate decide: reason=" +
+              (metaGateDecision.reason || "") +
+              " fetchBody=" +
+              !!metaGateDecision.fetchBody +
+              " remoteV=" +
+              (metaGateDecision.remoteV != null ? metaGateDecision.remoteV : "null") +
+              " lastSeen=" +
+              (aliyunHabitMetaLastSeenV != null ? aliyunHabitMetaLastSeenV : "null")
+          );
+          if (!metaGateDecision.fetchBody) {
+            skippedBodyByMeta = true;
+            ok = true;
+            aliyunHabitRealAppendLog(
+              "meta-gate skip Habit body GET (no parse/merge/render) v=" +
+                metaGateDecision.remoteV
+            );
+            return {
+              ok: true,
+              skippedBody: true,
+              metaV: metaGateDecision.remoteV,
+              reason: metaGateDecision.reason,
+              docId: docId
+            };
+          }
+        }
+
+        aliyunHabitRealAppendLog(
+          "拉取 Habit docId=" +
+            docId +
+            (metaGateDecision ? " via=" + metaGateDecision.reason : " via=gate-off")
+        );
         const tDl0 = Date.now();
         const getRes = await aliyunExpFetchJson("GET", base + "/smoke/" + encodeURIComponent(docId), null);
         downloadMs = Date.now() - tDl0;
         networkWaitMs += downloadMs;
         if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
           aliyunHabitRealAppendLog("云端尚无 Habit 文档（首次写入前正常）");
+          if (isAliyunSyncMetaGateEnabled()) {
+            aliyunHabitMetaBootBodyDone = true;
+            if (metaGateDecision && metaGateDecision.forceSafety) {
+              aliyunHabitMetaLastSafetyFullAt = Date.now();
+            }
+            if (metaGateDecision && metaGateDecision.seedNeeded) {
+              const seedRes = await aliyunHabitMetaSeedIfNeeded(Date.now());
+              if (seedRes && seedRes.ok && seedRes.v != null) {
+                aliyunHabitMetaLastSeenV = seedRes.v;
+              }
+            } else if (metaGateDecision && metaGateDecision.remoteV != null) {
+              aliyunHabitMetaLastSeenV = metaGateDecision.remoteV;
+            }
+          }
           ok = true;
           return { ok: true, empty: true, docId: docId };
         }
@@ -107485,6 +107878,26 @@
             aliyunHabitRealAppendLog("拉取无变化，但已补齐缺失的 Habit→Done 镜像");
           } else {
             aliyunHabitRealAppendLog("拉取无变化，跳过 merge/render");
+          }
+          if (isAliyunSyncMetaGateEnabled()) {
+            aliyunHabitMetaBootBodyDone = true;
+            if (metaGateDecision && metaGateDecision.forceSafety) {
+              aliyunHabitMetaLastSafetyFullAt = Date.now();
+            } else if (
+              metaGateDecision &&
+              metaGateDecision.reason === "boot" &&
+              aliyunHabitMetaLastSafetyFullAt <= 0
+            ) {
+              aliyunHabitMetaLastSafetyFullAt = Date.now();
+            }
+            if (metaGateDecision && metaGateDecision.seedNeeded) {
+              const seedRes = await aliyunHabitMetaSeedIfNeeded(Date.now());
+              if (seedRes && seedRes.ok && seedRes.v != null) {
+                aliyunHabitMetaLastSeenV = seedRes.v;
+              }
+            } else if (metaGateDecision && metaGateDecision.remoteV != null) {
+              aliyunHabitMetaLastSeenV = metaGateDecision.remoteV;
+            }
           }
           ok = true;
           return { ok: true, unchanged: true, doneRepaired: doneRepaired, docId: docId };
@@ -107567,6 +107980,26 @@
         renderMs = Date.now() - tRen0;
         aliyunSyncPrimaryMarkPullFingerprint("habit", habitPullFp);
         ok = true;
+        if (isAliyunSyncMetaGateEnabled()) {
+          aliyunHabitMetaBootBodyDone = true;
+          if (metaGateDecision && metaGateDecision.forceSafety) {
+            aliyunHabitMetaLastSafetyFullAt = Date.now();
+          } else if (metaGateDecision && metaGateDecision.reason === "boot") {
+            /* boot 也算对齐一次安全水位，避免紧接着再打 safety-full */
+            if (aliyunHabitMetaLastSafetyFullAt <= 0) {
+              aliyunHabitMetaLastSafetyFullAt = Date.now();
+            }
+          }
+          if (metaGateDecision && metaGateDecision.seedNeeded) {
+            const seedAt = Number(env && env.envelopeUpdatedAt) || Date.now();
+            const seedRes = await aliyunHabitMetaSeedIfNeeded(seedAt);
+            if (seedRes && seedRes.ok && seedRes.v != null) {
+              aliyunHabitMetaLastSeenV = seedRes.v;
+            }
+          } else if (metaGateDecision && metaGateDecision.remoteV != null) {
+            aliyunHabitMetaLastSeenV = metaGateDecision.remoteV;
+          }
+        }
         aliyunHabitRealAppendLog(
           "合并完成：云端日期数 " + mergedDates + "，槽位数 " + itemIds.length
         );
@@ -107579,7 +108012,11 @@
         lt.stop();
         aliyunHabitRealLogReport({
           ok: ok,
-          reason: "manual pull",
+          reason: skippedBodyByMeta
+            ? "meta-gate-skip"
+            : metaGateDecision && metaGateDecision.reason
+              ? "pull:" + metaGateDecision.reason
+              : "manual pull",
           docId: docId,
           payloadKB: payloadKB,
           uploadMs: 0,
@@ -107593,6 +108030,11 @@
           networkWaitMs: networkWaitMs,
           mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
           mergedDates: mergedDates,
+          skippedBody: skippedBodyByMeta || undefined,
+          metaV:
+            metaGateDecision && metaGateDecision.remoteV != null
+              ? metaGateDecision.remoteV
+              : undefined,
           error: errMsg || undefined
         });
       }
@@ -107601,6 +108043,9 @@
     try {
       window.runAliyunHabitRealPullAndMerge = runAliyunHabitRealPullAndMerge;
       window.isAliyunHabitRealSyncEnabled = isAliyunHabitRealSyncEnabled;
+      window.isAliyunSyncMetaGateEnabled = isAliyunSyncMetaGateEnabled;
+      window.setAliyunSyncMetaGateEnabled = setAliyunSyncMetaGateEnabled;
+      window.aliyunHabitMetaDocId = aliyunHabitMetaDocId;
       /*
        * Habit 拉取原先只在本次页面启动时跑一次。
        * 手机 PWA 常驻时，电脑后写入的槽不会再被拉下来，表现为电脑→手机失败。
