@@ -617,6 +617,17 @@
       color: #64748b;
     }
 
+    /* 发现新版本：角标可点，禁止自动整页刷新 */
+    .app-version-badge.app-version-badge--update-available,
+    .app-status-badge-cluster .app-version-badge.app-version-badge--update-available {
+      pointer-events: auto;
+      cursor: pointer;
+      color: #1d4ed8;
+      border-color: #93c5fd;
+      background: #eff6ff;
+      font-weight: 600;
+    }
+
     .cloud-sync-panel-overlay {
       position: fixed;
       inset: 0;
@@ -95855,7 +95866,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001ep";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001eq";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -103940,6 +103951,20 @@
           return;
         }
         if (shouldSkipCloudUiRender()) return;
+        /* 无脏切片则跳过：避免阿里云/Firebase 通知导致空整页重绘 */
+        if (
+          uiPaintDirty != null &&
+          typeof UI_PAINT_SLICE_KEYS !== "undefined" &&
+          !UI_PAINT_SLICE_KEYS.some(function (k) {
+            return uiPaintDirty[k];
+          }) &&
+          !heavyModulesDepDirty
+        ) {
+          if (typeof logSyncNoDataChangeSkipRender === "function") {
+            logSyncNoDataChangeSkipRender("cloud-ui");
+          }
+          return;
+        }
         render();
       }, CLOUD_SYNC_RENDER_DEBOUNCE_MS);
     }
@@ -104376,6 +104401,12 @@
     }
 
     function setAppVersionText(label) {
+      try {
+        if (typeof window !== "undefined" && window.__APP_UPDATE_AVAILABLE) {
+          if (typeof paintAppUpdateAvailableBadge === "function") paintAppUpdateAvailableBadge();
+          return;
+        }
+      } catch (_updGuard) {}
       const raw = label != null && String(label).trim() !== "" ? String(label) : null;
       const suffix = raw || String(APP_CACHE_NAME_FOR_BADGE || "").replace(/^exec-system-pwa-/, "") || "unknown";
       const t = "版本 " + suffix;
@@ -104386,53 +104417,152 @@
       });
     }
 
+    /**
+     * 版本更新与业务数据同步彻底分离：
+     * 仅代码/CACHE_NAME 变化时提示「发现新版本 · 点击刷新」；禁止自动 location.reload。
+     */
+    let appUpdatePromptShown = false;
+    let appUpdatePendingRemoteCacheName = "";
+    let appUpdatePendingRegistration = null;
+    let appUpdateUserRequestedReload = false;
+    let appUpdateClickBound = false;
+
+    function logVersionNewBuildDetected(remoteCacheName) {
+      if (appUpdatePromptShown) return;
+      try {
+        console.log(
+          "[VERSION] new build detected",
+          remoteCacheName ? String(remoteCacheName) : ""
+        );
+      } catch (_vLog) {}
+    }
+
+    function paintAppUpdateAvailableBadge() {
+      const t = "发现新版本 · 点击刷新";
+      [appVersionBadge, appVersionBadgeNav].forEach(function (el) {
+        if (!el) return;
+        el.textContent = t;
+        el.classList.add("app-version-badge--update-available");
+        el.setAttribute("role", "button");
+        el.setAttribute("tabindex", "0");
+        el.setAttribute("title", t);
+        el.setAttribute("aria-label", t);
+      });
+    }
+
+    /** 用户主动点击后才清 SW / Cache 并硬刷新 */
+    async function forceClearServiceWorkerAndCachesThenReload(remoteCacheName) {
+      const reloadKey = "exec-sw-nuclear-reload:" + String(remoteCacheName || "");
+      try {
+        if (sessionStorage.getItem(reloadKey) === "1") return false;
+        sessionStorage.setItem(reloadKey, "1");
+      } catch (_ssErr) {}
+      try {
+        if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(
+            regs.map(function (reg) {
+              return reg.unregister().catch(function () {
+                return false;
+              });
+            })
+          );
+        }
+      } catch (_unregErr) {}
+      try {
+        if (typeof caches !== "undefined" && caches.keys) {
+          const keys = await caches.keys();
+          await Promise.all(
+            keys.map(function (k) {
+              return caches.delete(k).catch(function () {
+                return false;
+              });
+            })
+          );
+        }
+      } catch (_cacheErr) {}
+      try {
+        const u = new URL(location.href);
+        u.searchParams.set("_swbust", String(Date.now()));
+        location.replace(u.toString());
+      } catch (_locErr) {
+        location.reload();
+      }
+      return true;
+    }
+
+    async function applyPendingAppUpdateReload() {
+      if (appUpdateUserRequestedReload) return;
+      appUpdateUserRequestedReload = true;
+      try {
+        window.__APP_UPDATE_USER_REQUESTED = true;
+      } catch (_flag) {}
+      try {
+        const reg = appUpdatePendingRegistration;
+        if (reg && reg.waiting) {
+          reg.waiting.postMessage({ type: "SKIP_WAITING" });
+        }
+      } catch (_skip) {}
+      const remote =
+        appUpdatePendingRemoteCacheName ||
+        String(APP_CACHE_NAME_FOR_BADGE || "") ||
+        "pending";
+      await forceClearServiceWorkerAndCachesThenReload(remote);
+    }
+
+    function bindAppUpdateBadgeClickOnce() {
+      if (appUpdateClickBound) return;
+      appUpdateClickBound = true;
+      function onActivate(ev) {
+        if (ev) {
+          try {
+            ev.preventDefault();
+            ev.stopPropagation();
+          } catch (_e) {}
+        }
+        void applyPendingAppUpdateReload();
+      }
+      [appVersionBadge, appVersionBadgeNav].forEach(function (el) {
+        if (!el) return;
+        el.addEventListener("click", onActivate);
+        el.addEventListener("keydown", function (ev) {
+          if (!ev) return;
+          if (ev.key === "Enter" || ev.key === " ") onActivate(ev);
+        });
+      });
+    }
+
+    /** 仅提示，不强制刷新；业务同步不得调用此入口 */
+    function showAppUpdateAvailable(opts) {
+      opts = opts && typeof opts === "object" ? opts : {};
+      const remoteCacheName = opts.remoteCacheName != null ? String(opts.remoteCacheName) : "";
+      if (opts.registration) appUpdatePendingRegistration = opts.registration;
+      if (remoteCacheName) appUpdatePendingRemoteCacheName = remoteCacheName;
+      logVersionNewBuildDetected(remoteCacheName || appUpdatePendingRemoteCacheName);
+      appUpdatePromptShown = true;
+      paintAppUpdateAvailableBadge();
+      bindAppUpdateBadgeClickOnce();
+      try {
+        window.__APP_UPDATE_AVAILABLE = true;
+        window.__APP_UPDATE_REMOTE_CACHE = appUpdatePendingRemoteCacheName || remoteCacheName;
+      } catch (_w) {}
+    }
+
+    try {
+      window.showAppUpdateAvailable = showAppUpdateAvailable;
+      window.applyPendingAppUpdateReload = applyPendingAppUpdateReload;
+    } catch (_updWin) {}
+
     async function initAppVersionBadge() {
       function applyCacheNameLabel(cacheName) {
+        if (appUpdatePromptShown) {
+          paintAppUpdateAvailableBadge();
+          return;
+        }
         const short = String(cacheName || "").replace(/^exec-system-pwa-/, "");
         setAppVersionText(short || cacheName || "unknown");
       }
       applyCacheNameLabel(APP_CACHE_NAME_FOR_BADGE);
-
-      /** 壳落后于线上：注销全部 SW + 清空 Cache Storage 后硬刷新（修手机/平板卡死旧版） */
-      async function forceClearServiceWorkerAndCachesThenReload(remoteCacheName) {
-        const reloadKey = "exec-sw-nuclear-reload:" + String(remoteCacheName || "");
-        try {
-          if (sessionStorage.getItem(reloadKey) === "1") return false;
-          sessionStorage.setItem(reloadKey, "1");
-        } catch (_ssErr) {}
-        try {
-          if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
-            const regs = await navigator.serviceWorker.getRegistrations();
-            await Promise.all(
-              regs.map(function (reg) {
-                return reg.unregister().catch(function () {
-                  return false;
-                });
-              })
-            );
-          }
-        } catch (_unregErr) {}
-        try {
-          if (typeof caches !== "undefined" && caches.keys) {
-            const keys = await caches.keys();
-            await Promise.all(
-              keys.map(function (k) {
-                return caches.delete(k).catch(function () {
-                  return false;
-                });
-              })
-            );
-          }
-        } catch (_cacheErr) {}
-        try {
-          const u = new URL(location.href);
-          u.searchParams.set("_swbust", String(Date.now()));
-          location.replace(u.toString());
-        } catch (_locErr) {
-          location.reload();
-        }
-        return true;
-      }
 
       try {
         const swUrl = new URL("sw.js", location.href);
@@ -104448,9 +104578,10 @@
           applyCacheNameLabel(APP_CACHE_NAME_FOR_BADGE);
           return;
         }
-        applyCacheNameLabel(m[1]);
-        if (m[1] !== APP_CACHE_NAME_FOR_BADGE && typeof navigator !== "undefined") {
-          await forceClearServiceWorkerAndCachesThenReload(m[1]);
+        /* 角标仍显示本机壳版本；远端更新只提示点击，禁止自动整页刷新 */
+        applyCacheNameLabel(APP_CACHE_NAME_FOR_BADGE);
+        if (m[1] !== APP_CACHE_NAME_FOR_BADGE) {
+          showAppUpdateAvailable({ remoteCacheName: m[1] });
         }
       } catch (_err) {
         applyCacheNameLabel(APP_CACHE_NAME_FOR_BADGE);
@@ -105754,6 +105885,63 @@
       return !!(domainId && fp != null && aliyunSyncPrimaryLastPullFp[domainId] === fp);
     }
 
+    /**
+     * 轻量 UI/SYNC 调试日志（节流，避免 5s 轮询刷屏）。
+     * 业务数据变化只局部更新；无变化则 skip render。
+     */
+    const uiPartialUpdateLogLastAt = Object.create(null);
+    const syncNoChangeLogLastAt = Object.create(null);
+    const UI_SYNC_DEBUG_LOG_MIN_MS = 15000;
+
+    function logUiPartialUpdate(slice) {
+      const key = String(slice || "unknown");
+      const now = Date.now();
+      if (uiPartialUpdateLogLastAt[key] && now - uiPartialUpdateLogLastAt[key] < UI_SYNC_DEBUG_LOG_MIN_MS) {
+        return;
+      }
+      uiPartialUpdateLogLastAt[key] = now;
+      try {
+        console.log("[UI] partial update: " + key);
+      } catch (_l) {}
+    }
+
+    function logSyncNoDataChangeSkipRender(domainId) {
+      const key = String(domainId || "unknown");
+      const now = Date.now();
+      if (syncNoChangeLogLastAt[key] && now - syncNoChangeLogLastAt[key] < UI_SYNC_DEBUG_LOG_MIN_MS) {
+        return;
+      }
+      syncNoChangeLogLastAt[key] = now;
+      try {
+        console.log("[SYNC] no data change, skip render");
+      } catch (_l) {}
+    }
+
+    /** 云合并后只刷新必要切片；禁止无脏位时整页重绘 */
+    function renderCloudDomainPartial(sliceNames) {
+      const names = Array.isArray(sliceNames)
+        ? sliceNames.filter(Boolean)
+        : sliceNames
+          ? [String(sliceNames)]
+          : [];
+      if (!names.length) return;
+      if (uiPaintDirty == null) {
+        uiPaintDirty = {};
+        if (typeof UI_PAINT_SLICE_KEYS !== "undefined") {
+          UI_PAINT_SLICE_KEYS.forEach(function (k) {
+            uiPaintDirty[k] = false;
+          });
+        }
+      }
+      if (typeof markUiPaintSlicesDirty === "function") {
+        markUiPaintSlicesDirty(names);
+      }
+      names.forEach(function (n) {
+        logUiPartialUpdate(n === "weeklyPlan" ? "today-plan" : n);
+      });
+      if (typeof render === "function") render();
+    }
+
     function aliyunSyncPrimaryAnyDomainFlushBusy() {
       try {
         if (aliyunDoneRealFlushing || (aliyunDoneRealQueue && aliyunDoneRealQueue.length)) return true;
@@ -105906,9 +106094,12 @@
         getCloudSyncLastSuccessAt() > 0;
       if (!quietPoll) paintAliyunSyncPrimaryBadgeSyncing();
       try {
-        try {
-          console.log("[aliyun-sync-primary] near-realtime pull:", pullReason);
-        } catch (_c) {}
+        /* 静默 5s 轮询不刷 console；有可见原因（boot/visible）才记一条 */
+        if (!quietPoll) {
+          try {
+            console.log("[aliyun-sync-primary] near-realtime pull:", pullReason);
+          } catch (_c) {}
+        }
         /* 复用启动串行拉取；域内指纹未变会跳过 merge/render */
         const report = await runAliyunSyncPrimaryBootPull();
         if (report && report.ok) {
@@ -106645,6 +106836,7 @@
         const donePullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
         if (aliyunSyncPrimaryIsUnchangedPull("done", donePullFp)) {
           ok = true;
+          logSyncNoDataChangeSkipRender("done");
           aliyunDoneRealAppendLog("拉取无变化，跳过 merge/render");
           return;
         }
@@ -106801,7 +106993,8 @@
           }
 
           const tRen0 = Date.now();
-          /* 仅脏 Done 切片的 render；rAF 错开网络回调，避免卡输入 */
+          /* 仅脏 Done 切片的局部 render；rAF 错开网络回调，避免卡输入 */
+          logUiPartialUpdate("done");
           if (typeof requestAnimationFrame === "function") {
             await new Promise(function (resolve) {
               requestAnimationFrame(function () {
@@ -108139,14 +108332,19 @@
                 markUiPaintSlicesDirty(["habit", "done"]);
               }
               saveState({ lists: ["habit", "done"] });
+              logUiPartialUpdate("habit");
+              logUiPartialUpdate("done");
               if (typeof paintHabitUiAfterCloudMerge === "function") {
                 paintHabitUiAfterCloudMerge();
+              } else if (typeof renderCloudDomainPartial === "function") {
+                renderCloudDomainPartial(["habit", "done"]);
               } else if (typeof render === "function") {
                 render();
               }
             } catch (_habitDonePaintErr) {}
             aliyunHabitRealAppendLog("拉取无变化，但已补齐缺失的 Habit→Done 镜像");
           } else {
+            logSyncNoDataChangeSkipRender("habit");
             aliyunHabitRealAppendLog("拉取无变化，跳过 merge/render");
           }
           if (isAliyunSyncMetaGateEnabled()) {
@@ -109119,6 +109317,7 @@
         const forgePullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
         if (aliyunSyncPrimaryIsUnchangedPull("forge", forgePullFp)) {
           ok = true;
+          logSyncNoDataChangeSkipRender("forge");
           aliyunForgeRealAppendLog("拉取无变化，跳过 merge/render");
           return { ok: true, unchanged: true, docId: docId };
         }
@@ -109220,9 +109419,18 @@
               if (typeof syncForgeCcProgressUi === "function") syncForgeCcProgressUi();
               if (typeof renderForgeDailyMinRows === "function") renderForgeDailyMinRows();
               if (typeof renderForgeWeeklyMinRows === "function") renderForgeWeeklyMinRows();
+              logUiPartialUpdate("forge");
             }
           } catch (_setUi) {}
-          if (typeof render === "function") render();
+          /* 仅 Done/Forge 条目变更才走切片 render；纯 settings 已局部刷新，禁止整页重绘 */
+          if (mergedCount || tombstoneApplied) {
+            if (typeof renderCloudDomainPartial === "function") {
+              renderCloudDomainPartial(["done", "forge"]);
+            } else if (typeof render === "function") {
+              logUiPartialUpdate("done");
+              render();
+            }
+          }
         }
         renderMs = Date.now() - tRen0;
         aliyunSyncPrimaryMarkPullFingerprint("forge", forgePullFp);
@@ -110162,6 +110370,7 @@
         const annivPullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
         if (aliyunSyncPrimaryIsUnchangedPull("anniv", annivPullFp)) {
           ok = true;
+          logSyncNoDataChangeSkipRender("anniv");
           aliyunAnnivRealAppendLog("拉取无变化，跳过 merge/render");
           return { ok: true, unchanged: true, docId: docId };
         }
@@ -110332,9 +110541,20 @@
                 renderAnniversaryTw022();
               else if (typeof renderAnniversaryTwModule === "function") renderAnniversaryTwModule(mk);
             }
-            if (metaChanged && typeof render === "function") render();
+            if (mks.length) logUiPartialUpdate("anniversary");
+            /* meta 变更只刷周年壳；禁止无任务变更时整页 render */
+            if (metaChanged && !mks.length) {
+              logUiPartialUpdate("anniversary");
+            } else if (metaChanged && typeof renderCloudDomainPartial === "function") {
+              /* 动态面板已在上方 ensure；不再调用全局 render() */
+              logUiPartialUpdate("anniversary");
+            }
           } catch (_rf) {
-            if (typeof render === "function") render();
+            if (typeof renderCloudDomainPartial === "function") {
+              renderCloudDomainPartial(["closedList", "done"]);
+            } else if (typeof render === "function") {
+              render();
+            }
           }
         }
         renderMs = Date.now() - tRen0;
@@ -111031,6 +111251,7 @@
         const sprintPullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
         if (aliyunSyncPrimaryIsUnchangedPull("sprint", sprintPullFp)) {
           ok = true;
+          logSyncNoDataChangeSkipRender("sprint");
           aliyunSprintRealAppendLog("拉取无变化，跳过 merge/render");
           return { ok: true, unchanged: true, docId: docId };
         }
@@ -111153,7 +111374,10 @@
               syncWeeklyPlanDoneList();
             }
             if (typeof refreshWeeklyPlanListAfterStructureChange === "function") {
+              logUiPartialUpdate("today-plan");
               refreshWeeklyPlanListAfterStructureChange();
+            } else if (typeof renderCloudDomainPartial === "function") {
+              renderCloudDomainPartial(["weeklyPlan", "done", "closedList"]);
             } else if (typeof render === "function") {
               render();
             }
@@ -111164,10 +111388,15 @@
               todayPlanPanelExpanded &&
               typeof paintTodayPlanPanel === "function"
             ) {
+              logUiPartialUpdate("today-plan");
               paintTodayPlanPanel();
             }
           } catch (_rf) {
-            if (typeof render === "function") render();
+            if (typeof renderCloudDomainPartial === "function") {
+              renderCloudDomainPartial(["weeklyPlan"]);
+            } else if (typeof render === "function") {
+              render();
+            }
           }
         }
         renderMs = Date.now() - tRen0;
@@ -111659,6 +111888,7 @@
         const todayPullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
         if (aliyunSyncPrimaryIsUnchangedPull("todayPlan", todayPullFp)) {
           ok = true;
+          logSyncNoDataChangeSkipRender("todayPlan");
           aliyunTodayPlanRealAppendLog("拉取无变化，跳过 merge/render");
           return { ok: true, unchanged: true, docId: docId };
         }
@@ -111708,6 +111938,7 @@
             aliyunSyncPrimaryMarkPullFingerprint("todayPlan", todayPullFp);
           }
           if (mergedCount && typeof paintTodayPlanPanel === "function") {
+            logUiPartialUpdate("today-plan");
             paintTodayPlanPanel();
           }
         } catch (_rf) {}
@@ -112422,6 +112653,7 @@
         const ambPullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
         if (aliyunSyncPrimaryIsUnchangedPull("amb", ambPullFp)) {
           ok = true;
+          logSyncNoDataChangeSkipRender("amb");
           aliyunAmbRealAppendLog("拉取无变化，跳过 merge/render");
           /* 仅清理/去重/补 meta，不再为陈旧周期发明今日 Done；并补齐油箱/预设明天三赢镜像 */
           try {
@@ -112950,6 +113182,7 @@
         const pullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
         if (aliyunSyncPrimaryIsUnchangedPull("rule100", pullFp)) {
           ok = true;
+          logSyncNoDataChangeSkipRender("rule100");
           aliyunRule100RealAppendLog("拉取无变化，跳过 merge/render");
           return { ok: true, unchanged: true, docId: docId };
         }
@@ -113568,6 +113801,7 @@
         const pullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
         if (aliyunSyncPrimaryIsUnchangedPull("lists", pullFp)) {
           ok = true;
+          logSyncNoDataChangeSkipRender("lists");
           aliyunListsRealAppendLog("拉取无变化，跳过 merge/render");
           try {
             if (
@@ -114219,6 +114453,7 @@
         const pullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
         if (aliyunSyncPrimaryIsUnchangedPull("goals", pullFp)) {
           ok = true;
+          logSyncNoDataChangeSkipRender("goals");
           aliyunGoalsRealAppendLog("拉取无变化，跳过 merge/render");
           return { ok: true, unchanged: true, docId: docId };
         }
@@ -117044,7 +117279,10 @@
         } catch (_habitPaintLog) {}
         return;
       }
-      if (typeof render === "function") {
+      if (typeof renderCloudDomainPartial === "function") {
+        renderCloudDomainPartial(["habit", "done"]);
+      } else if (typeof render === "function") {
+        logUiPartialUpdate("habit");
         render();
       }
     }
@@ -176875,9 +177113,24 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     if ("serviceWorker" in navigator) {
       let swReloadScheduled = false;
       let skipNextControllerReload = !navigator.serviceWorker.controller;
+      /* 仅用户点击「发现新版本 · 点击刷新」后才允许整页 reload */
       navigator.serviceWorker.addEventListener("controllerchange", () => {
         if (skipNextControllerReload) {
           skipNextControllerReload = false;
+          return;
+        }
+        let userRequested = false;
+        try {
+          userRequested = !!(typeof window !== "undefined" && window.__APP_UPDATE_USER_REQUESTED);
+        } catch (_ur) {
+          userRequested = false;
+        }
+        if (!userRequested) {
+          try {
+            if (typeof showAppUpdateAvailable === "function") {
+              showAppUpdateAvailable({ remoteCacheName: "" });
+            }
+          } catch (_show) {}
           return;
         }
         if (swReloadScheduled) return;
@@ -176892,15 +177145,29 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         } catch (_e) {}
       }
 
+      function promptServiceWorkerUpdate(registration) {
+        if (!registration) return;
+        try {
+          if (typeof showAppUpdateAvailable === "function") {
+            showAppUpdateAvailable({ registration: registration });
+          }
+        } catch (_p) {}
+      }
+
       function wireServiceWorkerRegistration(registration) {
-        registration.update();
-        kickWaitingWorker(registration);
+        /* 可检查更新，但禁止自动 SKIP_WAITING → controllerchange → reload */
+        try {
+          registration.update();
+        } catch (_upd) {}
+        if (registration.waiting && navigator.serviceWorker.controller) {
+          promptServiceWorkerUpdate(registration);
+        }
         registration.addEventListener("updatefound", () => {
           const newWorker = registration.installing;
           if (!newWorker) return;
           newWorker.addEventListener("statechange", () => {
             if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
-              kickWaitingWorker(registration);
+              promptServiceWorkerUpdate(registration);
             }
           });
         });
@@ -176925,7 +177192,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState !== "visible") return;
         navigator.serviceWorker.getRegistration().then((registration) => {
-          if (registration) wireServiceWorkerRegistration(registration);
+          if (!registration) return;
+          try {
+            registration.update();
+          } catch (_u) {}
+          if (registration.waiting && navigator.serviceWorker.controller) {
+            promptServiceWorkerUpdate(registration);
+          }
         });
       });
     }
