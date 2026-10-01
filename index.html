@@ -12977,23 +12977,61 @@
       min-width: 0;
     }
 
+    /* 旧日历图标样式保留选择器，避免残留节点占位；展开态改用日期卡片 */
     .today-plan-panel__icon {
-      flex: 0 0 auto;
-      width: 26px;
-      height: 26px;
-      border-radius: 8px;
-      background: var(--today-plan-blue);
-      color: #fff;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: 0 2px 6px rgba(37, 99, 235, 0.28);
+      display: none;
     }
 
-    .today-plan-panel__icon svg {
-      width: 15px;
-      height: 15px;
-      display: block;
+    /*
+     * 迷你日历日期卡片：上月下日；仅展开态可见（折叠时整 body 隐藏）。
+     * 蓝色体系 + 轻微明暗分层，贴近设计图。
+     */
+    .today-plan-panel__date-card {
+      flex: 0 0 auto;
+      box-sizing: border-box;
+      width: 34px;
+      height: 36px;
+      border-radius: 9px;
+      display: inline-flex;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: stretch;
+      overflow: hidden;
+      color: #fff;
+      background: linear-gradient(180deg, #1d4ed8 0%, #2563eb 46%, #3b82f6 100%);
+      box-shadow: 0 2px 7px rgba(37, 99, 235, 0.32);
+      line-height: 1;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    .today-plan-panel__date-card-month {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 13px;
+      padding: 0 2px;
+      background: rgba(15, 23, 42, 0.18);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+      font-size: 8px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #fff;
+    }
+
+    .today-plan-panel__date-card-day {
+      flex: 1 1 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 0;
+      font-size: 15px;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.02em;
+      color: #fff;
     }
 
     .today-plan-panel__title {
@@ -77461,19 +77499,20 @@
         <div class="today-plan-panel__head">
           <!--
             展开顶区四层（不含「今日」）：
-            1) 图标 + Problem/Approach
+            1) 迷你日期卡片 + Problem/Approach
             2) 进度条（内部居中 1 / 4 | 25%）
             3) 主标语
             4) 「赢」胶囊
           -->
           <div class="today-plan-panel__title-row">
-            <span class="today-plan-panel__icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path
-                  fill="currentColor"
-                  d="M7 3.25a.75.75 0 0 1 .75.75v.75h8.5V4a.75.75 0 0 1 1.5 0v.75H19a2 2 0 0 1 2 2V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7.5a2 2 0 0 1 2-2h1.25V4A.75.75 0 0 1 7 3.25Zm12 7.25H5V19h14V10.5Zm-8.03 2.22 1.28 1.28 3.03-3.03a.75.75 0 1 1 1.06 1.06l-3.56 3.56a.75.75 0 0 1-1.06 0l-1.81-1.81a.75.75 0 1 1 1.06-1.06Z"
-                />
-              </svg>
+            <!-- 迷你日期卡片：月份英文缩写 + 两位数日；由 JS 按系统当天写入 -->
+            <span
+              class="today-plan-panel__date-card"
+              id="todayPlanPanelDateCard"
+              aria-label="今日日期"
+            >
+              <span class="today-plan-panel__date-card-month" id="todayPlanPanelDateMonth">—</span>
+              <span class="today-plan-panel__date-card-day" id="todayPlanPanelDateDay">—</span>
             </span>
             <!-- 静态提醒胶囊：仅视觉，不可交互、不参与进度 -->
             <div
@@ -95722,7 +95761,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001eg";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001eh";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -96378,6 +96417,24 @@
     const todayPlanPanelProgressLabel = document.getElementById("todayPlanPanelProgressLabel");
     const todayPlanPanelProgressPct = document.getElementById("todayPlanPanelProgressPct");
     const todayPlanPanelProgressFill = document.getElementById("todayPlanPanelProgressFill");
+    const todayPlanPanelDateMonth = document.getElementById("todayPlanPanelDateMonth");
+    const todayPlanPanelDateDay = document.getElementById("todayPlanPanelDateDay");
+    const todayPlanPanelDateCard = document.getElementById("todayPlanPanelDateCard");
+    /** 迷你日期卡片月份英文缩写（0=Jan … 11=Dec）；仅展示，不落盘 */
+    const TODAY_PLAN_DATE_CARD_MONTHS = [
+      "JAN",
+      "FEB",
+      "MAR",
+      "APR",
+      "MAY",
+      "JUN",
+      "JUL",
+      "AUG",
+      "SEP",
+      "OCT",
+      "NOV",
+      "DEC"
+    ];
     let todayPlanPanelExpanded = false;
     /** 仅内存：其他任务是否展开全部（不落盘、不同步） */
     let todayPlanOtherExpanded = false;
@@ -157587,6 +157644,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         todayPlanPanelToggle.setAttribute("aria-label", todayPlanPanelExpanded ? "收起今日计划" : "展开今日计划");
       }
       if (todayPlanPanelExpanded) {
+        updateTodayPlanPanelDateCard();
         paintTodayPlanPanel();
         syncTodayPlanPanelWidthToTagline();
         syncTodayPlanPanelDockBottom();
@@ -158483,6 +158541,29 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!bodyOnly) parent.appendChild(section);
     }
 
+    /**
+     * 迷你日期卡片：按系统当前本地日期写入 OCT / 01。
+     * 仅 UI 展示；折叠时随 body 隐藏，不落盘、不同步。
+     */
+    function updateTodayPlanPanelDateCard() {
+      if (!todayPlanPanelDateMonth && !todayPlanPanelDateDay) return;
+      const now = new Date();
+      const monthIdx = now.getMonth();
+      const month =
+        TODAY_PLAN_DATE_CARD_MONTHS[monthIdx] ||
+        TODAY_PLAN_DATE_CARD_MONTHS[0];
+      const dayNum = now.getDate();
+      const day = dayNum < 10 ? "0" + dayNum : String(dayNum);
+      if (todayPlanPanelDateMonth) todayPlanPanelDateMonth.textContent = month;
+      if (todayPlanPanelDateDay) todayPlanPanelDateDay.textContent = day;
+      if (todayPlanPanelDateCard) {
+        todayPlanPanelDateCard.setAttribute(
+          "aria-label",
+          "今日日期 " + month + " " + day
+        );
+      }
+    }
+
     function updateTodayPlanPanelProgress(doneCount, totalCount) {
       const total = Math.max(0, Number(totalCount) || 0);
       const done = Math.max(0, Math.min(total, Number(doneCount) || 0));
@@ -158504,6 +158585,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      */
     function paintTodayPlanPanel(opts) {
       if (!todayPlanPanelClosedMount || !todayPlanPanelOtherMount) return;
+      updateTodayPlanPanelDateCard();
       opts = opts && typeof opts === "object" ? opts : {};
       ensureTodayPlanOtherComposer();
       const todayKey = formatDateInputValue(new Date());
