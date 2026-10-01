@@ -95399,7 +95399,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930ac";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930ad";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -124973,14 +124973,25 @@
       }
     }
 
+    /**
+     * Rule of 100 → Done：业务默认分类 Power·Hard Choice。
+     * 必须写入 outcomeKind/outcomeScore（state / IDB / 阿里云 Done 域一致），不是只改按钮高亮。
+     */
+    function applyRule100DoneDefaultOutcomeFields(item) {
+      if (!item || typeof item !== "object") return item;
+      item.outcomeKind = "power";
+      item.outcomeScore = 1;
+      return item;
+    }
+
     function syncRule100ToDone(ruleKey, dateStr, title) {
-      const newItem = {
+      const newItem = applyRule100DoneDefaultOutcomeFields({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: "【Rule of 100】" + title,
         completedAt: Date.now(),
         updatedAt: Date.now(),
         rule100Meta: { key: ruleKey, date: dateStr, kind: "day" }
-      };
+      });
       state.done.unshift(newItem);
       if (typeof notifyAliyunDoneRealUpsert === "function") {
         try {
@@ -125781,7 +125792,7 @@
       const uLabel = getRule100UnitLabel(unit);
       const t = title && String(title).trim() ? String(title).trim() : "自定义100" + uLabel;
       const rk = ruleKey && String(ruleKey) ? String(ruleKey) : "rule100D";
-      const newItem = {
+      const newItem = applyRule100DoneDefaultOutcomeFields({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text:
           "【Rule of 100】" +
@@ -125801,7 +125812,7 @@
           hoursDelta: hoursAdded,
           unit: u
         }
-      };
+      });
       state.done.unshift(newItem);
       if (typeof notifyAliyunDoneRealUpsert === "function") {
         try {
@@ -143734,6 +143745,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           delete item.outcomeKind;
           delete item.outcomeScore;
           return;
+        }
+        /* Rule of 100：缺省性质补 Power·Hard Choice（显式选过的 neutral/treason 不覆盖） */
+        if (
+          item.rule100Meta &&
+          typeof item.rule100Meta === "object" &&
+          !hasExplicitDoneOutcomeKind(item)
+        ) {
+          item.outcomeKind = "power";
+          if (item.outcomeScore == null) item.outcomeScore = 1;
         }
         const k = item.outcomeKind;
         if (k && k !== "power" && k !== "neutral" && k !== "treason") {
