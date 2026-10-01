@@ -58,6 +58,8 @@ assert.match(html, /maxAttempts = 3/);
 assert.match(html, /doneRepairedOnSkip/);
 assert.match(html, /allowRemove: true/);
 assert.match(html, /refreshAllDailyWinTomorrowPresetDones\(\{ skipNotify: true \}\)/);
+assert.match(html, /meta-gate seed SKIP not-confirmed-missing/);
+assert.match(html, /floor lastSeen/);
 
 /** 纯逻辑：不足 3 条且无 allowRemove 时不得删已有 Done */
 function planDwTomorrowSync(refCount, hasDone, allowRemove) {

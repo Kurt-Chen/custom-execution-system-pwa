@@ -91,7 +91,7 @@ const report = {
   raceKeep: r1,
   afterAmb: r2,
   userRemove: r3,
-  cache: "v20261001el"
+  cache: "v20261001eo"
 };
 fs.writeFileSync(path.join(outDir, "race-report.json"), JSON.stringify(report, null, 2));
 console.log("OK habit-dw-chain-race", JSON.stringify(report));
