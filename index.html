@@ -95780,7 +95780,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001ek";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001el";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -106605,6 +106605,34 @@
               state.done.unshift(accept);
               localById[rid] = accept;
               mergedCount += 1;
+              if (accept.dailyWinTomorrowMeta && accept.dailyWinTomorrowMeta.targetDateKey) {
+                try {
+                  console.log(
+                    "[dw-tomorrow-done-chain] step2 Done GET accept id=" +
+                      rid +
+                      " target=" +
+                      accept.dailyWinTomorrowMeta.targetDateKey
+                  );
+                } catch (_dwPullLog) {}
+                try {
+                  if (typeof aliyunDoneRealAppendLog === "function") {
+                    aliyunDoneRealAppendLog(
+                      "[dw-tomorrow-done-chain] step2 Done GET accept id=" +
+                        rid +
+                        " target=" +
+                        accept.dailyWinTomorrowMeta.targetDateKey
+                    );
+                  }
+                } catch (_dwPullLog2) {}
+              }
+            } else {
+              try {
+                if (remote && remote.dailyWinTomorrowMeta) {
+                  console.warn(
+                    "[dw-tomorrow-done-chain] step6 clone dropped dailyWinTomorrow id=" + rid
+                  );
+                }
+              } catch (_dwDrop) {}
             }
             continue;
           }
@@ -107154,61 +107182,84 @@
      */
     async function aliyunHabitMetaBumpAfterUpload(atOpt) {
       if (!isAliyunSyncMetaGateEnabled()) return { ok: false, skipped: true, reason: "gate-off" };
-      try {
-        const fresh = await aliyunHabitMetaFetch();
-        let freshV = 0;
-        if (fresh.ok && !fresh.missing && !fresh.parseError) {
-          freshV = Number(fresh.v) || 0;
-        } else if (!fresh.missing && fresh.parseError) {
-          aliyunHabitRealAppendLog("meta-gate bump: fresh parse/GET 异常，按 v=0 重种子+1");
-          freshV = 0;
-        }
-        const plannedV = (freshV || 0) + 1;
-        /* 禁止回退：单域文档写 plannedV；若并发已写得更高，再读一次取 max 后重写 */
-        let writeV = plannedV;
-        const wr = await aliyunHabitMetaWriteVersion(writeV, atOpt);
-        if (!wr.ok) {
-          aliyunHabitRealAppendLog(
-            "meta-gate bump FAIL plannedV=" + plannedV + " " + (wr.error || "")
-          );
-          return { ok: false, plannedV: plannedV, error: wr.error };
-        }
+      /* 正文已 POST 成功后必须 bump；失败重试，否则他端 meta-unchanged 永跳过正文→Done repair */
+      const maxAttempts = 3;
+      let lastErr = "";
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
-          const verify = await aliyunHabitMetaFetch();
-          if (verify.ok && !verify.missing && !verify.parseError) {
-            const remoteV = Number(verify.v) || 0;
-            if (remoteV < writeV) {
-              const repairV = writeV;
-              const wr2 = await aliyunHabitMetaWriteVersion(repairV, atOpt);
-              if (wr2.ok) {
-                aliyunHabitMetaLastSeenV = repairV;
-                aliyunHabitRealAppendLog("meta-gate bump repaired v=" + repairV);
-                return { ok: true, v: repairV, repaired: true };
+          const fresh = await aliyunHabitMetaFetch();
+          let freshV = 0;
+          if (fresh.ok && !fresh.missing && !fresh.parseError) {
+            freshV = Number(fresh.v) || 0;
+          } else if (!fresh.missing && fresh.parseError) {
+            aliyunHabitRealAppendLog(
+              "meta-gate bump: fresh parse/GET 异常，按 v=0 重种子+1 attempt=" + attempt
+            );
+            freshV = 0;
+          }
+          const plannedV = (freshV || 0) + 1;
+          const writeV = plannedV;
+          const wr = await aliyunHabitMetaWriteVersion(writeV, atOpt);
+          if (!wr.ok) {
+            lastErr = wr.error || "write-fail";
+            aliyunHabitRealAppendLog(
+              "meta-gate bump FAIL attempt=" +
+                attempt +
+                "/" +
+                maxAttempts +
+                " plannedV=" +
+                plannedV +
+                " " +
+                lastErr
+            );
+            continue;
+          }
+          try {
+            const verify = await aliyunHabitMetaFetch();
+            if (verify.ok && !verify.missing && !verify.parseError) {
+              const remoteV = Number(verify.v) || 0;
+              if (remoteV < writeV) {
+                const wr2 = await aliyunHabitMetaWriteVersion(writeV, atOpt);
+                if (wr2.ok) {
+                  aliyunHabitMetaLastSeenV = writeV;
+                  aliyunHabitRealAppendLog(
+                    "meta-gate bump repaired v=" + writeV + " attempt=" + attempt
+                  );
+                  return { ok: true, v: writeV, repaired: true, attempt: attempt };
+                }
+                lastErr = (wr2 && wr2.error) || "repair-write-fail";
+                continue;
+              } else if (remoteV > writeV) {
+                aliyunHabitMetaLastSeenV = remoteV;
+                aliyunHabitRealAppendLog(
+                  "meta-gate bump concurrent higher remoteV=" + remoteV + " (kept)"
+                );
+                return { ok: true, v: remoteV, concurrentHigher: true, attempt: attempt };
               }
-            } else if (remoteV > writeV) {
-              /* 并发同域已推到更高：不回退，对齐 lastSeen */
-              aliyunHabitMetaLastSeenV = remoteV;
-              aliyunHabitRealAppendLog(
-                "meta-gate bump concurrent higher remoteV=" + remoteV + " (kept)"
-              );
-              return { ok: true, v: remoteV, concurrentHigher: true };
+              aliyunHabitMetaLastSeenV = remoteV > 0 ? remoteV : writeV;
+            } else {
+              aliyunHabitMetaLastSeenV = writeV;
             }
-            aliyunHabitMetaLastSeenV = remoteV > 0 ? remoteV : writeV;
-          } else {
+          } catch (_vf) {
             aliyunHabitMetaLastSeenV = writeV;
           }
-        } catch (_vf) {
-          aliyunHabitMetaLastSeenV = writeV;
+          aliyunHabitRealAppendLog(
+            "[habit-done-chain] step1 meta-bump ok v=" +
+              aliyunHabitMetaLastSeenV +
+              " attempt=" +
+              attempt +
+              " id=" +
+              aliyunHabitMetaDocId()
+          );
+          return { ok: true, v: aliyunHabitMetaLastSeenV, attempt: attempt };
+        } catch (err) {
+          lastErr = err && err.message ? err.message : String(err);
+          aliyunHabitRealAppendLog(
+            "meta-gate bump error attempt=" + attempt + "/" + maxAttempts + ": " + lastErr
+          );
         }
-        aliyunHabitRealAppendLog(
-          "meta-gate bump ok v=" + aliyunHabitMetaLastSeenV + " id=" + aliyunHabitMetaDocId()
-        );
-        return { ok: true, v: aliyunHabitMetaLastSeenV };
-      } catch (err) {
-        const msg = err && err.message ? err.message : String(err);
-        aliyunHabitRealAppendLog("meta-gate bump error: " + msg);
-        return { ok: false, error: msg };
       }
+      return { ok: false, error: lastErr || "bump-exhausted" };
     }
 
     function aliyunHabitRealSlotId(dateKey, habitKey) {
@@ -107656,7 +107707,18 @@
           );
         }
         ok = true;
-        /* 正文成功后再 bump Habit 独立 meta（失败不回滚正文；靠 12 分钟安全全量兜底） */
+        const journalInBatch = batchIds.some(function (id) {
+          return String(id || "").indexOf("|journal") > 0 || String(id || "").endsWith("|journal");
+        });
+        aliyunHabitRealAppendLog(
+          "[habit-done-chain] step1 Habit POST ok ids=" +
+            batchIds.join(",") +
+            " hasJournal=" +
+            journalInBatch +
+            " payloadKB=" +
+            payloadKB
+        );
+        /* 正文成功后再 bump Habit 独立 meta（失败重试；仍失败则他端靠 12 分钟安全全量） */
         try {
           const bumpAt =
             envAfterApply && envAfterApply.envelopeUpdatedAt
@@ -107667,12 +107729,14 @@
           networkWaitMs += Date.now() - tBump0;
           if (!(bumpRes && bumpRes.ok) && !(bumpRes && bumpRes.skipped)) {
             aliyunHabitRealAppendLog(
-              "flush meta bump soft-fail: " + ((bumpRes && bumpRes.error) || "unknown")
+              "[habit-done-chain] step1 meta-bump FAIL after POST: " +
+                ((bumpRes && bumpRes.error) || "unknown") +
+                " (peers may skip Habit body until safety-full)"
             );
           }
         } catch (_bumpErr) {
           aliyunHabitRealAppendLog(
-            "flush meta bump error: " +
+            "[habit-done-chain] step1 meta-bump error: " +
               (_bumpErr && _bumpErr.message ? _bumpErr.message : String(_bumpErr))
           );
         }
@@ -107791,13 +107855,44 @@
           if (!metaGateDecision.fetchBody) {
             skippedBodyByMeta = true;
             ok = true;
-            aliyunHabitRealAppendLog(
-              "meta-gate skip Habit body GET (no parse/merge/render) v=" +
-                metaGateDecision.remoteV
-            );
+            /*
+             * 不改 meta-gate：正文仍跳过。但本机 habitCheckins 可能已有槽、Done 镜像却缺
+             * （上次 repair 失败 / 被误清）——轻量补镜像，不额外 GET 正文。
+             */
+            let doneRepairedOnSkip = false;
+            try {
+              if (typeof repairHabitDoneMirrorsAfterAliyunHabitPull === "function") {
+                doneRepairedOnSkip = !!repairHabitDoneMirrorsAfterAliyunHabitPull();
+              }
+            } catch (_habitSkipRepair) {
+              doneRepairedOnSkip = false;
+            }
+            if (doneRepairedOnSkip) {
+              try {
+                if (typeof markUiPaintSlicesDirty === "function") {
+                  markUiPaintSlicesDirty(["habit", "done"]);
+                }
+                saveState({ lists: ["habit", "done"] });
+                if (typeof paintHabitUiAfterCloudMerge === "function") {
+                  paintHabitUiAfterCloudMerge();
+                } else if (typeof render === "function") {
+                  render();
+                }
+              } catch (_habitSkipPaint) {}
+              aliyunHabitRealAppendLog(
+                "[habit-done-chain] step2 meta-unchanged skip body; step3-8 local repair ok v=" +
+                  metaGateDecision.remoteV
+              );
+            } else {
+              aliyunHabitRealAppendLog(
+                "[habit-done-chain] step2 meta-unchanged skip Habit body GET (no GET/merge); local repair noop v=" +
+                  metaGateDecision.remoteV
+              );
+            }
             return {
               ok: true,
               skippedBody: true,
+              doneRepaired: doneRepairedOnSkip,
               metaV: metaGateDecision.remoteV,
               reason: metaGateDecision.reason,
               docId: docId
@@ -107918,7 +108013,22 @@
         aliyunHabitRealSuppressPush = true;
         const prevCloudSuppress = cloudSyncSuppressPush;
         cloudSyncSuppressPush = true;
+        let habitDoneRepaired = false;
         try {
+          const journalBefore =
+            remoteHc &&
+            Object.keys(remoteHc).some(function (dk) {
+              const slot = remoteHc[dk] && remoteHc[dk].journal;
+              return slot != null && slot !== false;
+            });
+          aliyunHabitRealAppendLog(
+            "[habit-done-chain] step2 GET Habit body ok dates=" +
+              mergedDates +
+              " slots=" +
+              itemIds.length +
+              " hasJournalRemote=" +
+              !!journalBefore
+          );
           state.habitCheckins = mergeHabitCheckinsForSync(state.habitCheckins, remoteHc);
           /*
            * Habit 云端只同步 habitCheckins；My Done 镜像行不走阿里云 Done。
@@ -107926,15 +108036,22 @@
            */
           try {
             if (typeof repairHabitDoneMirrorsAfterAliyunHabitPull === "function") {
-              repairHabitDoneMirrorsAfterAliyunHabitPull(Object.keys(remoteHc));
+              habitDoneRepaired = !!repairHabitDoneMirrorsAfterAliyunHabitPull(
+                Object.keys(remoteHc)
+              );
             } else if (typeof restoreDoneListFromHabitCheckinsIfMissing === "function") {
-              restoreDoneListFromHabitCheckinsIfMissing({ allDates: true });
+              habitDoneRepaired = !!restoreDoneListFromHabitCheckinsIfMissing({ allDates: true });
             }
           } catch (_habitDoneMirrorErr) {
             try {
               console.warn("[aliyun-habit-real] Done mirror repair failed", _habitDoneMirrorErr);
             } catch (_c) {}
           }
+          aliyunHabitRealAppendLog(
+            "[habit-done-chain] step3-5 repair doneRepaired=" +
+              !!habitDoneRepaired +
+              " (stable habitMeta key+date+n)"
+          );
           if (typeof markHabitCheckinsSubTabDirty === "function") markHabitCheckinsSubTabDirty();
           if (uiPaintDirty == null) {
             uiPaintDirty = {};
@@ -108001,7 +108118,15 @@
           }
         }
         aliyunHabitRealAppendLog(
-          "合并完成：云端日期数 " + mergedDates + "，槽位数 " + itemIds.length
+          "合并完成：云端日期数 " +
+            mergedDates +
+            "，槽位数 " +
+            itemIds.length +
+            " habitDoneRepaired=" +
+            !!habitDoneRepaired
+        );
+        aliyunHabitRealAppendLog(
+          "[habit-done-chain] step8 render after Habit pull (Done List dirty)"
         );
         return { ok: true, docId: docId, mergedDates: mergedDates, slots: itemIds.length };
       } catch (err) {
@@ -111724,7 +111849,27 @@
       if (!slice || typeof slice !== "object") return false;
       const before = aliyunAmbRealSliceFingerprint(aliyunAmbRealCloneSliceFromState());
       const after = aliyunAmbRealSliceFingerprint(slice);
-      if (before === after) return false;
+      if (before === after) {
+        /*
+         * AMB 源指纹未变仍可能缺 Done（Done 域先到又被旧 reconcile 误清后）：
+         * 再跑安全网，只补不删（skipNotify + 无 allowRemove）。
+         */
+        let repairedOnly = false;
+        try {
+          if (typeof reconcileAmbDerivedDoneMirrorsFromState === "function") {
+            repairedOnly = !!reconcileAmbDerivedDoneMirrorsFromState();
+          }
+        } catch (_ambSameFp) {
+          repairedOnly = false;
+        }
+        if (repairedOnly) {
+          logDailyWinTomorrowDoneChain(
+            "step3 reconcile-on-unchanged-slice",
+            "repairedOnly=true"
+          );
+        }
+        return repairedOnly;
+      }
       if (slice.tombstones && typeof slice.tombstones === "object") {
         state.syncTombstones =
           typeof mergeSyncTombstoneMaps === "function"
@@ -111742,10 +111887,28 @@
       state.successCriteria = Array.isArray(slice.successCriteria) ? slice.successCriteria : [];
       state.stopDoing = Array.isArray(slice.stopDoing) ? slice.stopDoing : [];
       state.notToDo = Array.isArray(slice.notToDo) ? slice.notToDo : [];
-      /* AMB 源合入后补齐/清理 Done 镜像（他端仅拉 AMB 也能看到 Done） */
+      const dwKeys = Object.keys(state.dailyWinTomorrowRef || {});
+      let dwReady = 0;
+      dwKeys.forEach(function (k) {
+        if (
+          typeof listMeaningfulDailyWinTomorrowRef === "function" &&
+          listMeaningfulDailyWinTomorrowRef(k).length >= 3
+        ) {
+          dwReady += 1;
+        }
+      });
+      logDailyWinTomorrowDoneChain(
+        "step2-3 AMB slice applied",
+        "tomorrowKeys=" + dwKeys.length + " ready3=" + dwReady
+      );
+      /* AMB 源合入后补齐 Done 镜像（他端仅拉 AMB 也能看到 Done）；reconcile 不误删 */
       try {
         if (typeof reconcileAmbDerivedDoneMirrorsFromState === "function") {
-          reconcileAmbDerivedDoneMirrorsFromState();
+          const ambDone = !!reconcileAmbDerivedDoneMirrorsFromState();
+          logDailyWinTomorrowDoneChain(
+            "step3-8 reconcileAmbDerived",
+            "changed=" + ambDone
+          );
         } else if (typeof reconcileBackwardMeasureDoneMirrorsFromState === "function") {
           reconcileBackwardMeasureDoneMirrorsFromState();
         }
@@ -124814,13 +124977,33 @@
       });
     }
 
+    /** 预设明天三赢 → Done 稳定 id（跨设备 Done 域与 AMB reconcile 收敛到同一行） */
+    function stableDailyWinTomorrowPresetDoneId(targetDateKey) {
+      return "dw-tomorrow-" + String(targetDateKey || "");
+    }
+
+    function logDailyWinTomorrowDoneChain(step, detail) {
+      try {
+        console.log("[dw-tomorrow-done-chain] " + step + (detail ? " " + detail : ""));
+      } catch (_c) {}
+      try {
+        if (typeof aliyunAmbRealAppendLog === "function") {
+          aliyunAmbRealAppendLog("[dw-tomorrow-done-chain] " + step + (detail ? " " + detail : ""));
+        }
+      } catch (_a) {}
+    }
+
     /**
      * 预设明天三赢写满 3 条后，在记录当天的 My Done 放一行（含三条原文）。
      * opts.focusDone：刚点「记录」时把日期切到记录日，方便立刻看到。
+     * opts.skipNotify：AMB pull reconcile 安全网（不推云）。
+     * opts.allowRemove：仅用户删意向导致不足 3 条时才删 Done；默认禁止，
+     *   避免 Done 域先到、AMB 尚未合入时 hygiene/reconcile 误 tombstone 跨设备镜像。
      */
     function syncDailyWinTomorrowPresetToDone(targetDateKey, opts) {
       if (!targetDateKey) return false;
       const skipNotify = opts && opts.skipNotify;
+      const allowRemove = !!(opts && opts.allowRemove);
       ensureDailyWinTomorrowRefState();
       const raw = state.dailyWinTomorrowRef[targetDateKey];
       const list = Array.isArray(raw) ? raw : [];
@@ -124832,6 +125015,18 @@
       if (!should) {
         if (clearDailyWinTomorrowPresetDismissed(list)) changed = true;
         if (idx !== -1) {
+          if (!allowRemove) {
+            logDailyWinTomorrowDoneChain(
+              "step6 keep-done",
+              "target=" +
+                targetDateKey +
+                " reason=ref-lt3-no-allowRemove skipNotify=" +
+                !!skipNotify +
+                " keepId=" +
+                (state.done[idx] && state.done[idx].id)
+            );
+            return changed;
+          }
           const row = state.done[idx];
           if (row && row.id != null) {
             try {
@@ -124842,6 +125037,10 @@
                 notifyAliyunDoneRealTombstone("dailyWin-tomorrow-remove", row.id, row);
               } catch (_dwRm) {}
             }
+            logDailyWinTomorrowDoneChain(
+              "step7 tombstone",
+              "target=" + targetDateKey + " id=" + row.id + " (allowRemove)"
+            );
           }
           state.done.splice(idx, 1);
           changed = true;
@@ -124852,19 +125051,50 @@
         if (clearDailyWinTomorrowPresetDismissed(top)) changed = true;
         const row = state.done[idx];
         const text = buildDailyWinTomorrowPresetDoneText(top);
+        const stableId = stableDailyWinTomorrowPresetDoneId(targetDateKey);
+        if (row.id != null && String(row.id) !== stableId && !skipNotify) {
+          /* 本地用户路径：收敛到稳定 id，便于他端 Done 合并 */
+          try {
+            recordSyncTombstone(row.id);
+          } catch (_oldTs) {}
+          if (typeof notifyAliyunDoneRealTombstone === "function") {
+            try {
+              notifyAliyunDoneRealTombstone("dailyWin-tomorrow-stable-id", row.id, row);
+            } catch (_oldRm) {}
+          }
+          row.id = stableId;
+          changed = true;
+        }
         if (row.text !== text) {
           row.text = text;
           row.updatedAt = Date.now();
           changed = true;
         }
+        if (!row.dailyWinTomorrowMeta || typeof row.dailyWinTomorrowMeta !== "object") {
+          row.dailyWinTomorrowMeta = {};
+          changed = true;
+        }
+        if (row.dailyWinTomorrowMeta.targetDateKey !== targetDateKey) {
+          row.dailyWinTomorrowMeta.targetDateKey = targetDateKey;
+          changed = true;
+        }
+        logDailyWinTomorrowDoneChain(
+          "step4-5 upsert-existing",
+          "id=" + row.id + " changed=" + changed + " skipNotify=" + !!skipNotify
+        );
         if (changed && !skipNotify && typeof notifyAliyunDoneRealUpsert === "function") {
           try {
             notifyAliyunDoneRealUpsert("dailyWin-tomorrow", row);
+            logDailyWinTomorrowDoneChain("step1 notify-done-upsert", "id=" + row.id);
           } catch (_dwUp) {}
         }
         return changed;
       }
       if (top.every(function (item) { return item && item.doneListDismissed; })) {
+        logDailyWinTomorrowDoneChain(
+          "step6 skip-create",
+          "target=" + targetDateKey + " reason=all-dismissed"
+        );
         return changed;
       }
       if (clearDailyWinTomorrowPresetDismissed(top)) changed = true;
@@ -124874,7 +125104,7 @@
       }, 0) || Date.now();
       const recordedDateKey = formatDateInputValue(new Date(recordedAt));
       const newItem = {
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        id: stableDailyWinTomorrowPresetDoneId(targetDateKey),
         text: buildDailyWinTomorrowPresetDoneText(top),
         createdAt: recordedAt,
         completedAt: recordedAt,
@@ -124886,9 +125116,14 @@
       };
       state.done.unshift(newItem);
       changed = true;
+      logDailyWinTomorrowDoneChain(
+        "step4-5 create-stable",
+        "id=" + newItem.id + " skipNotify=" + !!skipNotify
+      );
       if (!skipNotify && typeof notifyAliyunDoneRealUpsert === "function") {
         try {
           notifyAliyunDoneRealUpsert("dailyWin-tomorrow", newItem);
+          logDailyWinTomorrowDoneChain("step1 notify-done-upsert", "id=" + newItem.id);
         } catch (_dwAdd) {}
       }
       if (opts && opts.focusDone) {
@@ -166573,7 +166808,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return habitChanged;
       }
       let doneHygieneChanged = refreshAllDailyWinCheckins();
-      if (refreshAllDailyWinTomorrowPresetDones()) doneHygieneChanged = true;
+      /* skipNotify：勿在 hygiene 里因 AMB 尚未合入而 tombstone 已由 Done 域同步来的预设三赢 */
+      if (refreshAllDailyWinTomorrowPresetDones({ skipNotify: true })) doneHygieneChanged = true;
       try {
         if (
           typeof reconcileFuelScoreDoneMirrorsFromState === "function" &&
@@ -171393,6 +171629,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return false;
       }
       let changed = false;
+      let journalChecked = 0;
+      let journalRowsBefore = 0;
       dates.forEach(function (dateStr) {
         const day = state.habitCheckins && state.habitCheckins[dateStr];
         if (!day || typeof day !== "object") return;
@@ -171408,6 +171646,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           if (!isHabitCheckedOnDate(dateStr, habitKey)) return;
           const v = day[habitKey];
           const rows = getHabitDoneRowsForDay(habitKey, dateStr);
+          if (habitKey === "journal") {
+            journalChecked += 1;
+            journalRowsBefore += rows.length;
+          }
           let expect = 1;
           if (v && typeof v === "object") {
             if (Array.isArray(v.batches) && v.batches.length) expect = v.batches.length;
@@ -171458,6 +171700,25 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           if (rebuildMissingHabitDoneRowsForDate(dateStr)) changed = true;
         }
       });
+      let journalRowsAfter = 0;
+      dates.forEach(function (dateStr) {
+        journalRowsAfter += getHabitDoneRowsForDay("journal", dateStr).length;
+      });
+      try {
+        if (typeof aliyunHabitRealAppendLog === "function") {
+          aliyunHabitRealAppendLog(
+            "[habit-done-chain] step3-7 repairHabitDoneMirrors journalChecked=" +
+              journalChecked +
+              " rowsBefore=" +
+              journalRowsBefore +
+              " rowsAfter=" +
+              journalRowsAfter +
+              " changed=" +
+              changed +
+              " tombstone=no (habit Done 不走 Done 域)"
+          );
+        }
+      } catch (_habitChainLog) {}
       try {
         if (typeof bumpDoneFilterToTaskDay === "function") {
           bumpDoneFilterToTaskDay(Date.now());
@@ -171776,7 +172037,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
       recordSyncTombstone(id);
       list.splice(idx, 1);
-      syncDailyWinTomorrowPresetToDone(targetDateKey);
+      syncDailyWinTomorrowPresetToDone(targetDateKey, { allowRemove: true });
       saveState();
       if (typeof notifyAliyunAmbRealAfterLocalChange === "function") {
         notifyAliyunAmbRealAfterLocalChange("dailyWin-tomorrow-delete");
