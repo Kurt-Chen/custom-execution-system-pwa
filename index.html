@@ -107310,11 +107310,11 @@
     } catch (_habWin) {}
 
     /**
-     * —— Forge 打卡单域真实同步（阿里云实验，可回滚）——
-     * 仅 Done 中带 forgeBodyMeta / forgeMindMeta 的行；不同步 state.forge 设置。
-     * 默认关；无新 UI。启用：window.__ALIYUN_FORGE_REAL_SYNC_ENABLED = true
+     * —— Forge 单域真实同步（阿里云，主路径随 isAliyunSyncPrimaryEnabled）——
+     * 1) Done 中带 forgeBodyMeta / forgeMindMeta 的打卡行（items+tombstones）
+     * 2) state.forge 设置切片 settings：kbWeightKg / ccProgressStep / dailyMinimums / weeklyMinimums
+     *    （主路径已从 Firebase 剥离 forge，设置必须走本域，否则跨端丢失）
      * 拉取：await window.runAliyunForgeRealPullAndMerge()
-     * 独立 kind，不走 Done 阿里云信封（避免丢掉 meta）；不碰 Habit。
      */
     const ALIYUN_FORGE_REAL_KIND = "forge-real-v1";
     const ALIYUN_FORGE_REAL_PERF_PREFIX = "aliyun-forge-real:";
@@ -107410,8 +107410,86 @@
         roomId: String(cloudSyncRoomId || ""),
         envelopeUpdatedAt: Date.now(),
         items: {},
-        tombstones: {}
+        tombstones: {},
+        settings: null
       };
+    }
+
+    /** state.forge 设置快照（壶铃重量 / 囚徒阶梯 / 日·周最低标准） */
+    function aliyunForgeRealCloneSettingsForCloud() {
+      let slice = null;
+      try {
+        if (typeof buildCloudSyncForgePulseSlice === "function") {
+          slice = buildCloudSyncForgePulseSlice();
+        }
+      } catch (_b) {
+        slice = null;
+      }
+      const out = slice && typeof slice === "object" ? slice : {};
+      const now = Date.now();
+      if (!state.forge || typeof state.forge !== "object") state.forge = {};
+      /* 本机戳：拉取时按 updatedAt LWW，避免 mergeForgeShallowMaps 的 Math.max 把 16kg 盖不过 24kg */
+      state.forge.settingsUpdatedAt = now;
+      out.updatedAt = now;
+      return out;
+    }
+
+    /**
+     * 阿里云 settings 整片 LWW（按 updatedAt）。
+     * 不用 mergeForgeShallowMapsForSync：该函数对数字取 max，不适合作重量/阶梯选择。
+     */
+    function aliyunForgeRealApplyRemoteSettings(remoteSettings) {
+      if (!remoteSettings || typeof remoteSettings !== "object") return false;
+      if (!state.forge || typeof state.forge !== "object") state.forge = {};
+      const remTs = Number(remoteSettings.updatedAt) || 0;
+      const locTs = Number(state.forge.settingsUpdatedAt) || 0;
+      if (remTs < locTs) return false;
+      let changed = false;
+      function assignObj(key) {
+        if (!remoteSettings[key] || typeof remoteSettings[key] !== "object") return;
+        let next;
+        try {
+          next = JSON.parse(JSON.stringify(remoteSettings[key]));
+        } catch (_c) {
+          next = remoteSettings[key];
+        }
+        try {
+          if (JSON.stringify(state.forge[key] || {}) !== JSON.stringify(next)) {
+            state.forge[key] = next;
+            changed = true;
+          }
+        } catch (_cmp) {
+          state.forge[key] = next;
+          changed = true;
+        }
+      }
+      function assignArr(key) {
+        if (!Array.isArray(remoteSettings[key])) return;
+        let next;
+        try {
+          next = JSON.parse(JSON.stringify(remoteSettings[key]));
+        } catch (_c) {
+          next = remoteSettings[key].slice();
+        }
+        try {
+          if (JSON.stringify(state.forge[key] || []) !== JSON.stringify(next)) {
+            state.forge[key] = next;
+            changed = true;
+          }
+        } catch (_cmp) {
+          state.forge[key] = next;
+          changed = true;
+        }
+      }
+      assignObj("kbWeightKg");
+      assignObj("ccProgressStep");
+      assignArr("dailyMinimums");
+      assignArr("weeklyMinimums");
+      if (remTs > locTs || changed) {
+        state.forge.settingsUpdatedAt = remTs;
+        if (remTs > locTs) changed = true;
+      }
+      return changed;
     }
 
     function aliyunForgeRealParseEnvelope(rawPayload) {
@@ -107429,6 +107507,7 @@
       env.envelopeUpdatedAt = Number(p.envelopeUpdatedAt) || 0;
       if (p.items && typeof p.items === "object") env.items = p.items;
       if (p.tombstones && typeof p.tombstones === "object") env.tombstones = p.tombstones;
+      if (p.settings && typeof p.settings === "object") env.settings = p.settings;
       return env;
     }
 
@@ -107437,7 +107516,17 @@
       const id = String(mutation.id || "");
       if (!id) return env;
       const now = Date.now();
-      if (mutation.op === "tombstone") {
+      if (mutation.op === "settings" && mutation.settings && typeof mutation.settings === "object") {
+        const next = mutation.settings;
+        const ts = Number(next.updatedAt) || now;
+        const prevTs =
+          env.settings && typeof env.settings === "object"
+            ? Number(env.settings.updatedAt) || 0
+            : 0;
+        if (ts < prevTs) return env;
+        env.settings = next;
+        env.settings.updatedAt = ts;
+      } else if (mutation.op === "tombstone") {
         const ts = Number(mutation.deletedAt) || now;
         const prevItem = env.items && env.items[id];
         const prevTs = aliyunForgeRealItemTs(prevItem);
@@ -107573,6 +107662,17 @@
       if (!cloned) return;
       if (!cloned.updatedAt) cloned.updatedAt = Date.now();
       scheduleAliyunForgeRealSync(reason, { op: "upsert", id: cloned.id, item: cloned });
+    }
+
+    /** 壶铃重量 / 囚徒阶梯 / 日周最低标准变更后推 settings 切片 */
+    function notifyAliyunForgeRealSettingsAfterLocalChange(reason) {
+      if (!isAliyunForgeRealSyncEnabled() || aliyunForgeRealSuppressPush) return;
+      const settings = aliyunForgeRealCloneSettingsForCloud();
+      scheduleAliyunForgeRealSync(reason || "settings", {
+        op: "settings",
+        id: "__forgeSettings__",
+        settings: settings
+      });
     }
 
     function notifyAliyunForgeRealTombstone(reason, id, itemOpt) {
@@ -107773,6 +107873,7 @@
         const remoteItems = env.items || {};
         const remoteTombs = env.tombstones || {};
         const remoteIds = Object.keys(remoteItems);
+        let settingsChanged = false;
         aliyunForgeRealSuppressPush = true;
         try {
           for (let r = 0; r < remoteIds.length; r++) {
@@ -107818,7 +107919,14 @@
             delete localById[tid];
             tombstoneApplied += 1;
           }
-          if (mergedCount || tombstoneApplied) {
+          if (env.settings && typeof env.settings === "object") {
+            try {
+              settingsChanged = !!aliyunForgeRealApplyRemoteSettings(env.settings);
+            } catch (_setMerge) {
+              settingsChanged = false;
+            }
+          }
+          if (mergedCount || tombstoneApplied || settingsChanged) {
             if (uiPaintDirty == null) {
               uiPaintDirty = {};
               if (typeof UI_PAINT_SLICE_KEYS !== "undefined") {
@@ -107838,25 +107946,39 @@
         mergeMs = Date.now() - tMerge0;
 
         const tRen0 = Date.now();
-        if (mergedCount || tombstoneApplied) {
+        if (mergedCount || tombstoneApplied || settingsChanged) {
           try {
             if (typeof refreshAllForgeTodayTaskRowsFromDone === "function") {
               refreshAllForgeTodayTaskRowsFromDone();
             }
           } catch (_rf) {}
+          try {
+            if (settingsChanged) {
+              if (typeof syncForgeKbWeightUi === "function") syncForgeKbWeightUi();
+              if (typeof syncForgeCcProgressUi === "function") syncForgeCcProgressUi();
+              if (typeof renderForgeDailyMinRows === "function") renderForgeDailyMinRows();
+              if (typeof renderForgeWeeklyMinRows === "function") renderForgeWeeklyMinRows();
+            }
+          } catch (_setUi) {}
           if (typeof render === "function") render();
         }
         renderMs = Date.now() - tRen0;
         aliyunSyncPrimaryMarkPullFingerprint("forge", forgePullFp);
         ok = true;
         aliyunForgeRealAppendLog(
-          "合并完成：upsert/更新 " + mergedCount + "，tombstone 生效 " + tombstoneApplied
+          "合并完成：upsert/更新 " +
+            mergedCount +
+            "，tombstone 生效 " +
+            tombstoneApplied +
+            "，settings=" +
+            !!settingsChanged
         );
         return {
           ok: true,
           docId: docId,
           mergedCount: mergedCount,
-          tombstoneApplied: tombstoneApplied
+          tombstoneApplied: tombstoneApplied,
+          settingsChanged: settingsChanged
         };
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
@@ -107889,6 +108011,8 @@
     try {
       window.runAliyunForgeRealPullAndMerge = runAliyunForgeRealPullAndMerge;
       window.isAliyunForgeRealSyncEnabled = isAliyunForgeRealSyncEnabled;
+      window.notifyAliyunForgeRealSettingsAfterLocalChange =
+        notifyAliyunForgeRealSettingsAfterLocalChange;
     } catch (_forgeWin) {}
 
     /**
@@ -119884,6 +120008,21 @@
             } catch (_goalsNotify) {}
           }
         }
+        if (
+          !cloudSyncSuppressPush &&
+          !opts.fromHygiene &&
+          typeof notifyAliyunForgeRealSettingsAfterLocalChange === "function" &&
+          typeof isAliyunForgeRealSyncEnabled === "function" &&
+          isAliyunForgeRealSyncEnabled()
+        ) {
+          const fLists = Array.isArray(opts.lists) ? opts.lists : null;
+          /* 仅显式 lists 含 forge：避免裸 saveState 把无关写入刷成 settings 风暴 */
+          if (fLists && fLists.indexOf("forge") >= 0) {
+            try {
+              notifyAliyunForgeRealSettingsAfterLocalChange("save:forge");
+            } catch (_forgeSetNotify) {}
+          }
+        }
         if (!cloudSyncSuppressPush) {
           const tCloud = perfNow();
           markCloudSyncPendingUpload();
@@ -129979,7 +130118,7 @@
           if (!key) return;
           ensureForgeKbWeightsState();
           state.forge.kbWeightKg[key] = sel.value === "24" ? "24" : "16";
-          saveState();
+          saveState({ lists: ["forge"] });
           syncForgeKbWeightUi();
         });
       });
@@ -130061,7 +130200,7 @@
           if (n > 10) n = 10;
           ensureForgeCcProgressState();
           state.forge.ccProgressStep[key] = String(n);
-          saveState();
+          saveState({ lists: ["forge"] });
           syncForgeCcProgressUi();
           const mod = document.getElementById("forgeModule");
           if (mod) captureForgeTaskValIdleDisplays(mod);
@@ -171877,7 +172016,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           row.label = nameInp ? nameInp.value.trim() : "";
           row.unit = inferForgeWpGoalUnit(row.label);
           row.weeklyMin = tgtInp ? tgtInp.value.trim() : "";
-          saveState();
+          saveState({ lists: ["forge"] });
         }
         function revertWeeklyMinInputsFromRow() {
           const lb = String(row.label || "").trim();
@@ -171963,7 +172102,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             state.forge.weeklyMinimums = state.forge.weeklyMinimums.filter(function (x) {
               return x.id !== id;
             });
-            saveState();
+            saveState({ lists: ["forge"] });
             renderForgeWeeklyMinRows();
             refreshAllForgeTodayTaskRowsFromDone();
           });
@@ -172162,7 +172301,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           row.label = nameInp ? nameInp.value.trim() : "";
           row.unit = inferForgeWpGoalUnit(row.label);
           row.dailyMin = tgtInp ? tgtInp.value.trim() : "";
-          saveState();
+          saveState({ lists: ["forge"] });
         }
         function revertWeeklyMinInputsFromRow() {
           const lb = String(row.label || "").trim();
@@ -172248,7 +172387,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             state.forge.dailyMinimums = state.forge.dailyMinimums.filter(function (x) {
               return x.id !== id;
             });
-            saveState();
+            saveState({ lists: ["forge"] });
             renderForgeDailyMinRows();
             refreshAllForgeTodayTaskRowsFromDone();
           });
@@ -172408,7 +172547,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             dailyMin: "",
             unit: "min"
           });
-          saveState();
+          saveState({ lists: ["forge"] });
           const tabBtn = root.querySelector('#forgeDailyMinBoard .forge-weekly-min-tab[data-forge-dm-tab="' + realm + '"]');
           if (tabBtn) tabBtn.click();
           renderForgeDailyMinRows();
@@ -172428,7 +172567,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           weeklyMin: "",
           unit: "min"
         });
-        saveState();
+        saveState({ lists: ["forge"] });
         const tabBtn = root.querySelector('#moduleSubTabPanel-forge-today-standards .forge-weekly-min-tab[data-forge-wm-tab="' + realm + '"]');
         if (tabBtn) tabBtn.click();
         renderForgeWeeklyMinRows();
