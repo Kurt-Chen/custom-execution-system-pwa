@@ -95399,7 +95399,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930ag";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930ah";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -104748,6 +104748,9 @@
       "anniversaryTw020",
       "anniversaryTw021",
       "anniversaryTw022",
+      "anniversaryTwRegistry",
+      "anniversaryTwArchivedKeys",
+      "anniversaryDoneRef",
       "backwardMeasure",
       "backwardMeasurePeriod",
       "dailyWin",
@@ -107889,11 +107892,10 @@
     } catch (_forgeWin) {}
 
     /**
-     * —— 十二周年（tw020/021/022）单域真实同步（阿里云实验，可回滚）——
-     * 只同步 weeks 任务树（主任务+subs）；不改 UI；Firebase 仍推全量。
-     * 默认关。启用：window.__ALIYUN_ANNIV_REAL_SYNC_ENABLED = true
-     * 拉取：await window.runAliyunAnnivRealPullAndMerge()
-     * 文档：aliyun-anniv-real-v1-{room} · kind anniv-real-v1 · items+tombstones（同 Forge）
+     * —— 十二周年单域真实同步（阿里云；主路径随 primary 开）——
+     * weeks 任务树（主任务+subs）+ meta：registry / archivedKeys / doneRef。
+     * 动态周期 tw023+ 与固定 tw020/021/022 同一 normalize（/^tw\d+$/）。
+     * 文档：aliyun-anniv-real-v1-{room} · kind anniv-real-v1 · items+tombstones+meta
      */
     const ALIYUN_ANNIV_REAL_KIND = "anniv-real-v1";
     const ALIYUN_ANNIV_REAL_PERF_PREFIX = "aliyun-anniv-real:";
@@ -107955,8 +107957,166 @@
 
     function aliyunAnnivRealNormalizeModule(moduleKey) {
       const mk = String(moduleKey || "").toLowerCase();
-      if (ALIYUN_ANNIV_REAL_MODULES.indexOf(mk) >= 0) return mk;
+      /* 固定三周期 + 动态 tw023+ */
+      if (/^tw\d+$/.test(mk)) return mk;
       return "";
+    }
+
+    function aliyunAnnivRealModulesToScan() {
+      const out = ALIYUN_ANNIV_REAL_MODULES.slice();
+      try {
+        if (typeof ensureAnniversaryTwRegistry === "function") ensureAnniversaryTwRegistry();
+      } catch (_e) {}
+      const dyn =
+        state.anniversaryTwRegistry && Array.isArray(state.anniversaryTwRegistry.dynamicKeys)
+          ? state.anniversaryTwRegistry.dynamicKeys
+          : [];
+      for (let i = 0; i < dyn.length; i++) {
+        const mk = aliyunAnnivRealNormalizeModule(dyn[i]);
+        if (mk && out.indexOf(mk) < 0) out.push(mk);
+      }
+      return out;
+    }
+
+    function aliyunAnnivRealMergeRegistry(a, b) {
+      const lo = a && typeof a === "object" ? a : {};
+      const ro = b && typeof b === "object" ? b : {};
+      const keys = [];
+      [].concat(lo.dynamicKeys || [], ro.dynamicKeys || []).forEach(function (k) {
+        const mk = aliyunAnnivRealNormalizeModule(k) || String(k || "");
+        if (mk && keys.indexOf(mk) < 0) keys.push(mk);
+      });
+      return {
+        nextNumber: Math.max(Number(lo.nextNumber) || 23, Number(ro.nextNumber) || 23),
+        dynamicKeys: keys
+      };
+    }
+
+    function aliyunAnnivRealMergeArchivedKeys(a, b) {
+      const out = [];
+      [].concat(Array.isArray(a) ? a : [], Array.isArray(b) ? b : []).forEach(function (k) {
+        const mk = aliyunAnnivRealNormalizeModule(k) || String(k || "");
+        if (mk && out.indexOf(mk) < 0) out.push(mk);
+      });
+      return out;
+    }
+
+    function aliyunAnnivRealCloneMetaFromState() {
+      try {
+        if (typeof ensureAnniversaryTwRegistry === "function") ensureAnniversaryTwRegistry();
+      } catch (_r) {}
+      try {
+        if (typeof ensureAnniversaryTwArchivedKeys === "function") ensureAnniversaryTwArchivedKeys();
+      } catch (_a) {}
+      let registry = { nextNumber: 23, dynamicKeys: [] };
+      let archivedKeys = [];
+      let doneRef = {};
+      try {
+        registry = JSON.parse(
+          JSON.stringify(
+            state.anniversaryTwRegistry && typeof state.anniversaryTwRegistry === "object"
+              ? state.anniversaryTwRegistry
+              : registry
+          )
+        );
+      } catch (_cr) {}
+      try {
+        archivedKeys = JSON.parse(
+          JSON.stringify(Array.isArray(state.anniversaryTwArchivedKeys) ? state.anniversaryTwArchivedKeys : [])
+        );
+      } catch (_ca) {
+        archivedKeys = Array.isArray(state.anniversaryTwArchivedKeys)
+          ? state.anniversaryTwArchivedKeys.slice()
+          : [];
+      }
+      try {
+        doneRef = JSON.parse(
+          JSON.stringify(
+            state.anniversaryDoneRef && typeof state.anniversaryDoneRef === "object"
+              ? state.anniversaryDoneRef
+              : {}
+          )
+        );
+      } catch (_cd) {}
+      return {
+        registry: registry,
+        archivedKeys: archivedKeys,
+        doneRef: doneRef,
+        updatedAt: Date.now()
+      };
+    }
+
+    function aliyunAnnivRealMergeMetaIntoEnvelope(env, localMeta) {
+      if (!env || !localMeta) return env;
+      env.registry = aliyunAnnivRealMergeRegistry(env.registry, localMeta.registry);
+      env.archivedKeys = aliyunAnnivRealMergeArchivedKeys(env.archivedKeys, localMeta.archivedKeys);
+      if (typeof mergeAnniversaryDoneRefForSync === "function") {
+        env.doneRef = mergeAnniversaryDoneRefForSync(env.doneRef, localMeta.doneRef);
+      } else {
+        env.doneRef =
+          localMeta.doneRef && typeof localMeta.doneRef === "object" ? localMeta.doneRef : env.doneRef || {};
+      }
+      env.metaUpdatedAt = Math.max(
+        Number(env.metaUpdatedAt) || 0,
+        Number(localMeta.updatedAt) || 0,
+        Date.now()
+      );
+      return env;
+    }
+
+    /** 拉取/合并远端 meta → state；新 dynamicKeys 会 ensure 动态周期壳 */
+    function aliyunAnnivRealApplyRemoteMeta(remoteEnv) {
+      if (!remoteEnv || typeof remoteEnv !== "object") return false;
+      let changed = false;
+      const nextReg = aliyunAnnivRealMergeRegistry(state.anniversaryTwRegistry, remoteEnv.registry);
+      try {
+        if (JSON.stringify(state.anniversaryTwRegistry || {}) !== JSON.stringify(nextReg)) {
+          state.anniversaryTwRegistry = nextReg;
+          changed = true;
+        }
+      } catch (_cmp) {
+        state.anniversaryTwRegistry = nextReg;
+        changed = true;
+      }
+      const dyn = Array.isArray(nextReg.dynamicKeys) ? nextReg.dynamicKeys : [];
+      for (let i = 0; i < dyn.length; i++) {
+        const mk = aliyunAnnivRealNormalizeModule(dyn[i]);
+        if (!mk || ALIYUN_ANNIV_REAL_MODULES.indexOf(mk) >= 0) continue;
+        try {
+          if (typeof ensureAnniversaryTwDynamicState === "function") {
+            ensureAnniversaryTwDynamicState(mk);
+          }
+        } catch (_ens) {}
+      }
+      const nextArch = aliyunAnnivRealMergeArchivedKeys(
+        state.anniversaryTwArchivedKeys,
+        remoteEnv.archivedKeys
+      );
+      try {
+        if (JSON.stringify(state.anniversaryTwArchivedKeys || []) !== JSON.stringify(nextArch)) {
+          state.anniversaryTwArchivedKeys = nextArch;
+          changed = true;
+        }
+      } catch (_ca) {
+        state.anniversaryTwArchivedKeys = nextArch;
+        changed = true;
+      }
+      if (remoteEnv.doneRef && typeof remoteEnv.doneRef === "object") {
+        const nextDone =
+          typeof mergeAnniversaryDoneRefForSync === "function"
+            ? mergeAnniversaryDoneRefForSync(state.anniversaryDoneRef, remoteEnv.doneRef)
+            : remoteEnv.doneRef;
+        try {
+          if (JSON.stringify(state.anniversaryDoneRef || {}) !== JSON.stringify(nextDone)) {
+            state.anniversaryDoneRef = nextDone;
+            changed = true;
+          }
+        } catch (_cd) {
+          state.anniversaryDoneRef = nextDone;
+          changed = true;
+        }
+      }
+      return changed;
     }
 
     /** 云端任务快照：module + weekNum + 任务字段（含 subs） */
@@ -107994,7 +108154,11 @@
         roomId: String(cloudSyncRoomId || ""),
         envelopeUpdatedAt: Date.now(),
         items: {},
-        tombstones: {}
+        tombstones: {},
+        registry: { nextNumber: 23, dynamicKeys: [] },
+        archivedKeys: [],
+        doneRef: {},
+        metaUpdatedAt: 0
       };
     }
 
@@ -108013,6 +108177,10 @@
       env.envelopeUpdatedAt = Number(p.envelopeUpdatedAt) || 0;
       if (p.items && typeof p.items === "object") env.items = p.items;
       if (p.tombstones && typeof p.tombstones === "object") env.tombstones = p.tombstones;
+      if (p.registry && typeof p.registry === "object") env.registry = p.registry;
+      if (Array.isArray(p.archivedKeys)) env.archivedKeys = p.archivedKeys;
+      if (p.doneRef && typeof p.doneRef === "object") env.doneRef = p.doneRef;
+      env.metaUpdatedAt = Number(p.metaUpdatedAt) || 0;
       return env;
     }
 
@@ -108021,6 +108189,12 @@
       const id = String(mutation.id || "");
       if (!id) return env;
       const now = Date.now();
+      if (mutation.op === "meta" && mutation.meta && typeof mutation.meta === "object") {
+        aliyunAnnivRealMergeMetaIntoEnvelope(env, mutation.meta);
+        env.envelopeUpdatedAt = Math.max(Number(env.envelopeUpdatedAt) || 0, now);
+        env.kind = ALIYUN_ANNIV_REAL_KIND;
+        return env;
+      }
       if (mutation.op === "tombstone") {
         const ts = Number(mutation.deletedAt) || now;
         const prevItem = env.items && env.items[id];
@@ -108224,6 +108398,17 @@
       }
     }
 
+    /** registry / archivedKeys / doneRef 变更后推 meta 切片 */
+    function notifyAliyunAnnivRealMetaAfterLocalChange(reason) {
+      if (!isAliyunAnnivRealSyncEnabled() || aliyunAnnivRealSuppressPush) return;
+      const meta = aliyunAnnivRealCloneMetaFromState();
+      scheduleAliyunAnnivRealSync(reason || "anniv-meta", {
+        op: "meta",
+        id: "__annivMeta__",
+        meta: meta
+      });
+    }
+
     async function flushAliyunAnnivRealQueue() {
       if (aliyunAnnivRealFlushing) return;
       if (!aliyunAnnivRealQueue.length) return;
@@ -108282,6 +108467,8 @@
         for (let i = 0; i < batch.length; i++) {
           aliyunAnnivRealApplyMutationToEnvelope(env, batch[i].mutation);
         }
+        /* 每次 flush 都把本机 meta 并进信封，避免只改 registry/归档时漏推 */
+        aliyunAnnivRealMergeMetaIntoEnvelope(env, aliyunAnnivRealCloneMetaFromState());
         env.roomId = String(cloudSyncRoomId || env.roomId || "");
         env.envelopeUpdatedAt = Date.now();
         mergeMs = Date.now() - tMerge0;
@@ -108411,8 +108598,10 @@
         const remoteTombs = env.tombstones || {};
         const remoteIds = Object.keys(remoteItems);
         const touchedModules = {};
+        let metaChanged = false;
         aliyunAnnivRealSuppressPush = true;
         try {
+          metaChanged = !!aliyunAnnivRealApplyRemoteMeta(env);
           for (let r = 0; r < remoteIds.length; r++) {
             const rid = remoteIds[r];
             const remote = remoteItems[rid];
@@ -108425,6 +108614,13 @@
             const tTs = aliyunAnnivRealItemTs(tomb);
             if (tTs > rTs) continue;
 
+            if (ALIYUN_ANNIV_REAL_MODULES.indexOf(mk) < 0) {
+              try {
+                if (typeof ensureAnniversaryTwDynamicState === "function") {
+                  ensureAnniversaryTwDynamicState(mk);
+                }
+              } catch (_ens) {}
+            }
             if (typeof normalizeAnniversaryTwModuleStateByKey === "function") {
               normalizeAnniversaryTwModuleStateByKey(mk);
             }
@@ -108471,7 +108667,7 @@
             const tomb = remoteTombs[tid];
             const tTs = aliyunAnnivRealItemTs(tomb);
             const hintMk = aliyunAnnivRealNormalizeModule(tomb && tomb.module);
-            const modulesToScan = hintMk ? [hintMk] : ALIYUN_ANNIV_REAL_MODULES.slice();
+            const modulesToScan = hintMk ? [hintMk] : aliyunAnnivRealModulesToScan();
             for (let mi = 0; mi < modulesToScan.length; mi++) {
               const mk = modulesToScan[mi];
               if (typeof normalizeAnniversaryTwModuleStateByKey === "function") {
@@ -108522,7 +108718,7 @@
             }
           }
 
-          if (mergedCount || tombstoneApplied) {
+          if (mergedCount || tombstoneApplied || metaChanged) {
             saveState({ lists: ["closedList", "done"] });
           }
         } finally {
@@ -108531,8 +108727,26 @@
         mergeMs = Date.now() - tMerge0;
 
         const tRen0 = Date.now();
-        if (mergedCount || tombstoneApplied) {
+        if (mergedCount || tombstoneApplied || metaChanged) {
           try {
+            if (metaChanged) {
+              const dyn =
+                state.anniversaryTwRegistry && Array.isArray(state.anniversaryTwRegistry.dynamicKeys)
+                  ? state.anniversaryTwRegistry.dynamicKeys
+                  : [];
+              for (let di = 0; di < dyn.length; di++) {
+                const dmk = aliyunAnnivRealNormalizeModule(dyn[di]);
+                if (!dmk || ALIYUN_ANNIV_REAL_MODULES.indexOf(dmk) >= 0) continue;
+                if (typeof ensureAnniversaryTwDynamicPanelDom === "function") {
+                  ensureAnniversaryTwDynamicPanelDom(
+                    dmk,
+                    typeof anniversaryTwNumberFromModuleKey === "function"
+                      ? anniversaryTwNumberFromModuleKey(dmk)
+                      : 0
+                  );
+                }
+              }
+            }
             const mks = Object.keys(touchedModules);
             for (let i = 0; i < mks.length; i++) {
               const mk = mks[i];
@@ -108543,6 +108757,7 @@
                 renderAnniversaryTw022();
               else if (typeof renderAnniversaryTwModule === "function") renderAnniversaryTwModule(mk);
             }
+            if (metaChanged && typeof render === "function") render();
           } catch (_rf) {
             if (typeof render === "function") render();
           }
@@ -108551,13 +108766,19 @@
         aliyunSyncPrimaryMarkPullFingerprint("anniv", annivPullFp);
         ok = true;
         aliyunAnnivRealAppendLog(
-          "合并完成：upsert/更新 " + mergedCount + "，tombstone 生效 " + tombstoneApplied
+          "合并完成：upsert/更新 " +
+            mergedCount +
+            "，tombstone 生效 " +
+            tombstoneApplied +
+            "，meta=" +
+            !!metaChanged
         );
         return {
           ok: true,
           docId: docId,
           mergedCount: mergedCount,
-          tombstoneApplied: tombstoneApplied
+          tombstoneApplied: tombstoneApplied,
+          metaChanged: metaChanged
         };
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
@@ -108590,6 +108811,9 @@
     try {
       window.runAliyunAnnivRealPullAndMerge = runAliyunAnnivRealPullAndMerge;
       window.isAliyunAnnivRealSyncEnabled = isAliyunAnnivRealSyncEnabled;
+      window.notifyAliyunAnnivRealMetaAfterLocalChange = notifyAliyunAnnivRealMetaAfterLocalChange;
+      window.aliyunAnnivRealDocId = aliyunAnnivRealDocId;
+      window.aliyunAnnivRealParseEnvelope = aliyunAnnivRealParseEnvelope;
     } catch (_annivWin) {}
 
     /**
@@ -117125,6 +117349,22 @@
         );
       });
       base.anniversaryDoneRef = mergeDetailTime("field", "anniversaryDoneRef", function () {
+        if (
+          typeof isAliyunAnnivRealSyncEnabled === "function" &&
+          isAliyunAnnivRealSyncEnabled()
+        ) {
+          try {
+            return state.anniversaryDoneRef && typeof state.anniversaryDoneRef === "object"
+              ? JSON.parse(JSON.stringify(state.anniversaryDoneRef))
+              : { tw020: { items: {} }, tw021: { items: {} }, tw022: { items: {} } };
+          } catch (_adrKeep) {
+            return state.anniversaryDoneRef || {
+              tw020: { items: {} },
+              tw021: { items: {} },
+              tw022: { items: {} }
+            };
+          }
+        }
         return mergeAnniversaryDoneRefForSync(
           state.anniversaryDoneRef,
           remoteState.anniversaryDoneRef
@@ -117215,24 +117455,46 @@
       const regRemote = remoteState.anniversaryTwRegistry && typeof remoteState.anniversaryTwRegistry === "object"
         ? remoteState.anniversaryTwRegistry
         : { nextNumber: 23, dynamicKeys: [] };
-      const dynKeys = [];
-      [].concat(regLocal.dynamicKeys || [], regRemote.dynamicKeys || []).forEach(function (k) {
-        if (k && dynKeys.indexOf(k) === -1) dynKeys.push(k);
-      });
-      base.anniversaryTwRegistry = {
-        nextNumber: Math.max(Number(regLocal.nextNumber) || 23, Number(regRemote.nextNumber) || 23),
-        dynamicKeys: dynKeys
-      };
-      const archKeys = [];
-      []
-        .concat(
-          Array.isArray(state.anniversaryTwArchivedKeys) ? state.anniversaryTwArchivedKeys : [],
-          Array.isArray(remoteState.anniversaryTwArchivedKeys) ? remoteState.anniversaryTwArchivedKeys : []
-        )
-        .forEach(function (k) {
-          if (k && archKeys.indexOf(k) === -1) archKeys.push(k);
+      let dynKeys = [];
+      if (aliyunAnnivKeepLocal) {
+        try {
+          base.anniversaryTwRegistry = JSON.parse(JSON.stringify(regLocal));
+        } catch (_regKeep) {
+          base.anniversaryTwRegistry = regLocal;
+        }
+        dynKeys = Array.isArray(base.anniversaryTwRegistry.dynamicKeys)
+          ? base.anniversaryTwRegistry.dynamicKeys.slice()
+          : [];
+        try {
+          base.anniversaryTwArchivedKeys = Array.isArray(state.anniversaryTwArchivedKeys)
+            ? JSON.parse(JSON.stringify(state.anniversaryTwArchivedKeys))
+            : [];
+        } catch (_archKeep) {
+          base.anniversaryTwArchivedKeys = Array.isArray(state.anniversaryTwArchivedKeys)
+            ? state.anniversaryTwArchivedKeys.slice()
+            : [];
+        }
+      } else {
+        [].concat(regLocal.dynamicKeys || [], regRemote.dynamicKeys || []).forEach(function (k) {
+          if (k && dynKeys.indexOf(k) === -1) dynKeys.push(k);
         });
-      base.anniversaryTwArchivedKeys = archKeys;
+        base.anniversaryTwRegistry = {
+          nextNumber: Math.max(Number(regLocal.nextNumber) || 23, Number(regRemote.nextNumber) || 23),
+          dynamicKeys: dynKeys
+        };
+        const archKeys = [];
+        []
+          .concat(
+            Array.isArray(state.anniversaryTwArchivedKeys) ? state.anniversaryTwArchivedKeys : [],
+            Array.isArray(remoteState.anniversaryTwArchivedKeys)
+              ? remoteState.anniversaryTwArchivedKeys
+              : []
+          )
+          .forEach(function (k) {
+            if (k && archKeys.indexOf(k) === -1) archKeys.push(k);
+          });
+        base.anniversaryTwArchivedKeys = archKeys;
+      }
       mergeDetailTime("field", "anniversaryTwDynamic", function () {
         dynKeys.forEach(function (moduleKey) {
           const sk = anniversaryTwStateKeyFromModuleKey(moduleKey);
@@ -149839,6 +150101,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           changed = true;
         }
       });
+      if (changed) {
+        try {
+          if (typeof notifyAliyunAnnivRealMetaAfterLocalChange === "function") {
+            notifyAliyunAnnivRealMetaAfterLocalChange("anniv-done-ref");
+          }
+        } catch (_nd) {}
+      }
       return changed;
     }
 
@@ -154569,11 +154838,20 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         };
       }
       ensureAnniversaryTwModuleArchiveUi(state[sk]);
+      let registryAdded = false;
       if (state.anniversaryTwRegistry.dynamicKeys.indexOf(moduleKey) === -1) {
         state.anniversaryTwRegistry.dynamicKeys.push(moduleKey);
+        registryAdded = true;
       }
       if (!state.anniversaryDoneRef[moduleKey]) {
         state.anniversaryDoneRef[moduleKey] = { items: {} };
+      }
+      if (registryAdded) {
+        try {
+          if (typeof notifyAliyunAnnivRealMetaAfterLocalChange === "function") {
+            notifyAliyunAnnivRealMetaAfterLocalChange("anniv-registry:" + moduleKey);
+          }
+        } catch (_nr) {}
       }
       return state[sk];
     }
@@ -154643,6 +154921,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (moduleKey && state.anniversaryTwArchivedKeys.indexOf(moduleKey) === -1) {
         state.anniversaryTwArchivedKeys.push(moduleKey);
       }
+      try {
+        if (typeof notifyAliyunAnnivRealMetaAfterLocalChange === "function") {
+          notifyAliyunAnnivRealMetaAfterLocalChange("anniv-archive:" + String(moduleKey || ""));
+        }
+      } catch (_nm) {}
     }
 
     function isAnniversaryTwModuleArchivedFlag(mod, moduleKey) {
@@ -154849,6 +155132,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       ensureAnniversaryTwDynamicPanelDom(moduleKey, number);
       state.anniversaryTwRegistry.nextNumber = number + 1;
       enforceAnniversaryTwThreeWindow();
+      try {
+        if (typeof notifyAliyunAnnivRealMetaAfterLocalChange === "function") {
+          notifyAliyunAnnivRealMetaAfterLocalChange("anniv-create:" + moduleKey);
+        }
+      } catch (_nc) {}
       return moduleKey;
     }
 
