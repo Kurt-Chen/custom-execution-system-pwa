@@ -2932,7 +2932,8 @@
       background: linear-gradient(90deg, #1d4ed8 0%, #2563eb 45%, #38bdf8 100%);
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
       pointer-events: none;
-      transition: width 0.35s ease-out;
+      /* 仅分钟级宽度变化；避免 all / 过长过渡在跑马灯期间被误触发 */
+      transition: width 0.2s ease;
     }
 
     /* 每整点短 tick：仅顶/底各一小段，中间留空以免挡 Sleep Pending */
@@ -3092,11 +3093,14 @@
       position: absolute;
       inset: 0;
       z-index: 3;
-      display: none;
+      /* 始终 flex：勿 display none↔flex（会触发布局/整条闪）；闲时仅隐藏 */
+      display: flex;
       align-items: center;
       box-sizing: border-box;
       pointer-events: none;
       overflow: hidden;
+      visibility: hidden;
+      contain: paint;
       background: linear-gradient(
         90deg,
         rgba(226, 232, 240, 0.96) 0%,
@@ -3106,7 +3110,7 @@
     }
 
     .done-sleep-countdown.is-motto-marquee-playing .done-sleep-countdown__motto-marquee-overlay {
-      display: flex;
+      visibility: visible;
     }
 
     /* 封闭清单未完成提醒：浅暖底（非满屏红字） */
@@ -3125,6 +3129,8 @@
       width: 100%;
       max-width: 100%;
       overflow: hidden;
+      contain: paint;
+      transform: translate3d(0, 0, 0);
       mask-image: linear-gradient(
         90deg,
         transparent 0,
@@ -3329,10 +3335,10 @@
 
     @keyframes done-sleep-countdown-motto-marquee-rtl {
       from {
-        transform: translateX(0);
+        transform: translate3d(0, 0, 0);
       }
       to {
-        transform: translateX(-100%);
+        transform: translate3d(-100%, 0, 0);
       }
     }
 
@@ -32054,6 +32060,9 @@
         box-sizing: border-box;
         padding: 6px 12px 10px;
         margin: 0;
+        /* 跑马灯启停不改尺寸；禁止 transition:all 拖整条一起闪 */
+        min-height: 40px;
+        transition: none;
         /* 上下半区分隔：冷灰略加深、满不透明，仍不抢主视觉；border 不撑高 */
         border-bottom: 1px solid #b8bfc9;
         background: #FFFBF5;
@@ -32326,7 +32335,7 @@
         background: #fffbf5;
       }
 
-      /* 已过色块：width% 与刻度 left% 同源，不受左右文案 min-content 影响；分钟级刷新时平滑过渡 */
+      /* 已过色块：width% 与刻度 left% 同源，不受左右文案 min-content 影响；仅分钟级刷新 */
       :is(ul.app-done-time-timeline, #weeklyPlanSprintStrip) .done-time-block-sprint-split-fill {
         position: absolute;
         top: 0;
@@ -32339,7 +32348,7 @@
         border-radius: 0;
         background: linear-gradient(90deg, #ff9100 0%, #ffd54f 100%);
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
-        transition: width 0.35s ease-out;
+        transition: width 0.2s ease;
       }
 
       /* 3-Day Sprint 顶栏：青绿渐变（pastel 提亮），与 Done List 橙黄冲刺条区分 */
@@ -32477,6 +32486,7 @@
         background: #fffbf5;
         border-radius: inherit;
         overflow: hidden;
+        contain: paint;
       }
 
       #doneList.done-time-block-list
@@ -32486,6 +32496,8 @@
         width: 100%;
         max-width: 100%;
         overflow: hidden;
+        contain: paint;
+        transform: translate3d(0, 0, 0);
         mask-image: linear-gradient(
           90deg,
           transparent 0,
@@ -32516,6 +32528,7 @@
         letter-spacing: 0;
         padding-left: 100%;
         will-change: transform;
+        transform: translate3d(0, 0, 0);
       }
 
       #doneList.done-time-block-list
@@ -32526,10 +32539,10 @@
 
       @keyframes done-sprint-reminder-marquee-rtl {
         from {
-          transform: translateX(0);
+          transform: translate3d(0, 0, 0);
         }
         to {
-          transform: translateX(-100%);
+          transform: translate3d(-100%, 0, 0);
         }
       }
 
@@ -32567,6 +32580,7 @@
         background: #fffbf5;
         border-radius: inherit;
         overflow: hidden;
+        contain: paint;
       }
 
       #doneList.done-time-block-list
@@ -32576,6 +32590,8 @@
         width: 100%;
         max-width: 100%;
         overflow: hidden;
+        contain: paint;
+        transform: translate3d(0, 0, 0);
         mask-image: linear-gradient(
           90deg,
           transparent 0,
@@ -32600,6 +32616,7 @@
         white-space: nowrap;
         padding-left: 100%;
         will-change: transform;
+        transform: translate3d(0, 0, 0);
       }
 
       #doneList.done-time-block-list
@@ -136371,15 +136388,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       viewport.appendChild(track);
       overlay.appendChild(viewport);
       hostEl.appendChild(overlay);
-      void track.offsetWidth;
+      /* 勿 void offsetWidth：强制 reflow 会让整条横条闪 */
       if (!(givenTotal > 0)) {
-        passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec);
+        passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1, hostEl);
+        track.style.setProperty("--marquee-duration", String(passSec) + "s");
       }
       const delaySec = elapsedSec + peekSec;
       if (delaySec > 0.05) {
         track.style.animationDelay = String(-Math.min(delaySec, passSec - 0.05)) + "s";
       }
-      track.classList.add("is-running");
+      startSprintMarqueeTrackRunning(track);
       return passSec;
     }
 
@@ -136604,58 +136622,76 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * 按绿胶囊像素速度换算单遍秒数。动画是 translateX(-100%)，
-     * 轨道含 padding-left:100%，长文案若只按字数估时会明显慢于「粗糙地开始」。
+     * 估单遍秒数：只读宿主 clientWidth + 文案长度，不 scrollWidth / getBoundingClientRect / 写 style。
+     * 挂载后测速再改 --marquee-duration 会强制整条横条 reflow → 闪动。
      */
-    function measureSprintFinishMarqueePassSecMatchingRoughStart(track, fallbackSec) {
+    function estimateSprintMarqueePassSecForHost(hostEl, text, fallbackSec, speedMul) {
       const fallback = Math.max(1, Number(fallbackSec) || sprintFinishRoughStartMarqueeDurationSec());
-      if (!track) return fallback;
-      const viewportEl = track.parentElement;
-      const viewportW = (viewportEl && viewportEl.clientWidth) || 0;
-      const travel = track.scrollWidth || 0;
-      if (viewportW < 8 || travel < 8) return fallback;
-      let roughChipW = 0;
-      const host =
-        track.closest(".done-time-sprint-finish") ||
-        document.querySelector(".done-time-sprint-finish") ||
-        track.parentElement;
+      const mul = Number(speedMul) > 0 ? Number(speedMul) : 1;
+      let viewportW = 0;
       try {
-        const probe = document.createElement("span");
-        probe.className = "done-sprint-finish-rough-start-marquee__chip";
-        probe.textContent = SPRINT_FINISH_ROUGH_START_TEXT;
-        probe.setAttribute("aria-hidden", "true");
-        probe.style.cssText =
-          "position:absolute;left:-9999px;top:0;visibility:hidden;pointer-events:none;white-space:nowrap;";
-        (host || document.body).appendChild(probe);
-        roughChipW = probe.getBoundingClientRect().width;
-        probe.remove();
+        viewportW = (hostEl && hostEl.clientWidth) || 0;
       } catch (err) {
-        roughChipW = 0;
+        viewportW = 0;
       }
-      if (!(roughChipW > 1)) {
-        roughChipW = String(SPRINT_FINISH_ROUGH_START_TEXT || "").length * 13 + 24;
+      if (!(viewportW > 8)) {
+        return Math.max(5, fallback / mul);
       }
+      const len = String(text || "").length;
+      /* padding-left:100% → 行程 ≈ 视口 + 内容宽；13px/字粗估（含胶囊边距） */
+      const travel = viewportW + Math.max(40, len * 13 + 24);
+      const roughChipW = String(SPRINT_FINISH_ROUGH_START_TEXT || "").length * 13 + 24;
       const roughTravel = viewportW + roughChipW;
       const roughDur = sprintFinishRoughStartMarqueeDurationSec();
       const pxPerSec = roughTravel / Math.max(1, roughDur);
-      if (!(pxPerSec > 1)) return fallback;
-      /* 上限 180s：长文案（顶栏公式、钟点提醒）仍跟绿胶囊同一像素速度，不被 90s 截快 */
-      return Math.max(6, Math.min(180, travel / pxPerSec));
+      if (!(pxPerSec > 1)) return Math.max(5, fallback / mul);
+      let matched = Math.max(6, Math.min(180, travel / pxPerSec));
+      return Math.max(5, matched / mul);
+    }
+
+    /** @deprecated 兼容旧名：不再对 live track 测宽写 duration */
+    function measureSprintFinishMarqueePassSecMatchingRoughStart(track, fallbackSec) {
+      const host =
+        (track && track.closest &&
+          (track.closest(".done-time-block-sprint-insert--top") ||
+            track.closest(".done-time-sprint-finish") ||
+            track.closest(".done-sleep-countdown") ||
+            track.closest("#doneInputRow") ||
+            track.parentElement)) ||
+        null;
+      const text = track ? String(track.textContent || "").replace(/\s+/g, " ").trim() : "";
+      return estimateSprintMarqueePassSecForHost(host, text, fallbackSec, 1);
     }
 
     /**
-     * 当前冲刺共用：把轨道单遍时长改成与绿胶囊同一像素速度。
-     * speedMul>1 再加快（Victory/Defeat、冲刺顶栏长文）。
+     * 估速（不写 DOM）。调用方须在 append 前设好 --marquee-duration，再 classList.add("is-running")。
+     * 禁止：void track.offsetWidth → 测宽 → 改 duration → 再开动画（横条闪）。
      */
-    function applySprintMarqueeSpeedMatchingRoughStart(track, fallbackSec, speedMul) {
+    function applySprintMarqueeSpeedMatchingRoughStart(track, fallbackSec, speedMul, hostElOpt) {
       const fallback = Math.max(1, Number(fallbackSec) || 11);
-      if (!track) return fallback;
-      const mul = Number(speedMul) > 0 ? Number(speedMul) : 1;
-      let matched = measureSprintFinishMarqueePassSecMatchingRoughStart(track, fallback);
-      if (!(matched > 0)) return fallback;
-      matched = Math.max(5, matched / mul);
-      track.style.setProperty("--marquee-duration", String(matched) + "s");
-      return matched;
+      if (!track && !hostElOpt) return Math.max(5, fallback / (Number(speedMul) > 0 ? Number(speedMul) : 1));
+      const host =
+        hostElOpt ||
+        (track && track.closest &&
+          (track.closest(".done-time-block-sprint-insert--top") ||
+            track.closest(".done-time-sprint-finish") ||
+            track.closest(".done-sleep-countdown") ||
+            track.closest("#doneInputRow") ||
+            track.parentElement)) ||
+        null;
+      const text = track ? String(track.textContent || "").replace(/\s+/g, " ").trim() : "";
+      return estimateSprintMarqueePassSecForHost(host, text, fallback, speedMul);
+    }
+
+    /** 只加 is-running；绝不 void offsetWidth 强制重启动画 */
+    function startSprintMarqueeTrackRunning(track) {
+      if (!track) return;
+      if (track.classList.contains("is-running")) return;
+      const reduceMotion =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (reduceMotion) return;
+      track.classList.add("is-running");
     }
 
     /**
@@ -136787,8 +136823,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       viewport.appendChild(track);
       overlay.appendChild(viewport);
       hostEl.appendChild(overlay);
-      void track.offsetWidth;
-      track.classList.add("is-running");
+      /* 勿 void offsetWidth：强制 reflow 会让整条横条闪 */
+      startSprintMarqueeTrackRunning(track);
     }
 
     function sprintFinishRoughStartMarqueeOverlayHealthy(hostEl) {
@@ -138724,15 +138760,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       viewport.appendChild(track);
       overlay.appendChild(viewport);
       hostEl.appendChild(overlay);
-      void track.offsetWidth;
+      /* 勿 void offsetWidth：强制 reflow 会让整条横条闪 */
       if (!(givenTotal > 0)) {
         passSec = applySprintMarqueeSpeedMatchingRoughStart(
           track,
           passSec,
-          kind === "blackSheepGoat" ? 1.5 : 1
+          kind === "blackSheepGoat" ? 1.5 : 1,
+          hostEl
         );
+        track.style.setProperty("--marquee-duration", String(passSec) + "s");
       }
-      track.classList.add("is-running");
+      startSprintMarqueeTrackRunning(track);
       return passSec;
     }
 
@@ -139098,11 +139136,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       viewport.appendChild(track);
       overlay.appendChild(viewport);
       hostEl.appendChild(overlay);
-      void track.offsetWidth;
+      /* 勿 void offsetWidth：强制 reflow 会让整条横条闪 */
       if (!(givenTotal > 0)) {
-        passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec);
+        passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1, hostEl);
+        track.style.setProperty("--marquee-duration", String(passSec) + "s");
       }
-      track.classList.add("is-running");
+      startSprintMarqueeTrackRunning(track);
       return passSec;
     }
 
@@ -139403,11 +139442,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       viewport.appendChild(track);
       overlay.appendChild(viewport);
       hostEl.appendChild(overlay);
-      void track.offsetWidth;
+      /* 勿 void offsetWidth：强制 reflow 会让整条横条闪 */
       if (!(givenTotal > 0)) {
-        passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec);
+        passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1, hostEl);
+        track.style.setProperty("--marquee-duration", String(passSec) + "s");
       }
-      track.classList.add("is-running");
+      startSprintMarqueeTrackRunning(track);
       return passSec;
     }
 
@@ -140991,11 +141031,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         typeof window.matchMedia === "function" &&
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       if (!reduceMotion) {
-        void track.offsetWidth;
+        /* 勿 void offsetWidth：强制 reflow 会让整条横条闪 */
         if (!(givenTotal > 0)) {
-          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1.45);
+          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1.45, hostEl);
+          track.style.setProperty("--marquee-duration", String(passSec) + "s");
         }
-        track.classList.add("is-running");
+        startSprintMarqueeTrackRunning(track);
       }
       return passSec;
     }
@@ -141296,11 +141337,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         typeof window.matchMedia === "function" &&
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       if (!reduceMotion) {
-        void track.offsetWidth;
+        /* 勿 void offsetWidth：强制 reflow 会让整条横条闪 */
         if (!(givenTotal > 0)) {
-          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1.45);
+          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1.45, hostEl);
+          track.style.setProperty("--marquee-duration", String(passSec) + "s");
         }
-        track.classList.add("is-running");
+        startSprintMarqueeTrackRunning(track);
       }
       return passSec;
     }
@@ -142498,10 +142540,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       const passes = Math.max(1, Number(SPRINT_REMINDER_MARQUEE_PASSES) || 1);
       const givenTotal = Number(totalDurationSec) || 0;
+      /* 挂载前估速并写满 duration；禁止 append 后再测宽改 style（整条横条闪） */
       let passSec =
         givenTotal > 0
           ? Math.max(1, givenTotal / passes)
-          : sprintReminderMarqueeDurationSec(item.text);
+          : estimateSprintMarqueePassSecForHost(
+              topEl,
+              item.text,
+              sprintReminderMarqueeDurationSec(item.text),
+              1.45
+            );
       const elapsedSec = Math.max(0, Number(elapsedSecOpt) || 0);
       track.style.setProperty("--marquee-duration", String(passSec) + "s");
       if (elapsedSec > 0.05) {
@@ -142512,16 +142560,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       viewport.appendChild(track);
       overlay.appendChild(viewport);
       topEl.appendChild(overlay);
-      const reduceMotion =
-        typeof window.matchMedia === "function" &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      if (!reduceMotion) {
-        void track.offsetWidth;
-        if (!(givenTotal > 0)) {
-          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1.45);
-        }
-        track.classList.add("is-running");
-      }
+      startSprintMarqueeTrackRunning(track);
       return passSec;
     }
 
@@ -143196,10 +143235,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       appendSprintFormulaMarqueeTrackContent(track, kind);
       const passes = sprintFormulaMarqueePassesForKind(kind);
       const givenTotal = Number(totalDurationSec) || 0;
+      const formulaText =
+        typeof sprintFormulaMarqueeText === "function" ? sprintFormulaMarqueeText(kind) : "";
       let passSec =
         givenTotal > 0
           ? Math.max(1, givenTotal / passes)
-          : sprintFormulaMarqueeDurationSec(kind);
+          : estimateSprintMarqueePassSecForHost(
+              topEl,
+              formulaText,
+              sprintFormulaMarqueeDurationSec(kind),
+              sprintFormulaMarqueeSpeedMul(kind)
+            );
       const elapsedSec = Math.max(0, Number(elapsedSecOpt) || 0);
       track.style.setProperty("--marquee-duration", String(passSec) + "s");
       if (elapsedSec > 0.05) {
@@ -143210,20 +143256,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       viewport.appendChild(track);
       overlay.appendChild(viewport);
       topEl.appendChild(overlay);
-      const reduceMotion =
-        typeof window.matchMedia === "function" &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      if (!reduceMotion) {
-        void track.offsetWidth;
-        if (!(givenTotal > 0)) {
-          passSec = applySprintMarqueeSpeedMatchingRoughStart(
-            track,
-            passSec,
-            sprintFormulaMarqueeSpeedMul(kind)
-          );
-        }
-        track.classList.add("is-running");
-      }
+      startSprintMarqueeTrackRunning(track);
       return passSec;
     }
 
@@ -143428,9 +143461,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (numSpan) {
         const prefixNode = lineEl.firstChild;
         if (prefixNode && prefixNode.nodeType === Node.TEXT_NODE) {
-          prefixNode.textContent = prefix;
+          if (prefixNode.textContent !== prefix) prefixNode.textContent = prefix;
         }
-        numSpan.textContent = valueText;
+        if (numSpan.textContent !== valueText) numSpan.textContent = valueText;
         return;
       }
       lineEl.textContent = "";
@@ -143455,8 +143488,34 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       /* 界面按整分地板：秒变化不推动色块 / 百分比 */
       const pct = span <= 0 ? 0 : Math.min(1, Math.max(0, (nowMin - sm) / span));
       const nextWidth = (pct * 100).toFixed(3) + "%";
+      const nextElapsed = formatDoneSprintDurMinutes(nowMin - sm);
+      const nextRemain = formatDoneSprintRemain(em, nowMin);
+      const nextPctText = String(Math.round(pct * 100)) + "%";
+      const sig =
+        String(sm) +
+        "|" +
+        String(em) +
+        "|" +
+        String(nowMin) +
+        "|" +
+        nextWidth +
+        "|" +
+        nextElapsed +
+        "|" +
+        nextRemain +
+        "|" +
+        nextPctText;
       const splitBar = bottom.querySelector(".done-time-block-sprint-split-bar");
       let fill = splitBar && splitBar.querySelector(":scope > .done-time-block-sprint-split-fill");
+      /* 数值未变且 fill 宽度已正确：不写 DOM（重建后 fill 为空则必须继续写） */
+      if (
+        blockLi.dataset.sprintProgSig === sig &&
+        fill &&
+        String(fill.style.width || "") === nextWidth
+      ) {
+        return;
+      }
+      blockLi.dataset.sprintProgSig = sig;
       if (splitBar && !fill) {
         fill = document.createElement("div");
         fill.className = "done-time-block-sprint-split-fill";
@@ -143465,14 +143524,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       if (fill) {
         const prevWidth = String(fill.style.width || "");
-        /* 首次写入（含 rebuild 后 0%）关掉过渡，避免「先短条再弹回」 */
-        if (!prevWidth || prevWidth === "0%" || prevWidth === "0.000%") {
-          fill.style.transition = "none";
-          fill.style.width = nextWidth;
-          void fill.offsetWidth;
-          fill.style.transition = "";
-        } else {
-          fill.style.width = nextWidth;
+        if (prevWidth !== nextWidth) {
+          /* 首次写入（含 rebuild 后 0%）关掉过渡，避免「先短条再弹回」 */
+          if (!prevWidth || prevWidth === "0%" || prevWidth === "0.000%") {
+            fill.style.transition = "none";
+            fill.style.width = nextWidth;
+            fill.style.transition = "";
+          } else {
+            fill.style.width = nextWidth;
+          }
         }
       }
       const splitDone = bottom.querySelector(".done-time-block-sprint-split-done");
@@ -143494,7 +143554,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const el = bottom.querySelector(".done-time-block-sprint-elapsed");
       const rm = bottom.querySelector(".done-time-block-sprint-remain");
       if (el) {
-        fillDoneSprintMetaLine(el, "已过 ", formatDoneSprintDurMinutes(nowMin - sm));
+        fillDoneSprintMetaLine(el, "已过 ", nextElapsed);
       }
       if (pctEl) {
         let pctSpan = pctEl.querySelector(":scope > .done-time-block-sprint-num");
@@ -143504,10 +143564,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           pctSpan.className = "done-time-block-sprint-num";
           pctEl.appendChild(pctSpan);
         }
-        pctSpan.textContent = String(Math.round(pct * 100)) + "%";
+        if (pctSpan.textContent !== nextPctText) {
+          pctSpan.textContent = nextPctText;
+        }
       }
       if (rm) {
-        fillDoneSprintMetaLine(rm, "仅剩 ", formatDoneSprintRemain(em, nowMin));
+        fillDoneSprintMetaLine(rm, "仅剩 ", nextRemain);
       }
     }
 
@@ -144447,8 +144509,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const token = doneSleepCountdownMottoMarqueeState.playToken;
       doneSleepCountdownMottoMarqueeState.playEndsAt = Date.now() + playMs;
       if (!reduceMotion) {
-        void track.offsetWidth;
-        track.classList.add("is-running");
+        /* 勿 void offsetWidth：强制 reflow 会让整条横条闪 */
+        startSprintMarqueeTrackRunning(track);
       }
       doneSleepCountdownMottoMarqueeState.finishTimerId = window.setTimeout(function () {
         finishDoneSleepCountdownMottoMarquee(token);
@@ -144652,33 +144714,52 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         : spanMin <= 0
           ? 0
           : Math.min(1, Math.max(0, elapsedFloor / spanMin));
-      if (fill) fill.style.width = Math.round(pct * 100) + "%";
+      if (fill) {
+        const nextW = Math.round(pct * 100) + "%";
+        if (String(fill.style.width || "") !== nextW) {
+          fill.style.width = nextW;
+        }
+      }
 
       if (elapsed) elapsed.classList.toggle("is-on-track", pct < 0.18);
       if (elapsedText) {
-        elapsedText.textContent = "已过 " + formatDoneSprintDurMinutes(elapsedFloor);
+        const nextElapsedTxt = "已过 " + formatDoneSprintDurMinutes(elapsedFloor);
+        if (elapsedText.textContent !== nextElapsedTxt) {
+          elapsedText.textContent = nextElapsedTxt;
+        }
       }
 
       const unlocked = snap.stage === "unlocked";
       if (pending) pending.classList.toggle("is-unlocked", unlocked);
-      if (pendingIc) pendingIc.textContent = unlocked ? "🔓" : "🔒";
+      if (pendingIc) {
+        const nextIc = unlocked ? "🔓" : "🔒";
+        if (pendingIc.textContent !== nextIc) pendingIc.textContent = nextIc;
+      }
       if (pendingText) {
+        let nextPending;
         if (unlocked) {
-          pendingText.textContent = mobile ? "Unlocked" : "Sleep Unlocked";
+          nextPending = mobile ? "Unlocked" : "Sleep Unlocked";
         } else {
           const n = Math.max(0, Math.floor(Number(snap.unfinished) || 0));
-          pendingText.textContent = mobile
+          nextPending = mobile
             ? "Pending · " + String(n) + "项"
             : "Sleep Pending · 剩余" + String(n) + "项";
+        }
+        if (pendingText.textContent !== nextPending) {
+          pendingText.textContent = nextPending;
         }
       }
 
       if (remainText) {
+        let nextRemainTxt;
         if (ended) {
-          remainText.textContent = mobile ? "剩 0m" : "仅剩 0m";
+          nextRemainTxt = mobile ? "剩 0m" : "仅剩 0m";
         } else {
           const remain = formatDoneSprintRemain(SLEEP_COUNTDOWN_END_MIN, nowMinFloor);
-          remainText.textContent = (mobile ? "剩 " : "仅剩 ") + remain;
+          nextRemainTxt = (mobile ? "剩 " : "仅剩 ") + remain;
+        }
+        if (remainText.textContent !== nextRemainTxt) {
+          remainText.textContent = nextRemainTxt;
         }
       }
 
@@ -144799,6 +144880,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         body.querySelectorAll(".done-time-block-sprint-insert").forEach(function (n) {
           n.remove();
         });
+        delete blockLi.dataset.sprintProgSig;
         return;
       }
       if (typeof block.startMin !== "number" || typeof block.endMin !== "number") {
@@ -144844,6 +144926,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       body.querySelectorAll(".done-time-block-sprint-insert").forEach(function (n) {
         n.remove();
       });
+      delete blockLi.dataset.sprintProgSig;
       const headAriaReset = body.querySelector(".done-time-block-head");
       if (headAriaReset) {
         headAriaReset.removeAttribute("aria-expanded");
@@ -150142,11 +150225,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         typeof window.matchMedia === "function" &&
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       if (!reduceMotion) {
-        void track.offsetWidth;
+        /* 勿 void offsetWidth：强制 reflow 会让整条横条闪 */
         if (!(givenTotal > 0) && typeof applySprintMarqueeSpeedMatchingRoughStart === "function") {
-          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1.2);
+          passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1.2, hostEl);
+          track.style.setProperty("--marquee-duration", String(passSec) + "s");
         }
-        track.classList.add("is-running");
+        startSprintMarqueeTrackRunning(track);
       }
       return passSec;
     }
@@ -164815,7 +164899,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         typeof window.matchMedia === "function" &&
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       if (!reduceMotion) {
-        void track.offsetWidth;
+        /* 勿 void offsetWidth：强制 reflow 会让整条横条闪 */
         track.classList.add(loop ? "is-running-loop" : once ? "is-running-once" : "is-running");
       }
     }
@@ -165166,8 +165250,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         typeof window.matchMedia === "function" &&
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       if (!reduceMotion) {
-        void track.offsetWidth;
-        track.classList.add("is-running");
+        /* 勿 void offsetWidth：强制 reflow 会让整条横条闪 */
+        startSprintMarqueeTrackRunning(track);
       }
     }
 
