@@ -95399,7 +95399,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930af";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930ag";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -163044,17 +163044,93 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
+     * 清掉「reconcile 用 Date.now() 发明」的假打卡：
+     * Done.completedAt 明显晚于对应周期 updatedAt（默认 > 30 分钟）→ 非用户记录时写入。
+     * 会 tombstone 推阿里云，避免他端又拉回来。
+     */
+    function purgeSpuriousAmbReconcileDoneMirrors() {
+      if (!Array.isArray(state.done) || !state.done.length) return false;
+      ensureBackwardMeasureState();
+      const skewMs = 30 * 60 * 1000;
+      const removed = [];
+      state.done = state.done.filter(function (d) {
+        if (!d) return false;
+        let kind =
+          d.backwardMeasureMeta && d.backwardMeasureMeta.kind
+            ? String(d.backwardMeasureMeta.kind)
+            : "";
+        let periodKey =
+          d.backwardMeasureMeta && d.backwardMeasureMeta.periodKey != null
+            ? String(d.backwardMeasureMeta.periodKey)
+            : "";
+        if (!kind) {
+          kind = backwardMeasureKindFromDoneLabelText(d.text);
+        }
+        if (!kind) return true;
+        const store = state.backwardMeasure && state.backwardMeasure[kind];
+        if (!store || typeof store !== "object") return true;
+        if (!periodKey) {
+          /* 无 periodKey：若该 kind 仅一个有内容周期，用它比对；否则保守保留 */
+          const contentKeys = Object.keys(store).filter(function (pk) {
+            return backwardMeasurePeriodHasContent(store[pk]);
+          });
+          if (contentKeys.length === 1) periodKey = contentKeys[0];
+          else return true;
+        }
+        const period = store[periodKey];
+        if (!backwardMeasurePeriodHasContent(period)) {
+          /* 周期已空：残留镜像本就该删（与 reconcile keep 逻辑一致） */
+          removed.push(d);
+          return false;
+        }
+        const periodAt = Number(
+          normalizeBackwardMeasurePeriodEntry(period).updatedAt || period.updatedAt || 0
+        );
+        if (!(periodAt > 0)) return true;
+        const doneAt =
+          Number(d.completedAt) || Number(d.updatedAt) || Number(d.createdAt) || 0;
+        if (!(doneAt > 0)) return true;
+        /* Done 完成时间远晚于周期保存时间 → 典型「打开 App 才发明打卡」 */
+        if (doneAt - periodAt > skewMs) {
+          removed.push(d);
+          return false;
+        }
+        return true;
+      });
+      if (!removed.length) return false;
+      removed.forEach(function (item) {
+        if (item && item.id != null && typeof notifyAliyunDoneRealTombstone === "function") {
+          try {
+            notifyAliyunDoneRealTombstone("amb-spurious-reconcile", item.id, item);
+          } catch (_tomb) {}
+        }
+        if (item && item.id != null && typeof recordSyncTombstone === "function") {
+          try {
+            recordSyncTombstone(item.id);
+          } catch (_ts) {}
+        }
+      });
+      return true;
+    }
+
+    /**
      * AMB→Done 安全网（收敛版）：
      * - 不为陈旧周期「发明」今日打卡（那是自动打卡 bug）
+     * - 清掉已被发明的假打卡（completedAt ≫ period.updatedAt）
      * - 仅：给无 meta 的旧 Done 补 meta；清掉已空周期的残留镜像；合并同 kind 同日重复
      * 跨设备新记录仍靠用户 save 时的 Done 域 upsert。
      */
     function reconcileBackwardMeasureDoneMirrorsFromState() {
       if (!Array.isArray(state.done)) state.done = [];
       ensureBackwardMeasureState();
+      let changed = false;
+      try {
+        if (purgeSpuriousAmbReconcileDoneMirrors()) changed = true;
+      } catch (_purgeSp) {
+        console.warn("[amb] purgeSpuriousAmbReconcileDoneMirrors 失败:", _purgeSp);
+      }
       const kinds = ["sprint3", "weekly", "monthly", "quarterly", "yearly", "triennial"];
       const keep = Object.create(null);
-      let changed = false;
 
       kinds.forEach(function (kind) {
         const store = state.backwardMeasure && state.backwardMeasure[kind];
@@ -167601,6 +167677,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         try {
           persistStateToLocalStorage();
         } catch (_bootRepairErr) {}
+      }
+      /* 清掉上一版 reconcile 误造的 AMB→Done 假打卡（升到 af 后仍残留的那条） */
+      try {
+        if (
+          typeof reconcileBackwardMeasureDoneMirrorsFromState === "function" &&
+          reconcileBackwardMeasureDoneMirrorsFromState()
+        ) {
+          try {
+            persistStateToLocalStorage();
+          } catch (_ambBootClean) {}
+          try {
+            markUiPaintSlicesDirty(["done"]);
+          } catch (_ambBootDirty) {}
+        }
+      } catch (_ambBootRec) {
+        console.warn("[amb] boot reconcile Done mirrors 失败:", _ambBootRec);
       }
       maybeRunScheduledDataRetentionOnStartup();
       bootstrapAppInfrastructure();
