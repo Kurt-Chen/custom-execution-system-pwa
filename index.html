@@ -95399,7 +95399,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930ac";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930ad";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -105616,6 +105616,14 @@
         if (m.unit != null && String(m.unit)) meta.unit = String(m.unit);
         out.rule100Meta = meta;
       }
+      /* A.M.B 向后衡量 → Done 镜像：跨设备需保留 kind/periodKey 才能去重与 Power 标 */
+      if (item.backwardMeasureMeta && typeof item.backwardMeasureMeta === "object") {
+        const bm = item.backwardMeasureMeta;
+        out.backwardMeasureMeta = {
+          kind: bm.kind != null ? String(bm.kind) : "",
+          periodKey: bm.periodKey != null ? String(bm.periodKey) : ""
+        };
+      }
       return out;
     }
 
@@ -106140,6 +106148,8 @@
             if (local.manualDone || remote.manualDone) next.manualDone = true;
             if (remote.rule100Meta) next.rule100Meta = remote.rule100Meta;
             else if (local.rule100Meta) next.rule100Meta = local.rule100Meta;
+            if (remote.backwardMeasureMeta) next.backwardMeasureMeta = remote.backwardMeasureMeta;
+            else if (local.backwardMeasureMeta) next.backwardMeasureMeta = local.backwardMeasureMeta;
             Object.keys(next).forEach(function (k) {
               local[k] = next[k];
             });
@@ -110071,6 +110081,14 @@
       state.successCriteria = Array.isArray(slice.successCriteria) ? slice.successCriteria : [];
       state.stopDoing = Array.isArray(slice.stopDoing) ? slice.stopDoing : [];
       state.notToDo = Array.isArray(slice.notToDo) ? slice.notToDo : [];
+      /* AMB 源合入后补齐/清理 Done 镜像（他端仅拉 AMB 也能看到 Done） */
+      try {
+        if (typeof reconcileBackwardMeasureDoneMirrorsFromState === "function") {
+          reconcileBackwardMeasureDoneMirrorsFromState();
+        }
+      } catch (_bmDoneRec) {
+        console.warn("[aliyun-amb-real] reconcile Done mirrors 失败:", _bmDoneRec);
+      }
       return true;
     }
 
@@ -110081,7 +110099,7 @@
     function aliyunAmbRealPaintLocalUiAfterMerge() {
       try {
         if (typeof markUiPaintSlicesDirty === "function") {
-          markUiPaintSlicesDirty(["dailyWin", "habit", "stopDoing", "notToDo"]);
+          markUiPaintSlicesDirty(["dailyWin", "habit", "stopDoing", "notToDo", "done"]);
         }
       } catch (_dirty) {}
       try {
@@ -110233,7 +110251,7 @@
           if (aliyunAmbRealApplySliceToState(mergedSlice)) {
             appliedDuringFlush = true;
             saveState({
-              lists: ["dailyWin", "habit", "stopDoing", "notToDo"],
+              lists: ["dailyWin", "habit", "stopDoing", "notToDo", "done"],
               skipUiPaintDirty: true
             });
           }
@@ -110355,6 +110373,17 @@
         if (aliyunSyncPrimaryIsUnchangedPull("amb", ambPullFp)) {
           ok = true;
           aliyunAmbRealAppendLog("拉取无变化，跳过 merge/render");
+          /* 历史：AMB 已在本机但 Done 镜像缺失（迁移漏 bridge）→ 仍做一次廉价 reconcile */
+          try {
+            if (
+              typeof reconcileBackwardMeasureDoneMirrorsFromState === "function" &&
+              reconcileBackwardMeasureDoneMirrorsFromState()
+            ) {
+              saveState({ lists: ["done"] });
+              aliyunAmbRealPaintLocalUiAfterMerge();
+              aliyunAmbRealAppendLog("unchanged pull：已补齐缺失的 AMB→Done 镜像");
+            }
+          } catch (_ambRecUnch) {}
           return { ok: true, unchanged: true, docId: docId };
         }
         const remoteEnv = aliyunAmbRealParseEnvelope(payloadRaw);
@@ -110370,7 +110399,7 @@
           changed = aliyunAmbRealApplySliceToState(mergedSlice);
           if (changed) {
             saveState({
-              lists: ["dailyWin", "habit", "stopDoing", "notToDo"],
+              lists: ["dailyWin", "habit", "stopDoing", "notToDo", "done"],
               skipUiPaintDirty: true
             });
           }
@@ -145397,6 +145426,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return "manual:" + String(task.id);
       }
       /**
+       * A.M.B 向后衡量：同一 kind+periodKey 只留一行（本机派生 + Done 域 upsert 可能各写一条）。
+       */
+      if (task && task.backwardMeasureMeta && typeof task.backwardMeasureMeta === "object") {
+        const bk = String(task.backwardMeasureMeta.kind || "").trim();
+        const bp = String(task.backwardMeasureMeta.periodKey || "").trim();
+        if (bk && bp) return "bm:" + bk + ":" + bp;
+        if (task.id != null) return "bm:" + String(task.id);
+      }
+      /**
        * 习惯打卡：同日可多次（第 N 次），按 key+date+次数去重。
        * 勿仅用 id：云同步两端各写一条时 id 不同，会整页成对翻倍。
        */
@@ -162775,25 +162813,86 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function removeBackwardMeasureDoneCopy(kind, periodKey) {
-      state.done = state.done.filter(
-        (item) =>
-          !(
-            item.backwardMeasureMeta &&
-            item.backwardMeasureMeta.kind === kind &&
-            item.backwardMeasureMeta.periodKey === periodKey
-          )
-      );
+      const removed = [];
+      state.done = state.done.filter(function (item) {
+        const hit =
+          item &&
+          item.backwardMeasureMeta &&
+          item.backwardMeasureMeta.kind === kind &&
+          item.backwardMeasureMeta.periodKey === periodKey;
+        if (hit) removed.push(item);
+        return !hit;
+      });
+      removed.forEach(function (item) {
+        if (item && item.id != null && typeof notifyAliyunDoneRealTombstone === "function") {
+          try {
+            notifyAliyunDoneRealTombstone("amb-backward-remove", item.id, item);
+          } catch (_ambDoneTomb) {}
+        }
+      });
     }
 
     function syncBackwardMeasureToDone(kind, periodKey) {
       const label = BACKWARD_MEASURE_KIND_LABEL[kind] || kind;
       removeBackwardMeasureDoneCopy(kind, periodKey);
-      state.done.unshift({
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+      const now = Date.now();
+      const newItem = {
+        id: now.toString(36) + Math.random().toString(36).slice(2, 7),
         text: "完成【" + label + "】",
-        completedAt: Date.now(),
+        completedAt: now,
+        updatedAt: now,
         backwardMeasureMeta: { kind: kind, periodKey: periodKey }
+      };
+      state.done.unshift(newItem);
+      /* 阿里云 Done 主路径：须显式 upsert，否则仅本机有、他端 Done List 永远看不到 */
+      if (typeof notifyAliyunDoneRealUpsert === "function") {
+        try {
+          notifyAliyunDoneRealUpsert("amb-backward", newItem);
+        } catch (_ambDoneUp) {}
+      }
+    }
+
+    /**
+     * AMB 源数据 → Done 镜像补齐/清理（跨设备安全网）。
+     * 有内容的周期缺 Done 则补；已清空的周期去掉残留镜像。不改统计口径。
+     */
+    function reconcileBackwardMeasureDoneMirrorsFromState() {
+      if (!Array.isArray(state.done)) state.done = [];
+      ensureBackwardMeasureState();
+      const kinds = ["sprint3", "weekly", "monthly", "quarterly", "yearly", "triennial"];
+      const keep = Object.create(null);
+      let changed = false;
+      kinds.forEach(function (kind) {
+        const store = state.backwardMeasure && state.backwardMeasure[kind];
+        if (!store || typeof store !== "object") return;
+        Object.keys(store).forEach(function (periodKey) {
+          if (!backwardMeasurePeriodHasContent(store[periodKey])) return;
+          const sig = kind + "\0" + periodKey;
+          keep[sig] = true;
+          const exists = state.done.some(function (d) {
+            return (
+              d &&
+              d.backwardMeasureMeta &&
+              d.backwardMeasureMeta.kind === kind &&
+              d.backwardMeasureMeta.periodKey === periodKey
+            );
+          });
+          if (!exists && typeof syncBackwardMeasureToDone === "function") {
+            syncBackwardMeasureToDone(kind, periodKey);
+            changed = true;
+          }
+        });
       });
+      const beforeLen = state.done.length;
+      state.done = state.done.filter(function (d) {
+        if (!d || !d.backwardMeasureMeta) return true;
+        const k = String(d.backwardMeasureMeta.kind || "");
+        if (kinds.indexOf(k) < 0) return true;
+        const p = String(d.backwardMeasureMeta.periodKey || "");
+        return Boolean(keep[k + "\0" + p]);
+      });
+      if (state.done.length !== beforeLen) changed = true;
+      return changed;
     }
 
     /** 向后衡量：某周期下已保存且正文非空的周期条数（历史累计） */
