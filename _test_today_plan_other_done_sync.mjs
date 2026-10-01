@@ -108,7 +108,7 @@ assert.doesNotMatch(
   html,
   /Math\.max\(aliyunSprintRealItemTs\(cloned\), aliyunSprintRealItemTs\(task\), Date\.now\(\)\)/
 );
-assert.match(sw, /exec-system-pwa-v20261001dw/);
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001dw"/);
+assert.match(sw, /exec-system-pwa-v20261001dx/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001dx"/);
 
 console.log("OK today-plan-other-done-sync");

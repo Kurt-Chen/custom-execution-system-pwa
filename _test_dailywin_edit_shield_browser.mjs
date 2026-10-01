@@ -1,5 +1,5 @@
 /**
- * Headless Chrome：编辑盾在模拟 AMB paint 后仍保留输入与焦点。
+ * Headless Chrome：显式编辑会话下经历多次 AMB paint + blur，DOM 节点身份不变。
  * 运行：node _test_dailywin_edit_shield_browser.mjs
  */
 import assert from "node:assert/strict";
@@ -41,7 +41,9 @@ function startStaticServer() {
         res.end("missing");
         return;
       }
-      res.writeHead(200, { "Content-Type": mime[path.extname(filePath)] || "application/octet-stream" });
+      res.writeHead(200, {
+        "Content-Type": mime[path.extname(filePath)] || "application/octet-stream"
+      });
       res.end(data);
     });
   });
@@ -51,7 +53,7 @@ function startStaticServer() {
 }
 
 async function runChromeEval() {
-  const userData = fs.mkdtempSync(path.join("/tmp", "dw-shield-chrome-"));
+  const userData = fs.mkdtempSync(path.join("/tmp", "dw-session-chrome-"));
   const outFile = path.join(userData, "result.json");
   const evalJs = `
     (async () => {
@@ -82,46 +84,79 @@ async function runChromeEval() {
         if (typeof render === "function") render(true);
         await sleep(300);
         let input = document.querySelector("#dailyWinList .daily-win-modern-pending-input");
-        if (!input) {
-          // force modern list rebuild
-          if (typeof renderList === "function" && typeof dailyWinList !== "undefined") {
-            renderList(dailyWinList, [], "dailyWin");
-          }
+        if (!input && typeof renderList === "function") {
+          renderList(dailyWinList, [], "dailyWin");
           input = document.querySelector("#dailyWinList .daily-win-modern-pending-input");
         }
         if (!input) {
-          return { ok: false, error: "no-pending-input", htmlSnippet: (document.getElementById("dailyWinList")||{}).innerHTML || "" };
+          return { ok: false, error: "no-pending-input" };
         }
         input.focus();
-        input.value = "盾测试文案ABC123";
+        input.value = "显式会话测试文案ABC";
         input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new CompositionEvent("compositionstart"));
+        input.dispatchEvent(new CompositionEvent("compositionupdate", { data: "测" }));
+        input.dispatchEvent(new CompositionEvent("compositionend", { data: "测试" }));
         const beforeNode = input;
         const beforeVal = input.value;
-        const shieldBefore = typeof isDailyWinEditorShieldActive === "function" && isDailyWinEditorShieldActive();
+        const sessionBefore =
+          typeof isDailyWinEditSessionActive === "function" && isDailyWinEditSessionActive();
+
+        /* 模拟软键盘/IME blur：旧逻辑会在 480ms 后清盾；新逻辑必须仍保持会话 */
+        input.blur();
+        await sleep(700);
+        const sessionAfterBlur =
+          typeof isDailyWinEditSessionActive === "function" && isDailyWinEditSessionActive();
+
+        const paintRounds = [];
+        for (let i = 0; i < 6; i++) {
+          if (typeof markUiPaintSlicesDirty === "function") {
+            markUiPaintSlicesDirty(["dailyWin", "habit", "stopDoing", "notToDo", "done"]);
+          }
+          if (typeof aliyunAmbRealPaintLocalUiAfterMerge === "function") {
+            aliyunAmbRealPaintLocalUiAfterMerge();
+          } else if (typeof render === "function") {
+            render();
+          }
+          /* 强制再撞一次 renderList 硬挡 */
+          if (typeof renderList === "function") {
+            renderList(dailyWinList, [], "dailyWin");
+          }
+          const stillSame = document.querySelector("#dailyWinList .daily-win-modern-pending-input") === beforeNode;
+          paintRounds.push({
+            i: i,
+            sameNode: stillSame,
+            session:
+              typeof isDailyWinEditSessionActive === "function" && isDailyWinEditSessionActive(),
+            value: beforeNode.value
+          });
+          await sleep(40);
+        }
+
+        const afterNode = document.querySelector("#dailyWinList .daily-win-modern-pending-input");
+        const allSame = paintRounds.every((r) => r.sameNode && r.session && r.value === beforeVal);
+
+        /* 明确结束后才允许重建 */
+        if (typeof endDailyWinEditSession === "function") {
+          endDailyWinEditSession("test-end");
+        }
         if (typeof markUiPaintSlicesDirty === "function") {
-          markUiPaintSlicesDirty(["dailyWin", "habit", "stopDoing", "notToDo", "done"]);
+          markUiPaintSlicesDirty(["dailyWin"]);
         }
-        if (typeof aliyunAmbRealPaintLocalUiAfterMerge === "function") {
-          aliyunAmbRealPaintLocalUiAfterMerge();
-        } else {
-          render();
-        }
-        await sleep(50);
-        const afterNode = document.activeElement;
-        const afterVal = afterNode && afterNode.classList && afterNode.classList.contains("daily-win-modern-pending-input")
-          ? afterNode.value
-          : (document.querySelector("#dailyWinList .daily-win-modern-pending-input") || {}).value;
-        const shieldAfter = typeof isDailyWinEditorShieldActive === "function" && isDailyWinEditorShieldActive();
-        const sameNode = afterNode === beforeNode;
+        if (typeof render === "function") render(true);
+        const rebuilt = document.querySelector("#dailyWinList .daily-win-modern-pending-input");
+        const rebuiltDifferent = rebuilt !== beforeNode;
+
         return {
           ok: true,
-          beforeVal,
-          afterVal,
-          shieldBefore,
-          shieldAfter,
-          sameNode,
-          valueKept: beforeVal === afterVal,
-          stillPendingFocused: !!(afterNode && afterNode.classList && afterNode.classList.contains("daily-win-modern-pending-input"))
+          beforeVal: beforeVal,
+          afterVal: afterNode && afterNode.value,
+          sessionBefore: sessionBefore,
+          sessionAfterBlur: sessionAfterBlur,
+          paintRounds: paintRounds,
+          allSame: allSame,
+          sameNodeFinal: afterNode === beforeNode,
+          rebuiltDifferent: rebuiltDifferent
         };
       } catch (err) {
         return { ok: false, error: String(err && err.stack || err) };
@@ -129,7 +164,7 @@ async function runChromeEval() {
     })()
   `;
 
-  const debugPort = 9229;
+  const debugPort = 9230;
   const chrome = spawn(
     CHROME,
     [
@@ -146,13 +181,6 @@ async function runChromeEval() {
 
   await new Promise((r) => setTimeout(r, 800));
 
-  async function cdp(method, params, sessionId) {
-    // minimal fetch to /json/new then Runtime.evaluate via websocket would be heavy.
-    // Use chrome's HTTP /json endpoint + websockets from node.
-    return { method, params, sessionId };
-  }
-
-  // Prefer websocket CDP
   const listRes = await fetch(`http://127.0.0.1:${debugPort}/json/list`);
   const targets = await listRes.json();
   let wsUrl = targets[0] && targets[0].webSocketDebuggerUrl;
@@ -163,22 +191,13 @@ async function runChromeEval() {
   }
   assert.ok(wsUrl, "cdp websocket");
 
-  const { default: WebSocket } = await import("node:ws").catch(async () => {
-    // node 22 may not have ws; use raw undici websocket if available
-    return { default: globalThis.WebSocket };
-  });
+  let WebSocketCtor = globalThis.WebSocket;
+  try {
+    const mod = await import("ws");
+    WebSocketCtor = mod.default;
+  } catch (_e) {}
 
-  let ws;
-  if (WebSocket && WebSocket !== globalThis.WebSocket) {
-    ws = new WebSocket(wsUrl);
-  } else if (globalThis.WebSocket) {
-    ws = new globalThis.WebSocket(wsUrl);
-  } else {
-    // fallback: install no dependency — use chrome --run-all-compositor-modes with page that posts result
-    chrome.kill("SIGKILL");
-    throw new Error("no WebSocket client available");
-  }
-
+  const ws = new WebSocketCtor(wsUrl);
   await new Promise((resolve, reject) => {
     ws.onopen = resolve;
     ws.onerror = reject;
@@ -207,7 +226,7 @@ async function runChromeEval() {
           pending.delete(id);
           reject(new Error("cdp timeout " + method));
         }
-      }, 20000);
+      }, 30000);
     });
   }
 
@@ -234,17 +253,18 @@ let result;
 try {
   result = await runChromeEval();
 } catch (err) {
-  // If ws module missing, skip browser test with clear message but don't fail CI hard?
   console.error(err);
   server.close();
   process.exit(1);
 }
 server.close();
 
-console.log("browser-result", result);
+console.log("browser-result", JSON.stringify(result, null, 2));
 assert.ok(result && result.ok, "browser harness ok: " + JSON.stringify(result));
-assert.equal(result.beforeVal, "盾测试文案ABC123");
-assert.equal(result.afterVal, "盾测试文案ABC123", "value must survive AMB paint");
-assert.equal(result.shieldAfter, true, "shield should stay active while focused/dirty");
-assert.ok(result.sameNode || result.stillPendingFocused, "editor node or focus should survive");
-console.log("OK dailywin-edit-shield-browser");
+assert.equal(result.sessionBefore, true, "session begins on input");
+assert.equal(result.sessionAfterBlur, true, "blur must NOT end session");
+assert.equal(result.allSame, true, "6 paint rounds must keep same node/value/session");
+assert.equal(result.sameNodeFinal, true, "node identity preserved through paints");
+assert.equal(result.afterVal, "显式会话测试文案ABC");
+assert.equal(result.rebuiltDifferent, true, "after explicit end, rebuild allowed");
+console.log("OK dailywin-edit-session-browser");
