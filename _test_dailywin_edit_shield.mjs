@@ -1,5 +1,5 @@
 /**
- * 每天三赢编辑盾：AMB pull/merge 不得在编辑中重建 dailyWin DOM。
+ * 每天三赢显式编辑会话：AMB pull/merge 不得在会话中重建 dailyWin DOM。
  * 运行：node _test_dailywin_edit_shield.mjs
  */
 import assert from "node:assert/strict";
@@ -15,47 +15,45 @@ function mustInclude(marker, msg) {
   assert.ok(html.includes(marker), msg || "missing: " + marker);
 }
 
-mustInclude("let dailyWinEditorShield", "dailyWinEditorShield state");
-mustInclude("function isDailyWinEditorShieldActive", "shield active helper");
-mustInclude("function armDailyWinEditorShield", "arm shield");
-mustInclude("function clearDailyWinEditorShield", "clear shield");
-mustInclude("function scheduleDailyWinEditorShieldRelease", "blur grace release");
+mustInclude("let dailyWinEditSession", "explicit edit session state");
+mustInclude("function isDailyWinEditSessionActive", "session active helper");
+mustInclude("function beginDailyWinEditSession", "begin session");
+mustInclude("function endDailyWinEditSession", "end session");
+mustInclude("function ensureDailyWinEditSessionLeaveDetection", "leave via pointerdown");
 mustInclude("function bindDailyWinPendingInputShield", "pending input bind");
 mustInclude("function protectDailyWinEditorsInMergedSlice", "merge protect");
-mustInclude("function taskTitleIxShieldKeepDailyWinText", "item text shield");
 
-mustInclude("bindDailyWinPendingInputShield(inputMain)", "wire pending inputs");
-mustInclude("protectDailyWinEditorsInMergedSlice(mergedSlice)", "pull/flush protect call");
+/* 禁止 blur 宽限期清会话 */
+assert.ok(!html.includes("scheduleDailyWinEditorShieldRelease"), "blur-grace release must be gone");
+assert.ok(!html.includes("DAILY_WIN_EDITOR_SHIELD_BLUR_MS"), "blur ms constant must be gone");
+assert.ok(!/\.addEventListener\(\"blur\".*dailyWin|scheduleDailyWinEditorShieldRelease/.test(html));
 
-/* render 跳过 dailyWin DOM */
-mustInclude("isDailyWinEditorShieldActive()", "shield checked in render/busy");
-mustInclude("paintDailyWinDom = false", "skip dailyWin DOM rebuild");
-
-/* busy / editing 路径纳入盾 */
-const busyFn = html.slice(
-  html.indexOf("function isAppUiBusyForBackgroundRefresh"),
-  html.indexOf("function isAppUiBusyForBackgroundRefresh") + 450
+/* renderList 硬挡 */
+const renderListFn = html.slice(
+  html.indexOf("function renderList(ul, tasks, listName)"),
+  html.indexOf("function renderList(ul, tasks, listName)") + 900
 );
-assert.match(busyFn, /isDailyWinEditorShieldActive/);
+assert.match(renderListFn, /isDailyWinEditSessionActive/);
+assert.match(renderListFn, /return;/);
 
-const editFn = html.slice(
-  html.indexOf("function isAppUiEditingInProgress"),
-  html.indexOf("function isAppUiEditingInProgress") + 400
-);
-assert.match(editFn, /isDailyWinEditorShieldActive/);
-
-/* AMB paint 在盾激活时记 deferred */
+/* AMB paint 会话中不走整页 render */
 const paintFn = html.slice(
   html.indexOf("function aliyunAmbRealPaintLocalUiAfterMerge"),
-  html.indexOf("function aliyunAmbRealPaintLocalUiAfterMerge") + 1200
+  html.indexOf("function aliyunAmbRealPaintLocalUiAfterMerge") + 2200
 );
-assert.match(paintFn, /dwShield|isDailyWinEditorShieldActive/);
-assert.match(paintFn, /renderDeferredWhileEditing\s*=\s*true/);
+assert.match(paintFn, /isDailyWinEditSessionActive|dwSession/);
+assert.match(paintFn, /return;/);
+assert.ok(
+  paintFn.includes("绝不调用") || paintFn.includes("绕开会碰 dailyWin"),
+  "paint must document skip full render during session"
+);
 
-/* 保存后清盾 */
-mustInclude('clearDailyWinEditorShield("composer-save")', "clear on composer save");
+/* 保存 / 离开模块结束会话 */
+mustInclude('endDailyWinEditSession("composer-save")', "end on composer save");
+mustInclude('endDailyWinEditSession("leave-module")', "end on leave module");
+mustInclude('endDailyWinEditSession("leave-panel")', "end on leave panel");
 
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001dw"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001dw"/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001dx"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001dx"/);
 
-console.log("OK dailywin-edit-shield");
+console.log("OK dailywin-edit-session");
