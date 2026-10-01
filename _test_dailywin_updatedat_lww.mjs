@@ -30,8 +30,8 @@ const tombBlock = sliceAround(
 );
 assert.match(tombBlock, /recordSyncTombstone\(task\.id\)/);
 
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930al"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20260930al"/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001dw"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001dw"/);
 
 function recordTieTimestampForSync(item) {
   if (!item || typeof item !== "object") return 0;
