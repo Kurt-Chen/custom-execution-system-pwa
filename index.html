@@ -95399,7 +95399,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930ae";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930af";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -143559,6 +143559,98 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return cluster;
     }
 
+    /**
+     * Done 分类点击卡顿根因（优化前同步链）：
+     * setDoneOutcomeKind/Score → saveState() 裸调用（markAllUiPaintSlicesDirty）
+     * → flushCloudSyncPulseImmediate() → render() 整页（含 V/D / 时间轴全量）
+     * → 且仅 manualDone 才 notifyAliyunDoneRealUpsert。
+     * 目标：先改 state + 本行 UI，保存/云同步/顶栏派生全部后台异步。
+     */
+    let doneOutcomeClickFollowUpTimer = null;
+
+    /** 仅替换该行性质控件，避免整页 render 阻塞点击反馈 */
+    function patchDoneOutcomeUiImmediate(task) {
+      if (!task || task.id == null || !doneList) return false;
+      const sid = String(task.id);
+      let li = null;
+      const nodes = doneList.querySelectorAll("li.timeline-item.done[data-done-id]");
+      for (let i = 0; i < nodes.length; i++) {
+        if (nodes[i].getAttribute("data-done-id") === sid) {
+          li = nodes[i];
+          break;
+        }
+      }
+      if (!li) return false;
+      const row = li.querySelector(".done-compact-outcome-row");
+      if (!row) return false;
+      row.textContent = "";
+      appendDoneOutcomeKindIntoContainer(row, task);
+      return true;
+    }
+
+    function collectDoneTasksForOutcomeChrome() {
+      const dateKey =
+        typeof selectedDoneDate === "string" && selectedDoneDate
+          ? selectedDoneDate
+          : formatDateInputValue(new Date());
+      const raw = (state.done || []).filter(function (task) {
+        return doneTaskMatchesFilterDate(task, dateKey);
+      });
+      const deduped =
+        typeof dedupeDoneTasksForDisplay === "function" ? dedupeDoneTasksForDisplay(raw) : raw;
+      return deduped.filter(function (t) {
+        return typeof isDoneCountedAsDayProduction === "function"
+          ? isDoneCountedAsDayProduction(t)
+          : true;
+      });
+    }
+
+    /** 顶栏性质统计 / Victory·Defeat：轻量刷新，不重建整条时间轴 */
+    function refreshDoneOutcomeDerivedChromeLight() {
+      try {
+        const statsTasks = collectDoneTasksForOutcomeChrome();
+        if (typeof renderDoneOutcomeDayStats === "function" && doneOutcomeDayStats) {
+          renderDoneOutcomeDayStats(doneOutcomeDayStats, statsTasks);
+        }
+        if (typeof renderDoneDayStats === "function" && typeof doneDayStats !== "undefined" && doneDayStats) {
+          renderDoneDayStats(doneDayStats, statsTasks);
+        }
+        if (typeof renderDoneVdIndexHome === "function") {
+          renderDoneVdIndexHome(statsTasks);
+        }
+        if (typeof renderDoneDailyDecisionReport === "function") {
+          renderDoneDailyDecisionReport(statsTasks);
+        }
+      } catch (_chromeErr) {
+        console.warn("[Done] 性质派生刷新失败:", _chromeErr);
+      }
+    }
+
+    /** 后台：窄域 save + 阿里云 Done upsert + 合并连点后刷派生 UI */
+    function scheduleDoneOutcomeClickFollowUp(item, reason, patchedOk) {
+      saveState({ lists: ["done"] });
+      if (item && typeof notifyAliyunDoneRealUpsert === "function") {
+        try {
+          notifyAliyunDoneRealUpsert(reason || "outcome-edit", item);
+        } catch (_aliyunDoneOutcome) {}
+      }
+      if (doneOutcomeClickFollowUpTimer) clearTimeout(doneOutcomeClickFollowUpTimer);
+      doneOutcomeClickFollowUpTimer = setTimeout(function () {
+        doneOutcomeClickFollowUpTimer = null;
+        try {
+          flushLocalPersistedState("force");
+        } catch (_persistErr) {}
+        if (patchedOk) {
+          refreshDoneOutcomeDerivedChromeLight();
+        } else {
+          try {
+            markUiPaintSlicesDirty(["done"]);
+            render();
+          } catch (_renderErr) {}
+        }
+      }, 0);
+    }
+
     function setDoneOutcomeKindForDoneId(id, kind) {
       const sid = String(id || "");
       if (!sid) return;
@@ -143580,14 +143672,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         queueDoneOutcomeScoreFx(sid, item.outcomeScore);
       }
       item.updatedAt = Date.now();
-      saveState();
-      flushCloudSyncPulseImmediate();
-      render();
-      if (item.manualDone && typeof notifyAliyunDoneRealUpsert === "function") {
-        try {
-          notifyAliyunDoneRealUpsert("edit", item);
-        } catch (_aliyunDoneEditKind) {}
-      }
+      const patchedOk = patchDoneOutcomeUiImmediate(item);
+      scheduleDoneOutcomeClickFollowUp(item, "outcome-kind", patchedOk);
     }
 
     function setDoneOutcomeScoreForDoneId(id, score) {
@@ -143605,14 +143691,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       item.updatedAt = Date.now();
       doneOutcomeScorePickOpenIds.delete(sid);
       queueDoneOutcomeScoreFx(sid, n);
-      saveState();
-      flushCloudSyncPulseImmediate();
-      render();
-      if (item.manualDone && typeof notifyAliyunDoneRealUpsert === "function") {
-        try {
-          notifyAliyunDoneRealUpsert("edit", item);
-        } catch (_aliyunDoneEditScore) {}
-      }
+      const patchedOk = patchDoneOutcomeUiImmediate(item);
+      scheduleDoneOutcomeClickFollowUp(item, "outcome-score", patchedOk);
     }
 
     function createDonePowerBadgeEl(playFx) {
