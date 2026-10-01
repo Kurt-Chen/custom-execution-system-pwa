@@ -95596,7 +95596,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001ee";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001ef";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -95967,6 +95967,16 @@
     const habitNumericCheckinConfirmBtn = document.getElementById("habitNumericCheckinConfirmBtn");
     const habitNumericCheckinCancelBtn = document.getElementById("habitNumericCheckinCancelBtn");
     let habitNumericCheckinPendingKey = "";
+    /**
+     * 「记录本次数量」弹窗本地 draft：确认前不写 habitCheckins / 不触发云同步。
+     * 弹窗打开期间后台 pull/merge 不得覆盖或清空此 draft。
+     */
+    let habitNumericCheckinDraft = {
+      active: false,
+      key: "",
+      value: "",
+      bodyFat: ""
+    };
     /* 称体重周日格：false=本周均值，true=当天体重（仅本机视图，不入云） */
     let weightSundayCellShowToday = false;
 
@@ -107228,8 +107238,8 @@
                 markUiPaintSlicesDirty(["habit", "done"]);
               }
               saveState({ lists: ["habit", "done"] });
-              if (typeof finalizeHabitCheckinUiAfterPunch === "function") {
-                finalizeHabitCheckinUiAfterPunch();
+              if (typeof paintHabitUiAfterCloudMerge === "function") {
+                paintHabitUiAfterCloudMerge();
               } else if (typeof render === "function") {
                 render();
               }
@@ -107296,8 +107306,9 @@
 
         const tRen0 = Date.now();
         const paintHabit = function () {
-          if (typeof finalizeHabitCheckinUiAfterPunch === "function") {
-            finalizeHabitCheckinUiAfterPunch();
+          /* 绝不能 finalizeHabitCheckinUiAfterPunch：会关掉「记录本次数量」并清空输入 */
+          if (typeof paintHabitUiAfterCloudMerge === "function") {
+            paintHabitUiAfterCloudMerge();
           } else if (typeof render === "function") {
             render();
           }
@@ -115949,6 +115960,32 @@
     }
 
     /**
+     * 云端 Habit pull/merge 后刷新 UI。
+     * 绝不能走 finalizeHabitCheckinUiAfterPunch：后者会关掉数值弹窗并清空输入。
+     * 弹窗打开期间：只记 dirty + 推迟 render，draft 保留在 DOM / habitNumericCheckinDraft。
+     */
+    function paintHabitUiAfterCloudMerge() {
+      if (typeof isHabitNumericDialogOpen === "function" && isHabitNumericDialogOpen()) {
+        if (typeof captureHabitNumericCheckinDraftFromInputs === "function") {
+          captureHabitNumericCheckinDraftFromInputs();
+        }
+        renderDeferredWhileEditing = true;
+        if (typeof scheduleRenderWhenEditingEnds === "function") {
+          scheduleRenderWhenEditingEnds();
+        }
+        try {
+          if (typeof aliyunHabitRealAppendLog === "function") {
+            aliyunHabitRealAppendLog("paint deferred: numeric checkin dialog open");
+          }
+        } catch (_habitPaintLog) {}
+        return;
+      }
+      if (typeof render === "function") {
+        render();
+      }
+    }
+
+    /**
      * 习惯打卡保存后：本地+pulse，并立即同步完成态 UI。
      * @param {{ hygieneDomains?: string[] }} [opts]
      * 仅普通简单勾选/取消传入 hygieneDomains:["habitDone"]；默认全量 hygiene。
@@ -124565,11 +124602,64 @@
       habitNumericBodyFatField.hidden = !on;
       if (!on && habitNumericBodyFatInput) {
         clearHabitNumericInputError(habitNumericBodyFatInput);
-        habitNumericBodyFatInput.value = "";
+        /* 弹窗仍开着时勿清 bodyFat draft/input（仅隐藏字段） */
+        if (!(typeof isHabitNumericDialogOpen === "function" && isHabitNumericDialogOpen())) {
+          habitNumericBodyFatInput.value = "";
+        }
+      }
+    }
+
+    function clearHabitNumericCheckinDraft() {
+      habitNumericCheckinDraft.active = false;
+      habitNumericCheckinDraft.key = "";
+      habitNumericCheckinDraft.value = "";
+      habitNumericCheckinDraft.bodyFat = "";
+    }
+
+    /** 从弹窗 input 捕获 draft（确认前仅本地，不写 state / 不云同步） */
+    function captureHabitNumericCheckinDraftFromInputs() {
+      if (!(typeof isHabitNumericDialogOpen === "function" && isHabitNumericDialogOpen())) {
+        if (!habitNumericCheckinDraft.active) return;
+      }
+      habitNumericCheckinDraft.active = true;
+      habitNumericCheckinDraft.key = String(habitNumericCheckinPendingKey || habitNumericCheckinDraft.key || "");
+      if (habitNumericCheckinInput) {
+        habitNumericCheckinDraft.value = String(habitNumericCheckinInput.value || "");
+      }
+      if (habitNumericBodyFatInput) {
+        habitNumericCheckinDraft.bodyFat = String(habitNumericBodyFatInput.value || "");
+      }
+    }
+
+    /** 把 draft 写回弹窗 input（防 merge/paint 误清） */
+    function restoreHabitNumericCheckinDraftToInputs() {
+      if (!habitNumericCheckinDraft.active) return;
+      if (
+        habitNumericCheckinPendingKey &&
+        habitNumericCheckinDraft.key &&
+        habitNumericCheckinPendingKey !== habitNumericCheckinDraft.key
+      ) {
+        return;
+      }
+      if (habitNumericCheckinInput) {
+        const next = String(habitNumericCheckinDraft.value || "");
+        if (habitNumericCheckinInput.value !== next) {
+          habitNumericCheckinInput.value = next;
+        }
+      }
+      if (habitNumericBodyFatInput && habitNumericCheckinDraft.key === "weightAndBodyFat") {
+        const nextFat = String(habitNumericCheckinDraft.bodyFat || "");
+        if (habitNumericBodyFatInput.value !== nextFat) {
+          habitNumericBodyFatInput.value = nextFat;
+        }
       }
     }
 
     function hideHabitNumericDialog() {
+      const wasOpen = !!(
+        habitNumericCheckinOverlay && !habitNumericCheckinOverlay.classList.contains("hidden")
+      );
+      clearHabitNumericCheckinDraft();
       habitNumericCheckinPendingKey = "";
       if (habitNumericCheckinInput) habitNumericCheckinInput.value = "";
       setHabitNumericBodyFatFieldVisible(false);
@@ -124578,6 +124668,10 @@
         habitNumericCheckinOverlay.setAttribute("aria-hidden", "true");
       }
       if (typeof syncEntryDialogPerfClass === "function") syncEntryDialogPerfClass();
+      /* 关闭后补跑被推迟的后台 render */
+      if (wasOpen && renderDeferredWhileEditing && typeof scheduleRenderWhenEditingEnds === "function") {
+        scheduleRenderWhenEditingEnds();
+      }
     }
 
     function getHabitNumericInputEl(card, habitKey) {
@@ -124646,6 +124740,15 @@
     function openHabitNumericEntry(habitKey) {
       const card = getHabitNumericCard(habitKey);
       if (!card || !habitNumericCheckinOverlay || !habitNumericCheckinInput) return;
+      /* 已打开同一习惯：保留 draft / 焦点，禁止重配 meta 或 select 打断连续输入 */
+      if (
+        isHabitNumericDialogOpen() &&
+        habitNumericCheckinPendingKey === habitKey &&
+        habitNumericCheckinDraft.active
+      ) {
+        restoreHabitNumericCheckinDraftToInputs();
+        return;
+      }
       /* 不用 habit-en-numeric-entry-open：给卡片加 class 会触发习惯区大量 :has() 重算 */
       habitNumericCheckinPendingKey = habitKey;
       const meta = getHabitNumericUnitMeta(habitKey);
@@ -124684,10 +124787,22 @@
       }
       habitNumericCheckinInput.value = prefills;
       clearHabitNumericInputError(habitNumericCheckinInput);
+      habitNumericCheckinDraft.active = true;
+      habitNumericCheckinDraft.key = habitKey;
+      habitNumericCheckinDraft.value = prefills;
+      habitNumericCheckinDraft.bodyFat = fatPrefill;
       habitNumericCheckinOverlay.classList.remove("hidden");
       habitNumericCheckinOverlay.setAttribute("aria-hidden", "false");
       if (typeof syncEntryDialogPerfClass === "function") syncEntryDialogPerfClass();
       window.requestAnimationFrame(function () {
+        /* 若用户已开始输入，勿再 focus/select 打断光标 */
+        if (
+          habitNumericCheckinDraft.active &&
+          String(habitNumericCheckinDraft.value || "") !== String(prefills || "")
+        ) {
+          restoreHabitNumericCheckinDraftToInputs();
+          return;
+        }
         try {
           habitNumericCheckinInput.focus({ preventScroll: true });
         } catch (_fErr) {
@@ -132335,6 +132450,8 @@
       if (habitNumericCheckinInput) {
         habitNumericCheckinInput.addEventListener("input", function () {
           clearHabitNumericInputError(habitNumericCheckinInput);
+          captureHabitNumericCheckinDraftFromInputs();
+          /* 输入中绝不 saveState / 云同步；确认打卡才写主数据 */
         });
         habitNumericCheckinInput.addEventListener("keydown", function (e) {
           const key = habitNumericCheckinPendingKey;
@@ -132345,6 +132462,7 @@
       if (habitNumericBodyFatInput) {
         habitNumericBodyFatInput.addEventListener("input", function () {
           clearHabitNumericInputError(habitNumericBodyFatInput);
+          captureHabitNumericCheckinDraftFromInputs();
         });
         habitNumericBodyFatInput.addEventListener("keydown", function (e) {
           const key = habitNumericCheckinPendingKey;
@@ -165199,8 +165317,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return isAppUiFieldEditingInProgress();
     }
 
-    /** ⋯ 展开 / 截止日期弹层：后台同步不得拆掉，本地点击删除/保存仍可立刻 render */
+    /** ⋯ 展开 / 截止日期弹层 / 习惯数值打卡弹窗：后台同步不得拆掉 */
     function isAppUiTransientChromeOpen() {
+      if (typeof isHabitNumericDialogOpen === "function" && isHabitNumericDialogOpen()) {
+        return true;
+      }
       if (document.querySelector(".manual-item-actions-wrap.is-expanded")) return true;
       if (document.querySelector(".manual-item-actions-wrap.is-deadline-picking")) return true;
       if (document.querySelector(".app-extreme-deadline-popover:not([hidden])")) return true;
@@ -165209,6 +165330,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function isAppUiBusyForBackgroundRefresh() {
       if (appUiImeComposing) return true;
+      if (typeof isHabitNumericDialogOpen === "function" && isHabitNumericDialogOpen()) {
+        return true;
+      }
       if (typeof isDailyWinEditSessionActive === "function" && isDailyWinEditSessionActive()) {
         return true;
       }
@@ -165367,7 +165491,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         deferRenderForTaskTitleIx(force ? "render-force-blocked" : "render");
         return;
       }
-      if (!force && isAppUiEditingInProgress()) {
+      if (
+        !force &&
+        (isAppUiEditingInProgress() ||
+          (typeof isHabitNumericDialogOpen === "function" && isHabitNumericDialogOpen()))
+      ) {
+        if (typeof isHabitNumericDialogOpen === "function" && isHabitNumericDialogOpen()) {
+          captureHabitNumericCheckinDraftFromInputs();
+        }
         renderDeferredWhileEditing = true;
         scheduleRenderWhenEditingEnds();
         return;
@@ -165465,8 +165596,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const paintClosedSlice = paintDynamic && isUiPaintSliceDirty("closedList");
       const paintWeeklySlice = paintDynamic && isUiPaintSliceDirty("weeklyPlan");
       const paintKineticSlice = paintDynamic && isUiPaintSliceDirty("kinetic");
-      const paintHabitDom = paintHabit && isUiPaintSliceDirty("habit");
+      let paintHabitDom = paintHabit && isUiPaintSliceDirty("habit");
       let paintDailyWinDom = paintHabit && isUiPaintSliceDirty("dailyWin");
+      /* 「记录本次数量」打开：数据可已 merge，但绝不能重绘 Habit 列表打断输入 */
+      if (
+        paintHabitDom &&
+        typeof isHabitNumericDialogOpen === "function" &&
+        isHabitNumericDialogOpen()
+      ) {
+        paintHabitDom = false;
+        captureHabitNumericCheckinDraftFromInputs();
+        restoreHabitNumericCheckinDraftToInputs();
+        renderDeferredWhileEditing = true;
+        if (typeof scheduleRenderWhenEditingEnds === "function") {
+          scheduleRenderWhenEditingEnds();
+        }
+      }
       /* 显式编辑会话：数据可已 merge，但绝不能拆掉正在输入的每天三赢 DOM */
       if (
         paintDailyWinDom &&
@@ -168253,6 +168398,20 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function renderHabitCheckins() {
+      /* 数值打卡弹窗打开时禁止重绘 Habit 列表，避免打断输入 / 误清 draft */
+      if (typeof isHabitNumericDialogOpen === "function" && isHabitNumericDialogOpen()) {
+        if (typeof captureHabitNumericCheckinDraftFromInputs === "function") {
+          captureHabitNumericCheckinDraftFromInputs();
+        }
+        if (typeof restoreHabitNumericCheckinDraftToInputs === "function") {
+          restoreHabitNumericCheckinDraftToInputs();
+        }
+        renderDeferredWhileEditing = true;
+        if (typeof scheduleRenderWhenEditingEnds === "function") {
+          scheduleRenderWhenEditingEnds();
+        }
+        return;
+      }
       const perfT0 = beginCloudSyncPerf();
       bindWeightWeekBarViewportRelayout();
       const todayKey = formatDateInputValue(new Date());
