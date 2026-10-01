@@ -101721,13 +101721,14 @@
       }
       const stickyTs =
         next.syncTombstones && typeof next.syncTombstones === "object" ? next.syncTombstones : {};
-      /* 阿里云 Lists 主路径：Firebase 合并不得改写封闭清单 / 备忘录 / Haters */
+      /* 阿里云 Lists 主路径：Firebase 合并不得改写封闭清单 / 备忘录 / Haters / trash */
       if (typeof isAliyunListsRealSyncEnabled === "function" && isAliyunListsRealSyncEnabled()) {
         next.closedList = Array.isArray(prev.closedList) ? prev.closedList.slice() : [];
         next.memo = Array.isArray(prev.memo) ? prev.memo.slice() : [];
         next.hatersDoubtersLog = Array.isArray(prev.hatersDoubtersLog)
           ? prev.hatersDoubtersLog.slice()
           : [];
+        next.trash = Array.isArray(prev.trash) ? prev.trash.slice() : [];
       } else if (prev.closedList || next.closedList) {
         next.closedList = omitTombstonedIdRecords(
           mergeClosedListArraysForSync(prev.closedList, next.closedList),
@@ -104764,6 +104765,7 @@
       "closedList",
       "memo",
       "hatersDoubtersLog",
+      "trash",
       "ageGoals",
       "moneyGoalLabels",
       "goalWhys",
@@ -111223,7 +111225,7 @@
 
     /**
      * —— Lists 域真实同步（阿里云，批 4）——
-     * closedList（封闭清单）/ memo（备忘录）/ hatersDoubtersLog。
+     * closedList / memo / hatersDoubtersLog / trash（垃圾箱软删条目）。
      * Firebase 主路径已软跳过，上述列表原先无阿里云域 → 跨端不同步。
      * 复用 mergeClosedListArraysForSync / mergeIdRecordArraysPreferLocalOnTie + tombstones。
      * 快照信封 + 指纹跳过；不改 5s 轮询架构 / UI。
@@ -111288,11 +111290,34 @@
       return out;
     }
 
+    /** trash 条目补 updatedAt（merge 按 updatedAt/deletedAt LWW；旧云端可能只有 deletedAt） */
+    function aliyunListsRealNormalizeTrashEntries(arr) {
+      const src = Array.isArray(arr) ? arr : [];
+      const out = [];
+      for (let i = 0; i < src.length; i++) {
+        const e = src[i];
+        if (!e || typeof e !== "object" || e.id == null) continue;
+        let cloned;
+        try {
+          cloned = JSON.parse(JSON.stringify(e));
+        } catch (_c) {
+          cloned = e;
+        }
+        const delAt = Number(cloned.deletedAt) || 0;
+        const upAt = Number(cloned.updatedAt) || 0;
+        if (!upAt && delAt) cloned.updatedAt = delAt;
+        else if (!upAt) cloned.updatedAt = Date.now();
+        out.push(cloned);
+      }
+      return out;
+    }
+
     function aliyunListsRealCloneSliceFromState() {
       return {
         closedList: aliyunListsRealDeepClone(state.closedList, []),
         memo: aliyunListsRealDeepClone(state.memo, []),
         hatersDoubtersLog: aliyunListsRealDeepClone(state.hatersDoubtersLog, []),
+        trash: aliyunListsRealNormalizeTrashEntries(state.trash),
         tombstones: aliyunListsRealCloneTombstonesFromState()
       };
     }
@@ -111305,6 +111330,7 @@
         closedList: [],
         memo: [],
         hatersDoubtersLog: [],
+        trash: [],
         tombstones: {}
       };
     }
@@ -111325,6 +111351,7 @@
       if (Array.isArray(p.closedList)) env.closedList = p.closedList;
       if (Array.isArray(p.memo)) env.memo = p.memo;
       if (Array.isArray(p.hatersDoubtersLog)) env.hatersDoubtersLog = p.hatersDoubtersLog;
+      if (Array.isArray(p.trash)) env.trash = aliyunListsRealNormalizeTrashEntries(p.trash);
       if (p.tombstones && typeof p.tombstones === "object") env.tombstones = p.tombstones;
       env.kind = ALIYUN_LISTS_REAL_KIND;
       return env;
@@ -111337,6 +111364,7 @@
           closedList: slice.closedList || [],
           memo: slice.memo || [],
           hatersDoubtersLog: slice.hatersDoubtersLog || [],
+          trash: slice.trash || [],
           tombstones: slice.tombstones || {}
         });
       } catch (_e) {
@@ -111386,6 +111414,13 @@
           : Array.isArray(loc.hatersDoubtersLog)
             ? loc.hatersDoubtersLog.slice()
             : [];
+      const trashMerged =
+        typeof mergeIdRecordArraysPreferLocalOnTie === "function"
+          ? mergeIdRecordArraysPreferLocalOnTie(
+              aliyunListsRealNormalizeTrashEntries(loc.trash),
+              aliyunListsRealNormalizeTrashEntries(rem.trash)
+            )
+          : aliyunListsRealNormalizeTrashEntries(loc.trash);
       return {
         closedList:
           typeof omitTombstonedIdRecords === "function"
@@ -111399,6 +111434,10 @@
           typeof omitTombstonedIdRecords === "function"
             ? omitTombstonedIdRecords(hatersMerged, ts)
             : hatersMerged,
+        trash:
+          typeof omitTombstonedIdRecords === "function"
+            ? omitTombstonedIdRecords(trashMerged, ts)
+            : trashMerged,
         tombstones: ts
       };
     }
@@ -111413,6 +111452,7 @@
       state.hatersDoubtersLog = Array.isArray(slice.hatersDoubtersLog)
         ? slice.hatersDoubtersLog
         : [];
+      state.trash = Array.isArray(slice.trash) ? slice.trash : [];
       if (slice.tombstones && typeof slice.tombstones === "object") {
         state.syncTombstones =
           typeof mergeSyncTombstoneMaps === "function"
@@ -111442,6 +111482,9 @@
           }
         }
       } catch (_rl) {}
+      try {
+        if (typeof renderTrash === "function") renderTrash();
+      } catch (_tr) {}
     }
 
     function aliyunListsRealStartLtObserver() {
@@ -111563,6 +111606,7 @@
         env.closedList = mergedSlice.closedList;
         env.memo = mergedSlice.memo;
         env.hatersDoubtersLog = mergedSlice.hatersDoubtersLog;
+        env.trash = mergedSlice.trash;
         env.tombstones = mergedSlice.tombstones || {};
         aliyunListsRealSuppressPush = true;
         const prevCloudSuppress = cloudSyncSuppressPush;
@@ -111570,7 +111614,7 @@
         try {
           if (aliyunListsRealApplySliceToState(mergedSlice)) {
             if (typeof markHeavyModulesDepDirty === "function") markHeavyModulesDepDirty();
-            saveState({ lists: ["closedList", "memo"], skipUiPaintDirty: true });
+            saveState({ lists: ["closedList", "memo", "trash"], skipUiPaintDirty: true });
           }
         } finally {
           cloudSyncSuppressPush = prevCloudSuppress;
@@ -111705,7 +111749,7 @@
           changed = aliyunListsRealApplySliceToState(mergedSlice);
           if (changed) {
             if (typeof markHeavyModulesDepDirty === "function") markHeavyModulesDepDirty();
-            saveState({ lists: ["closedList", "memo"], skipUiPaintDirty: true });
+            saveState({ lists: ["closedList", "memo", "trash"], skipUiPaintDirty: true });
           }
         } finally {
           cloudSyncSuppressPush = prevCloudSuppress;
@@ -113267,8 +113311,10 @@
       const u = Number(item.updatedAt);
       const du = Number(item.deadlineUpdatedAt);
       const cr = Number(item.createdAt);
+      /* trash 等软删记录以 deletedAt 为有效时间 */
+      const del = Number(item.deletedAt);
       let best = 0;
-      [c, u, du, cr].forEach(function (v) {
+      [c, u, du, cr, del].forEach(function (v) {
         if (Number.isFinite(v) && v > 0) best = Math.max(best, v);
       });
       return best;
@@ -113612,6 +113658,10 @@
     function pruneTrashEntryCount(maxCount) {
       const cap = Math.max(10, Number(maxCount) || DATA_RETENTION.trashMaxCount);
       if (!Array.isArray(state.trash) || state.trash.length <= cap) return false;
+      const dropped = state.trash.slice(cap);
+      for (let i = 0; i < dropped.length; i++) {
+        if (dropped[i] && dropped[i].id != null) recordSyncTombstone(dropped[i].id);
+      }
       state.trash = state.trash.slice(0, cap);
       return true;
     }
@@ -113785,11 +113835,19 @@
         return false;
       }
       const cutoff = Date.now() - TRASH_RETENTION_MS;
-      const next = state.trash.filter(function (e) {
-        return e && typeof e === "object" && typeof e.deletedAt === "number" && e.deletedAt >= cutoff;
-      });
-      if (next.length === state.trash.length) return false;
-      state.trash = next;
+      const kept = [];
+      let removed = false;
+      for (let i = 0; i < state.trash.length; i++) {
+        const e = state.trash[i];
+        if (e && typeof e === "object" && typeof e.deletedAt === "number" && e.deletedAt >= cutoff) {
+          kept.push(e);
+        } else {
+          removed = true;
+          if (e && e.id != null) recordSyncTombstone(e.id);
+        }
+      }
+      if (!removed) return false;
+      state.trash = kept;
       return true;
     }
 
@@ -113799,15 +113857,27 @@
       const tid = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
       const payload = deepCloneForTrash(parts.payload);
       if (parts.payload != null && payload == null) return;
+      const now = Date.now();
       state.trash.unshift({
         id: tid,
         sourceList: String(parts.sourceList || ""),
         originalId: parts.originalId != null ? parts.originalId : "",
-        deletedAt: Date.now(),
+        deletedAt: now,
+        updatedAt: now,
         payload: payload,
         meta: deepCloneForTrash(parts.meta) || {}
       });
       markHeavyModulesDepDirty();
+      /* Done 等 saveState({ lists:["done"] }) 不会触 Lists；软删后立刻推 trash 切片 */
+      try {
+        if (
+          typeof notifyAliyunListsRealAfterLocalChange === "function" &&
+          typeof isAliyunListsRealSyncEnabled === "function" &&
+          isAliyunListsRealSyncEnabled()
+        ) {
+          notifyAliyunListsRealAfterLocalChange("trash-push");
+        }
+      } catch (_tn) {}
     }
 
     function trashSummaryLine(ent) {
@@ -113865,6 +113935,7 @@
       }
 
       function okRemoveTrash() {
+        if (ent && ent.id != null) recordSyncTombstone(ent.id);
         state.trash.splice(ix, 1);
       }
 
@@ -114272,8 +114343,10 @@
       const tid = String(trashId || "");
       const ix = state.trash.findIndex((x) => x && String(x.id) === tid);
       if (ix === -1) return false;
+      const ent = state.trash[ix];
+      if (ent && ent.id != null) recordSyncTombstone(ent.id);
       state.trash.splice(ix, 1);
-      saveState();
+      saveState({ lists: ["trash"] });
       render();
       return true;
     }
@@ -114287,8 +114360,11 @@
         "确定永久删除垃圾箱内全部 " + n + " 条？\n\n删除后无法恢复（与逐条「彻底删除」相同）。"
       );
       if (!ok) return false;
+      for (let i = 0; i < arr.length; i++) {
+        if (arr[i] && arr[i].id != null) recordSyncTombstone(arr[i].id);
+      }
       state.trash = [];
-      saveState();
+      saveState({ lists: ["trash"] });
       render();
       return true;
     }
@@ -117501,9 +117577,19 @@
       }
 
       base.trash = mergeDetailTime("field", "trash", function () {
-        return mergeIdRecordArraysPreferLocalOnTie(
-          Array.isArray(state.trash) ? state.trash : [],
-          Array.isArray(remoteState.trash) ? remoteState.trash : []
+        if (aliyunListsKeepLocal) {
+          try {
+            return Array.isArray(state.trash) ? JSON.parse(JSON.stringify(state.trash)) : [];
+          } catch (_trKeep) {
+            return Array.isArray(state.trash) ? state.trash.slice() : [];
+          }
+        }
+        return omitTombstonedIdRecords(
+          mergeIdRecordArraysPreferLocalOnTie(
+            Array.isArray(state.trash) ? state.trash : [],
+            Array.isArray(remoteState.trash) ? remoteState.trash : []
+          ),
+          ts
         );
       });
 
@@ -119766,7 +119852,8 @@
             !listsArr ||
             listsArr.indexOf("closedList") >= 0 ||
             listsArr.indexOf("memo") >= 0 ||
-            listsArr.indexOf("hatersDoubtersLog") >= 0;
+            listsArr.indexOf("hatersDoubtersLog") >= 0 ||
+            listsArr.indexOf("trash") >= 0;
           if (touchLists) {
             try {
               notifyAliyunListsRealAfterLocalChange(
