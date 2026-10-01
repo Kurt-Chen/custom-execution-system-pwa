@@ -53,7 +53,7 @@ mustInclude('endDailyWinEditSession("composer-save")', "end on composer save");
 mustInclude('endDailyWinEditSession("leave-module")', "end on leave module");
 mustInclude('endDailyWinEditSession("leave-panel")', "end on leave panel");
 
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001dx"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001dx"/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001ed"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001ed"/);
 
 console.log("OK dailywin-edit-session");
