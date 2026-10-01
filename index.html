@@ -95399,7 +95399,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930ai";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20260930aj";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -109225,8 +109225,13 @@
       }
       cloned.id = id;
       cloned.weekKey = wk;
-      const ts = Math.max(aliyunSprintRealItemTs(cloned), aliyunSprintRealItemTs(task), Date.now());
-      cloned.updatedAt = ts;
+      /*
+       * 勿强刷 Date.now()：weekUpsert 会重推同周兄弟任务；若一律抬时间戳，
+       * 手机端未完成副本可能盖过桌面端刚写入的 mainDone（其他任务「同步完成」丢失）。
+       * 真实变更应已由 touchWeeklyPlanTaskRevision / statusAt 抬高；无时间戳时才用 now。
+       */
+      const ts = Math.max(aliyunSprintRealItemTs(cloned), aliyunSprintRealItemTs(task));
+      cloned.updatedAt = ts > 0 ? ts : Date.now();
       cloned.deleted = false;
       return cloned;
     }
@@ -109805,11 +109810,14 @@
               }
             }
             const lTs = aliyunSprintRealItemTs(local);
-            if (local && lTs > rTs) continue;
-
+            /*
+             * 勿因 local.updatedAt 更新就整项跳过：完成态按 statusAt / completedAt 字段级 LWW。
+             * 否则 weekUpsert 强刷时间戳后的未完成副本会挡住对端已勾选的 mainDone。
+             */
+            const preferRemote = !local || rTs >= lTs;
             const mergedTask =
               typeof mergeWeeklyPlanOneTaskForSync === "function"
-                ? mergeWeeklyPlanOneTaskForSync(local || {}, remote, true)
+                ? mergeWeeklyPlanOneTaskForSync(local || {}, remote, preferRemote)
                 : typeof normalizeWeeklyPlanTask === "function"
                   ? normalizeWeeklyPlanTask(remote)
                   : remote;
@@ -109889,6 +109897,15 @@
               refreshWeeklyPlanListAfterStructureChange();
             } else if (typeof render === "function") {
               render();
+            }
+            /* 今日计划「其他任务」不走周计划列表 DOM；合并完成态后须刷面板 */
+            if (
+              (mergedCount || tombstoneApplied) &&
+              typeof todayPlanPanelExpanded !== "undefined" &&
+              todayPlanPanelExpanded &&
+              typeof paintTodayPlanPanel === "function"
+            ) {
+              paintTodayPlanPanel();
             }
           } catch (_rf) {
             if (typeof render === "function") render();
@@ -152940,6 +152957,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /**
      * 今日计划「其他任务」打卡：按 taskId 定位任意周 bucket，避免仅限当前视图周。
      * 完成后立即 pulse，并刷新面板与周计划列表。
+     * 阿里云：完成态随 Sprint 实体（mainDone/statusAt）；显式单条 upsert 避免仅依赖整周重推。
      */
     function toggleTodayPlanOtherTaskDone(taskId, checked) {
       const tid = String(taskId || "");
@@ -152973,6 +152991,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       touchWeeklyPlanTaskRevision(task);
       saveWeeklyPlanTasksForWeekWithPulse(tasks, weekKey);
+      try {
+        if (typeof notifyAliyunSprintRealUpsert === "function") {
+          notifyAliyunSprintRealUpsert(
+            checked ? "today-plan-other-done" : "today-plan-other-undone",
+            weekKey,
+            task
+          );
+        }
+      } catch (_sprintDone) {}
       syncAllWeeklyPlanMirrorsForWeek(weekKey);
       refreshWeeklyPlanListAfterStructureChange();
       if (todayPlanPanelExpanded) paintTodayPlanPanel();
