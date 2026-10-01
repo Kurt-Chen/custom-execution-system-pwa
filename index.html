@@ -101721,13 +101721,14 @@
       }
       const stickyTs =
         next.syncTombstones && typeof next.syncTombstones === "object" ? next.syncTombstones : {};
-      /* 阿里云 Lists 主路径：Firebase 合并不得改写封闭清单 / 备忘录 / Haters */
+      /* 阿里云 Lists 主路径：Firebase 合并不得改写封闭清单 / 备忘录 / Haters / trash */
       if (typeof isAliyunListsRealSyncEnabled === "function" && isAliyunListsRealSyncEnabled()) {
         next.closedList = Array.isArray(prev.closedList) ? prev.closedList.slice() : [];
         next.memo = Array.isArray(prev.memo) ? prev.memo.slice() : [];
         next.hatersDoubtersLog = Array.isArray(prev.hatersDoubtersLog)
           ? prev.hatersDoubtersLog.slice()
           : [];
+        next.trash = Array.isArray(prev.trash) ? prev.trash.slice() : [];
       } else if (prev.closedList || next.closedList) {
         next.closedList = omitTombstonedIdRecords(
           mergeClosedListArraysForSync(prev.closedList, next.closedList),
@@ -104761,6 +104762,7 @@
       "closedList",
       "memo",
       "hatersDoubtersLog",
+      "trash",
       "ageGoals",
       "moneyGoalLabels",
       "goalWhys",
@@ -110522,7 +110524,7 @@
         if (aliyunSyncPrimaryIsUnchangedPull("amb", ambPullFp)) {
           ok = true;
           aliyunAmbRealAppendLog("拉取无变化，跳过 merge/render");
-          /* 历史：AMB 已在本机但 Done 镜像缺失（迁移漏 bridge）→ 仍做一次廉价 reconcile */
+          /* 仅清理/去重/补 meta，不再为陈旧周期发明今日 Done */
           try {
             if (
               typeof reconcileBackwardMeasureDoneMirrorsFromState === "function" &&
@@ -110530,7 +110532,7 @@
             ) {
               saveState({ lists: ["done"] });
               aliyunAmbRealPaintLocalUiAfterMerge();
-              aliyunAmbRealAppendLog("unchanged pull：已补齐缺失的 AMB→Done 镜像");
+              aliyunAmbRealAppendLog("unchanged pull：已清理 AMB→Done 镜像重复/空周期");
             }
           } catch (_ambRecUnch) {}
           return { ok: true, unchanged: true, docId: docId };
@@ -111123,7 +111125,7 @@
 
     /**
      * —— Lists 域真实同步（阿里云，批 4）——
-     * closedList（封闭清单）/ memo（备忘录）/ hatersDoubtersLog。
+     * closedList / memo / hatersDoubtersLog / trash（垃圾箱软删条目）。
      * Firebase 主路径已软跳过，上述列表原先无阿里云域 → 跨端不同步。
      * 复用 mergeClosedListArraysForSync / mergeIdRecordArraysPreferLocalOnTie + tombstones。
      * 快照信封 + 指纹跳过；不改 5s 轮询架构 / UI。
@@ -111188,11 +111190,34 @@
       return out;
     }
 
+    /** trash 条目补 updatedAt（merge 按 updatedAt/deletedAt LWW；旧云端可能只有 deletedAt） */
+    function aliyunListsRealNormalizeTrashEntries(arr) {
+      const src = Array.isArray(arr) ? arr : [];
+      const out = [];
+      for (let i = 0; i < src.length; i++) {
+        const e = src[i];
+        if (!e || typeof e !== "object" || e.id == null) continue;
+        let cloned;
+        try {
+          cloned = JSON.parse(JSON.stringify(e));
+        } catch (_c) {
+          cloned = e;
+        }
+        const delAt = Number(cloned.deletedAt) || 0;
+        const upAt = Number(cloned.updatedAt) || 0;
+        if (!upAt && delAt) cloned.updatedAt = delAt;
+        else if (!upAt) cloned.updatedAt = Date.now();
+        out.push(cloned);
+      }
+      return out;
+    }
+
     function aliyunListsRealCloneSliceFromState() {
       return {
         closedList: aliyunListsRealDeepClone(state.closedList, []),
         memo: aliyunListsRealDeepClone(state.memo, []),
         hatersDoubtersLog: aliyunListsRealDeepClone(state.hatersDoubtersLog, []),
+        trash: aliyunListsRealNormalizeTrashEntries(state.trash),
         tombstones: aliyunListsRealCloneTombstonesFromState()
       };
     }
@@ -111205,6 +111230,7 @@
         closedList: [],
         memo: [],
         hatersDoubtersLog: [],
+        trash: [],
         tombstones: {}
       };
     }
@@ -111225,6 +111251,7 @@
       if (Array.isArray(p.closedList)) env.closedList = p.closedList;
       if (Array.isArray(p.memo)) env.memo = p.memo;
       if (Array.isArray(p.hatersDoubtersLog)) env.hatersDoubtersLog = p.hatersDoubtersLog;
+      if (Array.isArray(p.trash)) env.trash = aliyunListsRealNormalizeTrashEntries(p.trash);
       if (p.tombstones && typeof p.tombstones === "object") env.tombstones = p.tombstones;
       env.kind = ALIYUN_LISTS_REAL_KIND;
       return env;
@@ -111237,6 +111264,7 @@
           closedList: slice.closedList || [],
           memo: slice.memo || [],
           hatersDoubtersLog: slice.hatersDoubtersLog || [],
+          trash: slice.trash || [],
           tombstones: slice.tombstones || {}
         });
       } catch (_e) {
@@ -111286,6 +111314,13 @@
           : Array.isArray(loc.hatersDoubtersLog)
             ? loc.hatersDoubtersLog.slice()
             : [];
+      const trashMerged =
+        typeof mergeIdRecordArraysPreferLocalOnTie === "function"
+          ? mergeIdRecordArraysPreferLocalOnTie(
+              aliyunListsRealNormalizeTrashEntries(loc.trash),
+              aliyunListsRealNormalizeTrashEntries(rem.trash)
+            )
+          : aliyunListsRealNormalizeTrashEntries(loc.trash);
       return {
         closedList:
           typeof omitTombstonedIdRecords === "function"
@@ -111299,6 +111334,10 @@
           typeof omitTombstonedIdRecords === "function"
             ? omitTombstonedIdRecords(hatersMerged, ts)
             : hatersMerged,
+        trash:
+          typeof omitTombstonedIdRecords === "function"
+            ? omitTombstonedIdRecords(trashMerged, ts)
+            : trashMerged,
         tombstones: ts
       };
     }
@@ -111313,6 +111352,7 @@
       state.hatersDoubtersLog = Array.isArray(slice.hatersDoubtersLog)
         ? slice.hatersDoubtersLog
         : [];
+      state.trash = Array.isArray(slice.trash) ? slice.trash : [];
       if (slice.tombstones && typeof slice.tombstones === "object") {
         state.syncTombstones =
           typeof mergeSyncTombstoneMaps === "function"
@@ -111342,6 +111382,9 @@
           }
         }
       } catch (_rl) {}
+      try {
+        if (typeof renderTrash === "function") renderTrash();
+      } catch (_tr) {}
     }
 
     function aliyunListsRealStartLtObserver() {
@@ -111463,6 +111506,7 @@
         env.closedList = mergedSlice.closedList;
         env.memo = mergedSlice.memo;
         env.hatersDoubtersLog = mergedSlice.hatersDoubtersLog;
+        env.trash = mergedSlice.trash;
         env.tombstones = mergedSlice.tombstones || {};
         aliyunListsRealSuppressPush = true;
         const prevCloudSuppress = cloudSyncSuppressPush;
@@ -111470,7 +111514,7 @@
         try {
           if (aliyunListsRealApplySliceToState(mergedSlice)) {
             if (typeof markHeavyModulesDepDirty === "function") markHeavyModulesDepDirty();
-            saveState({ lists: ["closedList", "memo"], skipUiPaintDirty: true });
+            saveState({ lists: ["closedList", "memo", "trash"], skipUiPaintDirty: true });
           }
         } finally {
           cloudSyncSuppressPush = prevCloudSuppress;
@@ -111605,7 +111649,7 @@
           changed = aliyunListsRealApplySliceToState(mergedSlice);
           if (changed) {
             if (typeof markHeavyModulesDepDirty === "function") markHeavyModulesDepDirty();
-            saveState({ lists: ["closedList", "memo"], skipUiPaintDirty: true });
+            saveState({ lists: ["closedList", "memo", "trash"], skipUiPaintDirty: true });
           }
         } finally {
           cloudSyncSuppressPush = prevCloudSuppress;
@@ -113167,8 +113211,10 @@
       const u = Number(item.updatedAt);
       const du = Number(item.deadlineUpdatedAt);
       const cr = Number(item.createdAt);
+      /* trash 等软删记录以 deletedAt 为有效时间 */
+      const del = Number(item.deletedAt);
       let best = 0;
-      [c, u, du, cr].forEach(function (v) {
+      [c, u, du, cr, del].forEach(function (v) {
         if (Number.isFinite(v) && v > 0) best = Math.max(best, v);
       });
       return best;
@@ -113512,6 +113558,10 @@
     function pruneTrashEntryCount(maxCount) {
       const cap = Math.max(10, Number(maxCount) || DATA_RETENTION.trashMaxCount);
       if (!Array.isArray(state.trash) || state.trash.length <= cap) return false;
+      const dropped = state.trash.slice(cap);
+      for (let i = 0; i < dropped.length; i++) {
+        if (dropped[i] && dropped[i].id != null) recordSyncTombstone(dropped[i].id);
+      }
       state.trash = state.trash.slice(0, cap);
       return true;
     }
@@ -113685,11 +113735,19 @@
         return false;
       }
       const cutoff = Date.now() - TRASH_RETENTION_MS;
-      const next = state.trash.filter(function (e) {
-        return e && typeof e === "object" && typeof e.deletedAt === "number" && e.deletedAt >= cutoff;
-      });
-      if (next.length === state.trash.length) return false;
-      state.trash = next;
+      const kept = [];
+      let removed = false;
+      for (let i = 0; i < state.trash.length; i++) {
+        const e = state.trash[i];
+        if (e && typeof e === "object" && typeof e.deletedAt === "number" && e.deletedAt >= cutoff) {
+          kept.push(e);
+        } else {
+          removed = true;
+          if (e && e.id != null) recordSyncTombstone(e.id);
+        }
+      }
+      if (!removed) return false;
+      state.trash = kept;
       return true;
     }
 
@@ -113699,15 +113757,27 @@
       const tid = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
       const payload = deepCloneForTrash(parts.payload);
       if (parts.payload != null && payload == null) return;
+      const now = Date.now();
       state.trash.unshift({
         id: tid,
         sourceList: String(parts.sourceList || ""),
         originalId: parts.originalId != null ? parts.originalId : "",
-        deletedAt: Date.now(),
+        deletedAt: now,
+        updatedAt: now,
         payload: payload,
         meta: deepCloneForTrash(parts.meta) || {}
       });
       markHeavyModulesDepDirty();
+      /* Done 等 saveState({ lists:["done"] }) 不会触 Lists；软删后立刻推 trash 切片 */
+      try {
+        if (
+          typeof notifyAliyunListsRealAfterLocalChange === "function" &&
+          typeof isAliyunListsRealSyncEnabled === "function" &&
+          isAliyunListsRealSyncEnabled()
+        ) {
+          notifyAliyunListsRealAfterLocalChange("trash-push");
+        }
+      } catch (_tn) {}
     }
 
     function trashSummaryLine(ent) {
@@ -113765,6 +113835,7 @@
       }
 
       function okRemoveTrash() {
+        if (ent && ent.id != null) recordSyncTombstone(ent.id);
         state.trash.splice(ix, 1);
       }
 
@@ -114172,8 +114243,10 @@
       const tid = String(trashId || "");
       const ix = state.trash.findIndex((x) => x && String(x.id) === tid);
       if (ix === -1) return false;
+      const ent = state.trash[ix];
+      if (ent && ent.id != null) recordSyncTombstone(ent.id);
       state.trash.splice(ix, 1);
-      saveState();
+      saveState({ lists: ["trash"] });
       render();
       return true;
     }
@@ -114187,8 +114260,11 @@
         "确定永久删除垃圾箱内全部 " + n + " 条？\n\n删除后无法恢复（与逐条「彻底删除」相同）。"
       );
       if (!ok) return false;
+      for (let i = 0; i < arr.length; i++) {
+        if (arr[i] && arr[i].id != null) recordSyncTombstone(arr[i].id);
+      }
       state.trash = [];
-      saveState();
+      saveState({ lists: ["trash"] });
       render();
       return true;
     }
@@ -117363,9 +117439,19 @@
       }
 
       base.trash = mergeDetailTime("field", "trash", function () {
-        return mergeIdRecordArraysPreferLocalOnTie(
-          Array.isArray(state.trash) ? state.trash : [],
-          Array.isArray(remoteState.trash) ? remoteState.trash : []
+        if (aliyunListsKeepLocal) {
+          try {
+            return Array.isArray(state.trash) ? JSON.parse(JSON.stringify(state.trash)) : [];
+          } catch (_trKeep) {
+            return Array.isArray(state.trash) ? state.trash.slice() : [];
+          }
+        }
+        return omitTombstonedIdRecords(
+          mergeIdRecordArraysPreferLocalOnTie(
+            Array.isArray(state.trash) ? state.trash : [],
+            Array.isArray(remoteState.trash) ? remoteState.trash : []
+          ),
+          ts
         );
       });
 
@@ -119628,7 +119714,8 @@
             !listsArr ||
             listsArr.indexOf("closedList") >= 0 ||
             listsArr.indexOf("memo") >= 0 ||
-            listsArr.indexOf("hatersDoubtersLog") >= 0;
+            listsArr.indexOf("hatersDoubtersLog") >= 0 ||
+            listsArr.indexOf("trash") >= 0;
           if (touchLists) {
             try {
               notifyAliyunListsRealAfterLocalChange(
@@ -145690,13 +145777,31 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return "manual:" + String(task.id);
       }
       /**
-       * A.M.B 向后衡量：同一 kind+periodKey 只留一行（本机派生 + Done 域 upsert 可能各写一条）。
+       * A.M.B 向后衡量：同 kind 同日只留一行（文案都是「完成【…】」，叠双即误打卡观感）。
+       * periodKey 仍写在 meta 里供删除/联动；去重按日避免 upsert+旧行/reconcile 叠双。
        */
-      if (task && task.backwardMeasureMeta && typeof task.backwardMeasureMeta === "object") {
-        const bk = String(task.backwardMeasureMeta.kind || "").trim();
-        const bp = String(task.backwardMeasureMeta.periodKey || "").trim();
-        if (bk && bp) return "bm:" + bk + ":" + bp;
-        if (task.id != null) return "bm:" + String(task.id);
+      {
+        const bmKindMeta =
+          task && task.backwardMeasureMeta && typeof task.backwardMeasureMeta === "object"
+            ? String(task.backwardMeasureMeta.kind || "").trim()
+            : "";
+        const bmKindLabel =
+          typeof backwardMeasureKindFromDoneLabelText === "function"
+            ? backwardMeasureKindFromDoneLabelText(task && task.text)
+            : "";
+        const bmKind = bmKindMeta || bmKindLabel;
+        if (bmKind) {
+          const dayTs = task && (task.completedAt || task.createdAt);
+          let dayKey = "";
+          if (dayTs) {
+            try {
+              dayKey = formatDateInputValue(new Date(dayTs));
+            } catch (_bmDayErr) {
+              dayKey = "";
+            }
+          }
+          return "bm:" + bmKind + ":day:" + (dayKey || "unknown");
+        }
       }
       /**
        * 习惯打卡：同日可多次（第 N 次），按 key+date+次数去重。
@@ -163124,44 +163229,142 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
     }
 
-    function syncBackwardMeasureToDone(kind, periodKey) {
+    /**
+     * @param {string} kind
+     * @param {string} periodKey
+     * @param {{ atMs?: number, skipNotify?: boolean }} [opts]
+     *   atMs：完成时间（默认 now）；skipNotify：合并补齐时勿再推 Done 域，避免他端「自动打卡」风暴
+     */
+    function syncBackwardMeasureToDone(kind, periodKey, opts) {
+      opts = opts && typeof opts === "object" ? opts : {};
       const label = BACKWARD_MEASURE_KIND_LABEL[kind] || kind;
       removeBackwardMeasureDoneCopy(kind, periodKey);
-      const now = Date.now();
+      const atMs =
+        Number.isFinite(Number(opts.atMs)) && Number(opts.atMs) > 0 ? Number(opts.atMs) : Date.now();
       const newItem = {
-        id: now.toString(36) + Math.random().toString(36).slice(2, 7),
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text: "完成【" + label + "】",
-        completedAt: now,
-        updatedAt: now,
+        completedAt: atMs,
+        updatedAt: atMs,
         backwardMeasureMeta: { kind: kind, periodKey: periodKey }
       };
       state.done.unshift(newItem);
-      /* 阿里云 Done 主路径：须显式 upsert，否则仅本机有、他端 Done List 永远看不到 */
-      if (typeof notifyAliyunDoneRealUpsert === "function") {
+      /* 仅用户主动记录时推 Done 域；reconcile 补齐走 skipNotify，防跨端误打卡 */
+      if (!opts.skipNotify && typeof notifyAliyunDoneRealUpsert === "function") {
         try {
           notifyAliyunDoneRealUpsert("amb-backward", newItem);
         } catch (_ambDoneUp) {}
       }
+      return newItem;
+    }
+
+    function backwardMeasureKindFromDoneLabelText(text) {
+      const m = String(text || "").trim().match(/^完成【(.+?)】$/);
+      if (!m) return "";
+      const label = m[1];
+      const kinds = Object.keys(BACKWARD_MEASURE_KIND_LABEL);
+      for (let i = 0; i < kinds.length; i++) {
+        if (BACKWARD_MEASURE_KIND_LABEL[kinds[i]] === label) return kinds[i];
+      }
+      return "";
     }
 
     /**
-     * AMB 源数据 → Done 镜像补齐/清理（跨设备安全网）。
-     * 有内容的周期缺 Done 则补；已清空的周期去掉残留镜像。不改统计口径。
+     * 清掉「reconcile 用 Date.now() 发明」的假打卡：
+     * Done.completedAt 明显晚于对应周期 updatedAt（默认 > 30 分钟）→ 非用户记录时写入。
+     * 会 tombstone 推阿里云，避免他端又拉回来。
+     */
+    function purgeSpuriousAmbReconcileDoneMirrors() {
+      if (!Array.isArray(state.done) || !state.done.length) return false;
+      ensureBackwardMeasureState();
+      const skewMs = 30 * 60 * 1000;
+      const removed = [];
+      state.done = state.done.filter(function (d) {
+        if (!d) return false;
+        let kind =
+          d.backwardMeasureMeta && d.backwardMeasureMeta.kind
+            ? String(d.backwardMeasureMeta.kind)
+            : "";
+        let periodKey =
+          d.backwardMeasureMeta && d.backwardMeasureMeta.periodKey != null
+            ? String(d.backwardMeasureMeta.periodKey)
+            : "";
+        if (!kind) {
+          kind = backwardMeasureKindFromDoneLabelText(d.text);
+        }
+        if (!kind) return true;
+        const store = state.backwardMeasure && state.backwardMeasure[kind];
+        if (!store || typeof store !== "object") return true;
+        if (!periodKey) {
+          /* 无 periodKey：若该 kind 仅一个有内容周期，用它比对；否则保守保留 */
+          const contentKeys = Object.keys(store).filter(function (pk) {
+            return backwardMeasurePeriodHasContent(store[pk]);
+          });
+          if (contentKeys.length === 1) periodKey = contentKeys[0];
+          else return true;
+        }
+        const period = store[periodKey];
+        if (!backwardMeasurePeriodHasContent(period)) {
+          /* 周期已空：残留镜像本就该删（与 reconcile keep 逻辑一致） */
+          removed.push(d);
+          return false;
+        }
+        const periodAt = Number(
+          normalizeBackwardMeasurePeriodEntry(period).updatedAt || period.updatedAt || 0
+        );
+        if (!(periodAt > 0)) return true;
+        const doneAt =
+          Number(d.completedAt) || Number(d.updatedAt) || Number(d.createdAt) || 0;
+        if (!(doneAt > 0)) return true;
+        /* Done 完成时间远晚于周期保存时间 → 典型「打开 App 才发明打卡」 */
+        if (doneAt - periodAt > skewMs) {
+          removed.push(d);
+          return false;
+        }
+        return true;
+      });
+      if (!removed.length) return false;
+      removed.forEach(function (item) {
+        if (item && item.id != null && typeof notifyAliyunDoneRealTombstone === "function") {
+          try {
+            notifyAliyunDoneRealTombstone("amb-spurious-reconcile", item.id, item);
+          } catch (_tomb) {}
+        }
+        if (item && item.id != null && typeof recordSyncTombstone === "function") {
+          try {
+            recordSyncTombstone(item.id);
+          } catch (_ts) {}
+        }
+      });
+      return true;
+    }
+
+    /**
+     * AMB→Done 安全网（收敛版）：
+     * - 不为陈旧周期「发明」今日打卡（那是自动打卡 bug）
+     * - 清掉已被发明的假打卡（completedAt ≫ period.updatedAt）
+     * - 仅：给无 meta 的旧 Done 补 meta；清掉已空周期的残留镜像；合并同 kind 同日重复
+     * 跨设备新记录仍靠用户 save 时的 Done 域 upsert。
      */
     function reconcileBackwardMeasureDoneMirrorsFromState() {
       if (!Array.isArray(state.done)) state.done = [];
       ensureBackwardMeasureState();
+      let changed = false;
+      try {
+        if (purgeSpuriousAmbReconcileDoneMirrors()) changed = true;
+      } catch (_purgeSp) {
+        console.warn("[amb] purgeSpuriousAmbReconcileDoneMirrors 失败:", _purgeSp);
+      }
       const kinds = ["sprint3", "weekly", "monthly", "quarterly", "yearly", "triennial"];
       const keep = Object.create(null);
-      let changed = false;
+
       kinds.forEach(function (kind) {
         const store = state.backwardMeasure && state.backwardMeasure[kind];
         if (!store || typeof store !== "object") return;
         Object.keys(store).forEach(function (periodKey) {
           if (!backwardMeasurePeriodHasContent(store[periodKey])) return;
-          const sig = kind + "\0" + periodKey;
-          keep[sig] = true;
-          const exists = state.done.some(function (d) {
+          keep[kind + "\0" + periodKey] = true;
+          const byMeta = state.done.find(function (d) {
             return (
               d &&
               d.backwardMeasureMeta &&
@@ -163169,12 +163372,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               d.backwardMeasureMeta.periodKey === periodKey
             );
           });
-          if (!exists && typeof syncBackwardMeasureToDone === "function") {
-            syncBackwardMeasureToDone(kind, periodKey);
+          if (byMeta) return;
+          /* 旧镜像可能无 meta：只补字段，不 new 一条（避免今日列表突然多出「自动打卡」） */
+          const label = BACKWARD_MEASURE_KIND_LABEL[kind] || kind;
+          const expectText = "完成【" + label + "】";
+          const legacy = state.done.find(function (d) {
+            if (!d || String(d.text || "") !== expectText) return false;
+            if (d.backwardMeasureMeta && d.backwardMeasureMeta.kind) return false;
+            return true;
+          });
+          if (legacy) {
+            legacy.backwardMeasureMeta = { kind: kind, periodKey: periodKey };
             changed = true;
           }
+          /* 不再对陈旧周期 syncBackwardMeasureToDone(Date.now()) —— 那会表现为未点击却打卡 */
         });
       });
+
       const beforeLen = state.done.length;
       state.done = state.done.filter(function (d) {
         if (!d || !d.backwardMeasureMeta) return true;
@@ -163184,6 +163398,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return Boolean(keep[k + "\0" + p]);
       });
       if (state.done.length !== beforeLen) changed = true;
+
+      /* 同 kind 同日「完成【…】」只留一条（修 upsert+旧行叠双） */
+      if (typeof pruneRedundantDoneEntriesInState === "function") {
+        try {
+          if (pruneRedundantDoneEntriesInState()) changed = true;
+        } catch (_pruneBm) {}
+      }
       return changed;
     }
 
@@ -167682,6 +167903,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         try {
           persistStateToLocalStorage();
         } catch (_bootRepairErr) {}
+      }
+      /* 清掉上一版 reconcile 误造的 AMB→Done 假打卡（升到 af 后仍残留的那条） */
+      try {
+        if (
+          typeof reconcileBackwardMeasureDoneMirrorsFromState === "function" &&
+          reconcileBackwardMeasureDoneMirrorsFromState()
+        ) {
+          try {
+            persistStateToLocalStorage();
+          } catch (_ambBootClean) {}
+          try {
+            markUiPaintSlicesDirty(["done"]);
+          } catch (_ambBootDirty) {}
+        }
+      } catch (_ambBootRec) {
+        console.warn("[amb] boot reconcile Done mirrors 失败:", _ambBootRec);
       }
       maybeRunScheduledDataRetentionOnStartup();
       bootstrapAppInfrastructure();
