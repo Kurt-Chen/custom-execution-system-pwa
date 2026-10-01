@@ -381,10 +381,10 @@
       transition: none !important;
     }
 
-    /* 进度条默认 width:0% + transition 会在节点重建时从 0 弹到当前值；宽度改由 JS 直接写入 */
+    /* 进度条默认 width:0% + transition 会在节点重建时从 0 弹到当前值；宽度改由 JS 直接写入。
+       Sleep / 当前冲刺条：允许分钟级 width 平滑过渡（全量 rebuild 仍由 is-ui-rebuild-snap 关掉） */
     .weekly-plan-progress-fill,
     .weekly-plan-head-progress-fill,
-    .done-sleep-countdown__fill,
     .closed-list-day-progress__fill,
     .reading-plan-item-progress-fill,
     .tw020-week-progress-fill,
@@ -396,7 +396,6 @@
     .rule100-title-progress__fill,
     .rule100-hours-bar__fill,
     .sprint-kanban-card__bar,
-    .done-time-block-sprint-split-fill,
     #weeklyPlanSection .weekly-plan-head-progress-fill,
     #weeklyPlanSection.weekly-plan-ui-v2 .weekly-plan-head-progress-fill,
     #forgeModule .forge-wp-summary-fill,
@@ -2933,7 +2932,7 @@
       background: linear-gradient(90deg, #1d4ed8 0%, #2563eb 45%, #38bdf8 100%);
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
       pointer-events: none;
-      transition: width 0.35s ease;
+      transition: width 0.35s ease-out;
     }
 
     /* 每整点短 tick：仅顶/底各一小段，中间留空以免挡 Sleep Pending */
@@ -32252,7 +32251,7 @@
         background: #fffbf5;
       }
 
-      /* 已过色块：width% 与刻度 left% 同源，不受左右文案 min-content 影响 */
+      /* 已过色块：width% 与刻度 left% 同源，不受左右文案 min-content 影响；分钟级刷新时平滑过渡 */
       :is(ul.app-done-time-timeline, #weeklyPlanSprintStrip) .done-time-block-sprint-split-fill {
         position: absolute;
         top: 0;
@@ -32265,6 +32264,7 @@
         border-radius: 0;
         background: linear-gradient(90deg, #ff9100 0%, #ffd54f 100%);
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+        transition: width 0.35s ease-out;
       }
 
       /* 3-Day Sprint 顶栏：青绿渐变（pastel 提亮），与 Done List 橙黄冲刺条区分 */
@@ -95780,7 +95780,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001ei";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001ej";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -140882,36 +140882,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return String(h) + "h " + String(m).padStart(2, "0") + "m";
     }
 
-    /** 冲刺横幅「剩余」：精确到秒，配合每秒 tick */
-    function formatDoneSprintDurSeconds(totalSec) {
-      const s = Math.max(0, Math.floor(Number(totalSec) || 0));
-      const h = Math.floor(s / 3600);
-      const m = Math.floor((s % 3600) / 60);
-      const sec = s % 60;
-      if (h > 0) {
-        return String(h) + "h " + String(m).padStart(2, "0") + "m " + String(sec).padStart(2, "0") + "s";
-      }
-      if (m > 0) {
-        return String(m) + "m " + String(sec).padStart(2, "0") + "s";
-      }
-      return String(sec) + "s";
-    }
-
-    function getDoneSprintRemainSeconds(endMin) {
-      const now = new Date();
-      const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-      const endSec = Math.floor(Number(endMin) || 0) * 60;
-      return Math.max(0, endSec - nowSec);
-    }
-
-    /** 冲刺「仅剩」：桌面精确到秒；手机（≤767px）与「已过」一致仅 h/m */
+    /** 冲刺 / Sleep「仅剩」：双端统一仅 h/m（界面不表现秒；内部时间仍可精确到秒） */
     function formatDoneSprintRemain(endMin, nowMin) {
-      const mobile =
-        typeof window.matchMedia === "function" && window.matchMedia("(max-width: 767px)").matches;
-      if (mobile) {
-        return formatDoneSprintDurMinutes(Math.max(0, Math.floor(Number(endMin) || 0) - Math.floor(Number(nowMin) || 0)));
-      }
-      return formatDoneSprintDurSeconds(getDoneSprintRemainSeconds(endMin));
+      return formatDoneSprintDurMinutes(
+        Math.max(0, Math.floor(Number(endMin) || 0) - Math.floor(Number(nowMin) || 0))
+      );
     }
 
     /** 冲刺条整点小时竖线数量（不含起止端点） */
@@ -140942,9 +140917,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     let doneTimeBlockSprintTickerId = null;
     let doneTimeBlockSprintLastTickAt = 0;
     let doneTimeBlockSprintHeavyBusy = false;
-    let doneSprintProgressClockId = null;
-    let doneSprintProgressClockRafId = 0;
-    let doneSprintProgressClockSec = -1;
+    /** 分钟对齐的进度时钟（timeout 链）；不再用 200ms/1s 驱动时间 UI */
+    let doneSprintProgressClockTimerId = null;
+    let doneSprintProgressClockMin = -1;
+    /** Sleep 倒计时时间文案 / 进度条上次写入的分钟桶 */
+    let doneSleepCountdownLastUiMin = -1;
     let doneTodayVisibilityDigest = null;
 
     /** 冲刺上半区提醒跑马灯：仅时钟准点逢 5 分播一条（如 16:55/17:00/17:05）；刷新不重播本槽 */
@@ -142255,39 +142232,56 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function stopDoneSprintProgressClock() {
-      if (doneSprintProgressClockId) {
-        clearInterval(doneSprintProgressClockId);
-        doneSprintProgressClockId = null;
+      if (doneSprintProgressClockTimerId) {
+        clearTimeout(doneSprintProgressClockTimerId);
+        doneSprintProgressClockTimerId = null;
       }
-      if (doneSprintProgressClockRafId) {
-        cancelAnimationFrame(doneSprintProgressClockRafId);
-        doneSprintProgressClockRafId = 0;
-      }
-      doneSprintProgressClockSec = -1;
+      doneSprintProgressClockMin = -1;
     }
 
-    /** 仅刷新色块 / 「仅剩 Xs」；与跑马灯重活分开，保证秒数每秒跳 */
-    function tickDoneSprintProgressClock() {
-      if (document.visibilityState && document.visibilityState !== "visible") return;
-      if (typeof shouldDeferSprintTickerHeavyWork === "function" && shouldDeferSprintTickerHeavyWork()) return;
-      const sec = Math.floor(Date.now() / 1000);
-      if (sec === doneSprintProgressClockSec) return;
-      doneSprintProgressClockSec = sec;
-      refreshDoneSprintProgressBars();
+    /** 距下一整分的毫秒数（对齐分钟边界，避免固定 60000 错位） */
+    function getMsUntilNextMinuteBoundary() {
+      const rem = 60000 - (Date.now() % 60000);
+      return rem > 0 ? rem : 60000;
     }
 
     /**
-     * 不再常驻 rAF：展开 Done 列表后每帧 tick 会与手指/滚轮滚动抢主线程。
-     * 秒级文案仍靠 setInterval(200) + 秒桶去重刷新即可。
+     * 仅刷新色块 / 「已过」/「仅剩」/ 百分比（分钟级）。
+     * 与跑马灯重活分开；秒数变化不更新 DOM。
      */
-    function ensureDoneSprintProgressClock() {
-      if (!doneSprintProgressClockId) {
-        doneSprintProgressClockSec = -1;
-        doneSprintProgressClockId = setInterval(tickDoneSprintProgressClock, 200);
+    function tickDoneSprintProgressClock(opts) {
+      const force = !!(opts && opts.force);
+      if (document.visibilityState && document.visibilityState !== "visible") return;
+      if (!force && typeof shouldDeferSprintTickerHeavyWork === "function" && shouldDeferSprintTickerHeavyWork()) {
+        return;
       }
-      if (doneSprintProgressClockRafId) {
-        cancelAnimationFrame(doneSprintProgressClockRafId);
-        doneSprintProgressClockRafId = 0;
+      const minBucket = Math.floor(Date.now() / 60000);
+      if (!force && minBucket === doneSprintProgressClockMin) return;
+      doneSprintProgressClockMin = minBucket;
+      refreshDoneSprintProgressBars();
+      if (typeof updateDoneSleepCountdownBarDom === "function") {
+        updateDoneSleepCountdownBarDom({ forceTime: true });
+      }
+    }
+
+    /** 对齐下一整分后更新，再递归对齐（后台节流后回前台也会重新 schedule） */
+    function scheduleDoneSprintProgressClockAligned() {
+      if (doneSprintProgressClockTimerId) {
+        clearTimeout(doneSprintProgressClockTimerId);
+        doneSprintProgressClockTimerId = null;
+      }
+      doneSprintProgressClockTimerId = window.setTimeout(function () {
+        doneSprintProgressClockTimerId = null;
+        tickDoneSprintProgressClock({ force: true });
+        scheduleDoneSprintProgressClockAligned();
+      }, getMsUntilNextMinuteBoundary());
+    }
+
+    /** 首次立即刷新 + 对齐下一整分钟；此后每分钟刷新 */
+    function ensureDoneSprintProgressClock() {
+      tickDoneSprintProgressClock({ force: doneSprintProgressClockMin < 0 });
+      if (!doneSprintProgressClockTimerId) {
+        scheduleDoneSprintProgressClockAligned();
       }
     }
 
@@ -142299,6 +142293,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       stopDoneSprintProgressClock();
       doneTimeBlockSprintHeavyBusy = false;
       doneTodayVisibilityDigest = null;
+      doneSleepCountdownLastUiMin = -1;
       resetSprintReminderMarqueeState();
       if (typeof resetSprintFormulaMarqueeState === "function") {
         resetSprintFormulaMarqueeState();
@@ -142330,10 +142325,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!Number.isFinite(sm) || !Number.isFinite(em)) return;
       const now = new Date();
       const nowMin = now.getHours() * 60 + now.getMinutes();
-      const nowSecFrac = nowMin + now.getSeconds() / 60;
       const span = em - sm;
-      /* 含秒：与「仅剩 Xs」同一时刻，避免整分地板让色块落后刻度约 1 分钟 */
-      const pct = span <= 0 ? 0 : Math.min(1, Math.max(0, (nowSecFrac - sm) / span));
+      /* 界面按整分地板：秒变化不推动色块 / 百分比 */
+      const pct = span <= 0 ? 0 : Math.min(1, Math.max(0, (nowMin - sm) / span));
       const splitBar = blockLi.querySelector(".done-time-block-sprint-split-bar");
       let fill = splitBar && splitBar.querySelector(":scope > .done-time-block-sprint-split-fill");
       if (splitBar && !fill) {
@@ -142716,9 +142710,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           doneListUiScrollTimer = window.setTimeout(function () {
             doneListUiScrolling = false;
             doneListUiScrollTimer = 0;
-            doneSprintProgressClockSec = -1;
+            doneSprintProgressClockMin = -1;
             try {
-              refreshDoneSprintProgressBars();
+              tickDoneSprintProgressClock({ force: true });
             } catch (err) {
               console.warn("[冲刺进度] 滚动结束后恢复失败", err);
             }
@@ -143462,10 +143456,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return host;
     }
 
-    function updateDoneSleepCountdownBarDom() {
+    function updateDoneSleepCountdownBarDom(opts) {
+      const forceTime = !!(opts && opts.forceTime);
       const host = document.getElementById("doneSleepCountdownBar");
       if (!host) return;
       ensureDoneSleepCountdownBarDom(host);
+
+      const minuteBucket = Math.floor(Date.now() / 60000);
+      const shouldUpdateTimeUi = forceTime || minuteBucket !== doneSleepCountdownLastUiMin;
+
+      /* 1s ticker 仍会调用本函数以驱动跑马灯；时间文案 / 进度条仅分钟级写入 */
+      if (!shouldUpdateTimeUi) {
+        syncDoneSleepCountdownMottoMarquee(host);
+        return;
+      }
+      doneSleepCountdownLastUiMin = minuteBucket;
+
       const snap = getSleepCountdownSnapshot();
       host.classList.remove.apply(host.classList, SLEEP_COUNTDOWN_STAGE_CLASSES);
 
@@ -143501,12 +143507,20 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
       /* phase=pending/unlocked 仅表示已过 22:00；提前清零任务时 stage=unlocked 但仍走时间进度 */
       const ended = snap.phase === "pending" || snap.phase === "unlocked";
-      const pct = ended ? 1 : Math.min(1, Math.max(0, snap.pct));
+      /* 界面按整分地板算进度，避免秒级宽度微动 */
+      const nowMinFloor = new Date().getHours() * 60 + new Date().getMinutes();
+      const spanMin = SLEEP_COUNTDOWN_END_MIN - SLEEP_COUNTDOWN_START_MIN;
+      const elapsedFloor = Math.max(0, nowMinFloor - SLEEP_COUNTDOWN_START_MIN);
+      const pct = ended
+        ? 1
+        : spanMin <= 0
+          ? 0
+          : Math.min(1, Math.max(0, elapsedFloor / spanMin));
       if (fill) fill.style.width = Math.round(pct * 100) + "%";
 
       if (elapsed) elapsed.classList.toggle("is-on-track", pct < 0.18);
       if (elapsedText) {
-        elapsedText.textContent = "已过 " + formatDoneSprintDurMinutes(snap.elapsedMin);
+        elapsedText.textContent = "已过 " + formatDoneSprintDurMinutes(elapsedFloor);
       }
 
       const unlocked = snap.stage === "unlocked";
@@ -143527,7 +143541,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (ended) {
           remainText.textContent = mobile ? "剩 0m" : "仅剩 0m";
         } else {
-          const nowMinFloor = new Date().getHours() * 60 + new Date().getMinutes();
           const remain = formatDoneSprintRemain(SLEEP_COUNTDOWN_END_MIN, nowMinFloor);
           remainText.textContent = (mobile ? "剩 " : "仅剩 ") + remain;
         }
@@ -143537,7 +143550,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function renderDoneSleepCountdownBar() {
-      updateDoneSleepCountdownBarDom();
+      updateDoneSleepCountdownBarDom({ forceTime: true });
     }
 
     function getDonePastBlockExpandKey(blockKey, dateKey) {
@@ -143596,8 +143609,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       window._doneSprintProgressVisBound = true;
       const resume = function () {
         if (document.visibilityState && document.visibilityState !== "visible") return;
+        /* 回前台：立即用真实时间校准，并重新对齐整分钟刷新 */
+        doneSprintProgressClockMin = -1;
+        doneSleepCountdownLastUiMin = -1;
         ensureDoneTimeBlockSprintTicker();
-        refreshDoneSprintProgressBars();
+        scheduleDoneSprintProgressClockAligned();
+        tickDoneSprintProgressClock({ force: true });
       };
       document.addEventListener("visibilitychange", function () {
         if (document.visibilityState === "visible") resume();
