@@ -61,7 +61,11 @@ assert.match(renderHabitHead, /return;/);
 mustInclude("captureHabitNumericCheckinDraftFromInputs();", "input captures draft");
 mustInclude("function commitHabitNumericCheckin", "commit only on confirm");
 
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001ef"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001ef"/);
+mustInclude("必须用 text + inputmode", "text input for decimal draft");
+assert.match(html, /id="habitNumericCheckinInput"[\s\S]*?type="text"/);
+
+
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001eg"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001eg"/);
 
 console.log("OK habit-numeric-input-stability");

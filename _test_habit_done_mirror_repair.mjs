@@ -15,8 +15,8 @@ assert.match(html, /拉取无变化，但已补齐缺失的 Habit→Done 镜像/
 assert.match(html, /简单习惯（间歇性断食 \/ 手掌写符号等）/);
 assert.match(html, /checkin-direct/);
 assert.match(html, /for \(let n = existingRows\.length \+ 1; n <= expectTimes; n\+\+/);
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001ef"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001ef"/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001eg"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001eg"/);
 
 /** 纯逻辑：已有 0 行、times=2 → 应补 2 次 */
 function planSimpleHabitDoneFills(existingCount, expectTimes, stamps) {

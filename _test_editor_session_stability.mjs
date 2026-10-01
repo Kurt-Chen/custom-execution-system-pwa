@@ -54,7 +54,7 @@ const busy = html.slice(
 assert.match(busy, /appUiImeComposing/);
 assert.match(busy, /taskTitleIxIsBusy/);
 
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001ef"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001ef"/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001eg"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001eg"/);
 
 console.log("OK editor-session-stability");
