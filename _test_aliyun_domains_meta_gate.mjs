@@ -22,11 +22,14 @@ mustInclude('aliyunDomainsMetaBumpDomain("forge")', "forge bump");
 mustInclude('aliyunDomainsMetaBumpDomain("goals")', "goals bump");
 mustInclude("runAliyunSyncPrimaryBootPull({ reason: pullReason })", "poll passes reason");
 mustInclude("Phase 1b", "phase 1b marker");
-mustInclude("exec-system-pwa-v20261002b", "cache bump in html");
+mustInclude("exec-system-pwa-v20261002c", "cache bump in html");
 assert.ok(
-  fs.readFileSync("sw.js", "utf8").includes("exec-system-pwa-v20261002b"),
+  fs.readFileSync("sw.js", "utf8").includes("exec-system-pwa-v20261002c"),
   "cache bump in sw"
 );
+mustInclude("ALIYUN_DOMAINS_META_SAFETY_FULL_MS = 60 * 60 * 1000", "phase1c 60m safety");
+mustInclude("aliyunDomainsMetaDrainPendingBumps", "pending bump drain");
+mustInclude("aliyunDomainsMetaPendingBumps", "pending bump map");
 
 /* 抽出 decide 的核心比较逻辑做表驱动测试（与实现一致） */
 function decidePullIds(ids, remoteVersions, lastSeen) {

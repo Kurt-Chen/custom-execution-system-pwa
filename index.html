@@ -96096,7 +96096,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261002b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261002c";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -106513,6 +106513,12 @@
             console.log("[aliyun-sync-primary] near-realtime pull:", pullReason);
           } catch (_c) {}
         }
+        /* Phase 1c：先排空挂起的 meta bump，再决定是否拉正文 */
+        try {
+          if (typeof aliyunDomainsMetaDrainPendingBumps === "function") {
+            await aliyunDomainsMetaDrainPendingBumps();
+          }
+        } catch (_drain) {}
         /* 复用启动串行拉取；Phase 1b domains meta 未变则跳过正文；域内指纹未变再跳过 merge/render */
         const report = await runAliyunSyncPrimaryBootPull({ reason: pullReason });
         if (report && report.ok) {
@@ -107654,7 +107660,7 @@
         console.log(
           "[aliyun-sync-meta-gate]",
           on
-            ? "已开启（Phase1b：5s 只拉房间 domains meta；某域 version 变才拉该域正文；12 分钟安全全量；Habit 仍保留独立 meta）"
+            ? "已开启（Phase1b/1c：5s 只拉房间 domains meta；某域 version 变才拉该域正文；60 分钟安全全量兜底；Habit 仍保留独立 meta）"
             : "已关闭（恢复每 5s 十域正文 GET 旧路径）"
         );
       } catch (_c) {}
@@ -107987,7 +107993,12 @@
      * 不改 FC、不改 merge、不 GC tombstone。
      */
     const ALIYUN_DOMAINS_META_KIND = "domains-meta-v1";
-    const ALIYUN_DOMAINS_META_SAFETY_FULL_MS = 12 * 60 * 1000;
+    /**
+     * Phase 1c：定时安全全量 12 分钟 → 60 分钟（仍保留，不删除）。
+     * 理由：10 域 flush 成功路径均已 bump，但 POST 成功后 bump 仍可能因网络耗尽失败；
+     * meta 请求失败/解析失败时 decide 已会立刻全量拉正文；定时全量只兜「正文已变但 meta 未推进」。
+     */
+    const ALIYUN_DOMAINS_META_SAFETY_FULL_MS = 60 * 60 * 1000;
     const ALIYUN_DOMAINS_META_IDS = [
       "done",
       "habit",
@@ -108004,6 +108015,9 @@
     let aliyunDomainsMetaBootBodyDone = false;
     let aliyunDomainsMetaLastSafetyFullAt = 0;
     const aliyunDomainsMetaLastBodyKB = Object.create(null);
+    /** bump 耗尽失败时挂起，下一轮 poll / 短延迟再试（缩小 meta 落后窗口） */
+    const aliyunDomainsMetaPendingBumps = Object.create(null);
+    let aliyunDomainsMetaPendingBumpTimer = null;
 
     /** Sync Check 观测：一轮拉取内累计 meta/正文下行字节 */
     let aliyunSyncCheckRoundActive = false;
@@ -108057,6 +108071,45 @@
       aliyunDomainsMetaLastSeen = Object.create(null);
       aliyunDomainsMetaBootBodyDone = false;
       aliyunDomainsMetaLastSafetyFullAt = 0;
+      try {
+        Object.keys(aliyunDomainsMetaPendingBumps).forEach(function (k) {
+          delete aliyunDomainsMetaPendingBumps[k];
+        });
+      } catch (_pb) {}
+      if (aliyunDomainsMetaPendingBumpTimer) {
+        clearTimeout(aliyunDomainsMetaPendingBumpTimer);
+        aliyunDomainsMetaPendingBumpTimer = null;
+      }
+    }
+
+    function aliyunDomainsMetaSchedulePendingBumpRetry() {
+      if (aliyunDomainsMetaPendingBumpTimer) return;
+      aliyunDomainsMetaPendingBumpTimer = window.setTimeout(function () {
+        aliyunDomainsMetaPendingBumpTimer = null;
+        Promise.resolve(aliyunDomainsMetaDrainPendingBumps()).catch(function () {});
+      }, 3000);
+    }
+
+    /** 重试此前 POST 成功但 bump 耗尽失败的域（不改变 decide 主路径） */
+    async function aliyunDomainsMetaDrainPendingBumps() {
+      if (!isAliyunSyncMetaGateEnabled()) return { drained: 0 };
+      const ids = Object.keys(aliyunDomainsMetaPendingBumps);
+      if (!ids.length) return { drained: 0 };
+      let drained = 0;
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        try {
+          const res = await aliyunDomainsMetaBumpDomain(id);
+          if (res && res.ok) {
+            delete aliyunDomainsMetaPendingBumps[id];
+            drained += 1;
+          }
+        } catch (_e) {}
+      }
+      if (Object.keys(aliyunDomainsMetaPendingBumps).length) {
+        aliyunDomainsMetaSchedulePendingBumpRetry();
+      }
+      return { drained: drained, remaining: Object.keys(aliyunDomainsMetaPendingBumps).length };
     }
 
     function aliyunDomainsMetaBaseUrl() {
@@ -108342,6 +108395,13 @@
         };
       }
       if (needSafety) {
+        try {
+          console.log(
+            "[aliyun-domains-meta] safety-full pull (intervalMs=" +
+              ALIYUN_DOMAINS_META_SAFETY_FULL_MS +
+              ") reason=timed-backstop"
+          );
+        } catch (_sf) {}
         return {
           fetchBody: true,
           skipAll: false,
@@ -108488,10 +108548,12 @@
                   }
                 }
               }
+              delete aliyunDomainsMetaPendingBumps[id];
               return { ok: true, v: remoteV, domain: id, attempt: attempt };
             }
           } catch (_vf) {}
           aliyunDomainsMetaLastSeen[id] = writeV;
+          delete aliyunDomainsMetaPendingBumps[id];
           return { ok: true, v: writeV, domain: id, attempt: attempt };
         } catch (err) {
           lastErr = err && err.message ? err.message : String(err);
@@ -108502,6 +108564,9 @@
           "[aliyun-domains-meta] bump FAIL domain=" + id + " err=" + (lastErr || "exhausted")
         );
       } catch (_c) {}
+      /* POST 已成功但 meta 未推进：挂起短延迟/下轮 poll 再 bump，缩小他端漏拉窗口 */
+      aliyunDomainsMetaPendingBumps[id] = Date.now();
+      aliyunDomainsMetaSchedulePendingBumpRetry();
       return { ok: false, error: lastErr || "bump-exhausted", domain: id };
     }
 
