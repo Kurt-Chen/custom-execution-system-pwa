@@ -1,11 +1,5 @@
 # -*- coding: utf-8 -*-
-"""阿里云 A：FC Web(Python3.10) → Tablestore 隔离 CRUD。仅用函数角色 STS，无长期 AK。
-
-Endpoint 配置（优先 OTS_ENDPOINT，兼容旧键 OTSENDPOINT）：
-- 公网回退值（仅人工回退用，失败时绝不静默自动切回）：见 OTS_ENDPOINT_PUBLIC_ROLLBACK
-- 经典网内网候选：OTS_ENDPOINT_INTERNAL_CANDIDATE
-- VPC 候选：OTS_ENDPOINT_VPC_CANDIDATE
-"""
+"""阿里云 A：FC Web(Python3.10) → Tablestore 隔离 CRUD。仅用函数角色 STS，无长期 AK。"""
 from __future__ import print_function
 
 import json
@@ -30,54 +24,12 @@ app = Flask(__name__)
 
 OTS_INSTANCE = os.environ.get("OTSINSTANCE", "execsmokea")
 OTS_TABLE = os.environ.get("OTSTABLE", "aliyun_exec_smoke_a")
-
-# 人工快速回退公网时使用；业务失败路径禁止自动切回此值
-OTS_ENDPOINT_PUBLIC_ROLLBACK = "https://execsmokea.cn-hangzhou.ots.aliyuncs.com"
-# 同地域已解析确认的候选（实例 execsmokea / cn-hangzhou）
-OTS_ENDPOINT_INTERNAL_CANDIDATE = "https://execsmokea.cn-hangzhou.ots-internal.aliyuncs.com"
-OTS_ENDPOINT_VPC_CANDIDATE = "https://execsmokea.cn-hangzhou.vpc.tablestore.aliyuncs.com"
-
-
-def _read_configured_ots_endpoint():
-    """优先 OTS_ENDPOINT；兼容历史 OTSENDPOINT；都未设时用公网默认（未切换前兼容）。"""
-    raw = os.environ.get("OTS_ENDPOINT")
-    if raw is None or not str(raw).strip():
-        raw = os.environ.get("OTSENDPOINT")
-    if raw is None or not str(raw).strip():
-        return OTS_ENDPOINT_PUBLIC_ROLLBACK
-    return str(raw).strip().rstrip("/")
-
-
-def classify_ots_endpoint_type(endpoint):
-    """返回 public | internal | vpc | unknown（供日志与 /health，不只打印 URL）。"""
-    ep = str(endpoint or "").lower()
-    if ".vpc.tablestore.aliyuncs.com" in ep:
-        return "vpc"
-    if "ots-internal.aliyuncs.com" in ep:
-        return "internal"
-    if ".ots.aliyuncs.com" in ep or ".tablestore.aliyuncs.com" in ep:
-        return "public"
-    return "unknown"
-
-
-OTS_ENDPOINT = _read_configured_ots_endpoint()
-OTS_ENDPOINT_TYPE = classify_ots_endpoint_type(OTS_ENDPOINT)
+OTS_ENDPOINT = os.environ.get(
+    "OTSENDPOINT",
+    "https://execsmokea.cn-hangzhou.ots.aliyuncs.com",
+)
 
 _client = None
-
-
-def _log_endpoint_boot():
-    try:
-        print(
-            "[ots-endpoint] type=%s endpoint=%s instance=%s table=%s "
-            "(no silent public fallback on failure)"
-            % (OTS_ENDPOINT_TYPE, OTS_ENDPOINT, OTS_INSTANCE, OTS_TABLE)
-        )
-    except Exception:
-        pass
-
-
-_log_endpoint_boot()
 
 
 def _now_iso():
@@ -107,50 +59,16 @@ def _read_sts_creds():
     return ak, sk, token
 
 
-def _make_ots_client(endpoint):
-    ak, sk, token = _read_sts_creds()
-    return OTSClient(
-        endpoint,
-        ak,
-        sk,
-        OTS_INSTANCE,
-        sts_token=token,
-        socket_timeout=20,
-        max_connection=4,
-    )
-
-
 def get_ots_client():
-    """使用配置的唯一 Endpoint；连接/读写失败时不静默改用公网。"""
     global _client
     if _client is not None:
         return _client
-    _client = _make_ots_client(OTS_ENDPOINT)
-    try:
-        print(
-            "[ots-endpoint] client_init ok type=%s endpoint=%s"
-            % (OTS_ENDPOINT_TYPE, OTS_ENDPOINT)
-        )
-    except Exception:
-        pass
+    ak, sk, token = _read_sts_creds()
+    _client = OTSClient(
+        OTS_ENDPOINT, ak, sk, OTS_INSTANCE,
+        sts_token=token, socket_timeout=20, max_connection=4,
+    )
     return _client
-
-
-def _endpoint_info_dict():
-    return {
-        "otsEndpoint": OTS_ENDPOINT,
-        "otsEndpointType": OTS_ENDPOINT_TYPE,
-        "otsInstance": OTS_INSTANCE,
-        "otsTable": OTS_TABLE,
-        "publicRollbackEndpoint": OTS_ENDPOINT_PUBLIC_ROLLBACK,
-        "internalCandidateEndpoint": OTS_ENDPOINT_INTERNAL_CANDIDATE,
-        "vpcCandidateEndpoint": OTS_ENDPOINT_VPC_CANDIDATE,
-        "envKeys": {
-            "OTS_ENDPOINT": bool(str(os.environ.get("OTS_ENDPOINT") or "").strip()),
-            "OTSENDPOINT": bool(str(os.environ.get("OTSENDPOINT") or "").strip()),
-        },
-        "silentPublicFallback": False,
-    }
 
 
 def _row_to_dict(row):
@@ -168,13 +86,7 @@ def _row_to_dict(row):
 
 
 def _error_response(err, status=500):
-    body = {
-        "ok": False,
-        "errorType": type(err).__name__,
-        "error": str(err),
-        "otsEndpointType": OTS_ENDPOINT_TYPE,
-        "otsEndpoint": OTS_ENDPOINT,
-    }
+    body = {"ok": False, "errorType": type(err).__name__, "error": str(err)}
     if isinstance(err, OTSServiceError):
         body["httpStatus"] = getattr(err, "http_status", None)
         body["errorCode"] = getattr(err, "code", None)
@@ -192,101 +104,25 @@ def add_cors(resp):
 
 @app.route("/", methods=["GET"])
 def root():
-    body = {
+    return jsonify({
         "service": "exec-smoke-a",
         "phase": "A",
+        "otsInstance": OTS_INSTANCE,
+        "otsTable": OTS_TABLE,
+        "otsEndpoint": OTS_ENDPOINT,
         "credentials": _cred_snapshot(),
-    }
-    body.update(_endpoint_info_dict())
-    return jsonify(body)
+    })
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    body = {
+    return jsonify({
         "ok": True,
         "credentials": _cred_snapshot(),
-    }
-    body.update(_endpoint_info_dict())
-    return jsonify(body)
-
-
-@app.route("/admin/ots-endpoint-probe", methods=["GET", "POST", "OPTIONS"])
-def ots_endpoint_probe():
-    """
-    在不切换当前业务 Endpoint 的前提下，从 FC 内探测候选内网/VPC 是否可达。
-    query/body: target=internal|vpc|public|<full-url>
-    成功标准：能完成一次 get_row（404/not_found 也算网络与签名成功）。
-    """
-    if request.method == "OPTIONS":
-        return ("", 204)
-    target = ""
-    if request.method == "POST":
-        body = request.get_json(silent=True) or {}
-        target = str(body.get("target") or "").strip()
-    if not target:
-        target = str(request.args.get("target") or "internal").strip()
-
-    if target == "internal":
-        probe_ep = OTS_ENDPOINT_INTERNAL_CANDIDATE
-    elif target == "vpc":
-        probe_ep = OTS_ENDPOINT_VPC_CANDIDATE
-    elif target == "public":
-        probe_ep = OTS_ENDPOINT_PUBLIC_ROLLBACK
-    elif target.startswith("https://"):
-        probe_ep = target.rstrip("/")
-    else:
-        return jsonify({
-            "ok": False,
-            "error": "bad target; use internal|vpc|public|https://...",
-            "activeEndpointType": OTS_ENDPOINT_TYPE,
-        }), 400
-
-    probe_type = classify_ots_endpoint_type(probe_ep)
-    doc_id = "aliyun-meta-v1-domains-default-room"
-    report = {
-        "ok": False,
-        "probeTarget": target,
-        "probeEndpoint": probe_ep,
-        "probeEndpointType": probe_type,
-        "activeEndpoint": OTS_ENDPOINT,
-        "activeEndpointType": OTS_ENDPOINT_TYPE,
-        "docId": doc_id,
-        "note": "probe does not change active OTS client; no silent fallback",
-    }
-    t0 = time.time()
-    try:
-        print(
-            "[ots-endpoint] probe_start type=%s endpoint=%s"
-            % (probe_type, probe_ep)
-        )
-        client = _make_ots_client(probe_ep)
-        _, row, _ = client.get_row(OTS_TABLE, [("id", doc_id)], None, None, 1)
-        data = _row_to_dict(row)
-        report["ok"] = True
-        report["rowFound"] = bool(data and data.get("id") is not None)
-        report["ms"] = int((time.time() - t0) * 1000)
-        print(
-            "[ots-endpoint] probe_ok type=%s ms=%s rowFound=%s"
-            % (probe_type, report["ms"], report["rowFound"])
-        )
-        return jsonify(report), 200
-    except Exception as e:
-        report["ms"] = int((time.time() - t0) * 1000)
-        report["errorType"] = type(e).__name__
-        report["error"] = str(e)
-        if isinstance(e, OTSServiceError):
-            report["httpStatus"] = getattr(e, "http_status", None)
-            report["errorCode"] = getattr(e, "code", None)
-            report["requestId"] = getattr(e, "request_id", None)
-            # 鉴权/权限类错误也说明网络已通到 OTS
-            if getattr(e, "http_status", None) in (403, 404) or getattr(e, "code", None):
-                report["networkReachableLikely"] = True
-        print(
-            "[ots-endpoint] probe_fail type=%s err=%s"
-            % (probe_type, report.get("error"))
-        )
-        return jsonify(report), 500
+        "otsEndpoint": OTS_ENDPOINT,
+        "otsInstance": OTS_INSTANCE,
+        "otsTable": OTS_TABLE,
+    })
 
 
 @app.route("/smoke", methods=["OPTIONS"])
@@ -302,7 +138,6 @@ def smoke_selftest():
         "ok": False,
         "docId": doc_id,
         "endpoint": OTS_ENDPOINT,
-        "otsEndpointType": OTS_ENDPOINT_TYPE,
         "instance": OTS_INSTANCE,
         "table": OTS_TABLE,
         "credentials": _cred_snapshot(),
@@ -410,11 +245,7 @@ def smoke_create():
             ]),
             Condition("IGNORE"),
         )
-        return jsonify({
-            "ok": True,
-            "id": doc_id,
-            "otsEndpointType": OTS_ENDPOINT_TYPE,
-        }), 201
+        return jsonify({"ok": True, "id": doc_id}), 201
     except Exception as e:
         return _error_response(e)
 
@@ -428,17 +259,8 @@ def smoke_get(doc_id):
         _, row, _ = client.get_row(OTS_TABLE, [("id", doc_id)], None, None, 1)
         data = _row_to_dict(row)
         if not data or data.get("id") is None:
-            return jsonify({
-                "ok": False,
-                "error": "not_found",
-                "id": doc_id,
-                "otsEndpointType": OTS_ENDPOINT_TYPE,
-            }), 404
-        return jsonify({
-            "ok": True,
-            "data": data,
-            "otsEndpointType": OTS_ENDPOINT_TYPE,
-        })
+            return jsonify({"ok": False, "error": "not_found", "id": doc_id}), 404
+        return jsonify({"ok": True, "data": data})
     except Exception as e:
         return _error_response(e)
 
@@ -459,11 +281,7 @@ def smoke_update(doc_id):
             }),
             Condition("EXPECT_EXIST"),
         )
-        return jsonify({
-            "ok": True,
-            "id": doc_id,
-            "otsEndpointType": OTS_ENDPOINT_TYPE,
-        })
+        return jsonify({"ok": True, "id": doc_id})
     except Exception as e:
         return _error_response(e)
 
@@ -473,11 +291,7 @@ def smoke_delete(doc_id):
     try:
         client = get_ots_client()
         client.delete_row(OTS_TABLE, Row([("id", doc_id)]), Condition("IGNORE"))
-        return jsonify({
-            "ok": True,
-            "deleted": doc_id,
-            "otsEndpointType": OTS_ENDPOINT_TYPE,
-        })
+        return jsonify({"ok": True, "deleted": doc_id})
     except Exception as e:
         return _error_response(e)
 
