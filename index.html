@@ -36073,11 +36073,15 @@
       flex-shrink: 0;
       white-space: nowrap;
     }
-    /* 默认 / legacy：CSS iteration（边界会 -100%→0% 闪） */
+    /*
+     * hour-task 稳定基线 v20261002j（见 .cursor/rules/hour-marquee-continuous-baseline.mdc）：
+     * 生产路径必须走 .is-continuous（单次 translate3d）；下方无 .is-continuous 的规则仅供
+     * __HOUR_MARQUEE_ITER_MODE=legacy/oneshot 对照，禁止改回默认多遍 CSS iteration。
+     */
     ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__track.is-running {
       animation: done-sprint-finish-close-loop-marquee-rtl var(--marquee-duration, 24s) linear var(--marquee-passes, 2) forwards;
     }
-    /* 连续单轨：单次 animation，transform 单向平移，无 iteration reset */
+    /* 稳定基线：复制 seq + 单次 unidirectional translate3d，iteration-count 恒为 1 */
     @keyframes done-sprint-finish-hour-task-marquee-continuous-rtl {
       from {
         transform: translate3d(0, 0, 0);
@@ -138536,10 +138540,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * hour-task 动画模式（控制台可改）：
-     * - continuous（默认）：单次 animation + 内容复制，视觉滚 N 遍，无 iteration reset
-     * - oneshot：只滚 1 遍（实验 1）
-     * - legacy：CSS animation-iteration-count = N（旧行为，会闪）
+     * hour-task 动画模式（稳定基线 v20261002j · hour-marquee-continuous-baseline.mdc）：
+     * - continuous（生产默认，不得改掉）：复制 seq + 单次 translate3d，视觉滚 N 遍，无 iteration reset
+     * - oneshot：仅诊断（只滚 1 遍）
+     * - legacy：仅对照（多遍 CSS iteration，会闪）；禁止当默认或「优化回退」
      */
     function getHourMarqueeIterMode() {
       try {
@@ -138552,7 +138556,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * 装配 hour-task track 动画。continuous：测单遍位移 → 复制 seq → 单次单向 translate3d。
+     * 装配 hour-task track 动画（回归保护：默认必须 continuous）。
+     * continuous：测单遍位移 unit → 复制 __seq → --marquee-shift=unit×N → 单次 unidirectional translate3d。
+     * 禁止改回「animation-iteration-count≥2 导致 -100%→0% reset」。
      */
     function armHourTaskMarqueeTrackAnimation(track, passSec, passes, elapsedSec) {
       if (!track) return;
