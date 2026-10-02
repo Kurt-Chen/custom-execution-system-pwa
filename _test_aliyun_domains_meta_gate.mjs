@@ -22,9 +22,9 @@ mustInclude('aliyunDomainsMetaBumpDomain("forge")', "forge bump");
 mustInclude('aliyunDomainsMetaBumpDomain("goals")', "goals bump");
 mustInclude("runAliyunSyncPrimaryBootPull({ reason: pullReason })", "poll passes reason");
 mustInclude("Phase 1b", "phase 1b marker");
-mustInclude("exec-system-pwa-v20261002b", "cache bump in html");
+mustInclude("exec-system-pwa-v20261002p", "cache bump in html");
 assert.ok(
-  fs.readFileSync("sw.js", "utf8").includes("exec-system-pwa-v20261002b"),
+  fs.readFileSync("sw.js", "utf8").includes("exec-system-pwa-v20261002p"),
   "cache bump in sw"
 );
 
