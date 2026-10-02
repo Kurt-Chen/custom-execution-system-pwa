@@ -96503,7 +96503,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261002o";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261002p";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -106883,6 +106883,8 @@
       return "阿里云同步失败";
     }
 
+    let aliyunSyncPrimaryLastPullReason = "";
+
     async function runAliyunSyncPrimaryNearRealtimePull(reason) {
       if (!isAliyunSyncPrimaryEnabled()) {
         return { ok: false, skipped: true, reason: "primary-off" };
@@ -106904,6 +106906,7 @@
        * boot / 回前台 / 异常恢复仍显示同步中。
        */
       const pullReason = reason || "poll";
+      aliyunSyncPrimaryLastPullReason = pullReason;
       const quietPoll =
         pullReason === "poll" &&
         cloudSyncMachineStatus === "synced" &&
@@ -116033,6 +116036,309 @@
       aliyunExpPanelOverlay.setAttribute("aria-hidden", "true");
     }
 
+    /**
+     * —— 临时诊断：Tablestore / FC 下行流量审计（v20261002p）——
+     * 不改同步策略；仅观测 Browser→FC→OTS 公网读路径。
+     * 控制台：
+     *   window.getAliyunOtsTrafficDiag()
+     *   window.dumpAliyunOtsTrafficDiag()
+     *   window.resetAliyunOtsTrafficDiag()
+     *   window.setAliyunOtsTrafficDiagVerbose(true|false)
+     */
+    const ALIYUN_OTS_TRAFFIC_DIAG_MAX_EVENTS = 400;
+    const ALIYUN_OTS_KNOWN_PUBLIC_ENDPOINT =
+      "https://execsmokea.cn-hangzhou.ots.aliyuncs.com";
+    const ALIYUN_OTS_ENDPOINT_TYPE = "ots-public"; /* 线上 /health 已确认；非 VPC/internal */
+    let aliyunOtsTrafficDiagVerbose = false;
+    let aliyunOtsDiagExplicitTrigger = "";
+    const aliyunOtsTrafficDiag = {
+      startedAt: Date.now(),
+      deviceId: "",
+      deviceLabel: "",
+      events: [],
+      byModuleBytes: Object.create(null),
+      byTriggerBytes: Object.create(null),
+      byRequestTypeCount: Object.create(null),
+      pullCount: 0,
+      getCount: 0,
+      postCount: 0,
+      totalResponseBytes: 0,
+      maxResponseBytes: 0,
+      maxResponseEvent: null,
+      minuteBuckets: Object.create(null),
+      hourBuckets: Object.create(null)
+    };
+
+    function aliyunOtsDiagEnsureDevice() {
+      if (aliyunOtsTrafficDiag.deviceId) return aliyunOtsTrafficDiag.deviceId;
+      let id = "";
+      try {
+        id = String(localStorage.getItem("todo-app-aliyun-ots-diag-device-v1") || "").trim();
+      } catch (_r) {
+        id = "";
+      }
+      if (!id) {
+        id =
+          "d-" +
+          Date.now().toString(36) +
+          "-" +
+          Math.random().toString(36).slice(2, 8);
+        try {
+          localStorage.setItem("todo-app-aliyun-ots-diag-device-v1", id);
+        } catch (_w) {}
+      }
+      aliyunOtsTrafficDiag.deviceId = id;
+      let ua = "";
+      try {
+        ua = String((typeof navigator !== "undefined" && navigator.userAgent) || "");
+      } catch (_ua) {
+        ua = "";
+      }
+      const coarse =
+        /iPad|Tablet|Android(?!.*Mobile)/i.test(ua)
+          ? "tablet"
+          : /Mobile|iPhone|Android/i.test(ua)
+            ? "phone"
+            : "desktop";
+      aliyunOtsTrafficDiag.deviceLabel = coarse + ":" + id.slice(-6);
+      return id;
+    }
+
+    function aliyunOtsDiagParseModule(url) {
+      const u = String(url || "");
+      const m = u.match(/\/smoke\/([^/?#]+)/);
+      if (!m) {
+        if (/\/health\/?$/.test(u) || /\/$/.test(u.replace(/https?:\/\/[^/]+/, ""))) {
+          return "fc-health";
+        }
+        return "unknown";
+      }
+      let docId = m[1];
+      try {
+        docId = decodeURIComponent(docId);
+      } catch (_d) {}
+      if (docId.indexOf("aliyun-meta-v1-domains-") === 0) return "meta-domains";
+      if (docId.indexOf("aliyun-meta-v1-habit-") === 0) return "meta-habit";
+      if (docId.indexOf("aliyun-done-real-v1-") === 0) return "done";
+      if (docId.indexOf("aliyun-habit-real-v1-") === 0) return "habit";
+      if (docId.indexOf("aliyun-forge-real-v1-") === 0) return "forge";
+      if (docId.indexOf("aliyun-anniv-real-v1-") === 0) return "anniv";
+      if (docId.indexOf("aliyun-sprint-real-v1-") === 0) return "sprint";
+      if (docId.indexOf("aliyun-today-plan-real-v1-") === 0) return "todayPlan";
+      if (docId.indexOf("aliyun-amb-real-v1-") === 0) return "amb";
+      if (docId.indexOf("aliyun-rule100-real-v1-") === 0) return "rule100";
+      if (docId.indexOf("aliyun-lists-real-v1-") === 0) return "lists";
+      if (docId.indexOf("aliyun-goals-real-v1-") === 0) return "goals";
+      if (docId.indexOf("aliyun-smoke-a-") === 0) return "smoke-test";
+      return "other:" + docId.slice(0, 32);
+    }
+
+    function aliyunOtsDiagInferTrigger(method, moduleId) {
+      if (aliyunOtsDiagExplicitTrigger) return aliyunOtsDiagExplicitTrigger;
+      try {
+        if (aliyunSyncPrimaryPullInFlight) {
+          return "pull:" + (aliyunSyncPrimaryLastPullReason || "unknown");
+        }
+      } catch (_p) {}
+      try {
+        if (typeof aliyunDoneRealFlushing !== "undefined" && aliyunDoneRealFlushing) return "flush:done";
+        if (typeof aliyunHabitRealFlushing !== "undefined" && aliyunHabitRealFlushing) return "flush:habit";
+        if (typeof aliyunForgeRealFlushing !== "undefined" && aliyunForgeRealFlushing) return "flush:forge";
+        if (typeof aliyunAnnivRealFlushing !== "undefined" && aliyunAnnivRealFlushing) return "flush:anniv";
+        if (typeof aliyunSprintRealFlushing !== "undefined" && aliyunSprintRealFlushing) return "flush:sprint";
+        if (typeof aliyunTodayPlanRealFlushing !== "undefined" && aliyunTodayPlanRealFlushing)
+          return "flush:todayPlan";
+        if (typeof aliyunAmbRealFlushing !== "undefined" && aliyunAmbRealFlushing) return "flush:amb";
+        if (typeof aliyunRule100RealFlushing !== "undefined" && aliyunRule100RealFlushing)
+          return "flush:rule100";
+        if (typeof aliyunListsRealFlushing !== "undefined" && aliyunListsRealFlushing) return "flush:lists";
+        if (typeof aliyunGoalsRealFlushing !== "undefined" && aliyunGoalsRealFlushing) return "flush:goals";
+      } catch (_f) {}
+      const mod = String(moduleId || "");
+      if (mod.indexOf("meta-") === 0) return "meta-rmw-or-gate";
+      return String(method || "GET").toUpperCase() === "GET" ? "ad-hoc-get" : "ad-hoc-write";
+    }
+
+    function aliyunOtsDiagRequestType(method, moduleId) {
+      const m = String(method || "GET").toUpperCase();
+      const mod = String(moduleId || "");
+      if (m === "GET" && (mod === "meta-domains" || mod === "meta-habit")) return "GET-meta";
+      if (m === "GET") return "GET-body";
+      if (m === "POST") return "POST-upsert";
+      if (m === "PATCH" || m === "PUT") return "PATCH-update";
+      if (m === "DELETE") return "DELETE";
+      return m;
+    }
+
+    function aliyunOtsDiagNoteEvent(ev) {
+      const d = aliyunOtsTrafficDiag;
+      aliyunOtsDiagEnsureDevice();
+      d.events.push(ev);
+      if (d.events.length > ALIYUN_OTS_TRAFFIC_DIAG_MAX_EVENTS) {
+        d.events.splice(0, d.events.length - ALIYUN_OTS_TRAFFIC_DIAG_MAX_EVENTS);
+      }
+      const bytes = Number(ev.responseBytes) || 0;
+      d.totalResponseBytes += bytes;
+      if (bytes > d.maxResponseBytes) {
+        d.maxResponseBytes = bytes;
+        d.maxResponseEvent = ev;
+      }
+      d.byModuleBytes[ev.module] = (Number(d.byModuleBytes[ev.module]) || 0) + bytes;
+      d.byTriggerBytes[ev.trigger] = (Number(d.byTriggerBytes[ev.trigger]) || 0) + bytes;
+      d.byRequestTypeCount[ev.requestType] =
+        (Number(d.byRequestTypeCount[ev.requestType]) || 0) + 1;
+      if (String(ev.method || "").toUpperCase() === "GET") {
+        d.getCount += 1;
+        if (ev.requestType === "GET-body" || ev.requestType === "GET-meta") d.pullCount += 1;
+      } else if (String(ev.method || "").toUpperCase() === "POST") {
+        d.postCount += 1;
+      }
+      const t = Number(ev.timestamp) || Date.now();
+      const minuteKey = new Date(t).toISOString().slice(0, 16); /* YYYY-MM-DDTHH:MM */
+      const hourKey = minuteKey.slice(0, 13); /* YYYY-MM-DDTHH */
+      if (!d.minuteBuckets[minuteKey]) d.minuteBuckets[minuteKey] = { pulls: 0, bytes: 0 };
+      if (!d.hourBuckets[hourKey]) d.hourBuckets[hourKey] = { pulls: 0, bytes: 0 };
+      if (String(ev.method || "").toUpperCase() === "GET") {
+        d.minuteBuckets[minuteKey].pulls += 1;
+        d.hourBuckets[hourKey].pulls += 1;
+      }
+      d.minuteBuckets[minuteKey].bytes += bytes;
+      d.hourBuckets[hourKey].bytes += bytes;
+      if (aliyunOtsTrafficDiagVerbose) {
+        try {
+          console.log(
+            "[aliyun-ots-diag]",
+            ev.timestampIso,
+            ev.device,
+            ev.module,
+            ev.trigger,
+            ev.requestType,
+            ev.responseBytes + "B",
+            ev.elapsedMs + "ms",
+            ev.endpointType
+          );
+        } catch (_l) {}
+      }
+    }
+
+    function aliyunOtsDiagSummarize() {
+      aliyunOtsDiagEnsureDevice();
+      const d = aliyunOtsTrafficDiag;
+      const now = Date.now();
+      const elapsedMin = Math.max(1 / 60, (now - d.startedAt) / 60000);
+      const elapsedHour = Math.max(1 / 3600, (now - d.startedAt) / 3600000);
+      const topTrigger = Object.keys(d.byTriggerBytes)
+        .map(function (k) {
+          return { trigger: k, bytes: d.byTriggerBytes[k] };
+        })
+        .sort(function (a, b) {
+          return b.bytes - a.bytes;
+        })[0];
+      const topModule = Object.keys(d.byModuleBytes)
+        .map(function (k) {
+          return { module: k, bytes: d.byModuleBytes[k] };
+        })
+        .sort(function (a, b) {
+          return b.bytes - a.bytes;
+        })[0];
+      const minuteKeys = Object.keys(d.minuteBuckets).sort();
+      const hourKeys = Object.keys(d.hourBuckets).sort();
+      const lastMinute = minuteKeys.length ? d.minuteBuckets[minuteKeys[minuteKeys.length - 1]] : null;
+      const lastHour = hourKeys.length ? d.hourBuckets[hourKeys[hourKeys.length - 1]] : null;
+      return {
+        note:
+          "Browser 只打 FC 公网 Function URL；OTS 读发生在 FC 内。线上 otsEndpoint=" +
+          ALIYUN_OTS_KNOWN_PUBLIC_ENDPOINT +
+          "（公网，非 VPC/internal）。responseBytes≈FC→浏览器 UTF-16/JSON 文本长度；OTS 外网下行与此同量级且常因无 gzip 更大。",
+        device: d.deviceLabel,
+        deviceId: d.deviceId,
+        endpointType: ALIYUN_OTS_ENDPOINT_TYPE,
+        otsEndpoint: ALIYUN_OTS_KNOWN_PUBLIC_ENDPOINT,
+        startedAt: d.startedAt,
+        elapsedMin: Math.round(elapsedMin * 10) / 10,
+        pullsTotal: d.pullCount,
+        gets: d.getCount,
+        posts: d.postCount,
+        pullsPerMinuteAvg: Math.round((d.pullCount / elapsedMin) * 10) / 10,
+        pullsPerHourAvg: Math.round((d.pullCount / elapsedHour) * 10) / 10,
+        lastMinutePulls: lastMinute ? lastMinute.pulls : 0,
+        lastHourPulls: lastHour ? lastHour.pulls : 0,
+        totalResponseBytes: d.totalResponseBytes,
+        totalResponseKB: Math.round((d.totalResponseBytes / 1024) * 10) / 10,
+        totalResponseMB: Math.round((d.totalResponseBytes / (1024 * 1024)) * 100) / 100,
+        maxResponseBytes: d.maxResponseBytes,
+        maxResponseKB: Math.round((d.maxResponseBytes / 1024) * 10) / 10,
+        maxResponseEvent: d.maxResponseEvent,
+        byModuleBytes: Object.assign({}, d.byModuleBytes),
+        byTriggerBytes: Object.assign({}, d.byTriggerBytes),
+        byRequestTypeCount: Object.assign({}, d.byRequestTypeCount),
+        topTriggerByBytes: topTrigger || null,
+        topModuleByBytes: topModule || null,
+        recentEvents: d.events.slice(-20),
+        pollIntervalMs: typeof ALIYUN_SYNC_PRIMARY_POLL_MS !== "undefined" ? ALIYUN_SYNC_PRIMARY_POLL_MS : 5000,
+        safetyFullMs:
+          typeof ALIYUN_DOMAINS_META_SAFETY_FULL_MS !== "undefined"
+            ? ALIYUN_DOMAINS_META_SAFETY_FULL_MS
+            : null
+      };
+    }
+
+    function dumpAliyunOtsTrafficDiag() {
+      const s = aliyunOtsDiagSummarize();
+      try {
+        console.log("[aliyun-ots-diag] summary", s);
+        console.table(
+          Object.keys(s.byModuleBytes).map(function (k) {
+            return {
+              module: k,
+              KB: Math.round((s.byModuleBytes[k] / 1024) * 10) / 10,
+              MB: Math.round((s.byModuleBytes[k] / (1024 * 1024)) * 100) / 100
+            };
+          })
+        );
+        console.table(
+          Object.keys(s.byTriggerBytes).map(function (k) {
+            return {
+              trigger: k,
+              KB: Math.round((s.byTriggerBytes[k] / 1024) * 10) / 10
+            };
+          })
+        );
+      } catch (_c) {}
+      return s;
+    }
+
+    function resetAliyunOtsTrafficDiag() {
+      aliyunOtsTrafficDiag.startedAt = Date.now();
+      aliyunOtsTrafficDiag.events = [];
+      aliyunOtsTrafficDiag.byModuleBytes = Object.create(null);
+      aliyunOtsTrafficDiag.byTriggerBytes = Object.create(null);
+      aliyunOtsTrafficDiag.byRequestTypeCount = Object.create(null);
+      aliyunOtsTrafficDiag.pullCount = 0;
+      aliyunOtsTrafficDiag.getCount = 0;
+      aliyunOtsTrafficDiag.postCount = 0;
+      aliyunOtsTrafficDiag.totalResponseBytes = 0;
+      aliyunOtsTrafficDiag.maxResponseBytes = 0;
+      aliyunOtsTrafficDiag.maxResponseEvent = null;
+      aliyunOtsTrafficDiag.minuteBuckets = Object.create(null);
+      aliyunOtsTrafficDiag.hourBuckets = Object.create(null);
+      return aliyunOtsDiagSummarize();
+    }
+
+    try {
+      window.getAliyunOtsTrafficDiag = aliyunOtsDiagSummarize;
+      window.dumpAliyunOtsTrafficDiag = dumpAliyunOtsTrafficDiag;
+      window.resetAliyunOtsTrafficDiag = resetAliyunOtsTrafficDiag;
+      window.setAliyunOtsTrafficDiagVerbose = function (on) {
+        aliyunOtsTrafficDiagVerbose = !!on;
+        return aliyunOtsTrafficDiagVerbose;
+      };
+      window.setAliyunOtsDiagTrigger = function (trigger) {
+        aliyunOtsDiagExplicitTrigger = trigger ? String(trigger) : "";
+        return aliyunOtsDiagExplicitTrigger;
+      };
+    } catch (_diagWin) {}
+
     async function aliyunExpFetchJson(method, url, bodyObj) {
       const opts = {
         method: method,
@@ -116042,10 +116348,12 @@
         opts.headers["Content-Type"] = "application/json";
         opts.body = JSON.stringify(bodyObj);
       }
+      const t0 = Date.now();
       const res = await fetch(url, opts);
       let data = null;
       const text = await res.text();
       const bytes = text ? text.length : 0;
+      const elapsedMs = Date.now() - t0;
       try {
         data = text ? JSON.parse(text) : null;
       } catch (_parseErr) {
@@ -116056,7 +116364,26 @@
           aliyunSyncCheckNoteFetchBytes(String(url || ""), bytes, method);
         }
       } catch (_syncCheck) {}
-      return { status: res.status, ok: res.ok, data: data, bytes: bytes };
+      try {
+        const moduleId = aliyunOtsDiagParseModule(url);
+        const trigger = aliyunOtsDiagInferTrigger(method, moduleId);
+        const requestType = aliyunOtsDiagRequestType(method, moduleId);
+        aliyunOtsDiagNoteEvent({
+          timestamp: t0,
+          timestampIso: new Date(t0).toISOString(),
+          device: aliyunOtsDiagEnsureDevice() && aliyunOtsTrafficDiag.deviceLabel,
+          module: moduleId,
+          trigger: trigger,
+          requestType: requestType,
+          method: String(method || "GET").toUpperCase(),
+          responseBytes: bytes,
+          elapsedMs: elapsedMs,
+          endpointType: ALIYUN_OTS_ENDPOINT_TYPE,
+          httpStatus: res.status,
+          urlTail: String(url || "").slice(-96)
+        });
+      } catch (_diag) {}
+      return { status: res.status, ok: res.ok, data: data, bytes: bytes, elapsedMs: elapsedMs };
     }
 
     async function runAliyunExpSmokeA() {
