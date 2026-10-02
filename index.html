@@ -138487,6 +138487,70 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /** render() 内：Done 时间轴因跑马灯/冻结被跳过时，勿 clear done 脏标记 */
     let hourRowDoneTimelineRenderDeferred = false;
 
+    /** A/B 隔离：'solid' | 'oneshot' | ''；solid/oneshot 时禁止 sync 重写 track 内容 */
+    function getHourMarqueeAbMode() {
+      try {
+        return String(window.__HOUR_MARQUEE_AB_MODE || "").trim();
+      } catch (err) {
+        return "";
+      }
+    }
+
+    function isHourMarqueeAbLocked() {
+      const m = getHourMarqueeAbMode();
+      return m === "solid" || m === "oneshot";
+    }
+
+    /** 控制台：window.__HOUR_MARQUEE_AB_MODE='solid'|'oneshot'; applyHourMarqueeAbExperiment() */
+    function applyHourMarqueeAbExperiment() {
+      const mode = getHourMarqueeAbMode();
+      const tracks = document.querySelectorAll(
+        ".done-sprint-finish-hour-task-marquee__track"
+      );
+      let n = 0;
+      tracks.forEach(function (t) {
+        if (mode === "solid") {
+          t.replaceChildren();
+          const b = document.createElement("span");
+          b.setAttribute("data-ab-solid", "1");
+          b.style.cssText =
+            "display:inline-block;width:480px;height:22px;background:#e11d48;flex-shrink:0;";
+          t.appendChild(b);
+          t.setAttribute("data-ab-lock", "1");
+          if (!t.classList.contains("is-running")) t.classList.add("is-running");
+          n += 1;
+        } else if (mode === "oneshot") {
+          t.setAttribute("data-ab-lock", "1");
+          t.style.animation = "none";
+          void t.offsetWidth;
+          t.style.setProperty("--marquee-duration", "180s");
+          t.style.animation =
+            "done-sprint-finish-close-loop-marquee-rtl 180s linear 1 forwards";
+          t.addEventListener(
+            "animationiteration",
+            function () {
+              console.log("[AB] ITER @" + marqueeDiagNowMs() + "ms");
+            },
+            false
+          );
+          n += 1;
+        } else {
+          t.removeAttribute("data-ab-lock");
+        }
+      });
+      logHourMarqueeEvent("ab-experiment", {
+        mode: mode || "(clear)",
+        tracks: n,
+        freeze: isHourRowUpdateFrozen()
+      });
+      return n;
+    }
+    try {
+      window.applyHourMarqueeAbExperiment = applyHourMarqueeAbExperiment;
+    } catch (errAb) {
+      /* ignore */
+    }
+
     function logHourRowEvent(action, detail) {
       try {
         if (window.__DEBUG_HOUR_ROW === false) return;
@@ -140764,6 +140828,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           ? parseFloat(trackAlive.style.getPropertyValue("--marquee-duration")) || 0
           : 0;
         return dur > 0 ? dur : sprintFinishHourTaskMarqueeDurationSec(text);
+      }
+      /* A/B 隔离：solid/oneshot 锁定后禁止任何重写 track 内容 */
+      if (isHourMarqueeAbLocked()) {
+        const trLock = hostEl.querySelector(".done-sprint-finish-hour-task-marquee__track");
+        if (trLock && trLock.getAttribute("data-ab-lock") === "1") {
+          logHourMarqueeEvent("text-update", {
+            blocked: true,
+            reason: "AB_LOCK",
+            mode: getHourMarqueeAbMode()
+          });
+          const durLock = parseFloat(trLock.style.getPropertyValue("--marquee-duration")) || 0;
+          return durLock > 0 ? durLock : sprintFinishHourTaskMarqueeDurationSec(text);
+        }
       }
       /* 播放中：禁止 ensure/sync/progress 触发的 remount / text 整体替换 / animation restart */
       if (sprintFinishHourTaskMarqueeState.phase === "playing" && !allowMutate) {
