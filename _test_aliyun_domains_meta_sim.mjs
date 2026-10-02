@@ -37,7 +37,7 @@ function simulateRound({ reason, lastSeen, remoteVersions, bootDone, safetyAt, n
     };
   }
   const needBoot = !bootDone || reason === "boot";
-  const needSafety = !needBoot && (!safetyAt || now - safetyAt >= 12 * 60 * 1000);
+  const needSafety = !needBoot && (!safetyAt || now - safetyAt >= 60 * 60 * 1000);
   if (needBoot || needSafety) {
     return {
       metaKB: 0.3,
