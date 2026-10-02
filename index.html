@@ -32594,6 +32594,8 @@
         padding: 0;
         box-sizing: border-box;
         width: 100%;
+        /* 进度条 paint 隔离：避免分钟级 width 改动牵动整块小时冲刺条 */
+        contain: layout paint;
       }
 
       /* 当前冲刺头区底边加粗（进度条下方、终点线上方） */
@@ -35965,6 +35967,11 @@
         transparent 100%
       );
     }
+    ul.app-done-time-timeline .done-time-sprint-finish.is-hour-task-marquee-playing {
+      /* 跑马灯宿主独立合成层，减少父块 progress/class 更新时整行闪 */
+      isolation: isolate;
+      contain: paint;
+    }
     ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__track {
       display: inline-flex;
       align-items: center;
@@ -35972,6 +35979,8 @@
       white-space: nowrap;
       padding-left: 100%;
       will-change: transform;
+      transform: translateZ(0);
+      backface-visibility: hidden;
     }
     ul.app-done-time-timeline .done-sprint-finish-hour-task-marquee__track.is-running {
       animation: done-sprint-finish-close-loop-marquee-rtl var(--marquee-duration, 24s) linear var(--marquee-passes, 2) forwards;
@@ -137488,6 +137497,16 @@
 
     /** 纯视觉：整点后自动去掉 class，恢复 SPRINT N · FINISH；不碰跑马灯状态 */
     function syncSprintFinishLastFiveVisual() {
+      if (isHourRowUpdateFrozen() || isHourTaskMarqueePlayingNow()) {
+        logHourRowEvent("class-change", {
+          blocked: true,
+          reason: isHourRowUpdateFrozen()
+            ? "FREEZE_HOUR_ROW_UPDATES"
+            : "hour-task-marquee-playing",
+          via: "last-five-visual"
+        });
+        return;
+      }
       const now = new Date();
       document
         .querySelectorAll("ul.app-done-time-timeline .done-time-sprint-finish")
@@ -138436,6 +138455,146 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const playId = d.playId != null ? d.playId : marqueePlayIdForLane(d.lane || "hourTask");
         const tag = "[marquee] " + String(action || "EVENT") + " playId=" + playId;
         logMarqueeDomDiag(tag, d);
+      } catch (err) {
+        /* ignore */
+      }
+    }
+
+    /**
+     * 小时冲刺条（flex 任务行 + 同列表 sprint-finish）闪动专用诊断。
+     * A/B：window.__FREEZE_HOUR_ROW_UPDATES = true → 冻结除 hour-task 跑马灯外的周期 DOM 更新。
+     * window.__DEBUG_HOUR_ROW = false 可关日志。
+     */
+    function isHourRowUpdateFrozen() {
+      try {
+        return window.__FREEZE_HOUR_ROW_UPDATES === true;
+      } catch (err) {
+        return false;
+      }
+    }
+
+    function isHourTaskMarqueePlayingNow() {
+      try {
+        return (
+          typeof sprintFinishHourTaskMarqueeState !== "undefined" &&
+          sprintFinishHourTaskMarqueeState.phase === "playing"
+        );
+      } catch (err) {
+        return false;
+      }
+    }
+
+    /** render() 内：Done 时间轴因跑马灯/冻结被跳过时，勿 clear done 脏标记 */
+    let hourRowDoneTimelineRenderDeferred = false;
+
+    function logHourRowEvent(action, detail) {
+      try {
+        if (window.__DEBUG_HOUR_ROW === false) return;
+        const d = detail && typeof detail === "object" ? detail : { note: detail };
+        const t = marqueeDiagNowMs();
+        console.log("[hour-row] " + String(action || "event") + " @" + t + "ms", d);
+        if (d.trace) {
+          console.trace("[hour-row] TRACE " + String(action || "event") + " @" + t + "ms");
+        }
+      } catch (err) {
+        /* ignore */
+      }
+    }
+
+    function logHourMarqueeEvent(action, detail) {
+      try {
+        if (window.__DEBUG_HOUR_ROW === false) return;
+        const d = detail && typeof detail === "object" ? detail : { note: detail };
+        const t = marqueeDiagNowMs();
+        console.log("[hour-marquee] " + String(action || "event") + " @" + t + "ms", d);
+      } catch (err) {
+        /* ignore */
+      }
+    }
+
+    let hourRowMutationObserver = null;
+    let hourRowMutationBoundRoots = new WeakSet();
+
+    function ensureHourRowMutationObserver() {
+      if (typeof MutationObserver !== "function") return null;
+      if (hourRowMutationObserver) return hourRowMutationObserver;
+      hourRowMutationObserver = new MutationObserver(function (mutations) {
+        if (window.__DEBUG_HOUR_ROW === false) return;
+        for (let i = 0; i < mutations.length; i++) {
+          const m = mutations[i];
+          const target = m.target;
+          if (!target || !target.closest) continue;
+          const row =
+            target.closest(".done-time-block-item--flex-row") ||
+            target.closest(".done-time-sprint-finish") ||
+            target.closest(".done-time-block--sprint-current");
+          if (!row) continue;
+          if (m.type === "attributes") {
+            const name = m.attributeName || "";
+            if (name === "class") {
+              logHourRowEvent("class-change", {
+                target: marqueeDiagDescribeNode(target),
+                row: marqueeDiagDescribeNode(row),
+                oldValue: m.oldValue,
+                newValue: target.getAttribute("class"),
+                marqueePlaying: isHourTaskMarqueePlayingNow()
+              });
+            } else if (name === "style") {
+              const nv = String(target.getAttribute("style") || "");
+              /* 忽略跑马灯 track 自身 transform 帧噪声 */
+              if (
+                target.classList &&
+                target.classList.contains("done-sprint-finish-hour-task-marquee__track") &&
+                nv.indexOf("transform") >= 0 &&
+                nv.indexOf("animation") < 0
+              ) {
+                continue;
+              }
+              logHourRowEvent("style-change", {
+                target: marqueeDiagDescribeNode(target),
+                row: marqueeDiagDescribeNode(row),
+                oldValue: m.oldValue,
+                newValue: nv.slice(0, 200),
+                marqueePlaying: isHourTaskMarqueePlayingNow()
+              });
+            }
+          } else if (m.type === "childList") {
+            logHourRowEvent("childList-change", {
+              target: marqueeDiagDescribeNode(target),
+              row: marqueeDiagDescribeNode(row),
+              added: m.addedNodes ? m.addedNodes.length : 0,
+              removed: m.removedNodes ? m.removedNodes.length : 0,
+              marqueePlaying: isHourTaskMarqueePlayingNow()
+            });
+          }
+        }
+      });
+      return hourRowMutationObserver;
+    }
+
+    /** 绑定当前冲刺块：flex 任务行 + sprint-finish + 底栏进度 */
+    function bindHourRowMutationWatch() {
+      const obs = ensureHourRowMutationObserver();
+      if (!obs) return;
+      try {
+        document
+          .querySelectorAll(
+            "#doneList li.done-time-block--sprint-current, " +
+              "#doneList li.done-time-block--sprint-current .done-time-block-item--flex-row, " +
+              "#doneList li.done-time-block--sprint-current .done-time-sprint-finish, " +
+              "#doneList li.done-time-block--sprint-current .done-time-block-sprint-insert--bottom"
+          )
+          .forEach(function (el) {
+            if (hourRowMutationBoundRoots.has(el)) return;
+            obs.observe(el, {
+              attributes: true,
+              attributeOldValue: true,
+              attributeFilter: ["class", "style", "hidden", "data-sprint-prog-sig", "data-marquee-kind"],
+              childList: true,
+              subtree: true
+            });
+            hourRowMutationBoundRoots.add(el);
+          });
       } catch (err) {
         /* ignore */
       }
@@ -140869,6 +141028,26 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       sprintFinishHourTaskMarqueeState.playEndsAt = 0;
       sprintFinishHourTaskMarqueeState.playStartedAt = 0;
       sprintFinishHourTaskMarqueeState.playDurationMs = 0;
+      /* 播放中推迟的底栏进度 / Done 列表 paint：收尾后补一轮 */
+      try {
+        if (typeof refreshDoneSprintProgressBars === "function") {
+          refreshDoneSprintProgressBars();
+        }
+        if (typeof markUiPaintSlicesDirty === "function") {
+          markUiPaintSlicesDirty(["done"]);
+        }
+        if (!handoff && typeof render === "function") {
+          window.setTimeout(function () {
+            try {
+              if (!isHourTaskMarqueePlayingNow()) render();
+            } catch (errR) {
+              /* ignore */
+            }
+          }, 0);
+        }
+      } catch (errCatchUp) {
+        /* ignore */
+      }
     }
 
     function startSprintFinishHourTaskMarqueePlay(kind, slotKey) {
@@ -140904,6 +141083,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         kind: kind,
         slotKey: slotKey
       });
+      logHourMarqueeEvent("frame/start", { playId: playId, kind: kind, slotKey: slotKey });
       try {
         console.trace(
           "[marquee] START TRACE @" + marqueeDiagNowMs() + "ms playId=" + playId + " kind=" + kind
@@ -140915,6 +141095,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       sprintFinishHourTaskMarqueeState.phase = "playing";
       sprintFinishHourTaskMarqueeState.kind = kind;
       sprintFinishHourTaskMarqueeState.text = text;
+      bindHourRowMutationWatch();
       const measuredPass =
         mountSprintFinishHourTaskMarqueeOverlay(host, payload, 0, 0, {
           allowMutate: true,
@@ -146004,6 +146185,24 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function updateDoneTimeBlockSprintProgressDom(blockLi) {
       if (!blockLi) return;
+      if (isHourRowUpdateFrozen()) {
+        logHourRowEvent("update-count", {
+          blocked: true,
+          reason: "FREEZE_HOUR_ROW_UPDATES",
+          via: "progress-dom"
+        });
+        return;
+      }
+      /* 跑马灯播放中写底栏 width/text 会牵动整块 layout/paint → 小时冲刺条闪 */
+      if (isHourTaskMarqueePlayingNow()) {
+        logHourRowEvent("update-count", {
+          blocked: true,
+          reason: "hour-task-marquee-playing",
+          via: "progress-dom",
+          trace: true
+        });
+        return;
+      }
       const sm = parseInt(blockLi.getAttribute("data-done-block-start-min"), 10);
       const em = parseInt(blockLi.getAttribute("data-done-block-end-min"), 10);
       if (!Number.isFinite(sm) || !Number.isFinite(em)) return;
@@ -146512,6 +146711,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       doneTimeBlockSprintHeavyBusy = true;
       doneTimeBlockSprintLastTickAt = Date.now();
+      bindHourRowMutationWatch();
       const jobs = [
         [updateDoneSleepCountdownBarDom, "睡眠倒计时"],
         [syncSprintReminderMarquee, "提醒跑马灯"],
@@ -147451,11 +147651,30 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
       }
 
+      if (isHourRowUpdateFrozen() || isHourTaskMarqueePlayingNow()) {
+        logHourRowEvent("render", {
+          blocked: true,
+          reason: isHourRowUpdateFrozen()
+            ? "FREEZE_HOUR_ROW_UPDATES"
+            : "hour-task-marquee-playing",
+          via: "sprint-layer-rebuild",
+          phase: phase,
+          key: String((block && block.key) || ""),
+          trace: true
+        });
+        return;
+      }
       logMarqueeDomDiag(
         "[render] currentSprint",
         "full-rebuild phase=" + phase + " key=" + String((block && block.key) || "")
       );
       logMarqueeDomDiag("[render] hourRows", "sprint-layer-rebuild");
+      logHourRowEvent("render", {
+        reason: "sprint-layer-rebuild",
+        phase: phase,
+        key: String((block && block.key) || ""),
+        trace: true
+      });
       blockLi.classList.remove(
         "done-time-block--sprint-future",
         "done-time-block--sprint-past",
@@ -153158,6 +153377,34 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function renderDoneTimeBlockTimeline(ul, orderedTasks, listName) {
       const ln = listName || "done";
+      hourRowDoneTimelineRenderDeferred = false;
+      /* A/B 冻结：禁止整表 innerHTML 重建（会连带闪 flex 任务行 + sprint-finish） */
+      if (isHourRowUpdateFrozen()) {
+        hourRowDoneTimelineRenderDeferred = true;
+        logHourRowEvent("render", {
+          blocked: true,
+          reason: "FREEZE_HOUR_ROW_UPDATES",
+          taskCount: Array.isArray(orderedTasks) ? orderedTasks.length : 0,
+          trace: true
+        });
+        return;
+      }
+      /* 跑马灯播放中：推迟整表重建，避免父层 repaint 闪整条小时冲刺条 */
+      if (isHourTaskMarqueePlayingNow()) {
+        hourRowDoneTimelineRenderDeferred = true;
+        logHourRowEvent("render", {
+          blocked: true,
+          reason: "hour-task-marquee-playing",
+          taskCount: Array.isArray(orderedTasks) ? orderedTasks.length : 0,
+          trace: true
+        });
+        return;
+      }
+      logHourRowEvent("render", {
+        reason: "renderDoneTimeBlockTimeline",
+        taskCount: Array.isArray(orderedTasks) ? orderedTasks.length : 0,
+        trace: true
+      });
       ul.innerHTML = "";
       const narrowDoneDeepRestBadge =
         typeof window !== "undefined" &&
@@ -169971,7 +170218,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           }
         }
         doneEmpty.style.display = filteredDoneTasks.length ? "none" : "block";
-        clearUiPaintSlice("done");
+        if (hourRowDoneTimelineRenderDeferred) {
+          /* 时间轴未重建：保持 done 脏，收尾/解冻后再渲 */
+          logHourRowEvent("render", {
+            reason: "keep-done-dirty",
+            via: "hourRowDoneTimelineRenderDeferred"
+          });
+        } else {
+          clearUiPaintSlice("done");
+        }
         if (stallSegT0 != null) {
           stallDoneMs += cloudSyncPerfNow() - stallSegT0;
           stallSegT0 = null;
