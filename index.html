@@ -138190,6 +138190,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      */
     function restartSprintMarqueeTrackRunning(track) {
       if (!track) return null;
+      logMarqueeDomDiag("[marquee] animation restart", {
+        reason: "restartSprintMarqueeTrackRunning",
+        hadRunning: track.classList.contains("is-running"),
+        stack: new Error().stack
+      });
       const parent = track.parentNode;
       if (!parent) {
         startSprintMarqueeTrackRunning(track);
@@ -138206,15 +138211,167 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return next;
     }
 
-    /** 临时诊断：跑马灯 vs 父级 rebuild 是否同帧触发（window.__DEBUG_MARQUEE_DOM = false 可关） */
+    /**
+     * 临时诊断：跑马灯播放中 DOM/class/animation 变动溯源。
+     * window.__DEBUG_MARQUEE_DOM = false 可关；默认开。
+     */
+    function marqueeDiagNowMs() {
+      try {
+        if (typeof performance !== "undefined" && typeof performance.now === "function") {
+          return Math.round(performance.now() * 100) / 100;
+        }
+      } catch (err) {
+        /* ignore */
+      }
+      return Date.now();
+    }
+
     function logMarqueeDomDiag(tag, detail) {
       try {
         if (window.__DEBUG_MARQUEE_DOM === false) return;
+        const t = marqueeDiagNowMs();
+        const prefix = String(tag || "[marquee]") + " @" + t + "ms";
         if (detail != null && detail !== "") {
-          console.log(String(tag), detail);
+          console.log(prefix, detail);
         } else {
-          console.log(String(tag));
+          console.log(prefix);
         }
+      } catch (err) {
+        /* ignore */
+      }
+    }
+
+    let marqueeDomMutationObserver = null;
+    let marqueeDomMutationBoundHosts = new WeakSet();
+
+    function marqueeDiagDescribeNode(el) {
+      if (!el || !el.tagName) return String(el);
+      const id = el.id ? "#" + el.id : "";
+      const cls = el.className && typeof el.className === "string" ? "." + el.className.trim().split(/\s+/).slice(0, 4).join(".") : "";
+      return el.tagName.toLowerCase() + id + cls;
+    }
+
+    function marqueeDiagCurrentIndex() {
+      try {
+        if (
+          typeof sprintFinishHourTaskMarqueeState !== "undefined" &&
+          sprintFinishHourTaskMarqueeState.phase === "playing"
+        ) {
+          return "hourTask:" + String(sprintFinishHourTaskMarqueeState.kind || "");
+        }
+        if (
+          typeof sprintReminderMarqueeState !== "undefined" &&
+          sprintReminderMarqueeState.phase === "playing"
+        ) {
+          return "reminder:" + String(sprintReminderMarqueeState.currentId || "");
+        }
+        if (
+          typeof sprintFormulaMarqueeState !== "undefined" &&
+          sprintFormulaMarqueeState.phase === "playing"
+        ) {
+          return "formula:" + String(sprintFormulaMarqueeState.kind || "");
+        }
+      } catch (err) {
+        /* ignore */
+      }
+      return "";
+    }
+
+    function ensureMarqueeDomMutationObserver() {
+      if (typeof MutationObserver !== "function") return null;
+      if (marqueeDomMutationObserver) return marqueeDomMutationObserver;
+      marqueeDomMutationObserver = new MutationObserver(function (mutations) {
+        if (window.__DEBUG_MARQUEE_DOM === false) return;
+        for (let i = 0; i < mutations.length; i++) {
+          const m = mutations[i];
+          const target = m.target;
+          if (!target) continue;
+          /* 忽略纯跑马灯 transform/animation 进行中的无关噪声：只报 class/style/childList/属性 */
+          if (m.type === "attributes") {
+            const name = m.attributeName || "";
+            if (name !== "class" && name !== "style" && name.indexOf("data-") !== 0) continue;
+            const newVal = target.getAttribute ? target.getAttribute(name) : "";
+            if (name === "style" && String(newVal || "").indexOf("transform") >= 0) {
+              /* 动画帧 transform 太吵：只在 class 含 is-running 变化时旁路；style 上 transform 跳过 */
+              const onlyTransform =
+                /^[\s;]*transform\s*:/.test(String(newVal || "")) ||
+                /transform\s*:/.test(String(newVal || ""));
+              if (onlyTransform && String(m.oldValue || "").indexOf("animation") < 0) {
+                continue;
+              }
+            }
+            logMarqueeDomDiag("[marquee] class change", {
+              type: "attributes",
+              attr: name,
+              target: marqueeDiagDescribeNode(target),
+              oldValue: m.oldValue,
+              newValue: newVal,
+              index: marqueeDiagCurrentIndex()
+            });
+            if (name === "class" || name === "style") {
+              try {
+                const cs = target.nodeType === 1 ? getComputedStyle(target) : null;
+                if (cs) {
+                  logMarqueeDomDiag("[marquee] visibility", {
+                    target: marqueeDiagDescribeNode(target),
+                    visibility: cs.visibility,
+                    opacity: cs.opacity,
+                    display: cs.display,
+                    index: marqueeDiagCurrentIndex()
+                  });
+                }
+              } catch (err2) {
+                /* ignore */
+              }
+            }
+          } else if (m.type === "childList") {
+            logMarqueeDomDiag("[marquee] class change", {
+              type: "childList",
+              target: marqueeDiagDescribeNode(target),
+              added: m.addedNodes ? m.addedNodes.length : 0,
+              removed: m.removedNodes ? m.removedNodes.length : 0,
+              index: marqueeDiagCurrentIndex()
+            });
+          }
+        }
+      });
+      return marqueeDomMutationObserver;
+    }
+
+    /** 播放中绑定：终点线宿主 + 当前冲刺顶栏（含 overlay/track） */
+    function bindMarqueeDomMutationWatch(rootEl) {
+      if (!rootEl || marqueeDomMutationBoundHosts.has(rootEl)) return;
+      const obs = ensureMarqueeDomMutationObserver();
+      if (!obs) return;
+      try {
+        obs.observe(rootEl, {
+          attributes: true,
+          attributeOldValue: true,
+          attributeFilter: ["class", "style", "hidden", "data-marquee-kind", "data-marquee-text", "data-marquee-item-id", "data-formula-kind"],
+          childList: true,
+          subtree: true
+        });
+        marqueeDomMutationBoundHosts.add(rootEl);
+        logMarqueeDomDiag("[marquee] mount", {
+          watch: marqueeDiagDescribeNode(rootEl),
+          index: marqueeDiagCurrentIndex()
+        });
+      } catch (err) {
+        /* ignore */
+      }
+    }
+
+    function bindMarqueeDomWatchForActiveHosts() {
+      try {
+        document
+          .querySelectorAll(
+            ".done-time-sprint-finish.is-hour-task-marquee-playing, " +
+              ".done-time-sprint-finish.is-sprint-finish-marquee-cover, " +
+              "#doneList li.done-time-block--sprint-current .done-time-block-sprint-insert--top"
+          )
+          .forEach(function (el) {
+            bindMarqueeDomMutationWatch(el);
+          });
       } catch (err) {
         /* ignore */
       }
@@ -140193,7 +140350,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           : 0;
         return dur > 0 ? dur : sprintFinishHourTaskMarqueeDurationSec(text);
       }
-      logMarqueeDomDiag("[marquee] switch", "hourTask:" + kind);
+      logMarqueeDomDiag("[marquee] mount", "hourTask:" + kind);
       /* A→B：保持 is-hour-task-marquee-playing，绝不先 hidden 再 visible */
       const alreadyCovering = hostEl.classList.contains("is-hour-task-marquee-playing");
       if (!alreadyCovering) {
@@ -140201,6 +140358,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       hostEl.classList.add("is-sprint-finish-marquee-cover");
       applySprintHourTaskMarqueeHostKindClass(hostEl, kind);
+      bindMarqueeDomMutationWatch(hostEl);
       if (typeof clearSprintFinishCloseLoopMarqueeOverlay === "function") {
         clearSprintFinishCloseLoopMarqueeOverlay(hostEl);
       }
@@ -140383,7 +140541,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (playToken !== sprintFinishHourTaskMarqueeState.playToken) return;
       if (sprintFinishHourTaskMarqueeState.phase !== "playing") return;
       const handoff = !!(opts && opts.handoff);
-      logMarqueeDomDiag("[marquee] finish", handoff ? "hourTask:handoff" : "hourTask");
+      logMarqueeDomDiag(handoff ? "[marquee] handoff" : "[marquee] finish", {
+        lane: "hourTask",
+        kind: sprintFinishHourTaskMarqueeState.kind || "",
+        handoff: handoff
+      });
       clearSprintFinishHourTaskMarqueeFinishTimer();
       clearSprintFinishHourTaskMarqueeOverlay(null, handoff ? { handoff: true } : null);
       sprintFinishHourTaskMarqueeState.phase = "idle";
@@ -140469,11 +140631,56 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function ensureSprintFinishHourTaskMarqueeOverlayMounted(kind) {
       const hosts = querySprintFinishMarqueeHosts();
-      if (!hosts.length) return;
-      stripSprintFinishMarqueesNotIn(hosts);
+      if (!hosts.length) {
+        logMarqueeDomDiag("[marquee] ensure", {
+          lane: "hourTask",
+          kind: kind,
+          result: "no-hosts"
+        });
+        return;
+      }
+      /* 播放中禁止 strip：会扫全表终点线改 class，可能波及视觉 */
       const host = hosts[0];
+      bindMarqueeDomWatchForActiveHosts();
+      const overlay = host.querySelector(".done-sprint-finish-hour-task-marquee-overlay");
+      const track = overlay && overlay.querySelector(".done-sprint-finish-hour-task-marquee__track");
+      const playing = host.classList.contains("is-hour-task-marquee-playing");
+      const kindOk =
+        !!overlay && overlay.getAttribute("data-marquee-kind") === String(kind || "");
+      if (playing && overlay && track && kindOk) {
+        /* 文案指纹可能随倒计时/进度漂移：播放中只认 shell+kind，禁止 remount */
+        const liveText = sprintHourTaskMarqueePlainText(
+          buildSprintHourTaskMarqueePayload(kind, host)
+        );
+        const pinned = overlay.getAttribute("data-marquee-text") || "";
+        if (liveText && pinned && liveText !== pinned) {
+          logMarqueeDomDiag("[marquee] ensure", {
+            lane: "hourTask",
+            kind: kind,
+            result: "skip-text-drift",
+            pinnedLen: pinned.length,
+            liveLen: liveText.length
+          });
+        }
+        return;
+      }
       const payload = buildSprintHourTaskMarqueePayload(kind, host);
       const text = sprintHourTaskMarqueePlainText(payload);
+      const reason = !overlay
+        ? "missing-overlay"
+        : !track
+          ? "missing-track"
+          : !playing
+            ? "missing-playing-class"
+            : !kindOk
+              ? "kind-mismatch"
+              : "unhealthy";
+      logMarqueeDomDiag("[marquee] ensure", {
+        lane: "hourTask",
+        kind: kind,
+        result: "remount",
+        reason: reason
+      });
       sprintFinishHourTaskMarqueeState.kind = kind;
       sprintFinishHourTaskMarqueeState.text = text;
       const passes = sprintFinishHourTaskMarqueePassesForKind(kind);
@@ -140486,9 +140693,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const started = sprintFinishHourTaskMarqueeState.playStartedAt || Date.now();
       const elapsedSec = Math.max(0, (Date.now() - started) / 1000);
       hosts.forEach(function (el) {
-        if (!sprintFinishHourTaskMarqueeOverlayHealthy(el, kind, text)) {
-          mountSprintFinishHourTaskMarqueeOverlay(el, payload, totalSec, elapsedSec);
-        }
+        mountSprintFinishHourTaskMarqueeOverlay(el, payload, totalSec, elapsedSec);
       });
     }
 
@@ -140500,6 +140705,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const now = Date.now();
         if (!hosts.length) {
           if (sprintFinishHourTaskMarqueeState.phase === "playing") {
+            /* 播放未到期却短暂找不到宿主：勿 finish（会 hidden 闪 FINISH）；等下一 tick */
+            if (now < sprintFinishHourTaskMarqueeState.playEndsAt) {
+              logMarqueeDomDiag("[marquee] ensure", {
+                lane: "hourTask",
+                result: "hosts-missing-keep-playing",
+                remainMs: sprintFinishHourTaskMarqueeState.playEndsAt - now
+              });
+              return;
+            }
             finishSprintFinishHourTaskMarqueePlay(sprintFinishHourTaskMarqueeState.playToken);
           }
           return;
@@ -140523,6 +140737,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               nextSlot.slotKey !== readSprintFinishHourTaskMarqueeLastSlotKey();
             if (canHandoff) {
               /* A→B：finish 不 hidden，立刻 mount 下一条 */
+              logMarqueeDomDiag("[marquee] handoff", {
+                from: sprintFinishHourTaskMarqueeState.kind,
+                to: nextSlot.kind
+              });
               finishSprintFinishHourTaskMarqueePlay(sprintFinishHourTaskMarqueeState.playToken, {
                 handoff: true
               });
@@ -140543,6 +140761,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             sprintFinishHourTaskMarqueeState.kind !== liveSlot.kind &&
             liveSlot.slotKey !== readSprintFinishHourTaskMarqueeLastSlotKey()
           ) {
+            logMarqueeDomDiag("[marquee] handoff", {
+              from: sprintFinishHourTaskMarqueeState.kind,
+              to: liveSlot.kind,
+              reason: "interrupt-slot"
+            });
             finishSprintFinishHourTaskMarqueePlay(sprintFinishHourTaskMarqueeState.playToken, {
               handoff: true
             });
@@ -144208,9 +144431,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           : 0;
         return dur > 0 ? dur : sprintReminderMarqueeDurationSec(item.text);
       }
-      logMarqueeDomDiag("[marquee] switch", "reminder:" + String(item.id || ""));
+      logMarqueeDomDiag("[marquee] mount", "reminder:" + String(item.id || ""));
       topEl.classList.add("is-reminder-marquee-playing");
       debugCurrentSprintRowCount("current-sprint marquee init");
+      bindMarqueeDomMutationWatch(topEl);
 
       let overlay = slot.querySelector(":scope > .done-sprint-reminder-marquee-overlay");
       let viewport = overlay && overlay.querySelector(":scope > .done-sprint-reminder-marquee");
@@ -144378,7 +144602,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function ensureSprintReminderMarqueeOverlayMounted(item) {
       if (!item) return;
       const tops = querySprintReminderMarqueeTopHosts();
-      if (!tops.length) return;
+      if (!tops.length) {
+        logMarqueeDomDiag("[marquee] ensure", { lane: "reminder", result: "no-hosts" });
+        return;
+      }
+      bindMarqueeDomWatchForActiveHosts();
       const totalMs =
         sprintReminderMarqueeState.playDurationMs > 0
           ? sprintReminderMarqueeState.playDurationMs
@@ -144391,6 +144619,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       for (let h = 0; h < tops.length; h++) {
         const top = tops[h];
         if (sprintReminderMarqueeOverlayHealthy(top, item.id)) continue;
+        logMarqueeDomDiag("[marquee] ensure", {
+          lane: "reminder",
+          result: "remount",
+          reason: "overlay-missing-or-id-mismatch",
+          id: item.id
+        });
         mountSprintReminderMarqueeOverlay(top, item, totalSec, elapsedSec);
       }
     }
@@ -144899,9 +145133,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           : 0;
         return dur > 0 ? dur : sprintFormulaMarqueeDurationSec(kind);
       }
-      logMarqueeDomDiag("[marquee] switch", "formula:" + String(kind || ""));
+      logMarqueeDomDiag("[marquee] mount", "formula:" + String(kind || ""));
       topEl.classList.add("is-formula-marquee-playing");
       debugCurrentSprintRowCount("current-sprint marquee init");
+      bindMarqueeDomMutationWatch(topEl);
 
       let overlay = slot.querySelector(":scope > .done-sprint-formula-marquee-overlay");
       let viewport = overlay && overlay.querySelector(":scope > .done-sprint-formula-marquee");
@@ -145022,7 +145257,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function ensureSprintFormulaMarqueeOverlayMounted(kind) {
       if (!kind) return;
       const tops = querySprintReminderMarqueeTopHosts();
-      if (!tops.length) return;
+      if (!tops.length) {
+        logMarqueeDomDiag("[marquee] ensure", { lane: "formula", result: "no-hosts" });
+        return;
+      }
+      bindMarqueeDomWatchForActiveHosts();
       const totalMs =
         sprintFormulaMarqueeState.playDurationMs > 0
           ? sprintFormulaMarqueeState.playDurationMs
@@ -145035,6 +145274,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       for (let h = 0; h < tops.length; h++) {
         const top = tops[h];
         if (sprintFormulaMarqueeOverlayHealthy(top, kind)) continue;
+        logMarqueeDomDiag("[marquee] ensure", {
+          lane: "formula",
+          result: "remount",
+          reason: "overlay-missing-or-kind-mismatch",
+          kind: kind
+        });
         mountSprintFormulaMarqueeOverlay(top, kind, totalSec, elapsedSec);
       }
     }
@@ -145189,7 +145434,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const now = new Date();
       const nowMin = now.getHours() * 60 + now.getMinutes();
       const span = em - sm;
-      /* 界面按整分地板：秒变化不推动色块 / 百分比 */
+      /* 界面按整分地板：秒变化不更新 DOM */
       const pct = span <= 0 ? 0 : Math.min(1, Math.max(0, (nowMin - sm) / span));
       const nextWidth = (pct * 100).toFixed(3) + "%";
       const nextElapsed = formatDoneSprintDurMinutes(nowMin - sm);
@@ -145218,6 +145463,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         String(fill.style.width || "") === nextWidth
       ) {
         return;
+      }
+      if (
+        typeof sprintFinishHourTaskMarqueeState !== "undefined" &&
+        sprintFinishHourTaskMarqueeState.phase === "playing"
+      ) {
+        logMarqueeDomDiag("[render] hourRows", {
+          reason: "progress-dom-write-during-marquee",
+          width: nextWidth,
+          index: marqueeDiagCurrentIndex()
+        });
       }
       blockLi.dataset.sprintProgSig = sig;
       if (splitBar && !fill) {
