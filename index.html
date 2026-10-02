@@ -95966,7 +95966,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001ev";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261002a";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -154408,6 +154408,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return state.closedList.filter((item) => isClosedListItemVisibleForViewDate(item, viewDateStr));
     }
 
+    /**
+     * 3-Day Sprint（Life / Work / Open List）展示：已完成且 completedAt 日历日早于查看日则不展示。
+     * 当日完成仍可见；次日起隐藏（与 Closed List / 今日计划「其他任务」规则对齐）。
+     * 无完成时刻戳时仍展示，避免误藏旧数据。
+     */
+    function isWeeklyPlanTaskVisibleForViewDate(task, viewDateStr) {
+      if (!task || !viewDateStr) return false;
+      if (!isWeeklyPlanMainComplete(task)) return true;
+      let ts = normalizeWeeklyPlanCompletedAtMs(task.completedAt);
+      if (ts == null) ts = getWeeklyPlanMainCompletionFromMicros(task);
+      if (ts == null) return true;
+      const completedDay = formatDateInputValue(new Date(ts));
+      if (completedDay < viewDateStr) return false;
+      return true;
+    }
+
     function compareClosedListItemsForSort(a, b, allHaveListOrder) {
       if (allHaveListOrder) {
         return (typeof a.listOrder === "number" ? a.listOrder : 0) -
@@ -155735,7 +155751,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       tasks.forEach(function (t) {
         applyWeeklyPlanMainDoneFromMicros(t);
       });
-      const unitProgress = countWeeklyPlanTaskUnits(tasks);
+      const viewDateKey = formatDateInputValue(new Date());
+      const visibleTasks = tasks.filter(function (t) {
+        return isWeeklyPlanTaskVisibleForViewDate(t, viewDateKey);
+      });
+      const unitProgress = countWeeklyPlanTaskUnits(visibleTasks);
       const done = unitProgress.done;
       const total = unitProgress.total;
       let mainLifeTotal = 0;
@@ -155752,7 +155772,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       let mainOpenDone = 0;
       let microOpenTotal = 0;
       let microOpenDone = 0;
-      tasks.forEach((t) => {
+      visibleTasks.forEach((t) => {
         const lane = getWeeklyPlanTaskLane(t);
         const micros = t.microTasks || [];
         if (micros.length > 0) {
@@ -155950,13 +155970,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (dedupeWeeklyPlanTasksInStorage()) {
         saveState();
       }
+      const viewDateKey = formatDateInputValue(new Date());
       if (
         isWeeklyPlanTaskShell(sprintShell) &&
         isSprintKanbanDesktopEnabled() &&
         getSprintViewMode(sprintShell) === "kanban"
       ) {
         const tasks = getWeeklyPlanTasksForViewSprint();
-        const filtered = tasks.filter((t) => getWeeklyPlanTaskLane(t) === sprintShell);
+        const filtered = tasks.filter(
+          (t) =>
+            getWeeklyPlanTaskLane(t) === sprintShell &&
+            isWeeklyPlanTaskVisibleForViewDate(t, viewDateKey)
+        );
         const tasksSorted = sortWeeklyPlanTasksForDisplay(filtered);
         weeklyPlanList.innerHTML = "";
         weeklyPlanEmpty.style.display = "none";
@@ -155968,7 +155993,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const viewLane =
         isWeeklyPlanTaskShell(sprintShell) ? sprintShell : getWeeklyPlanAddLane();
       const tasks = getWeeklyPlanTasksForViewSprint();
-      const filtered = tasks.filter((t) => getWeeklyPlanTaskLane(t) === viewLane);
+      const filtered = tasks.filter(
+        (t) =>
+          getWeeklyPlanTaskLane(t) === viewLane &&
+          isWeeklyPlanTaskVisibleForViewDate(t, viewDateKey)
+      );
       const tasksSorted = sortWeeklyPlanTasksForDisplay(filtered);
       weeklyPlanList.innerHTML = "";
       weeklyPlanEmpty.style.display = tasksSorted.length ? "none" : "block";
