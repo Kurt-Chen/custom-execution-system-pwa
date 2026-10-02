@@ -105970,7 +105970,9 @@
       return on;
     }
 
-    async function runAliyunSyncPrimaryBootPull() {
+    async function runAliyunSyncPrimaryBootPull(opts) {
+      const pullOpts = opts && typeof opts === "object" ? opts : {};
+      const pullReason = String(pullOpts.reason || "boot");
       if (!isAliyunSyncPrimaryEnabled()) {
         try {
           console.log("[aliyun-sync-primary] boot pull skipped: primary off");
@@ -106033,22 +106035,144 @@
               : null
         }
       ];
+      const domainIds = domains.map(function (d) {
+        return d.id;
+      });
       const results = {};
       let allOk = true;
+      let metaKB = 0;
+      let bodyDownloadKB = 0;
+      let changedDomains = [];
+      let skippedFullPull = false;
+      let savedEstimatedKB = 0;
+      let domainsGate = null;
+
+      /*
+       * Phase 1b：房间级 domains meta。
+       * boot / 关 gate / 安全全量 → 仍拉正文；常规 poll 先只拉 meta，未变则零正文下载。
+       */
+      const forceAllBodies =
+        pullReason === "boot" ||
+        pullReason === "manual-full" ||
+        !(typeof isAliyunSyncMetaGateEnabled === "function" && isAliyunSyncMetaGateEnabled());
+
+      if (typeof aliyunSyncCheckBeginRound === "function") {
+        aliyunSyncCheckBeginRound();
+      }
+
+      if (!forceAllBodies && typeof aliyunDomainsMetaGateDecide === "function") {
+        try {
+          domainsGate = await aliyunDomainsMetaGateDecide(domainIds, pullReason);
+          metaKB = Number(domainsGate && domainsGate.metaKB) || 0;
+          if (domainsGate && domainsGate.skipAll) {
+            skippedFullPull = true;
+            savedEstimatedKB =
+              typeof aliyunDomainsMetaEstimateSavedKB === "function"
+                ? aliyunDomainsMetaEstimateSavedKB(domainIds)
+                : 0;
+            if (typeof aliyunDomainsMetaLogSyncCheck === "function") {
+              aliyunDomainsMetaLogSyncCheck({
+                metaKB: metaKB,
+                changedDomains: [],
+                bodyDownloadKB: 0,
+                skippedFullPull: true,
+                savedEstimatedKB: savedEstimatedKB,
+                reason: pullReason
+              });
+            }
+            if (typeof aliyunSyncCheckEndRound === "function") aliyunSyncCheckEndRound();
+            const reportSkip = {
+              ok: true,
+              results: results,
+              skippedAll: true,
+              skippedFullPull: true,
+              metaKB: metaKB,
+              bodyDownloadKB: 0,
+              changedDomains: [],
+              reason: pullReason
+            };
+            try {
+              window.__aliyunSyncPrimaryBootPullReport = reportSkip;
+            } catch (_w0) {}
+            return reportSkip;
+          }
+          if (domainsGate && Array.isArray(domainsGate.pullIds)) {
+            changedDomains = domainsGate.pullIds.slice();
+          }
+        } catch (gateErr) {
+          try {
+            console.warn(
+              "[aliyun-domains-meta] decide failed → fallback full pull",
+              gateErr && gateErr.message ? gateErr.message : gateErr
+            );
+          } catch (_cg) {}
+          domainsGate = null;
+          changedDomains = domainIds.slice();
+        }
+      } else {
+        changedDomains = domainIds.slice();
+      }
+
+      const pullIdSet = Object.create(null);
+      const idsToPull =
+        domainsGate && Array.isArray(domainsGate.pullIds) && !forceAllBodies
+          ? domainsGate.pullIds
+          : domainIds;
+      for (let pi = 0; pi < idsToPull.length; pi++) {
+        pullIdSet[idsToPull[pi]] = true;
+      }
+      if (!forceAllBodies && domainsGate && Array.isArray(domainsGate.skipIds)) {
+        savedEstimatedKB =
+          typeof aliyunDomainsMetaEstimateSavedKB === "function"
+            ? aliyunDomainsMetaEstimateSavedKB(domainsGate.skipIds)
+            : 0;
+      }
+
       try {
-        console.log("[aliyun-sync-primary] boot pull start (10 domains, +Goals)");
+        if (forceAllBodies || pullReason === "boot") {
+          console.log(
+            "[aliyun-sync-primary] boot pull start (10 domains, +Goals) reason=" + pullReason
+          );
+        } else {
+          console.log(
+            "[aliyun-sync-primary] gated pull start reason=" +
+              pullReason +
+              " domains=" +
+              (changedDomains.length ? changedDomains.join(",") : "(none)")
+          );
+        }
       } catch (_c0) {}
+
       for (let i = 0; i < domains.length; i++) {
         const d = domains[i];
+        if (!pullIdSet[d.id]) {
+          results[d.id] = { ok: true, skippedMeta: true, reason: "domains-meta-unchanged" };
+          continue;
+        }
         if (!d.run) {
           results[d.id] = { ok: false, error: "missing-fn" };
           allOk = false;
           continue;
         }
         try {
+          if (typeof aliyunSyncCheckMarkBodyDomain === "function") {
+            aliyunSyncCheckMarkBodyDomain(d.id);
+          }
           const r = await d.run();
-          results[d.id] = r && typeof r === "object" ? r : { ok: true, raw: r };
+          const packed = r && typeof r === "object" ? r : { ok: true, raw: r };
+          results[d.id] = packed;
           if (r && r.ok === false) allOk = false;
+          const kbFromResult = Number(packed.payloadKB) || Number(packed.bodyKB) || 0;
+          if (kbFromResult > 0 && typeof aliyunDomainsMetaNoteBodyKB === "function") {
+            aliyunDomainsMetaNoteBodyKB(d.id, kbFromResult);
+          }
+          if (
+            typeof aliyunDomainsMetaMarkDomainPulled === "function" &&
+            domainsGate &&
+            domainsGate.remoteVersions
+          ) {
+            aliyunDomainsMetaMarkDomainPulled(d.id, domainsGate.remoteVersions[d.id]);
+          }
         } catch (err) {
           allOk = false;
           results[d.id] = {
@@ -106056,20 +106180,65 @@
             error: err && err.message ? err.message : String(err)
           };
         }
-        /* 域间让出主线程，避免 6 域串行 merge 连成一次长任务 */
+        /* 域间让出主线程，避免多域串行 merge 连成一次长任务 */
         if (i < domains.length - 1) {
           await new Promise(function (resolve) {
             window.setTimeout(resolve, 0);
           });
         }
       }
-      const report = { ok: allOk, results: results };
+
+      if (typeof aliyunDomainsMetaAfterPullRound === "function") {
+        try {
+          await aliyunDomainsMetaAfterPullRound({
+            reason: pullReason,
+            forceAllBodies: forceAllBodies,
+            domainIds: domainIds,
+            results: results,
+            remoteVersions: domainsGate && domainsGate.remoteVersions,
+            seedNeeded: !!(domainsGate && domainsGate.seedNeeded)
+          });
+        } catch (_after) {}
+      }
+
+      if (typeof aliyunSyncCheckGetBodyKB === "function") {
+        bodyDownloadKB = aliyunSyncCheckGetBodyKB();
+      }
+      if (typeof aliyunSyncCheckEndRound === "function") aliyunSyncCheckEndRound();
+
+      bodyDownloadKB = Math.round(bodyDownloadKB * 10) / 10;
+      metaKB = Math.round(metaKB * 10) / 10;
+      savedEstimatedKB = Math.round(savedEstimatedKB * 10) / 10;
+      skippedFullPull = !forceAllBodies && changedDomains.length === 0;
+      if (typeof aliyunDomainsMetaLogSyncCheck === "function") {
+        aliyunDomainsMetaLogSyncCheck({
+          metaKB: metaKB,
+          changedDomains: forceAllBodies ? domainIds.slice() : changedDomains.slice(),
+          bodyDownloadKB: bodyDownloadKB,
+          skippedFullPull: skippedFullPull,
+          savedEstimatedKB: savedEstimatedKB,
+          reason: pullReason
+        });
+      }
+
+      const report = {
+        ok: allOk,
+        results: results,
+        metaKB: metaKB,
+        bodyDownloadKB: bodyDownloadKB,
+        changedDomains: forceAllBodies ? domainIds.slice() : changedDomains.slice(),
+        skippedFullPull: skippedFullPull,
+        reason: pullReason
+      };
       try {
         window.__aliyunSyncPrimaryBootPullReport = report;
-        console.log("[aliyun-sync-primary] boot pull done", report);
+        if (forceAllBodies || pullReason === "boot" || (changedDomains && changedDomains.length)) {
+          console.log("[aliyun-sync-primary] boot pull done", report);
+        }
       } catch (_w) {}
       return report;
     }
+
 
     function scheduleAliyunSyncPrimaryBootPull() {
       if (!isAliyunSyncPrimaryEnabled()) return;
@@ -106108,8 +106277,8 @@
     /**
      * 准实时拉取（5–10 秒目标）：
      * - 根因：Firebase 已软跳过，接收端几乎只靠启动拉取 → 延迟到几十秒
-     * - 方案：页面可见时每 5s 后台串行拉 6 域；网络 await 不堵 UI
-     * - 防卡顿：payload 指纹未变则跳过 merge/render；拉取 inflight / 上传中则跳过
+     * - 方案：页面可见时每 5s 后台检查；Phase 1b 先 GET 房间 domains meta，仅变化域拉正文
+     * - 防卡顿：meta 未变零正文；payload 指纹未变再跳过 merge/render；inflight / 上传中则跳过
      */
     const ALIYUN_SYNC_PRIMARY_POLL_MS = 5000;
     const ALIYUN_SYNC_PRIMARY_VISIBLE_PULL_DELAY_MS = 300;
@@ -106355,10 +106524,13 @@
             console.log("[aliyun-sync-primary] near-realtime pull:", pullReason);
           } catch (_c) {}
         }
-        /* 复用启动串行拉取；域内指纹未变会跳过 merge/render */
-        const report = await runAliyunSyncPrimaryBootPull();
+        /* 复用启动串行拉取；Phase 1b domains meta 未变则跳过正文；域内指纹未变再跳过 merge/render */
+        const report = await runAliyunSyncPrimaryBootPull({ reason: pullReason });
         if (report && report.ok) {
-          paintAliyunSyncPrimaryBadgeOk();
+          /* 静默轮询且全域 meta 未变：不刷新角标时钟，避免无意义 UI 抖动 */
+          if (!(quietPoll && report.skippedAll)) {
+            paintAliyunSyncPrimaryBadgeOk();
+          }
         } else if (report && !report.skipped) {
           paintAliyunSyncPrimaryBadgeError(aliyunSyncPrimaryFirstErrorFromBootReport(report));
         }
@@ -106419,9 +106591,9 @@
       }
       try {
         console.log(
-          "[aliyun-sync-primary] 前台准实时轮询已开：每 " +
+            "[aliyun-sync-primary] 前台准实时轮询已开：每 " +
             ALIYUN_SYNC_PRIMARY_POLL_MS +
-            "ms（仅可见时；无变更跳过 merge/render）"
+            "ms（仅可见时；Phase1b 先查 domains meta，无变更零正文下载）"
         );
       } catch (_c) {}
     }
@@ -107004,6 +107176,11 @@
           );
         }
         ok = true;
+        try {
+          if (typeof aliyunDomainsMetaBumpDomain === "function") {
+            await aliyunDomainsMetaBumpDomain("done");
+          }
+        } catch (_domBump) {}
         mainThreadWorkMs = Math.max(0, Date.now() - tAll - networkWaitMs);
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
@@ -107480,13 +107657,16 @@
         aliyunHabitMetaLastSeenV = null;
         aliyunHabitMetaBootBodyDone = false;
         aliyunHabitMetaLastSafetyFullAt = 0;
+        if (typeof aliyunDomainsMetaResetLocalState === "function") {
+          aliyunDomainsMetaResetLocalState();
+        }
       }
       try {
         console.log(
-          "[aliyun-habit-meta-gate]",
+          "[aliyun-sync-meta-gate]",
           on
-            ? "已开启（Habit 5s 只拉 meta；version 变才拉正文；12 分钟安全全量）"
-            : "已关闭（Habit 恢复每 5s 正文 GET 旧路径）"
+            ? "已开启（Phase1b：5s 只拉房间 domains meta；某域 version 变才拉该域正文；12 分钟安全全量；Habit 仍保留独立 meta）"
+            : "已关闭（恢复每 5s 十域正文 GET 旧路径）"
         );
       } catch (_c) {}
       return on;
@@ -107808,6 +107988,601 @@
       }
       return { ok: false, error: lastErr || "bump-exhausted" };
     }
+
+    /**
+     * Phase 1b · 房间级 domains meta（消灭无效下行流量）
+     * 文档：aliyun-meta-v1-domains-{room}
+     * payload.versions = { done, habit, forge, ... } 各域独立版本
+     * 5s 轮询只 GET 此小文档；某域 version 变才 GET 该域正文。
+     * 与 Habit Phase 1a 共用 setAliyunSyncMetaGateEnabled 回退开关。
+     * 不改 FC、不改 merge、不 GC tombstone。
+     */
+    const ALIYUN_DOMAINS_META_KIND = "domains-meta-v1";
+    const ALIYUN_DOMAINS_META_SAFETY_FULL_MS = 12 * 60 * 1000;
+    const ALIYUN_DOMAINS_META_IDS = [
+      "done",
+      "habit",
+      "forge",
+      "anniv",
+      "sprint",
+      "todayPlan",
+      "amb",
+      "rule100",
+      "lists",
+      "goals"
+    ];
+    let aliyunDomainsMetaLastSeen = Object.create(null);
+    let aliyunDomainsMetaBootBodyDone = false;
+    let aliyunDomainsMetaLastSafetyFullAt = 0;
+    const aliyunDomainsMetaLastBodyKB = Object.create(null);
+
+    /** Sync Check 观测：一轮拉取内累计 meta/正文下行字节 */
+    let aliyunSyncCheckRoundActive = false;
+    let aliyunSyncCheckRoundMetaBytes = 0;
+    let aliyunSyncCheckRoundBodyBytes = 0;
+    let aliyunSyncCheckRoundBodyDomain = "";
+
+    function aliyunSyncCheckBeginRound() {
+      aliyunSyncCheckRoundActive = true;
+      aliyunSyncCheckRoundMetaBytes = 0;
+      aliyunSyncCheckRoundBodyBytes = 0;
+      aliyunSyncCheckRoundBodyDomain = "";
+    }
+
+    function aliyunSyncCheckEndRound() {
+      aliyunSyncCheckRoundActive = false;
+      aliyunSyncCheckRoundBodyDomain = "";
+    }
+
+    function aliyunSyncCheckMarkBodyDomain(domainId) {
+      aliyunSyncCheckRoundBodyDomain = String(domainId || "");
+    }
+
+    function aliyunSyncCheckGetBodyKB() {
+      return Math.round((aliyunSyncCheckRoundBodyBytes / 1024) * 10) / 10;
+    }
+
+    function aliyunSyncCheckGetMetaKB() {
+      return Math.round((aliyunSyncCheckRoundMetaBytes / 1024) * 10) / 10;
+    }
+
+    function aliyunSyncCheckNoteFetchBytes(url, bytes, method) {
+      if (!aliyunSyncCheckRoundActive) return;
+      const n = Number(bytes) || 0;
+      if (n <= 0) return;
+      const u = String(url || "");
+      const m = String(method || "GET").toUpperCase();
+      if (m !== "GET") return;
+      if (u.indexOf("aliyun-meta-v1-domains-") >= 0 || u.indexOf("aliyun-meta-v1-habit-") >= 0) {
+        aliyunSyncCheckRoundMetaBytes += n;
+        return;
+      }
+      if (u.indexOf("/smoke/") >= 0 && aliyunSyncCheckRoundBodyDomain) {
+        aliyunSyncCheckRoundBodyBytes += n;
+        const kb = Math.round((n / 1024) * 10) / 10;
+        aliyunDomainsMetaNoteBodyKB(aliyunSyncCheckRoundBodyDomain, kb);
+      }
+    }
+
+    function aliyunDomainsMetaResetLocalState() {
+      aliyunDomainsMetaLastSeen = Object.create(null);
+      aliyunDomainsMetaBootBodyDone = false;
+      aliyunDomainsMetaLastSafetyFullAt = 0;
+    }
+
+    function aliyunDomainsMetaBaseUrl() {
+      return String((aliyunExpUrlInput && aliyunExpUrlInput.value) || ALIYUN_EXP_DEFAULT_URL)
+        .trim()
+        .replace(/\/+$/, "");
+    }
+
+    function aliyunDomainsMetaDocId() {
+      return "aliyun-meta-v1-domains-" + getAliyunSyncRoomIdForDocs();
+    }
+
+    function aliyunDomainsMetaEmptyVersions() {
+      const v = Object.create(null);
+      for (let i = 0; i < ALIYUN_DOMAINS_META_IDS.length; i++) {
+        v[ALIYUN_DOMAINS_META_IDS[i]] = 0;
+      }
+      return v;
+    }
+
+    function aliyunDomainsMetaParsePayload(rawPayload) {
+      let p = rawPayload;
+      if (typeof p === "string") {
+        try {
+          p = JSON.parse(p);
+        } catch (_e) {
+          return null;
+        }
+      }
+      if (!p || typeof p !== "object") return null;
+      const src = p.versions && typeof p.versions === "object" ? p.versions : p;
+      const versions = aliyunDomainsMetaEmptyVersions();
+      let any = false;
+      for (let i = 0; i < ALIYUN_DOMAINS_META_IDS.length; i++) {
+        const id = ALIYUN_DOMAINS_META_IDS[i];
+        const n = Number(src[id]);
+        if (Number.isFinite(n) && n >= 0) {
+          versions[id] = n;
+          if (n > 0) any = true;
+        }
+      }
+      if (!any && !(p.versions && typeof p.versions === "object")) {
+        /* 兼容误写成单域 {v:N} 的脏数据：视为无效，走 seed */
+        if (p.v != null && p.domain) return null;
+      }
+      return {
+        kind: String(p.kind || ALIYUN_DOMAINS_META_KIND),
+        roomId: p.roomId != null ? String(p.roomId) : "",
+        versions: versions,
+        at: Number(p.at) || 0
+      };
+    }
+
+    function aliyunDomainsMetaNoteBodyKB(domainId, kb) {
+      const id = String(domainId || "");
+      const n = Number(kb);
+      if (!id || !Number.isFinite(n) || n < 0) return;
+      aliyunDomainsMetaLastBodyKB[id] = Math.round(n * 10) / 10;
+    }
+
+    function aliyunDomainsMetaEstimateSavedKB(domainIds) {
+      const ids = Array.isArray(domainIds) ? domainIds : [];
+      let sum = 0;
+      for (let i = 0; i < ids.length; i++) {
+        sum += Number(aliyunDomainsMetaLastBodyKB[ids[i]]) || 0;
+      }
+      return Math.round(sum * 10) / 10;
+    }
+
+    function aliyunDomainsMetaLogSyncCheck(info) {
+      const i = info || {};
+      const changed = Array.isArray(i.changedDomains) ? i.changedDomains : [];
+      const changedStr = changed.length ? changed.join(",") : "0";
+      try {
+        console.log(
+          "[Sync Check]\n" +
+            "metaKB=" +
+            (Number(i.metaKB) || 0) +
+            "\n" +
+            "changedDomains=" +
+            changedStr +
+            "\n" +
+            "bodyDownloadKB=" +
+            (Number(i.bodyDownloadKB) || 0) +
+            "\n" +
+            "skippedFullPull=" +
+            !!i.skippedFullPull +
+            "\n" +
+            "savedEstimatedKB=" +
+            (Number(i.savedEstimatedKB) || 0) +
+            (i.reason ? "\nreason=" + i.reason : "")
+        );
+      } catch (_l) {}
+    }
+
+    function aliyunDomainsMetaMarkDomainPulled(domainId, remoteV) {
+      const id = String(domainId || "");
+      if (!id) return;
+      if (remoteV != null && Number.isFinite(Number(remoteV))) {
+        aliyunDomainsMetaLastSeen[id] = Number(remoteV);
+      }
+    }
+
+    /** GET 房间级 domains meta；不下载任何业务正文。 */
+    async function aliyunDomainsMetaFetch() {
+      const base = aliyunDomainsMetaBaseUrl();
+      const metaId = aliyunDomainsMetaDocId();
+      if (!base || (typeof aliyunExpHasForbiddenSecret === "function" && aliyunExpHasForbiddenSecret(base))) {
+        return { ok: false, missing: false, parseError: true, error: "bad-url", metaId: metaId };
+      }
+      const getRes = await aliyunExpFetchJson(
+        "GET",
+        base + "/smoke/" + encodeURIComponent(metaId),
+        null
+      );
+      const bytes =
+        getRes && getRes.bytes != null
+          ? Number(getRes.bytes)
+          : getRes && getRes.data
+            ? JSON.stringify(getRes.data).length
+            : 0;
+      if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+        return {
+          ok: true,
+          missing: true,
+          parseError: false,
+          versions: null,
+          metaId: metaId,
+          bytes: bytes
+        };
+      }
+      if (!getRes.ok) {
+        return {
+          ok: false,
+          missing: false,
+          parseError: true,
+          error: "GET HTTP " + getRes.status,
+          metaId: metaId,
+          status: getRes.status,
+          bytes: bytes
+        };
+      }
+      const row = getRes.data && getRes.data.data;
+      const attrs = (row && (row.attrs || row)) || {};
+      const parsed = aliyunDomainsMetaParsePayload(attrs.payload != null ? attrs.payload : attrs);
+      if (!parsed) {
+        return {
+          ok: false,
+          missing: false,
+          parseError: true,
+          error: "parse",
+          metaId: metaId,
+          bytes: bytes
+        };
+      }
+      return {
+        ok: true,
+        missing: false,
+        parseError: false,
+        versions: parsed.versions,
+        at: parsed.at,
+        metaId: metaId,
+        payload: parsed,
+        bytes: bytes
+      };
+    }
+
+    async function aliyunDomainsMetaWriteVersions(versionsIn, atOpt) {
+      const base = aliyunDomainsMetaBaseUrl();
+      const metaId = aliyunDomainsMetaDocId();
+      if (!base || (typeof aliyunExpHasForbiddenSecret === "function" && aliyunExpHasForbiddenSecret(base))) {
+        return { ok: false, error: "bad-url" };
+      }
+      const versions = aliyunDomainsMetaEmptyVersions();
+      const src = versionsIn && typeof versionsIn === "object" ? versionsIn : {};
+      for (let i = 0; i < ALIYUN_DOMAINS_META_IDS.length; i++) {
+        const id = ALIYUN_DOMAINS_META_IDS[i];
+        const n = Number(src[id]);
+        versions[id] = Number.isFinite(n) && n >= 0 ? n : 0;
+      }
+      const payload = {
+        kind: ALIYUN_DOMAINS_META_KIND,
+        roomId: String(
+          (typeof getAliyunSyncRoomIdForDocs === "function" && getAliyunSyncRoomIdForDocs()) ||
+            cloudSyncRoomId ||
+            ""
+        ),
+        versions: versions,
+        at: Number(atOpt) || Date.now()
+      };
+      const putRes = await aliyunExpFetchJson("POST", base + "/smoke", {
+        id: metaId,
+        payload: payload
+      });
+      if (!putRes.ok) {
+        return {
+          ok: false,
+          error: "upload HTTP " + putRes.status,
+          status: putRes.status,
+          metaId: metaId
+        };
+      }
+      return { ok: true, metaId: metaId, payload: payload, versions: versions };
+    }
+
+    /**
+     * 决定本轮要拉哪些域正文。
+     * 必须先看房间 meta，禁止先下正文再比 hash。
+     */
+    async function aliyunDomainsMetaGateDecide(domainIds, reason) {
+      const ids = Array.isArray(domainIds) && domainIds.length ? domainIds : ALIYUN_DOMAINS_META_IDS.slice();
+      if (!isAliyunSyncMetaGateEnabled()) {
+        return {
+          fetchBody: true,
+          skipAll: false,
+          pullIds: ids.slice(),
+          skipIds: [],
+          reason: "gate-off",
+          metaKB: 0
+        };
+      }
+      const now = Date.now();
+      const needBoot = !aliyunDomainsMetaBootBodyDone || reason === "boot";
+      const needSafety =
+        !needBoot &&
+        (aliyunDomainsMetaLastSafetyFullAt <= 0 ||
+          now - aliyunDomainsMetaLastSafetyFullAt >= ALIYUN_DOMAINS_META_SAFETY_FULL_MS);
+
+      let meta;
+      try {
+        meta = await aliyunDomainsMetaFetch();
+      } catch (err) {
+        return {
+          fetchBody: true,
+          skipAll: false,
+          pullIds: ids.slice(),
+          skipIds: [],
+          reason: "meta-fetch-error",
+          seedNeeded: true,
+          metaKB: 0,
+          error: err && err.message ? err.message : String(err)
+        };
+      }
+      const metaKB = Math.round(((Number(meta.bytes) || 0) / 1024) * 10) / 10;
+
+      if (!meta.ok || meta.parseError) {
+        return {
+          fetchBody: true,
+          skipAll: false,
+          pullIds: ids.slice(),
+          skipIds: [],
+          reason: "meta-parse-fail",
+          seedNeeded: true,
+          metaKB: metaKB,
+          error: meta.error
+        };
+      }
+      if (meta.missing) {
+        return {
+          fetchBody: true,
+          skipAll: false,
+          pullIds: ids.slice(),
+          skipIds: [],
+          reason: needBoot ? "boot-meta-404" : "meta-404",
+          seedNeeded: true,
+          remoteVersions: null,
+          forceSafety: needSafety,
+          metaKB: metaKB
+        };
+      }
+
+      if (needBoot) {
+        return {
+          fetchBody: true,
+          skipAll: false,
+          pullIds: ids.slice(),
+          skipIds: [],
+          reason: "boot",
+          seedNeeded: false,
+          remoteVersions: meta.versions,
+          forceSafety: false,
+          metaKB: metaKB
+        };
+      }
+      if (needSafety) {
+        return {
+          fetchBody: true,
+          skipAll: false,
+          pullIds: ids.slice(),
+          skipIds: [],
+          reason: "safety-full",
+          seedNeeded: false,
+          remoteVersions: meta.versions,
+          forceSafety: true,
+          metaKB: metaKB
+        };
+      }
+
+      const pullIds = [];
+      const skipIds = [];
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        const remoteV = Number(meta.versions && meta.versions[id]);
+        const localV = aliyunDomainsMetaLastSeen[id];
+        if (localV == null || !Number.isFinite(Number(localV))) {
+          pullIds.push(id);
+          continue;
+        }
+        if (!Number.isFinite(remoteV) || Number(remoteV) !== Number(localV)) {
+          pullIds.push(id);
+        } else {
+          skipIds.push(id);
+        }
+      }
+      if (!pullIds.length) {
+        return {
+          fetchBody: false,
+          skipAll: true,
+          pullIds: [],
+          skipIds: skipIds,
+          reason: "meta-unchanged",
+          seedNeeded: false,
+          remoteVersions: meta.versions,
+          metaKB: metaKB
+        };
+      }
+      return {
+        fetchBody: true,
+        skipAll: false,
+        pullIds: pullIds,
+        skipIds: skipIds,
+        reason: "meta-changed",
+        seedNeeded: false,
+        remoteVersions: meta.versions,
+        metaKB: metaKB
+      };
+    }
+
+    /** meta 仅在确认 404 时种子各域 v=1；禁止在 GET/parse 失败时写低版本。 */
+    async function aliyunDomainsMetaSeedIfNeeded(atOpt) {
+      try {
+        const fresh = await aliyunDomainsMetaFetch();
+        if (fresh.ok && !fresh.missing && !fresh.parseError && fresh.versions) {
+          let maxV = 0;
+          for (let i = 0; i < ALIYUN_DOMAINS_META_IDS.length; i++) {
+            maxV = Math.max(maxV, Number(fresh.versions[ALIYUN_DOMAINS_META_IDS[i]]) || 0);
+          }
+          if (maxV >= 1) {
+            return { ok: true, seeded: false, versions: fresh.versions };
+          }
+        }
+        if (!(fresh && fresh.ok && fresh.missing)) {
+          return {
+            ok: false,
+            seeded: false,
+            error: (fresh && fresh.error) || "not-confirmed-missing"
+          };
+        }
+        const versions = aliyunDomainsMetaEmptyVersions();
+        for (let i = 0; i < ALIYUN_DOMAINS_META_IDS.length; i++) {
+          versions[ALIYUN_DOMAINS_META_IDS[i]] = 1;
+        }
+        const wr = await aliyunDomainsMetaWriteVersions(versions, atOpt);
+        if (!wr.ok) return { ok: false, seeded: false, error: wr.error };
+        try {
+          console.log("[aliyun-domains-meta] seed ok v=1 all domains id=" + wr.metaId);
+        } catch (_c) {}
+        return { ok: true, seeded: true, versions: versions };
+      } catch (err) {
+        return { ok: false, seeded: false, error: err && err.message ? err.message : String(err) };
+      }
+    }
+
+    /**
+     * 某域正文 POST 成功后 bump 房间 meta 中该域版本。
+     * RMW + verify 重试，避免多域并发 bump 互相覆盖。
+     */
+    async function aliyunDomainsMetaBumpDomain(domainId, atOpt) {
+      if (!isAliyunSyncMetaGateEnabled()) {
+        return { ok: false, skipped: true, reason: "gate-off" };
+      }
+      const id = String(domainId || "");
+      if (!id || ALIYUN_DOMAINS_META_IDS.indexOf(id) < 0) {
+        return { ok: false, error: "bad-domain" };
+      }
+      const maxAttempts = 3;
+      let lastErr = "";
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const fresh = await aliyunDomainsMetaFetch();
+          let versions = aliyunDomainsMetaEmptyVersions();
+          if (fresh.ok && !fresh.missing && !fresh.parseError && fresh.versions) {
+            versions = Object.assign(versions, fresh.versions);
+          } else if (!(fresh && fresh.missing)) {
+            /* GET 不确定：用 lastSeen 托底，保留已知版本，勿整表写 1 */
+            for (let i = 0; i < ALIYUN_DOMAINS_META_IDS.length; i++) {
+              const did = ALIYUN_DOMAINS_META_IDS[i];
+              const ls = Number(aliyunDomainsMetaLastSeen[did]);
+              if (Number.isFinite(ls) && ls > 0) versions[did] = ls;
+            }
+          }
+          const floorV = Math.max(
+            Number(versions[id]) || 0,
+            Number(aliyunDomainsMetaLastSeen[id]) || 0
+          );
+          const writeV = floorV + 1;
+          versions[id] = writeV;
+          const wr = await aliyunDomainsMetaWriteVersions(versions, atOpt);
+          if (!wr.ok) {
+            lastErr = wr.error || "write-fail";
+            continue;
+          }
+          try {
+            const verify = await aliyunDomainsMetaFetch();
+            if (verify.ok && !verify.missing && !verify.parseError && verify.versions) {
+              const remoteV = Number(verify.versions[id]) || 0;
+              if (remoteV < writeV) {
+                lastErr = "verify-lost-race";
+                continue;
+              }
+              aliyunDomainsMetaLastSeen[id] = remoteV;
+              for (let i = 0; i < ALIYUN_DOMAINS_META_IDS.length; i++) {
+                const did = ALIYUN_DOMAINS_META_IDS[i];
+                const rv = Number(verify.versions[did]);
+                if (Number.isFinite(rv)) {
+                  const ls = Number(aliyunDomainsMetaLastSeen[did]);
+                  if (!Number.isFinite(ls) || rv > ls) {
+                    aliyunDomainsMetaLastSeen[did] = rv;
+                  }
+                }
+              }
+              return { ok: true, v: remoteV, domain: id, attempt: attempt };
+            }
+          } catch (_vf) {}
+          aliyunDomainsMetaLastSeen[id] = writeV;
+          return { ok: true, v: writeV, domain: id, attempt: attempt };
+        } catch (err) {
+          lastErr = err && err.message ? err.message : String(err);
+        }
+      }
+      try {
+        console.warn(
+          "[aliyun-domains-meta] bump FAIL domain=" + id + " err=" + (lastErr || "exhausted")
+        );
+      } catch (_c) {}
+      return { ok: false, error: lastErr || "bump-exhausted", domain: id };
+    }
+
+    /** 一轮拉取结束后：标记 boot/safety、必要时 seed、对齐 lastSeen */
+    async function aliyunDomainsMetaAfterPullRound(info) {
+      if (!isAliyunSyncMetaGateEnabled()) return;
+      const i = info || {};
+      aliyunDomainsMetaBootBodyDone = true;
+      if (i.forceAllBodies || i.reason === "boot" || i.reason === "safety-full") {
+        if (i.reason === "safety-full" || aliyunDomainsMetaLastSafetyFullAt <= 0) {
+          aliyunDomainsMetaLastSafetyFullAt = Date.now();
+        }
+      }
+      if (i.seedNeeded) {
+        const seedRes = await aliyunDomainsMetaSeedIfNeeded(Date.now());
+        if (seedRes && seedRes.ok && seedRes.versions) {
+          for (let di = 0; di < ALIYUN_DOMAINS_META_IDS.length; di++) {
+            const id = ALIYUN_DOMAINS_META_IDS[di];
+            aliyunDomainsMetaLastSeen[id] = Number(seedRes.versions[id]) || 1;
+          }
+          return;
+        }
+      }
+      if (i.remoteVersions && typeof i.remoteVersions === "object") {
+        for (let di = 0; di < ALIYUN_DOMAINS_META_IDS.length; di++) {
+          const id = ALIYUN_DOMAINS_META_IDS[di];
+          const rv = Number(i.remoteVersions[id]);
+          if (Number.isFinite(rv)) {
+            aliyunDomainsMetaLastSeen[id] = rv;
+          }
+        }
+        return;
+      }
+      /*
+       * boot / forceAll 可能未走 decide：这里补 GET meta 对齐 lastSeen。
+       * 否则 lastSeen 全空 → 后续每轮都会误判「全域变化」继续下全文。
+       */
+      if (i.forceAllBodies || i.reason === "boot") {
+        try {
+          const fresh = await aliyunDomainsMetaFetch();
+          if (fresh && fresh.ok && fresh.missing) {
+            const seedRes = await aliyunDomainsMetaSeedIfNeeded(Date.now());
+            if (seedRes && seedRes.ok && seedRes.versions) {
+              for (let di = 0; di < ALIYUN_DOMAINS_META_IDS.length; di++) {
+                const id = ALIYUN_DOMAINS_META_IDS[di];
+                aliyunDomainsMetaLastSeen[id] = Number(seedRes.versions[id]) || 1;
+              }
+            }
+            return;
+          }
+          if (fresh && fresh.ok && !fresh.parseError && fresh.versions) {
+            for (let di = 0; di < ALIYUN_DOMAINS_META_IDS.length; di++) {
+              const id = ALIYUN_DOMAINS_META_IDS[di];
+              const rv = Number(fresh.versions[id]);
+              if (Number.isFinite(rv)) {
+                aliyunDomainsMetaLastSeen[id] = rv;
+              }
+            }
+          }
+        } catch (_bootAlign) {}
+      }
+    }
+
+    try {
+      window.aliyunDomainsMetaDocId = aliyunDomainsMetaDocId;
+      window.aliyunDomainsMetaBumpDomain = aliyunDomainsMetaBumpDomain;
+      window.aliyunDomainsMetaGateDecide = aliyunDomainsMetaGateDecide;
+      window.aliyunDomainsMetaLastBodyKB = aliyunDomainsMetaLastBodyKB;
+    } catch (_wDomMeta) {}
+
 
     function aliyunHabitRealSlotId(dateKey, habitKey) {
       return String(dateKey || "") + "|" + String(habitKey || "");
@@ -108339,6 +109114,11 @@
                 " (peers may skip Habit body until safety-full)"
             );
           }
+          try {
+            if (typeof aliyunDomainsMetaBumpDomain === "function") {
+              await aliyunDomainsMetaBumpDomain("habit", bumpAt);
+            }
+          } catch (_domBumpH) {}
         } catch (_bumpErr) {
           aliyunHabitRealAppendLog(
             "[habit-done-chain] step1 meta-bump error: " +
@@ -109489,6 +110269,11 @@
           );
         }
         ok = true;
+        try {
+          if (typeof aliyunDomainsMetaBumpDomain === "function") {
+            await aliyunDomainsMetaBumpDomain("forge");
+          }
+        } catch (_domBump) {}
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
         ok = false;
@@ -110538,6 +111323,11 @@
           );
         }
         ok = true;
+        try {
+          if (typeof aliyunDomainsMetaBumpDomain === "function") {
+            await aliyunDomainsMetaBumpDomain("anniv");
+          }
+        } catch (_domBump) {}
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
         ok = false;
@@ -111419,6 +112209,11 @@
           );
         }
         ok = true;
+        try {
+          if (typeof aliyunDomainsMetaBumpDomain === "function") {
+            await aliyunDomainsMetaBumpDomain("sprint");
+          }
+        } catch (_domBump) {}
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
         ok = false;
@@ -112056,6 +112851,11 @@
           );
         }
         ok = true;
+        try {
+          if (typeof aliyunDomainsMetaBumpDomain === "function") {
+            await aliyunDomainsMetaBumpDomain("todayPlan");
+          }
+        } catch (_domBump) {}
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
         ok = false;
@@ -112827,6 +113627,11 @@
           aliyunSyncPrimaryMarkPullFingerprint("amb", aliyunAmbRealSliceFingerprint(mergedSlice));
         } catch (_fp) {}
         ok = true;
+        try {
+          if (typeof aliyunDomainsMetaBumpDomain === "function") {
+            await aliyunDomainsMetaBumpDomain("amb");
+          }
+        } catch (_domBump) {}
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
         ok = false;
@@ -113356,6 +114161,11 @@
           );
         } catch (_fp) {}
         ok = true;
+        try {
+          if (typeof aliyunDomainsMetaBumpDomain === "function") {
+            await aliyunDomainsMetaBumpDomain("rule100");
+          }
+        } catch (_domBump) {}
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
         ok = false;
@@ -113975,6 +114785,11 @@
           );
         } catch (_fp) {}
         ok = true;
+        try {
+          if (typeof aliyunDomainsMetaBumpDomain === "function") {
+            await aliyunDomainsMetaBumpDomain("lists");
+          }
+        } catch (_domBump) {}
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
         ok = false;
@@ -114627,6 +115442,11 @@
           );
         } catch (_fp) {}
         ok = true;
+        try {
+          if (typeof aliyunDomainsMetaBumpDomain === "function") {
+            await aliyunDomainsMetaBumpDomain("goals");
+          }
+        } catch (_domBump) {}
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
         ok = false;
@@ -114833,12 +115653,18 @@
       const res = await fetch(url, opts);
       let data = null;
       const text = await res.text();
+      const bytes = text ? text.length : 0;
       try {
         data = text ? JSON.parse(text) : null;
       } catch (_parseErr) {
         data = { raw: text };
       }
-      return { status: res.status, ok: res.ok, data: data };
+      try {
+        if (typeof aliyunSyncCheckNoteFetchBytes === "function") {
+          aliyunSyncCheckNoteFetchBytes(String(url || ""), bytes, method);
+        }
+      } catch (_syncCheck) {}
+      return { status: res.status, ok: res.ok, data: data, bytes: bytes };
     }
 
     async function runAliyunExpSmokeA() {
