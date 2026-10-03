@@ -96544,7 +96544,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261003a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261003b";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -138927,12 +138927,12 @@
 
     /** 纯视觉：整点后自动去掉 class，恢复 SPRINT N · FINISH；不碰跑马灯状态 */
     function syncSprintFinishLastFiveVisual() {
-      if (isHourRowUpdateFrozen() || isHourTaskMarqueePlayingNow()) {
+      if (isHourRowUpdateFrozen() || isFinishLineMarqueePlayingNow()) {
         logHourRowEvent("class-change", {
           blocked: true,
           reason: isHourRowUpdateFrozen()
             ? "FREEZE_HOUR_ROW_UPDATES"
-            : "hour-task-marquee-playing",
+            : finishLineMarqueePlayingFreezeReason(),
           via: "last-five-visual"
         });
         return;
@@ -139177,7 +139177,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       playEndsAt: 0,
       playStartedAt: 0,
       playDurationMs: 0,
-      finishTimerId: null
+      finishTimerId: null,
+      /** 本轮 mount 时的 host 节点引用，用于判断中途是否被换掉 */
+      hostEl: null,
+      trackEl: null
     };
 
     function getSprintFinishCloseLoopMarqueeClockSlotKey(dateOpt) {
@@ -139352,8 +139355,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       hosts.forEach(function (host) {
         if (!host || seen.has(host)) return;
         seen.add(host);
-        host.classList.remove("is-close-loop-marquee-playing");
+        const hadClass = host.classList.contains("is-close-loop-marquee-playing");
         const overlay = host.querySelector(".done-sprint-finish-close-loop-marquee-overlay");
+        const track = overlay && overlay.querySelector(".done-sprint-finish-close-loop-marquee__track");
+        if (hadClass) {
+          logCloseLoopFlashDiag("CLOSE_LOOP_CLASS_REMOVED", {
+            via: "clearSprintFinishCloseLoopMarqueeOverlay",
+            host: marqueeDiagDescribeNode(host)
+          });
+        }
+        if (track) {
+          logCloseLoopFlashDiag("CLOSE_LOOP_TRACK_REPLACED", {
+            via: "clearSprintFinishCloseLoopMarqueeOverlay",
+            note: "overlay/track 即将 remove"
+          });
+        }
+        host.classList.remove("is-close-loop-marquee-playing");
         if (overlay) overlay.remove();
       });
     }
@@ -139371,6 +139388,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!hostEl) return 0;
       const rule = hostEl.querySelector(".done-time-sprint-finish__rule");
       if (!rule) return 0;
+      logCloseLoopFlashDiag("CLOSE_LOOP_MOUNT", {
+        via: "mountSprintFinishCloseLoopMarqueeOverlay",
+        elapsedSecOpt: elapsedSecOpt,
+        wallDurationSecOpt: wallDurationSecOpt,
+        hostBefore: marqueeDiagDescribeNode(hostEl)
+      });
       clearSprintFinishCloseLoopMarqueeOverlay(hostEl);
       if (typeof clearSprintFinishRoughStartMarqueeOverlay === "function") {
         clearSprintFinishRoughStartMarqueeOverlay(hostEl);
@@ -139385,6 +139408,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         clearSprintFinishGainHourMarqueeOverlay(hostEl);
       }
       hostEl.classList.add("is-close-loop-marquee-playing");
+      logCloseLoopFlashDiag("CLOSE_LOOP_CLASS_ADDED", {
+        via: "mountSprintFinishCloseLoopMarqueeOverlay",
+        className: "is-close-loop-marquee-playing"
+      });
       const overlay = document.createElement("div");
       overlay.className = "done-sprint-finish-close-loop-marquee-overlay";
       overlay.setAttribute("data-marquee-item-id", "close-loop");
@@ -139412,6 +139439,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       viewport.appendChild(track);
       overlay.appendChild(viewport);
       hostEl.appendChild(overlay);
+      sprintFinishCloseLoopMarqueeState.hostEl = hostEl;
+      sprintFinishCloseLoopMarqueeState.trackEl = track;
       /* 勿 void offsetWidth：强制 reflow 会让整条横条闪 */
       if (!(givenTotal > 0)) {
         passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1, hostEl);
@@ -139426,9 +139455,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       armSharedMarqueeContinuousTrack(track, passSec, passesN, elapsedSec + peekSec, {
         lane: "closeLoop"
       });
-      startSprintMarqueeTrackRunning(track);
-      bindCloseLoopFlashProbe(track);
-      logCloseLoopFlashDiag("arm/mount", {
+      logCloseLoopFlashDiag("CLOSE_LOOP_ARM", {
         passSec: passSec,
         passesN: passesN,
         wallSec: wallSec,
@@ -139440,6 +139467,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         clones: track.querySelectorAll(":scope > .marquee-continuous-seq").length,
         spacers: track.querySelectorAll(":scope > .marquee-cycle-spacer").length
       });
+      startSprintMarqueeTrackRunning(track);
+      logCloseLoopFlashDiag("CLOSE_LOOP_START", {
+        running: track.classList.contains("is-running")
+      });
+      bindCloseLoopFlashProbe(track);
       return passSec;
     }
 
@@ -139452,12 +139484,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function finishSprintFinishCloseLoopMarqueePlay(playToken) {
       if (playToken !== sprintFinishCloseLoopMarqueeState.playToken) return;
       if (sprintFinishCloseLoopMarqueeState.phase !== "playing") return;
+      logCloseLoopFlashDiag("CLOSE_LOOP_END", {
+        via: "finishSprintFinishCloseLoopMarqueePlay",
+        playToken: playToken
+      });
       clearSprintFinishCloseLoopMarqueeFinishTimer();
       clearSprintFinishCloseLoopMarqueeOverlay();
       sprintFinishCloseLoopMarqueeState.phase = "idle";
       sprintFinishCloseLoopMarqueeState.playEndsAt = 0;
       sprintFinishCloseLoopMarqueeState.playStartedAt = 0;
       sprintFinishCloseLoopMarqueeState.playDurationMs = 0;
+      sprintFinishCloseLoopMarqueeState.hostEl = null;
+      sprintFinishCloseLoopMarqueeState.trackEl = null;
     }
 
     function startSprintFinishCloseLoopMarqueePlay() {
@@ -139530,27 +139568,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         stale.push(host);
       });
       if (!stale.length) return;
-      logCloseLoopFlashDiag("ensure-remount", {
+      /* 播放中禁止 ensure remount：clear+重建 track 会直接闪；父级冻结后不应走到这里 */
+      logCloseLoopFlashDiag("CLOSE_LOOP_ENSURE", {
         staleCount: stale.length,
         hostCount: hosts.length,
         passSecGuess: passSec,
-        note: "playing 期间 ensure 发现 overlay 不健康 → 将 clear+重建 track（可疑闪点）"
+        blockedRemount: true,
+        note: "playing 期间 ensure 发现 overlay 不健康 → 禁止 remount（避免闪）"
       });
-      if (!passSec) {
-        passSec =
-          mountSprintFinishCloseLoopMarqueeOverlay(stale[0], 0, 0) ||
-          sprintFinishCloseLoopMarqueeDurationSec();
-        const started0 = sprintFinishCloseLoopMarqueeState.playStartedAt || Date.now();
-        const elapsed0 = Math.max(0, (Date.now() - started0) / 1000) % Math.max(1, passSec);
-        if (elapsed0 > 0.05) {
-          mountSprintFinishCloseLoopMarqueeOverlay(stale[0], passSec, elapsed0);
-        }
-        stale.shift();
-      }
-      const started = sprintFinishCloseLoopMarqueeState.playStartedAt || Date.now();
-      const elapsedSec = Math.max(0, (Date.now() - started) / 1000) % Math.max(1, passSec);
-      stale.forEach(function (host) {
-        mountSprintFinishCloseLoopMarqueeOverlay(host, passSec, elapsedSec);
+      logCloseLoopFlashDiag("CLOSE_LOOP_REMOUNT", {
+        blocked: true,
+        reason: "ensure-while-playing",
+        staleCount: stale.length
       });
     }
 
@@ -139761,6 +139790,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const lane = (opts && opts.lane) || "unknown";
       const playId = marqueePlayIdForLane(lane);
       const playing = isMarqueeLanePlaying(lane);
+      if (lane === "closeLoop" || (track.classList && track.classList.contains("done-sprint-finish-close-loop-marquee__track"))) {
+        logCloseLoopFlashDiag("CLOSE_LOOP_ANIMATION_RESTART", {
+          allowRestart: allowRestart,
+          blocked: playing && !allowRestart,
+          reason: (opts && opts.reason) || "restart",
+          lane: lane
+        });
+      }
       if (playing && !allowRestart) {
         logMarqueePlayEvent("RESTART", {
           blocked: true,
@@ -140336,18 +140373,140 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
+    function isRoughStartMarqueePlayingNow() {
+      try {
+        return (
+          typeof sprintFinishRoughStartMarqueeState !== "undefined" &&
+          sprintFinishRoughStartMarqueeState.phase === "playing"
+        );
+      } catch (err) {
+        return false;
+      }
+    }
+
+    /** 终点线自动跑马灯播放中：禁止拆掉 host/overlay/track 的父级更新 */
+    function isFinishLineMarqueePlayingNow() {
+      return (
+        isHourTaskMarqueePlayingNow() ||
+        isCloseLoopMarqueePlayingNow() ||
+        isRoughStartMarqueePlayingNow()
+      );
+    }
+
+    function finishLineMarqueePlayingFreezeReason() {
+      if (isCloseLoopMarqueePlayingNow()) return "close-loop-marquee-playing";
+      if (isRoughStartMarqueePlayingNow()) return "rough-start-marquee-playing";
+      if (isHourTaskMarqueePlayingNow()) return "hour-task-marquee-playing";
+      return "finish-line-marquee-playing";
+    }
+
     /**
-     * 临时诊断：闭环 vs hour-task 闪动差异。
-     * 控制台执行 window.__DEBUG_CLOSE_LOOP_FLASH = true 后刷新/等 :15/:30/:45。
-     * 不改动画行为，只打日志。
+     * 闭环闪动生命周期日志。
+     * 默认开启（与 hour-row 一致）；控制台设 window.__DEBUG_CLOSE_LOOP_FLASH = false 可关。
+     * 历史：window.__CLOSE_LOOP_FLASH_LOG（最多 200 条）。
      */
+    function closeLoopFlashClockLabel(dateOpt) {
+      const d = dateOpt instanceof Date ? dateOpt : new Date();
+      const pad = function (n) {
+        return String(n).padStart(2, "0");
+      };
+      return (
+        pad(d.getHours()) +
+        ":" +
+        pad(d.getMinutes()) +
+        ":" +
+        pad(d.getSeconds()) +
+        "." +
+        String(d.getMilliseconds()).padStart(3, "0")
+      );
+    }
+
+    function closeLoopFlashSnapshot(extra) {
+      const host =
+        (sprintFinishCloseLoopMarqueeState && sprintFinishCloseLoopMarqueeState.hostEl) ||
+        (typeof querySprintFinishCloseLoopMarqueeHost === "function"
+          ? querySprintFinishCloseLoopMarqueeHost()
+          : null);
+      const track =
+        (sprintFinishCloseLoopMarqueeState && sprintFinishCloseLoopMarqueeState.trackEl) ||
+        (host && host.querySelector(".done-sprint-finish-close-loop-marquee__track"));
+      let anim = null;
+      let transform = "";
+      try {
+        if (track && typeof track.getAnimations === "function") {
+          const list = track.getAnimations();
+          anim = list && list.length ? list[0] : null;
+        }
+      } catch (errAnim) {
+        /* ignore */
+      }
+      try {
+        transform = track ? String(window.getComputedStyle(track).transform || "") : "";
+      } catch (errCs) {
+        transform = track && track.style ? String(track.style.transform || "") : "";
+      }
+      const liveHost =
+        typeof querySprintFinishCloseLoopMarqueeHost === "function"
+          ? querySprintFinishCloseLoopMarqueeHost()
+          : null;
+      return Object.assign(
+        {
+          perfMs: Math.round(
+            typeof performance !== "undefined" && performance.now
+              ? performance.now()
+              : Date.now()
+          ),
+          clock: closeLoopFlashClockLabel(),
+          phase: sprintFinishCloseLoopMarqueeState && sprintFinishCloseLoopMarqueeState.phase,
+          playToken: sprintFinishCloseLoopMarqueeState && sprintFinishCloseLoopMarqueeState.playToken,
+          hostSame: !!(
+            host &&
+            liveHost &&
+            host === liveHost &&
+            host.isConnected !== false
+          ),
+          hostConnected: !!(host && host.isConnected),
+          host: typeof marqueeDiagDescribeNode === "function" ? marqueeDiagDescribeNode(host) : "",
+          animationName: anim
+            ? String(anim.animationName || "")
+            : track
+              ? String(
+                  (track.style && track.style.animationName) ||
+                    (window.getComputedStyle && window.getComputedStyle(track).animationName) ||
+                    ""
+                )
+              : "",
+          currentTime: anim && anim.currentTime != null ? anim.currentTime : null,
+          duration:
+            (track && track.style.getPropertyValue("--marquee-duration")) ||
+            (anim && anim.effect && anim.effect.getTiming
+              ? anim.effect.getTiming().duration
+              : null),
+          transform: transform.slice(0, 120),
+          running: !!(track && track.classList && track.classList.contains("is-running")),
+          continuous: !!(track && track.classList && track.classList.contains("is-continuous"))
+        },
+        extra && typeof extra === "object" ? extra : extra != null ? { note: extra } : {}
+      );
+    }
+
     function logCloseLoopFlashDiag(tag, detail) {
       try {
-        if (window.__DEBUG_CLOSE_LOOP_FLASH !== true) return;
-        const t = marqueeDiagNowMs();
+        if (window.__DEBUG_CLOSE_LOOP_FLASH === false) return;
+        const snap = closeLoopFlashSnapshot(detail);
+        if (!window.__CLOSE_LOOP_FLASH_LOG) window.__CLOSE_LOOP_FLASH_LOG = [];
+        window.__CLOSE_LOOP_FLASH_LOG.push({
+          tag: String(tag || "event"),
+          t: snap.perfMs,
+          clock: snap.clock,
+          detail: snap
+        });
+        if (window.__CLOSE_LOOP_FLASH_LOG.length > 200) {
+          window.__CLOSE_LOOP_FLASH_LOG.splice(0, window.__CLOSE_LOOP_FLASH_LOG.length - 200);
+        }
         console.log(
-          "[close-loop-flash] " + String(tag || "event") + " @" + t + "ms",
-          detail && typeof detail === "object" ? detail : { note: detail }
+          "[close-loop-flash] " + String(tag || "event") + " @" + snap.perfMs + "ms " + snap.clock,
+          snap
         );
       } catch (err) {
         /* ignore */
@@ -140356,25 +140515,28 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function bindCloseLoopFlashProbe(track) {
       if (!track || track.getAttribute("data-close-loop-flash-probe") === "1") return;
-      if (window.__DEBUG_CLOSE_LOOP_FLASH !== true) return;
       track.setAttribute("data-close-loop-flash-probe", "1");
-      ["animationstart", "animationend", "animationiteration"].forEach(function (evName) {
-        try {
-          track.addEventListener(evName, function (ev) {
-            logCloseLoopFlashDiag(evName, {
-              anim: ev && ev.animationName,
-              elapsed: ev && ev.elapsedTime,
-              duration: track.style.getPropertyValue("--marquee-duration"),
-              shift: track.style.getPropertyValue("--marquee-shift"),
-              continuous: track.classList.contains("is-continuous"),
-              running: track.classList.contains("is-running"),
-              delay: track.style.animationDelay || ""
+      ["animationstart", "animationend", "animationiteration", "animationcancel"].forEach(
+        function (evName) {
+          try {
+            track.addEventListener(evName, function (ev) {
+              const tagMap = {
+                animationstart: "CLOSE_LOOP_ANIMATION_START",
+                animationend: "CLOSE_LOOP_ANIMATION_END",
+                animationiteration: "CLOSE_LOOP_ANIMATION_ITERATION",
+                animationcancel: "CLOSE_LOOP_ANIMATION_CANCEL"
+              };
+              logCloseLoopFlashDiag(tagMap[evName] || "CLOSE_LOOP_ANIM", {
+                animEvent: evName,
+                anim: ev && ev.animationName,
+                elapsed: ev && ev.elapsedTime
+              });
             });
-          });
-        } catch (errBind) {
-          /* ignore */
+          } catch (errBind) {
+            /* ignore */
+          }
         }
-      });
+      );
     }
 
     /** render() 内：Done 时间轴因跑马灯/冻结被跳过时，勿 clear done 脏标记 */
@@ -140878,14 +141040,24 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const hosts = querySprintFinishMarqueeHosts();
       if (!hosts.length) return;
       stripSprintFinishMarqueesNotIn(hosts);
-      const passSec = sprintFinishRoughStartMarqueeDurationSec();
-      const started = sprintFinishRoughStartMarqueeState.playStartedAt || Date.now();
-      const elapsedSec = Math.max(0, (Date.now() - started) / 1000) % passSec;
+      const stale = [];
       hosts.forEach(function (host) {
-        if (!sprintFinishRoughStartMarqueeOverlayHealthy(host)) {
-          mountSprintFinishRoughStartMarqueeOverlay(host, passSec, elapsedSec);
-        }
+        if (!sprintFinishRoughStartMarqueeOverlayHealthy(host)) stale.push(host);
       });
+      if (!stale.length) return;
+      /* 播放中禁止 ensure remount：与 close-loop 一致，避免 clear+重建闪一下 */
+      try {
+        console.log(
+          "[rough-start-flash] ENSURE blocked remount @" +
+            (typeof performance !== "undefined" && performance.now
+              ? Math.round(performance.now())
+              : Date.now()) +
+            "ms stale=" +
+            stale.length
+        );
+      } catch (errLog) {
+        /* ignore */
+      }
     }
 
     function syncSprintFinishRoughStartMarquee() {
@@ -142942,7 +143114,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (!handoff && typeof render === "function") {
           window.setTimeout(function () {
             try {
-              if (!isHourTaskMarqueePlayingNow()) render();
+              if (!isFinishLineMarqueePlayingNow()) render();
             } catch (errR) {
               /* ignore */
             }
@@ -148132,20 +148304,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return;
       }
       /* 跑马灯播放中写底栏 width/text 会牵动整块 layout/paint → 小时冲刺条闪 */
-      if (isHourTaskMarqueePlayingNow()) {
+      if (isFinishLineMarqueePlayingNow()) {
+        if (isCloseLoopMarqueePlayingNow()) {
+          logCloseLoopFlashDiag("CLOSE_LOOP_PROGRESS_UPDATE", {
+            via: "updateDoneTimeBlockSprintProgressDom",
+            blocked: true,
+            note: "与 hour-task 相同：播放中冻结 progress DOM 写入"
+          });
+        }
         logHourRowEvent("update-count", {
           blocked: true,
-          reason: "hour-task-marquee-playing",
+          reason: finishLineMarqueePlayingFreezeReason(),
           via: "progress-dom",
           trace: true
         });
         return;
-      }
-      if (isCloseLoopMarqueePlayingNow()) {
-        logCloseLoopFlashDiag("PARENT_PROGRESS_WHILE_CLOSE_LOOP", {
-          via: "updateDoneTimeBlockSprintProgressDom",
-          note: "hour-task 会 freeze；close-loop 不会"
-        });
       }
       const sm = parseInt(blockLi.getAttribute("data-done-block-start-min"), 10);
       const em = parseInt(blockLi.getAttribute("data-done-block-end-min"), 10);
@@ -149607,26 +149780,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
       }
 
-      if (isHourRowUpdateFrozen() || isHourTaskMarqueePlayingNow()) {
+      if (isHourRowUpdateFrozen() || isFinishLineMarqueePlayingNow()) {
+        if (isCloseLoopMarqueePlayingNow()) {
+          logCloseLoopFlashDiag("CLOSE_LOOP_SPRINT_REBUILD", {
+            via: "sprint-layer-rebuild",
+            blocked: true,
+            phase: phase,
+            key: String((block && block.key) || ""),
+            note: "与 hour-task 相同：播放中冻结 sprint-layer rebuild"
+          });
+        }
         logHourRowEvent("render", {
           blocked: true,
           reason: isHourRowUpdateFrozen()
             ? "FREEZE_HOUR_ROW_UPDATES"
-            : "hour-task-marquee-playing",
+            : finishLineMarqueePlayingFreezeReason(),
           via: "sprint-layer-rebuild",
           phase: phase,
           key: String((block && block.key) || ""),
           trace: true
         });
         return;
-      }
-      if (isCloseLoopMarqueePlayingNow()) {
-        logCloseLoopFlashDiag("PARENT_SPRINT_LAYER_WHILE_CLOSE_LOOP", {
-          via: "sprint-layer-rebuild",
-          phase: phase,
-          key: String((block && block.key) || ""),
-          note: "hour-task 会 freeze；close-loop 不会 → 可能整段 rebuild 宿主"
-        });
       }
       logMarqueeDomDiag(
         "[render] currentSprint",
@@ -155356,23 +155530,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return;
       }
       /* 跑马灯播放中：推迟整表重建，避免父层 repaint 闪整条小时冲刺条 */
-      if (isHourTaskMarqueePlayingNow()) {
+      if (isFinishLineMarqueePlayingNow()) {
         hourRowDoneTimelineRenderDeferred = true;
+        if (isCloseLoopMarqueePlayingNow()) {
+          logCloseLoopFlashDiag("CLOSE_LOOP_PARENT_RENDER", {
+            via: "renderDoneTimeBlockTimeline",
+            blocked: true,
+            taskCount: Array.isArray(orderedTasks) ? orderedTasks.length : 0,
+            note: "与 hour-task 相同：播放中冻结整表 innerHTML 重建"
+          });
+        }
         logHourRowEvent("render", {
           blocked: true,
-          reason: "hour-task-marquee-playing",
+          reason: finishLineMarqueePlayingFreezeReason(),
           taskCount: Array.isArray(orderedTasks) ? orderedTasks.length : 0,
           trace: true
         });
         return;
-      }
-      /* 诊断：闭环播放中若仍走进整表 rebuild，即为与 hour-task 的关键差异 */
-      if (isCloseLoopMarqueePlayingNow()) {
-        logCloseLoopFlashDiag("PARENT_RENDER_WHILE_CLOSE_LOOP", {
-          via: "renderDoneTimeBlockTimeline",
-          taskCount: Array.isArray(orderedTasks) ? orderedTasks.length : 0,
-          note: "hour-task 会 freeze；close-loop 不会 → 高嫌疑闪点"
-        });
       }
       logHourRowEvent("render", {
         reason: "renderDoneTimeBlockTimeline",
