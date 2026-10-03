@@ -36080,6 +36080,17 @@
       flex-shrink: 0;
       white-space: nowrap;
     }
+    /* 多副本 continuous：内容之间固定物理空白（约 3cm / 120px），禁止首尾黏连 */
+    .marquee-cycle-spacer {
+      display: inline-block;
+      flex-shrink: 0;
+      width: var(--marquee-cycle-gap, 120px);
+      min-width: var(--marquee-cycle-gap, 120px);
+      height: 1px;
+      overflow: hidden;
+      pointer-events: none;
+      vertical-align: middle;
+    }
     /*
      * hour-task 稳定基线 v20261002j（见 .cursor/rules/hour-marquee-continuous-baseline.mdc）：
      * 生产路径必须走 .is-continuous（单次 translate3d）；下方无 .is-continuous 的规则仅供
@@ -96533,7 +96544,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261002r";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261002s";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -139800,7 +139811,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     /**
      * 装配 hour-task track 动画（回归保护：默认必须 continuous）。
-     * continuous：测单遍位移 unit → 复制 __seq → --marquee-shift=unit×N → 单次 unidirectional translate3d。
+     * continuous：测单遍位移 unit → 复制 __seq（副本间插入 --marquee-cycle-gap spacer）
+     * → --marquee-shift=unit×N+gap×(N-1) → 单次 unidirectional translate3d。
      * 禁止改回「animation-iteration-count≥2 导致 -100%→0% reset」。
      */
     function armHourTaskMarqueeTrackAnimation(track, passSec, passes, elapsedSec) {
@@ -139811,6 +139823,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
       track.classList.remove("is-continuous");
       track.style.removeProperty("--marquee-shift");
+      Array.prototype.slice
+        .call(track.querySelectorAll(":scope > .marquee-cycle-spacer"))
+        .forEach(function (el) {
+          el.remove();
+        });
 
       if (mode === "continuous" && passesN >= 2) {
         /* 复制前测量 = 旧 translateX(-100%) 的单遍位移 */
@@ -139835,21 +139852,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             if (idx === 0) el.removeAttribute("aria-hidden");
             else el.remove();
           });
+        const gapPx = marqueeCycleGapPx();
+        track.style.setProperty("--marquee-cycle-gap", String(gapPx) + "px");
         for (let i = 1; i < passesN; i++) {
+          track.appendChild(createMarqueeCycleSpacer(gapPx));
           const clone = seq.cloneNode(true);
           clone.setAttribute("aria-hidden", "true");
           track.appendChild(clone);
         }
 
-        const totalShift = unit * passesN;
-        const totalDur = Math.max(0.2, Number(passSec) * passesN);
-        track.style.setProperty("--marquee-duration", String(totalDur) + "s");
-        track.style.setProperty("--marquee-shift", String(totalShift) + "px");
+        const metrics = marqueeContinuousShiftAndDuration(unit, passSec, passesN, gapPx);
+        track.style.setProperty("--marquee-duration", String(metrics.totalDur) + "s");
+        track.style.setProperty("--marquee-shift", String(metrics.totalShift) + "px");
         track.style.setProperty("--marquee-passes", "1");
         track.classList.add("is-continuous");
         if (elapsedSec > 0.05) {
           track.style.animationDelay =
-            String(-Math.min(elapsedSec, totalDur - 0.05)) + "s";
+            String(-Math.min(elapsedSec, metrics.totalDur - 0.05)) + "s";
         } else {
           track.style.removeProperty("animation-delay");
         }
@@ -139857,8 +139876,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           passSec: passSec,
           passes: passesN,
           unit: Math.round(unit),
-          totalShift: Math.round(totalShift),
-          totalDur: totalDur
+          gapPx: gapPx,
+          totalShift: Math.round(metrics.totalShift),
+          totalDur: metrics.totalDur
         });
         return;
       }
@@ -139882,6 +139902,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      * 将 hour-task 已验证的 continuous 装配「对齐」到其它横向跑马灯。
      * 零退化约束：不改 armHourTaskMarqueeTrackAnimation；不改速度/文案/触发；仅去掉 iteration reset。
      * seq 类名用 .marquee-continuous-seq，避免碰 hour-task 的 __seq。
+     * 多副本时插入统一 --marquee-cycle-gap spacer，避免内容首尾黏连。
      */
     function armSharedMarqueeContinuousTrack(track, passSec, passes, elapsedSec, opts) {
       if (!track) return;
@@ -139889,6 +139910,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       let passesN = Math.max(1, Number(passes) || 1);
       track.classList.remove("is-continuous");
       track.style.removeProperty("--marquee-shift");
+      Array.prototype.slice
+        .call(track.querySelectorAll(":scope > .marquee-cycle-spacer"))
+        .forEach(function (el) {
+          el.remove();
+        });
 
       if (passesN <= 1) {
         track.style.setProperty("--marquee-duration", String(Math.max(0.2, Number(passSec) || 1)) + "s");
@@ -139925,21 +139951,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         });
       /* 安全上限：避免极端短 passSec 时复制过多；速度仍由 passSec 决定 */
       const passesCap = Math.min(passesN, 20);
+      const gapPx = marqueeCycleGapPx();
+      track.style.setProperty("--marquee-cycle-gap", String(gapPx) + "px");
       for (let i = 1; i < passesCap; i++) {
+        track.appendChild(createMarqueeCycleSpacer(gapPx));
         const clone = seq.cloneNode(true);
         clone.setAttribute("aria-hidden", "true");
         track.appendChild(clone);
       }
 
-      const totalShift = unit * passesCap;
-      const totalDur = Math.max(0.2, Number(passSec) * passesCap);
-      track.style.setProperty("--marquee-duration", String(totalDur) + "s");
-      track.style.setProperty("--marquee-shift", String(totalShift) + "px");
+      const metrics = marqueeContinuousShiftAndDuration(unit, passSec, passesCap, gapPx);
+      track.style.setProperty("--marquee-duration", String(metrics.totalDur) + "s");
+      track.style.setProperty("--marquee-shift", String(metrics.totalShift) + "px");
       track.style.setProperty("--marquee-passes", "1");
       track.classList.add("is-continuous");
       if (elapsedSec > 0.05) {
         track.style.animationDelay =
-          String(-Math.min(elapsedSec, totalDur - 0.05)) + "s";
+          String(-Math.min(elapsedSec, metrics.totalDur - 0.05)) + "s";
       } else {
         track.style.removeProperty("animation-delay");
       }
@@ -139950,8 +139978,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             passSec: passSec,
             passes: passesCap,
             unit: Math.round(unit),
-            totalShift: Math.round(totalShift),
-            totalDur: totalDur
+            gapPx: gapPx,
+            totalShift: Math.round(metrics.totalShift),
+            totalDur: metrics.totalDur
           });
         }
       } catch (errLog) {
@@ -139960,11 +139989,45 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * 固定遍数跑马灯：独立 continuous cycle 之间的静默间隔。
-     * 目标节奏：play #1 → pause ≈1800ms → play #2（不用 CSS iteration）。
-     * 墙钟无缝 ticker（close-loop / rough-start）不要走此路径。
+     * 固定遍数跑马灯：独立 continuous cycle 之间的静默间隔（时间轴，可与物理 spacer 并存）。
+     * 物理空白优先走 --marquee-cycle-gap；墙钟无缝 ticker 只加 spacer、不走独立 replay。
      */
     const MARQUEE_INTER_CYCLE_GAP_MS = 1800;
+    /** 多副本内容之间的物理空白（约 3cm）；可用 window.__MARQUEE_CYCLE_GAP_PX 覆盖 */
+    const MARQUEE_CYCLE_GAP_PX = 120;
+
+    function marqueeCycleGapPx() {
+      try {
+        const n = Number(window.__MARQUEE_CYCLE_GAP_PX);
+        if (Number.isFinite(n) && n >= 0) return n;
+      } catch (errGapPx) {
+        /* ignore */
+      }
+      return MARQUEE_CYCLE_GAP_PX;
+    }
+
+    function createMarqueeCycleSpacer(gapPxOpt) {
+      const gapPx = Math.max(0, Number(gapPxOpt != null ? gapPxOpt : marqueeCycleGapPx()) || 0);
+      const sp = document.createElement("span");
+      sp.className = "marquee-cycle-spacer";
+      sp.setAttribute("aria-hidden", "true");
+      if (gapPx > 0) {
+        sp.style.width = String(gapPx) + "px";
+        sp.style.minWidth = String(gapPx) + "px";
+      }
+      return sp;
+    }
+
+    /** 保持单遍速度：distance = unit×N + gap×(N-1)；duration = distance / (unit/passSec) */
+    function marqueeContinuousShiftAndDuration(unit, passSec, passes, gapPx) {
+      const p = Math.max(1, Math.floor(Number(passes) || 1));
+      const u = Math.max(1, Number(unit) || 1);
+      const sec = Math.max(0.2, Number(passSec) || 1);
+      const gap = Math.max(0, Number(gapPx) || 0);
+      const totalShift = u * p + gap * Math.max(0, p - 1);
+      const totalDur = Math.max(0.2, (totalShift / u) * sec);
+      return { totalShift: totalShift, totalDur: totalDur, gapPx: gap };
+    }
 
     function marqueeInterCycleGapMs() {
       try {
@@ -139976,7 +140039,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return MARQUEE_INTER_CYCLE_GAP_MS;
     }
 
-    /** 含轮间静默的总播放时长（不改变单遍速度） */
+    /** 含轮间静默的总播放时长（时间轴；物理 spacer 已计入 continuous duration） */
     function marqueeGappedTotalPlayMs(passSec, passes, gapMsOpt) {
       const p = Math.max(1, Math.floor(Number(passes) || 1));
       const sec = Math.max(0.2, Number(passSec) || 1);
@@ -139985,6 +140048,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         Number(gapMsOpt != null ? gapMsOpt : marqueeInterCycleGapMs()) || 0
       );
       return Math.round(sec * 1000 * p + gap * Math.max(0, p - 1));
+    }
+
+    /** 读取 track 上 continuous 装配后的真实时长（已含物理 gap） */
+    function readMarqueeTrackPlayMs(track, fallbackMs) {
+      if (!track) return Math.max(0, Number(fallbackMs) || 0);
+      const dur = parseFloat(track.style.getPropertyValue("--marquee-duration"));
+      if (dur > 0.05) return Math.round(dur * 1000);
+      return Math.max(0, Number(fallbackMs) || 0);
     }
 
     function clearMarqueeCycleTimers(stateObj) {
@@ -140006,9 +140077,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     /**
      * cycle1 已在跑（单遍 continuous）后，调度后续独立 cycle。
-     * - 不改 arm / keyframes / 速度
-     * - 不 remount 父级；仅 track 级 restart
-     * - reset 前 hidden，避免 end→start 瞬间被看见
+     * 注意：多副本物理 spacer 已在 arm* continuous 路径处理；本调度仅作时间轴 replay 备用。
      */
     function scheduleMarqueeGappedCycles(opts) {
       const stateObj = opts && opts.stateObj;
@@ -142672,13 +142741,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           hostEl
         );
       }
-      /* continuous：单次单向 translate；多遍改为独立 cycle + 轮间静默（见 scheduleMarqueeGappedCycles） */
-      armHourTaskMarqueeTrackAnimation(
-        track,
-        passSec,
-        passes >= 2 ? 1 : passes,
-        elapsedSec
-      );
+      /* continuous：N 副本 + 物理 spacer；速度不变，gap 计入 shift/duration */
+      armHourTaskMarqueeTrackAnimation(track, passSec, passes, elapsedSec);
       restartSprintMarqueeTrackRunning(track, {
         allowRestart: true,
         lane: "hourTask",
@@ -142794,10 +142858,20 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const passSec = Math.max(1, totalSec / passes);
       if (Math.abs(passSec - measuredPass) > 0.05) {
         const adjTrack = host.querySelector(".done-sprint-finish-hour-task-marquee__track");
-        if (adjTrack) adjTrack.style.setProperty("--marquee-duration", String(passSec) + "s");
+        if (adjTrack) {
+          armHourTaskMarqueeTrackAnimation(adjTrack, passSec, passes, 0);
+          restartSprintMarqueeTrackRunning(adjTrack, {
+            allowRestart: true,
+            lane: "hourTask",
+            reason: "cap-adjust"
+          });
+        }
       }
-      /* 两轮独立 continuous：play#1 → 1800ms 静默 → play#2；总时长含间隙，速度不变 */
-      const playMs = marqueeGappedTotalPlayMs(passSec, passes);
+      /* continuous N 副本 + 物理 spacer；总时长读 track（已含 gap 位移） */
+      const playMs = readMarqueeTrackPlayMs(
+        host.querySelector(".done-sprint-finish-hour-task-marquee__track"),
+        Math.round(passSec * passes * 1000)
+      );
       sprintFinishHourTaskMarqueeState.playToken += 1;
       const token = sprintFinishHourTaskMarqueeState.playToken;
       sprintFinishHourTaskMarqueeState.playStartedAt = Date.now();
@@ -142812,32 +142886,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           allowMutate: true,
           reason: "START"
         });
-      });
-      scheduleMarqueeGappedCycles({
-        stateObj: sprintFinishHourTaskMarqueeState,
-        passes: passes,
-        passSec: passSec,
-        lane: "hourTask",
-        playToken: token,
-        isCancelled: function (t) {
-          return (
-            t !== sprintFinishHourTaskMarqueeState.playToken ||
-            sprintFinishHourTaskMarqueeState.phase !== "playing"
-          );
-        },
-        getTracks: function () {
-          return Array.prototype.slice
-            .call(
-              document.querySelectorAll(
-                ".done-time-sprint-finish.is-hour-task-marquee-playing .done-sprint-finish-hour-task-marquee__track"
-              )
-            )
-            .filter(function (tr) {
-              return tr && tr.isConnected;
-            });
-        }
-      });
-      sprintFinishHourTaskMarqueeState.finishTimerId = window.setTimeout(function () {
+      });      sprintFinishHourTaskMarqueeState.finishTimerId = window.setTimeout(function () {
         const nextSlot =
           typeof getSprintFinishHourTaskMarqueeClockSlot === "function"
             ? getSprintFinishHourTaskMarqueeClockSlot(new Date())
@@ -143273,7 +143322,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1, hostEl);
       }
       /* 多遍：先装单遍 continuous；轮间静默由 start 调度 */
-      armSharedMarqueeContinuousTrack(track, passSec, passes >= 2 ? 1 : passes, elapsedSec, {
+      armSharedMarqueeContinuousTrack(track, passSec, passes, elapsedSec, {
         lane: "audit"
       });
       startSprintMarqueeTrackRunning(track);
@@ -143328,9 +143377,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const passSec = Math.max(1, totalSec / passes);
       if (Math.abs(passSec - measuredPass) > 0.05) {
         const adjTrack = host.querySelector(".done-sprint-finish-audit-marquee__track");
-        if (adjTrack) adjTrack.style.setProperty("--marquee-duration", String(passSec) + "s");
+        if (adjTrack) {
+          armSharedMarqueeContinuousTrack(adjTrack, passSec, passes, 0, { lane: "audit" });
+          restartSprintMarqueeTrackRunning(adjTrack, {
+            allowRestart: true,
+            lane: "audit",
+            reason: "cap-adjust"
+          });
+        }
       }
-      const playMs = marqueeGappedTotalPlayMs(passSec, passes);
+      const playMs = readMarqueeTrackPlayMs(
+        host.querySelector(".done-sprint-finish-audit-marquee__track"),
+        Math.round(passSec * passes * 1000)
+      );
       sprintFinishAuditMarqueeState.phase = "playing";
       sprintFinishAuditMarqueeState.index = slot.index;
       sprintFinishAuditMarqueeState.text = slot.text;
@@ -143345,32 +143404,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       clearSprintFinishAuditMarqueeFinishTimer();
       hosts.slice(1).forEach(function (el) {
         mountSprintFinishAuditMarqueeOverlay(el, slot.index, slot.text, totalSec, 0);
-      });
-      scheduleMarqueeGappedCycles({
-        stateObj: sprintFinishAuditMarqueeState,
-        passes: passes,
-        passSec: passSec,
-        lane: "audit",
-        playToken: token,
-        isCancelled: function (t) {
-          return (
-            t !== sprintFinishAuditMarqueeState.playToken ||
-            sprintFinishAuditMarqueeState.phase !== "playing"
-          );
-        },
-        getTracks: function () {
-          return Array.prototype.slice
-            .call(
-              document.querySelectorAll(
-                ".done-time-sprint-finish.is-audit-marquee-playing .done-sprint-finish-audit-marquee__track"
-              )
-            )
-            .filter(function (tr) {
-              return tr && tr.isConnected;
-            });
-        }
-      });
-      sprintFinishAuditMarqueeState.finishTimerId = window.setTimeout(function () {
+      });      sprintFinishAuditMarqueeState.finishTimerId = window.setTimeout(function () {
         finishSprintFinishAuditMarqueePlay(token);
       }, playMs + 40);
       return true;
@@ -143603,7 +143637,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!(givenTotal > 0)) {
         passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1, hostEl);
       }
-      armSharedMarqueeContinuousTrack(track, passSec, passes >= 2 ? 1 : passes, elapsedSec, {
+      armSharedMarqueeContinuousTrack(track, passSec, passes, elapsedSec, {
         lane: "gainHour"
       });
       startSprintMarqueeTrackRunning(track);
@@ -143663,9 +143697,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const passSec = Math.max(1, totalSec / passes);
       if (Math.abs(passSec - measuredPass) > 0.05) {
         const adjTrack = host.querySelector(".done-sprint-finish-gain-hour-marquee__track");
-        if (adjTrack) adjTrack.style.setProperty("--marquee-duration", String(passSec) + "s");
+        if (adjTrack) {
+          armSharedMarqueeContinuousTrack(adjTrack, passSec, passes, 0, { lane: "gainHour" });
+          restartSprintMarqueeTrackRunning(adjTrack, {
+            allowRestart: true,
+            lane: "gainHour",
+            reason: "cap-adjust"
+          });
+        }
       }
-      const playMs = marqueeGappedTotalPlayMs(passSec, passes);
+      const playMs = readMarqueeTrackPlayMs(
+        host.querySelector(".done-sprint-finish-gain-hour-marquee__track"),
+        Math.round(passSec * passes * 1000)
+      );
       sprintFinishGainHourMarqueeState.phase = "playing";
       sprintFinishGainHourMarqueeState.playToken += 1;
       const token = sprintFinishGainHourMarqueeState.playToken;
@@ -143678,32 +143722,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       clearSprintFinishGainHourMarqueeFinishTimer();
       hosts.slice(1).forEach(function (el) {
         mountSprintFinishGainHourMarqueeOverlay(el, totalSec, 0);
-      });
-      scheduleMarqueeGappedCycles({
-        stateObj: sprintFinishGainHourMarqueeState,
-        passes: passes,
-        passSec: passSec,
-        lane: "gainHour",
-        playToken: token,
-        isCancelled: function (t) {
-          return (
-            t !== sprintFinishGainHourMarqueeState.playToken ||
-            sprintFinishGainHourMarqueeState.phase !== "playing"
-          );
-        },
-        getTracks: function () {
-          return Array.prototype.slice
-            .call(
-              document.querySelectorAll(
-                ".done-time-sprint-finish.is-gain-hour-marquee-playing .done-sprint-finish-gain-hour-marquee__track"
-              )
-            )
-            .filter(function (tr) {
-              return tr && tr.isConnected;
-            });
-        }
-      });
-      sprintFinishGainHourMarqueeState.finishTimerId = window.setTimeout(function () {
+      });      sprintFinishGainHourMarqueeState.finishTimerId = window.setTimeout(function () {
         finishSprintFinishGainHourMarqueePlay(token);
       }, playMs + 40);
       return true;
@@ -145217,7 +145236,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1.45, hostEl);
         }
         /* 对齐 continuous：去掉 CSS iteration=2 边界 reset；多遍改独立 cycle + 轮间静默 */
-        armSharedMarqueeContinuousTrack(track, passSec, passes >= 2 ? 1 : passes, elapsedSec, {
+        armSharedMarqueeContinuousTrack(track, passSec, passes, elapsedSec, {
           lane: "vdRules"
         });
         startSprintMarqueeTrackRunning(track);
@@ -145260,7 +145279,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       const playMs = reduceMotion
         ? Math.min(12000, durationSec * 1000)
-        : marqueeGappedTotalPlayMs(measuredPass, passes);
+        : readMarqueeTrackPlayMs(
+            host.querySelector(".done-vd-index-rules-marquee__track"),
+            Math.round(measuredPass * passes * 1000)
+          );
       vdIndexRulesMarqueeState.phase = "playing";
       vdIndexRulesMarqueeState.currentId = item.id;
       vdIndexRulesMarqueeState.currentText = item.text;
@@ -145272,27 +145294,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       clearVdIndexRulesMarqueeFinishTimer();
       if (reduceMotion && Math.abs(playMs / 1000 - durationSec) > 0.05) {
         mountVdIndexRulesMarqueeOverlay(host, item, playMs / 1000, 0);
-      }
-      if (!reduceMotion) {
-        scheduleMarqueeGappedCycles({
-          stateObj: vdIndexRulesMarqueeState,
-          passes: passes,
-          passSec: measuredPass,
-          lane: "vdRules",
-          playToken: token,
-          isCancelled: function (t) {
-            return (
-              t !== vdIndexRulesMarqueeState.playToken ||
-              vdIndexRulesMarqueeState.phase !== "playing"
-            );
-          },
-          getTracks: function () {
-            const h = queryVdIndexRulesMarqueeHost();
-            const tr =
-              h && h.querySelector(".done-vd-index-rules-marquee__track");
-            return tr && tr.isConnected ? [tr] : [];
-          }
-        });
       }
       vdIndexRulesMarqueeState.finishTimerId = window.setTimeout(function () {
         finishVdIndexRulesMarqueePlay(token);
@@ -146871,7 +146872,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             );
       const elapsedSec = Math.max(0, Number(elapsedSecOpt) || 0);
       /* 对齐 continuous：去掉 CSS iteration=2 边界 reset；速度/遍数不变；多遍改独立 cycle */
-      armSharedMarqueeContinuousTrack(track, passSec, passes >= 2 ? 1 : passes, elapsedSec, {
+      armSharedMarqueeContinuousTrack(track, passSec, passes, elapsedSec, {
         lane: "reminder"
       });
       restartSprintMarqueeTrackRunning(track, {
@@ -146979,7 +146980,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       const playMs = reduceMotion
         ? Math.min(12000, durationSec * 1000)
-        : marqueeGappedTotalPlayMs(measuredPass, passes);
+        : readMarqueeTrackPlayMs(
+            tops[0].querySelector(".done-sprint-reminder-marquee__track"),
+            Math.round(measuredPass * passes * 1000)
+          );
       sprintReminderMarqueeState.playToken += 1;
       const token = sprintReminderMarqueeState.playToken;
       sprintReminderMarqueeState.playStartedAt = Date.now();
@@ -146992,32 +146996,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       for (let i = 1; i < tops.length; i++) {
         mountSprintReminderMarqueeOverlay(tops[i], item, durationSec, 0, true);
-      }
-      if (!reduceMotion) {
-        scheduleMarqueeGappedCycles({
-          stateObj: sprintReminderMarqueeState,
-          passes: passes,
-          passSec: measuredPass,
-          lane: "reminder",
-          playToken: token,
-          isCancelled: function (t) {
-            return (
-              t !== sprintReminderMarqueeState.playToken ||
-              sprintReminderMarqueeState.phase !== "playing"
-            );
-          },
-          getTracks: function () {
-            return Array.prototype.slice
-              .call(
-                document.querySelectorAll(
-                  "#doneList li.done-time-block--sprint-current .done-sprint-reminder-marquee__track"
-                )
-              )
-              .filter(function (tr) {
-                return tr && tr.isConnected;
-              });
-          }
-        });
       }
       sprintReminderMarqueeState.finishTimerId = window.setTimeout(function () {
         finishSprintReminderMarqueePlay(token);
@@ -147689,7 +147667,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             );
       const elapsedSec = Math.max(0, Number(elapsedSecOpt) || 0);
       /* 对齐 continuous：多遍时单次 translate；多遍改独立 cycle + 轮间静默；is-once（1 遍）仍走原路径 */
-      armSharedMarqueeContinuousTrack(track, passSec, passes >= 2 ? 1 : passes, elapsedSec, {
+      armSharedMarqueeContinuousTrack(track, passSec, passes, elapsedSec, {
         lane: "formula"
       });
       restartSprintMarqueeTrackRunning(track, {
@@ -147767,7 +147745,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       const playMs = reduceMotion
         ? Math.min(12000, durationSec * 1000)
-        : marqueeGappedTotalPlayMs(measuredPass, passes);
+        : readMarqueeTrackPlayMs(
+            tops[0].querySelector(".done-sprint-formula-marquee__track"),
+            Math.round(measuredPass * passes * 1000)
+          );
       sprintFormulaMarqueeState.playToken += 1;
       const token = sprintFormulaMarqueeState.playToken;
       sprintFormulaMarqueeState.playStartedAt = Date.now();
@@ -147779,32 +147760,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       for (let i = 1; i < tops.length; i++) {
         mountSprintFormulaMarqueeOverlay(tops[i], kind, durationSec, 0, true);
-      }
-      if (!reduceMotion && passes >= 2) {
-        scheduleMarqueeGappedCycles({
-          stateObj: sprintFormulaMarqueeState,
-          passes: passes,
-          passSec: measuredPass,
-          lane: "formula",
-          playToken: token,
-          isCancelled: function (t) {
-            return (
-              t !== sprintFormulaMarqueeState.playToken ||
-              sprintFormulaMarqueeState.phase !== "playing"
-            );
-          },
-          getTracks: function () {
-            return Array.prototype.slice
-              .call(
-                document.querySelectorAll(
-                  "#doneList li.done-time-block--sprint-current .done-sprint-formula-marquee__track"
-                )
-              )
-              .filter(function (tr) {
-                return tr && tr.isConnected;
-              });
-          }
-        });
       }
       sprintFormulaMarqueeState.finishTimerId = window.setTimeout(function () {
         finishSprintFormulaMarqueePlay(token);
@@ -149071,18 +149026,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const reduceMotion =
         typeof window.matchMedia === "function" &&
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      const durationSec = reduceMotion ? Math.min(4, passSec) : passSec * passes;
-      const playMs = reduceMotion
-        ? durationSec * 1000
-        : marqueeGappedTotalPlayMs(passSec, passes);
       doneSleepCountdownMottoMarqueeState.phase = "playing";
       doneSleepCountdownMottoMarqueeState.currentKind = kind;
       doneSleepCountdownMottoMarqueeState.playToken += 1;
       const token = doneSleepCountdownMottoMarqueeState.playToken;
-      doneSleepCountdownMottoMarqueeState.playEndsAt = Date.now() + playMs;
+      let playMs;
       if (!reduceMotion) {
-        /* 对齐 continuous：去掉多 iteration；多遍改独立 cycle + 轮间静默 */
-        armSharedMarqueeContinuousTrack(track, passSec, passes >= 2 ? 1 : passes, 0, {
+        /* continuous N 副本 + 物理 spacer */
+        armSharedMarqueeContinuousTrack(track, passSec, passes, 0, {
           lane: "sleepMotto"
         });
         if (!track.classList.contains("is-continuous")) {
@@ -149093,26 +149044,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         /* 勿 void offsetWidth：强制 reflow 会让整条横条闪 */
         startSprintMarqueeTrackRunning(track);
-        scheduleMarqueeGappedCycles({
-          stateObj: doneSleepCountdownMottoMarqueeState,
-          passes: passes,
-          passSec: passSec,
-          lane: "sleepMotto",
-          playToken: token,
-          isCancelled: function (t) {
-            return (
-              t !== doneSleepCountdownMottoMarqueeState.playToken ||
-              doneSleepCountdownMottoMarqueeState.phase !== "playing"
-            );
-          },
-          getTracks: function () {
-            const h = document.getElementById("doneSleepCountdownBar");
-            const tr =
-              h && h.querySelector(".done-sleep-countdown__motto-marquee__track");
-            return tr && tr.isConnected ? [tr] : [];
-          }
-        });
+        playMs = readMarqueeTrackPlayMs(track, Math.round(passSec * passes * 1000));
+      } else {
+        playMs = Math.min(4, passSec) * 1000;
       }
+      doneSleepCountdownMottoMarqueeState.playEndsAt = Date.now() + playMs;
       doneSleepCountdownMottoMarqueeState.finishTimerId = window.setTimeout(function () {
         finishDoneSleepCountdownMottoMarquee(token);
       }, playMs + 40);
@@ -154858,7 +154794,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           passSec = applySprintMarqueeSpeedMatchingRoughStart(track, passSec, 1.2, hostEl);
         }
         /* 对齐 continuous：去掉 --marquee-passes 多 iteration reset；多遍改独立 cycle */
-        armSharedMarqueeContinuousTrack(track, passSec, passes >= 2 ? 1 : passes, elapsedSec, {
+        armSharedMarqueeContinuousTrack(track, passSec, passes, elapsedSec, {
           lane: "slogan"
         });
         startSprintMarqueeTrackRunning(track);
@@ -154907,7 +154843,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       const playMs = reduceMotion
         ? Math.min(8000, durationSec * 1000)
-        : marqueeGappedTotalPlayMs(measuredPass, passes);
+        : readMarqueeTrackPlayMs(
+            host.querySelector(".done-input-slogan-marquee__track"),
+            Math.round(measuredPass * passes * 1000)
+          );
       doneInputSloganMarqueeState.phase = "playing";
       doneInputSloganMarqueeState.itemId = item.id;
       doneInputSloganMarqueeState.text = fullText;
@@ -154922,26 +154861,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       clearDoneInputSloganMarqueeFinishTimer();
       if (reduceMotion && Math.abs(playMs / 1000 - durationSec) > 0.05) {
         mountDoneInputSloganMarqueeOverlay(host, item, playMs / 1000, 0);
-      }
-      if (!reduceMotion && passes >= 2) {
-        scheduleMarqueeGappedCycles({
-          stateObj: doneInputSloganMarqueeState,
-          passes: passes,
-          passSec: measuredPass,
-          lane: "slogan",
-          playToken: token,
-          isCancelled: function (t) {
-            return (
-              t !== doneInputSloganMarqueeState.playToken ||
-              doneInputSloganMarqueeState.phase !== "playing"
-            );
-          },
-          getTracks: function () {
-            const h = queryDoneInputSloganMarqueeHost();
-            const tr = h && h.querySelector(".done-input-slogan-marquee__track");
-            return tr && tr.isConnected ? [tr] : [];
-          }
-        });
       }
       doneInputSloganMarqueeState.finishTimerId = window.setTimeout(function () {
         finishDoneInputSloganMarqueePlay(token);
@@ -169682,17 +169601,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const reduceMotion =
         typeof window.matchMedia === "function" &&
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      const playMs = reduceMotion ? Math.min(8000, durationSec * 1000) : durationSec * 1000;
       kineticWeeklySprintDayMarqueeState.phase = "playing";
       kineticWeeklySprintDayMarqueeState.mode = "day";
       kineticWeeklySprintDayMarqueeState.text = text;
       kineticWeeklySprintDayMarqueeState.playToken += 1;
       const token = kineticWeeklySprintDayMarqueeState.playToken;
+      clearKineticWeeklySprintDayMarqueeFinishTimer();
+      mountKineticWeeklySprintDayMarqueeOverlay(btn, text, durationSec, 0, { loop: false });
+      const playMs = reduceMotion
+        ? Math.min(8000, durationSec * 1000)
+        : readMarqueeTrackPlayMs(
+            btn.querySelector(".kinetic-weekly-sprint-day-marquee__track"),
+            Math.round(durationSec * 1000)
+          );
       kineticWeeklySprintDayMarqueeState.playStartedAt = Date.now();
       kineticWeeklySprintDayMarqueeState.playDurationMs = playMs;
-      kineticWeeklySprintDayMarqueeState.playEndsAt = kineticWeeklySprintDayMarqueeState.playStartedAt + playMs;
-      clearKineticWeeklySprintDayMarqueeFinishTimer();
-      mountKineticWeeklySprintDayMarqueeOverlay(btn, text, playMs / 1000, 0, { loop: false });
+      kineticWeeklySprintDayMarqueeState.playEndsAt =
+        kineticWeeklySprintDayMarqueeState.playStartedAt + playMs;
       kineticWeeklySprintDayMarqueeState.finishTimerId = window.setTimeout(function () {
         finishKineticWeeklySprintDayMarqueePlay(token);
       }, playMs + 40);
@@ -169995,7 +169920,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       if (!reduceMotion) {
         /* 对齐 continuous：去掉 CSS iteration=2 边界 reset；多遍改独立 cycle */
-        armSharedMarqueeContinuousTrack(track, passSec, passes >= 2 ? 1 : passes, elapsedSec, {
+        armSharedMarqueeContinuousTrack(track, passSec, passes, elapsedSec, {
           lane: "habitMeasure"
         });
         /* 勿 void offsetWidth：强制 reflow 会让整条横条闪 */
@@ -170050,39 +169975,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const reduceMotion =
         typeof window.matchMedia === "function" &&
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      const playMs = reduceMotion
-        ? Math.min(5000, durationSec * 1000)
-        : marqueeGappedTotalPlayMs(passSec, passes);
       habitMeasureTitleMarqueeState.phase = "playing";
       habitMeasureTitleMarqueeState.text = text;
       habitMeasureTitleMarqueeState.playToken += 1;
       const token = habitMeasureTitleMarqueeState.playToken;
+      clearHabitMeasureTitleMarqueeFinishTimer();
+      /* mount 用内容时长估 passSec；continuous arm 再把物理 gap 计入真实 duration */
+      mountHabitMeasureTitleMarqueeOverlay(btn, text, durationSec, 0);
+      const playMs = reduceMotion
+        ? Math.min(5000, durationSec * 1000)
+        : readMarqueeTrackPlayMs(
+            btn.querySelector(".habit-measure-title-marquee__track"),
+            Math.round(passSec * passes * 1000)
+          );
       habitMeasureTitleMarqueeState.playStartedAt = Date.now();
       habitMeasureTitleMarqueeState.playDurationMs = playMs;
       habitMeasureTitleMarqueeState.playEndsAt = habitMeasureTitleMarqueeState.playStartedAt + playMs;
-      clearHabitMeasureTitleMarqueeFinishTimer();
-      /* mount 的 totalDuration 只用动画内容时长（不含轮间静默），避免把 gap 算进速度 */
-      mountHabitMeasureTitleMarqueeOverlay(btn, text, durationSec, 0);
-      if (!reduceMotion && passes >= 2) {
-        scheduleMarqueeGappedCycles({
-          stateObj: habitMeasureTitleMarqueeState,
-          passes: passes,
-          passSec: passSec,
-          lane: "habitMeasure",
-          playToken: token,
-          isCancelled: function (t) {
-            return (
-              t !== habitMeasureTitleMarqueeState.playToken ||
-              habitMeasureTitleMarqueeState.phase !== "playing"
-            );
-          },
-          getTracks: function () {
-            const b = queryHabitMeasureTitleMarqueeBtn();
-            const tr = b && b.querySelector(".habit-measure-title-marquee__track");
-            return tr && tr.isConnected ? [tr] : [];
-          }
-        });
-      }
       habitMeasureTitleMarqueeState.finishTimerId = window.setTimeout(function () {
         finishHabitMeasureTitleMarqueePlay(token);
       }, playMs + 40);
