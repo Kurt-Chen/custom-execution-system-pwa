@@ -97192,7 +97192,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261003n";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261003o";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -107918,6 +107918,36 @@
         const d = domains[i];
         if (!pullIdSet[d.id]) {
           results[d.id] = { ok: true, skippedMeta: true, reason: "domains-meta-unchanged" };
+          /*
+           * Habit 正文被 domains-meta 跳过时，仍可能本机已有 habitCheckins、Done 镜像却缺
+           * （数值 batches 欠补 / 上次 repair 被清）。不 GET 正文，只做本地轻量补镜像。
+           */
+          if (d.id === "habit" && typeof repairHabitDoneMirrorsAfterAliyunHabitPull === "function") {
+            try {
+              const localRepaired = !!repairHabitDoneMirrorsAfterAliyunHabitPull();
+              results[d.id].doneRepaired = localRepaired;
+              if (localRepaired) {
+                try {
+                  if (typeof markUiPaintSlicesDirty === "function") {
+                    markUiPaintSlicesDirty(["habit", "done"]);
+                  }
+                  saveState({ lists: ["habit", "done"] });
+                  if (typeof paintHabitUiAfterCloudMerge === "function") {
+                    paintHabitUiAfterCloudMerge();
+                  }
+                } catch (_habitSkipDomPaint) {}
+                try {
+                  if (typeof aliyunHabitRealAppendLog === "function") {
+                    aliyunHabitRealAppendLog(
+                      "[habit-done-chain] domains-meta skip Habit body; local Done mirror repair ok"
+                    );
+                  }
+                } catch (_habitSkipDomLog) {}
+              }
+            } catch (_habitSkipDomRepair) {
+              results[d.id].doneRepaired = false;
+            }
+          }
           continue;
         }
         if (!d.run) {
@@ -107937,10 +107967,17 @@
           if (kbFromResult > 0 && typeof aliyunDomainsMetaNoteBodyKB === "function") {
             aliyunDomainsMetaNoteBodyKB(d.id, kbFromResult);
           }
+          /*
+           * 仅在正文拉取真正成功时推进 domains lastSeen。
+           * ok:false 仍标记会导致 Habit 版本卡住后永久 skip（domains habit 滞后于 habit-meta）。
+           * skippedBody：Habit 独立 meta 未变、未下正文——仍可标记（避免每 5s 空转），
+           * 因其内部已跑本地 Done mirror repair。
+           */
           if (
             typeof aliyunDomainsMetaMarkDomainPulled === "function" &&
             domainsGate &&
-            domainsGate.remoteVersions
+            domainsGate.remoteVersions &&
+            !(packed && packed.ok === false)
           ) {
             aliyunDomainsMetaMarkDomainPulled(d.id, domainsGate.remoteVersions[d.id]);
           }
@@ -129769,12 +129806,27 @@
           ? current.batches.slice()
           : [];
       prevBatches.push(add);
+      /* stamps[]：跨端 repair 按批次还原每一行 completedAt（缺省只有 revisedAt 会全挤到最后一次） */
+      const nowStamp = Date.now();
+      const prevStamps =
+        current && typeof current === "object" && Array.isArray(current.stamps)
+          ? current.stamps
+              .map(function (t) {
+                return Number(t);
+              })
+              .filter(function (t) {
+                return Number.isFinite(t) && t > 0 && !isSyntheticHabitNoonAt(t);
+              })
+          : [];
+      const nextStamps = prevStamps.concat([nowStamp]);
       state.habitCheckins[dateKey][habitKey] = stampHabitCheckinRevision({
         minutes: newTotal,
         times: stampTimes,
-        batches: prevBatches
+        batches: prevBatches,
+        stamps: nextStamps,
+        stampAt: nextStamps[0] || nowStamp
       });
-      syncHabitMinutesToDone(habitKey, dateKey, add, newTotal, stampTimes);
+      syncHabitMinutesToDone(habitKey, dateKey, add, newTotal, stampTimes, nowStamp);
       if (input) {
         clearHabitNumericInputError(input);
         input.value = "";
@@ -130257,8 +130309,21 @@
       if (isHabitExperimentKey(habitKey) && typeof cur.remark === "string" && cur.remark.trim()) {
         nextObj.remark = cur.remark.trim();
       }
+      if (Array.isArray(cur.stamps) && cur.stamps.length) {
+        nextObj.stamps = cur.stamps
+          .map(function (t) {
+            return Number(t);
+          })
+          .filter(function (t) {
+            return Number.isFinite(t) && t > 0 && !isSyntheticHabitNoonAt(t);
+          })
+          .slice(0, stampTimes);
+        if (nextObj.stamps.length) nextObj.stampAt = nextObj.stamps[0];
+      }
       const prevStamp = Number(cur.stampAt);
-      if (Number.isFinite(prevStamp) && prevStamp > 0) nextObj.stampAt = prevStamp;
+      if (!(Number(nextObj.stampAt) > 0) && Number.isFinite(prevStamp) && prevStamp > 0) {
+        nextObj.stampAt = prevStamp;
+      }
       day[habitKey] = stampHabitCheckinRevision(nextObj);
       saveStateAfterHabitCheckin();
     }
@@ -178257,6 +178322,65 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return changed;
     }
 
+    /**
+     * 数值习惯（分钟/词数/水量等）：按 batches 逐条补 Done 镜像。
+     * 旧逻辑「已有任一行就 return + 只 sync 第 1 批」会导致 times/batches>1 时
+     * repair 永远 expect≠rows → 每轮删光再补 1 行（Audible 跨设备漏项根因之一）。
+     */
+    function fillMissingNumericHabitDoneRowsFromBatches(habitKey, dateStr, v, valueKey, syncOne) {
+      if (!v || typeof v !== "object" || typeof syncOne !== "function") return false;
+      const batches = Array.isArray(v.batches)
+        ? v.batches
+            .map(function (n) {
+              return Number(n);
+            })
+            .filter(function (n) {
+              return Number.isFinite(n) && n > 0;
+            })
+        : [];
+      const fieldTotal = Number(v[valueKey]);
+      const stampList =
+        Array.isArray(v.stamps)
+          ? v.stamps
+              .map(function (t) {
+                return Number(t);
+              })
+              .filter(function (t) {
+                return Number.isFinite(t) && t > 0;
+              })
+          : [];
+      const fallbackAt =
+        typeof habitDoneAtMsFromCheckin === "function" ? habitDoneAtMsFromCheckin(v, dateStr) : 0;
+      let expect = batches.length;
+      if (!(expect > 0)) {
+        expect = Math.max(1, Number(v.times) || 0);
+        if (!(expect > 0) && Number.isFinite(fieldTotal) && fieldTotal > 0) expect = 1;
+      }
+      if (!(expect > 0)) return false;
+      const existingRows = getHabitDoneRowsForDay(habitKey, dateStr);
+      if (existingRows.length >= expect) return false;
+      let changed = false;
+      for (let n = existingRows.length + 1; n <= expect; n++) {
+        const batch =
+          batches.length >= n
+            ? batches[n - 1]
+            : Number.isFinite(fieldTotal) && fieldTotal > 0
+              ? fieldTotal
+              : 1;
+        const runningTotal = batches.length
+          ? batches.slice(0, n).reduce(function (a, b) {
+              return a + b;
+            }, 0)
+          : Number.isFinite(fieldTotal) && fieldTotal > 0
+            ? fieldTotal
+            : batch;
+        const atMs = stampList[n - 1] || stampList[stampList.length - 1] || fallbackAt;
+        syncOne(batch, runningTotal, n, atMs);
+        changed = true;
+      }
+      return changed;
+    }
+
     /** 习惯打卡仍在但 My Done 行被同步冲掉时，按 checkins 补回展示用 Done 行 */
     function rebuildMissingHabitDoneRowsForDate(dateStr) {
       const day = state.habitCheckins && state.habitCheckins[dateStr];
@@ -178275,82 +178399,124 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           return;
         }
         if (isHabitMinutesKey(habitKey) && v && typeof v === "object") {
-          if (getHabitDoneRowsForDay(habitKey, dateStr).length > 0) return;
-          const batches = Array.isArray(v.batches) ? v.batches : [];
-          const minutes = Number(v.minutes) || batches.reduce(function (a, b) { return a + b; }, 0);
-          const times = Number(v.times) || batches.length || 1;
-          const batch = batches.length ? batches[0] : minutes;
-          syncHabitMinutesToDone(habitKey, dateStr, batch, minutes, times, atMs);
-          changed = true;
+          if (
+            fillMissingNumericHabitDoneRowsFromBatches(
+              habitKey,
+              dateStr,
+              v,
+              "minutes",
+              function (batch, total, n, stampMs) {
+                syncHabitMinutesToDone(habitKey, dateStr, batch, total, n, stampMs);
+              }
+            )
+          ) {
+            changed = true;
+          }
           return;
         }
         if (isHabitWordCountKey(habitKey) && v && typeof v === "object") {
-          if (getHabitDoneRowsForDay(habitKey, dateStr).length > 0) return;
-          const batches = Array.isArray(v.batches) ? v.batches : [];
-          const words = Number(v.wordCount) || batches.reduce(function (a, b) { return a + b; }, 0);
-          const times = Number(v.times) || batches.length || 1;
-          const batch = batches.length ? batches[0] : words;
-          syncHabitWordCountToDone(habitKey, dateStr, batch, words, times, atMs);
-          changed = true;
+          if (
+            fillMissingNumericHabitDoneRowsFromBatches(
+              habitKey,
+              dateStr,
+              v,
+              "wordCount",
+              function (batch, total, n, stampMs) {
+                syncHabitWordCountToDone(habitKey, dateStr, batch, total, n, stampMs);
+              }
+            )
+          ) {
+            changed = true;
+          }
           return;
         }
         if (isHabitEggsKey(habitKey) && v && typeof v === "object") {
-          if (getHabitDoneRowsForDay(habitKey, dateStr).length > 0) return;
-          const batches = Array.isArray(v.batches) ? v.batches : [];
-          const eggs = Number(v.eggs) || batches.reduce(function (a, b) { return a + b; }, 0);
-          const times = Number(v.times) || batches.length || 1;
-          const batch = batches.length ? batches[0] : eggs;
-          syncHabitEggsToDone(habitKey, dateStr, batch, eggs, times, atMs);
-          changed = true;
+          if (
+            fillMissingNumericHabitDoneRowsFromBatches(
+              habitKey,
+              dateStr,
+              v,
+              "eggs",
+              function (batch, total, n, stampMs) {
+                syncHabitEggsToDone(habitKey, dateStr, batch, total, n, stampMs);
+              }
+            )
+          ) {
+            changed = true;
+          }
           return;
         }
         if (isHabitWaterKey(habitKey) && v && typeof v === "object") {
-          if (getHabitDoneRowsForDay(habitKey, dateStr).length > 0) return;
-          const batches = Array.isArray(v.batches) ? v.batches : [];
-          const ml = Number(v.ml) || batches.reduce(function (a, b) { return a + b; }, 0);
-          const times = Number(v.times) || batches.length || 1;
-          const batch = batches.length ? batches[0] : ml;
-          syncHabitWaterToDone(habitKey, dateStr, batch, ml, times, atMs);
-          changed = true;
+          if (
+            fillMissingNumericHabitDoneRowsFromBatches(
+              habitKey,
+              dateStr,
+              v,
+              "ml",
+              function (batch, total, n, stampMs) {
+                syncHabitWaterToDone(habitKey, dateStr, batch, total, n, stampMs);
+              }
+            )
+          ) {
+            changed = true;
+          }
           return;
         }
         if (isHabitQuestionsKey(habitKey) && v && typeof v === "object") {
-          if (getHabitDoneRowsForDay(habitKey, dateStr).length > 0) return;
-          const batches = Array.isArray(v.batches) ? v.batches : [];
-          const questions = Number(v.questions) || batches.reduce(function (a, b) { return a + b; }, 0);
-          const times = Number(v.times) || batches.length || 1;
-          const batch = batches.length ? batches[0] : questions;
-          syncHabitQuestionsToDone(habitKey, dateStr, batch, questions, times, atMs);
-          changed = true;
+          if (
+            fillMissingNumericHabitDoneRowsFromBatches(
+              habitKey,
+              dateStr,
+              v,
+              "questions",
+              function (batch, total, n, stampMs) {
+                syncHabitQuestionsToDone(habitKey, dateStr, batch, total, n, stampMs);
+              }
+            )
+          ) {
+            changed = true;
+          }
           return;
         }
         if (isHabitSavingsKey(habitKey) && v && typeof v === "object") {
-          if (getHabitDoneRowsForDay(habitKey, dateStr).length > 0) return;
-          const batches = Array.isArray(v.batches) ? v.batches : [];
-          const yuan = Number(v.yuan) || batches.reduce(function (a, b) { return a + b; }, 0);
-          const times = Number(v.times) || batches.length || 1;
-          const batch = batches.length ? batches[0] : yuan;
-          syncHabitSavingsToDone(habitKey, dateStr, batch, yuan, times, atMs);
-          changed = true;
+          if (
+            fillMissingNumericHabitDoneRowsFromBatches(
+              habitKey,
+              dateStr,
+              v,
+              "yuan",
+              function (batch, total, n, stampMs) {
+                syncHabitSavingsToDone(habitKey, dateStr, batch, total, n, stampMs);
+              }
+            )
+          ) {
+            changed = true;
+          }
           return;
         }
         if (isHabitExperimentKey(habitKey) && v && typeof v === "object") {
-          if (getHabitDoneRowsForDay(habitKey, dateStr).length > 0) return;
-          const batches = Array.isArray(v.batches) ? v.batches : [];
-          const exp = Number(v.experiments) || batches.reduce(function (a, b) { return a + b; }, 0);
-          const times = Number(v.times) || batches.length || 1;
-          const delta = batches.length ? batches[0] : 1;
-          syncHabitExperimentToDone(
-            habitKey,
-            dateStr,
-            exp,
-            times,
-            getHabitExperimentLifetimeTotal(habitKey),
-            getHabitRemarkFromCheckinValue(v),
-            delta,
-            atMs
-          );
-          changed = true;
+          if (
+            fillMissingNumericHabitDoneRowsFromBatches(
+              habitKey,
+              dateStr,
+              v,
+              "experiments",
+              function (batch, total, n, stampMs) {
+                syncHabitExperimentToDone(
+                  habitKey,
+                  dateStr,
+                  total,
+                  n,
+                  getHabitExperimentLifetimeTotal(habitKey),
+                  getHabitRemarkFromCheckinValue(v),
+                  batch,
+                  stampMs
+                );
+              }
+            )
+          ) {
+            changed = true;
+          }
           return;
         }
         if (isHabitOptionalRemarkKey(habitKey)) {
