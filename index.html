@@ -96544,7 +96544,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261003b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261003c";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -140384,18 +140384,31 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
+    function isAuditMarqueePlayingNow() {
+      try {
+        return (
+          typeof sprintFinishAuditMarqueeState !== "undefined" &&
+          sprintFinishAuditMarqueeState.phase === "playing"
+        );
+      } catch (err) {
+        return false;
+      }
+    }
+
     /** 终点线自动跑马灯播放中：禁止拆掉 host/overlay/track 的父级更新 */
     function isFinishLineMarqueePlayingNow() {
       return (
         isHourTaskMarqueePlayingNow() ||
         isCloseLoopMarqueePlayingNow() ||
-        isRoughStartMarqueePlayingNow()
+        isRoughStartMarqueePlayingNow() ||
+        isAuditMarqueePlayingNow()
       );
     }
 
     function finishLineMarqueePlayingFreezeReason() {
       if (isCloseLoopMarqueePlayingNow()) return "close-loop-marquee-playing";
       if (isRoughStartMarqueePlayingNow()) return "rough-start-marquee-playing";
+      if (isAuditMarqueePlayingNow()) return "audit-marquee-playing";
       if (isHourTaskMarqueePlayingNow()) return "hour-task-marquee-playing";
       return "finish-line-marquee-playing";
     }
@@ -143737,26 +143750,38 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const hosts = querySprintFinishMarqueeHosts();
       if (!hosts.length || !slot) return;
       stripSprintFinishMarqueesNotIn(hosts);
-      const passes = Math.max(1, Number(SPRINT_FINISH_AUDIT_MARQUEE_PASSES) || 2);
-      const passSec = Math.max(
-        1,
-        Number(sprintFinishAuditMarqueeState.passDurationSec) ||
-          sprintFinishAuditMarqueeDurationSec(slot.text)
-      );
-      const totalMs =
-        sprintFinishAuditMarqueeState.playDurationMs > 0
-          ? sprintFinishAuditMarqueeState.playDurationMs
-          : passSec * passes * 1000;
-      const totalSec = Math.max(1, totalMs / 1000);
-      const started = sprintFinishAuditMarqueeState.playStartedAt || Date.now();
-      const elapsedSec = Math.max(0, (Date.now() - started) / 1000);
-      sprintFinishAuditMarqueeState.index = slot.index;
-      sprintFinishAuditMarqueeState.text = slot.text;
+      const stale = [];
       hosts.forEach(function (el) {
         if (!sprintFinishAuditMarqueeOverlayHealthy(el, slot.index, slot.text)) {
-          mountSprintFinishAuditMarqueeOverlay(el, slot.index, slot.text, totalSec, elapsedSec);
+          stale.push(el);
         }
       });
+      if (!stale.length) return;
+      /*
+       * 播放中禁止 ensure remount：父级 rebuild 拆掉 overlay 后再用大 elapsedSec 重挂，
+       * animationDelay 会跳到终点 → 肉眼「卡死在左侧」+ 冲刺条闪一下。
+       * 父级已对 audit 做 playing freeze；此处兜底不再 clear+重建。
+       */
+      try {
+        console.log(
+          "[audit-flash] ENSURE blocked remount @" +
+            (typeof performance !== "undefined" && performance.now
+              ? Math.round(performance.now())
+              : Date.now()) +
+            "ms stale=" +
+            stale.length +
+            " elapsed≈" +
+            Math.round(
+              Math.max(
+                0,
+                (Date.now() - (sprintFinishAuditMarqueeState.playStartedAt || Date.now())) / 1000
+              )
+            ) +
+            "s"
+        );
+      } catch (errLog) {
+        /* ignore */
+      }
     }
 
     function syncSprintFinishAuditMarquee() {
