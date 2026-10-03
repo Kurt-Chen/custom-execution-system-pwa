@@ -66416,6 +66416,34 @@
       opacity: 0.95;
     }
 
+    /* #022 起：12周目标双槽（目标1 / 目标2） */
+    #anniversaryModule .anniversary-tw-vision-goal-body--dual {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    #anniversaryModule .anniversary-tw-vision-goal-slot-label {
+      display: block;
+      margin: 0;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: #9d174d;
+      opacity: 0.85;
+    }
+
+    #anniversaryModule .anniversary-tw-vision-goal-body--dual .anniversary-tw-vision-goal-input {
+      min-height: 2.4rem;
+    }
+
+    #anniversaryModule .tw021-anchor-input:disabled {
+      opacity: 0.92;
+      cursor: default;
+      color: #334155;
+      background: #f8fafc;
+    }
+
     #anniversaryModule .anniversary-tw-vision-anchor-row {
       margin-bottom: 4px;
     }
@@ -80284,13 +80312,25 @@
                               </button>
                             </div>
                           </div>
-                          <div class="anniversary-tw-vision-goal-body">
+                          <div class="anniversary-tw-vision-goal-body anniversary-tw-vision-goal-body--dual">
+                            <label class="anniversary-tw-vision-goal-slot-label" for="anniversary022VisionGoalMain1">目标 1</label>
                             <textarea
-                              id="anniversary022VisionGoalMain"
+                              id="anniversary022VisionGoalMain1"
                               class="anniversary-tw-vision-goal-main anniversary-tw-vision-goal-input"
                               rows="2"
-                              placeholder="例如：本周期可验证成果（战术见「OKR与战术」）"
-                              aria-label="12周目标"
+                              placeholder="例如：本周期可验证成果 A"
+                              aria-label="12周目标 1"
+                              data-goal-slot="0"
+                              readonly
+                            ></textarea>
+                            <label class="anniversary-tw-vision-goal-slot-label" for="anniversary022VisionGoalMain2">目标 2</label>
+                            <textarea
+                              id="anniversary022VisionGoalMain2"
+                              class="anniversary-tw-vision-goal-main anniversary-tw-vision-goal-input"
+                              rows="2"
+                              placeholder="例如：本周期可验证成果 B"
+                              aria-label="12周目标 2"
+                              data-goal-slot="1"
                               readonly
                             ></textarea>
                           </div>
@@ -80303,12 +80343,16 @@
                               type="date"
                               id="anniversary022AnchorInput"
                               class="done-filter tw021-anchor-input"
-                              title="请选择周日作为第1周起点"
+                              title="十二周年#22 固定起算日：2026-10-04（周日）"
+                              value="2026-10-04"
+                              disabled
                             />
-                            <button type="button" id="anniversary022AnchorClear" class="tw020-btn-mini">清除</button>
+                            <button type="button" id="anniversary022AnchorClear" class="tw020-btn-mini" hidden disabled>
+                              清除
+                            </button>
                           </div>
                           <p class="submodule-note tw021-anchor-hint anniversary-tw-vision-anchor-hint">
-                            起算日须为<strong>周日</strong>；未选或清除时，下方日期为「待定」，仍可填写任务与子任务。
+                            起算日已固定为 <strong>2026-10-04（周日）</strong>，本周期按此日起算 12 周执行 + 第 13 周总结。
                           </p>
                           <dl class="anniversary-tw-vision-cycle-dl">
                             <div class="anniversary-tw-vision-cycle-row">
@@ -101588,12 +101632,13 @@
         deepTime: { days: {} }
       },
       anniversaryTw022: {
-        anchor: null,
+        anchor: "2026-10-04",
         weeks: {},
         futureStory: "",
         okrWhys: "",
         longTermVision: "",
         twelveWeekGoal: "",
+        twelveWeekGoals: ["", ""],
         keyResults: [],
         progressBands: { okMinPct: 85, cautionMinPct: 40 },
         deepTime: { days: {} }
@@ -104828,6 +104873,9 @@
           !cloudSyncPaintValuesEqual(p.weeks, n.weeks) ||
           !cloudSyncPaintValuesEqual(p.anchor, n.anchor) ||
           !cloudSyncPaintValuesEqual(p.futureStory, n.futureStory) ||
+          !cloudSyncPaintValuesEqual(p.longTermVision, n.longTermVision) ||
+          !cloudSyncPaintValuesEqual(p.twelveWeekGoal, n.twelveWeekGoal) ||
+          !cloudSyncPaintValuesEqual(p.twelveWeekGoals, n.twelveWeekGoals) ||
           !cloudSyncPaintValuesEqual(p.progressBands, n.progressBands) ||
           !cloudSyncPaintValuesEqual(p.weekGoals, n.weekGoals)
         );
@@ -111818,6 +111866,9 @@
             okrWhys: String(mod.okrWhys || ""),
             longTermVision: String(mod.longTermVision || ""),
             twelveWeekGoal: String(mod.twelveWeekGoal || ""),
+            twelveWeekGoals: Array.isArray(mod.twelveWeekGoals)
+              ? [String(mod.twelveWeekGoals[0] || ""), String(mod.twelveWeekGoals[1] || "")]
+              : ["", ""],
             keyResults: Array.isArray(mod.keyResults) ? mod.keyResults : [],
             progressBands: mod.progressBands || {},
             deepTime: mod.deepTime || { days: {} },
@@ -121680,6 +121731,10 @@
       } else {
         anchor = la;
       }
+      /* #22 起算日代码固定，云合并不得改写 */
+      if (mk === "tw022" && typeof ANNIVERSARY_TW022_FIXED_ANCHOR === "string") {
+        anchor = ANNIVERSARY_TW022_FIXED_ANCHOR;
+      }
       return {
         anchor: anchor,
         weeks: mergeTw020WeeksMapsForSync(lo.weeks || {}, ro.weeks || {}, preferRemote, tombstones, mk),
@@ -121688,6 +121743,7 @@
         okrWhys: mergeTwDisjointString(lo.okrWhys, ro.okrWhys, preferRemote),
         longTermVision: mergeTwDisjointString(lo.longTermVision, ro.longTermVision, preferRemote),
         twelveWeekGoal: mergeTwDisjointString(lo.twelveWeekGoal, ro.twelveWeekGoal, preferRemote),
+        twelveWeekGoals: mergeAnniversaryTwelveWeekGoalsForSync(lo.twelveWeekGoals, ro.twelveWeekGoals, preferRemote, lo.twelveWeekGoal, ro.twelveWeekGoal),
         keyResults: mergeAnniversaryTwKeyResultsForSync(lo.keyResults, ro.keyResults, preferRemote),
         ui: mergeAnniversaryTwUiOverlay(lo.ui, ro.ui),
         progressBands: mergeAnniversaryProgressBands(lo.progressBands, ro.progressBands, preferRemote),
@@ -121700,6 +121756,37 @@
           )
         }
       };
+    }
+
+    /** 双槽 12周目标：按槽位并集合并，并兼容旧版单字符串 twelveWeekGoal */
+    function mergeAnniversaryTwelveWeekGoalsForSync(localArr, remoteArr, preferRemote, localLegacy, remoteLegacy) {
+      const normalizePair = function (arr, legacy) {
+        const out = ["", ""];
+        if (Array.isArray(arr)) {
+          out[0] = typeof arr[0] === "string" ? String(arr[0]).trim() : "";
+          out[1] = typeof arr[1] === "string" ? String(arr[1]).trim() : "";
+        }
+        if (!out[0] && !out[1] && typeof legacy === "string" && legacy.trim()) {
+          const parts = String(legacy)
+            .split(/\n+|；|;/)
+            .map(function (s) {
+              return String(s || "").trim();
+            })
+            .filter(Boolean);
+          out[0] = parts[0] || "";
+          out[1] = parts[1] || "";
+          if (parts.length > 2) {
+            out[1] = parts.slice(1).join("；");
+          }
+        }
+        return out;
+      };
+      const lo = normalizePair(localArr, localLegacy);
+      const ro = normalizePair(remoteArr, remoteLegacy);
+      return [
+        mergeTwDisjointString(lo[0], ro[0], preferRemote),
+        mergeTwDisjointString(lo[1], ro[1], preferRemote)
+      ];
     }
 
     function mergeAnniversaryDeepTimeDaysForSync(localDays, remoteDays, preferRemote) {
@@ -125089,14 +125176,14 @@
             state.anniversaryTw021.keyResults = [];
           }
           if (!state.anniversaryTw022 || typeof state.anniversaryTw022 !== "object") {
-            state.anniversaryTw022 = { anchor: null, weeks: {}, futureStory: "" };
+            state.anniversaryTw022 = {
+              anchor: "2026-10-04",
+              weeks: {},
+              futureStory: "",
+              twelveWeekGoals: ["", ""]
+            };
           }
-          if (!("anchor" in state.anniversaryTw022)) {
-            state.anniversaryTw022.anchor = null;
-          }
-          if (state.anniversaryTw022.anchor != null && typeof state.anniversaryTw022.anchor !== "string") {
-            state.anniversaryTw022.anchor = null;
-          }
+          state.anniversaryTw022.anchor = "2026-10-04";
           if (!state.anniversaryTw022.weeks || typeof state.anniversaryTw022.weeks !== "object") {
             state.anniversaryTw022.weeks = {};
           }
@@ -125111,6 +125198,9 @@
           }
           if (typeof state.anniversaryTw022.twelveWeekGoal !== "string") {
             state.anniversaryTw022.twelveWeekGoal = "";
+          }
+          if (!Array.isArray(state.anniversaryTw022.twelveWeekGoals)) {
+            state.anniversaryTw022.twelveWeekGoals = ["", ""];
           }
           if (!Array.isArray(state.anniversaryTw022.keyResults)) {
             state.anniversaryTw022.keyResults = [];
@@ -159534,17 +159624,64 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return -1;
     }
 
+    /** 上一周期第12周截止日是否已到（含当日）：用于交接新十二周年倒计时 */
+    function anniversaryTwPreviousWeek12DeadlineReached(visible, index, refDate) {
+      const ref = refDate instanceof Date ? refDate : new Date();
+      const refDay = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate()).getTime();
+      for (let j = index - 1; j >= 0; j--) {
+        const om = visible[j];
+        if (!om || !moduleHasAnniversaryTwAnchor(om.key)) continue;
+        const owk = getAnniversaryTwWeekIndexForModuleOnDate(om.key, ref);
+        if (owk >= 1 && owk <= 11) return false;
+        if (owk === 12) {
+          const ms =
+            typeof getAnniversaryTwWeek12DeadlineMsForModule === "function"
+              ? getAnniversaryTwWeek12DeadlineMsForModule(om.key)
+              : null;
+          if (ms == null) return true;
+          const end = new Date(ms);
+          const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate()).getTime();
+          return refDay >= endDay;
+        }
+        return true;
+      }
+      return true;
+    }
+
     /** 封闭清单所选日 → 应对应跳转的十二周年 Tab 与周次 */
     function resolveAnniversaryTwJumpTargetForDate(dateKey) {
       ensureAnniversaryTwRegistry();
       const visible = getAnniversaryTwVisibleCycleMetas();
       if (!visible.length) return null;
       const ref = parseDateInputToLocalNoon(dateKey) || new Date();
+      /* 优先：执行中的第1–11周（最新周期优先） */
       for (let i = visible.length - 1; i >= 0; i--) {
         const meta = visible[i];
         if (!moduleHasAnniversaryTwAnchor(meta.key)) continue;
         const wk = getAnniversaryTwWeekIndexForModuleOnDate(meta.key, ref);
-        if (wk >= 1 && wk <= 13) {
+        if (wk >= 1 && wk <= 11) {
+          return { moduleKey: meta.key, weekNum: wk };
+        }
+      }
+      /*
+       * 交接：上一周期第12周已截止（含当日「今天截止」）时，即使新周期尚未到起算日，
+       * 也开始使用新周期倒计时（#21→#22：10月3日截止后切到 10月4日起算的 #22）。
+       */
+      for (let i = visible.length - 1; i >= 0; i--) {
+        const meta = visible[i];
+        if (!moduleHasAnniversaryTwAnchor(meta.key)) continue;
+        const wk = getAnniversaryTwWeekIndexForModuleOnDate(meta.key, ref);
+        if (wk !== 0) continue;
+        if (anniversaryTwPreviousWeek12DeadlineReached(visible, i, ref)) {
+          return { moduleKey: meta.key, weekNum: 1 };
+        }
+      }
+      /* 仍处第12/13周的旧周期（新周期尚未就绪时） */
+      for (let i = visible.length - 1; i >= 0; i--) {
+        const meta = visible[i];
+        if (!moduleHasAnniversaryTwAnchor(meta.key)) continue;
+        const wk = getAnniversaryTwWeekIndexForModuleOnDate(meta.key, ref);
+        if (wk >= 12 && wk <= 13) {
           return { moduleKey: meta.key, weekNum: wk };
         }
       }
@@ -162372,6 +162509,49 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     const ANNIVERSARY_TW020_ANCHOR = new Date(2026, 3, 12);
+    /** 十二周年#22 固定起算日（周日）；与 UI 禁用日期选择一致 */
+    const ANNIVERSARY_TW022_FIXED_ANCHOR = "2026-10-04";
+    const ANNIVERSARY_TW022_ANCHOR = new Date(2026, 9, 4);
+
+    /** #022 起支持双槽 12周目标 */
+    function anniversaryTwSupportsDualTwelveWeekGoals(moduleKey) {
+      const num = anniversaryTwNumberFromModuleKey(moduleKey);
+      return Number.isFinite(num) && num >= 22;
+    }
+
+    /** 规范化双槽目标，并回写兼容字段 twelveWeekGoal（分号拼接） */
+    function normalizeAnniversaryTwelveWeekGoalsOnModule(mod, moduleKey) {
+      if (!mod || typeof mod !== "object") return ["", ""];
+      const dual = !moduleKey || anniversaryTwSupportsDualTwelveWeekGoals(moduleKey);
+      let g0 = "";
+      let g1 = "";
+      if (Array.isArray(mod.twelveWeekGoals)) {
+        g0 = typeof mod.twelveWeekGoals[0] === "string" ? String(mod.twelveWeekGoals[0]).trim() : "";
+        g1 = typeof mod.twelveWeekGoals[1] === "string" ? String(mod.twelveWeekGoals[1]).trim() : "";
+      }
+      if (!g0 && !g1 && typeof mod.twelveWeekGoal === "string" && mod.twelveWeekGoal.trim()) {
+        const parts = String(mod.twelveWeekGoal)
+          .split(/\n+|；|;/)
+          .map(function (s) {
+            return String(s || "").trim();
+          })
+          .filter(Boolean);
+        g0 = parts[0] || "";
+        g1 = parts.length > 2 ? parts.slice(1).join("；") : parts[1] || "";
+      }
+      if (dual) {
+        mod.twelveWeekGoals = [g0, g1];
+        mod.twelveWeekGoal = [g0, g1].filter(Boolean).join("；");
+      } else if (typeof mod.twelveWeekGoal !== "string") {
+        mod.twelveWeekGoal = g0 || g1 || "";
+      }
+      return dual ? [g0, g1] : [String(mod.twelveWeekGoal || "").trim(), ""];
+    }
+
+    function getAnniversaryTwelveWeekGoalsDisplay(mod, moduleKey) {
+      const pair = normalizeAnniversaryTwelveWeekGoalsOnModule(mod, moduleKey);
+      return pair.filter(Boolean).join("；");
+    }
 
     function formatChineseWeekdayLabel(d) {
       if (!d || isNaN(d.getTime())) {
@@ -162470,8 +162650,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return ANNIVERSARY_TW020_FULL_NAME;
       }
       const mod = getAnniversaryTwStateModule(key);
-      const goal =
-        mod && typeof mod.twelveWeekGoal === "string" ? String(mod.twelveWeekGoal).trim() : "";
+      const goal = getAnniversaryTwelveWeekGoalsDisplay(mod, key);
       return goal ? "十二周年#" + num + "：" + goal : "十二周年#" + num;
     }
 
@@ -162648,6 +162827,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           okrWhys: "",
           longTermVision: "",
           twelveWeekGoal: "",
+          twelveWeekGoals: ["", ""],
           keyResults: [],
           progressBands: { okMinPct: 85, cautionMinPct: 40 },
           deepTime: { days: {} }
@@ -162904,9 +163084,28 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (sloganEl) {
         sloganEl.id = "anniversaryTw" + suffix + "HeadSlogan";
       }
+      /* 模板来自 #22（固定起算日）；动态周期需恢复可编辑起算日 */
+      const cloneAnchorInp = clone.querySelector("#anniversary" + suffix + "AnchorInput");
+      const cloneAnchorClr = clone.querySelector("#anniversary" + suffix + "AnchorClear");
+      const cloneAnchorHint = clone.querySelector(".anniversary-tw-vision-anchor-hint");
+      if (cloneAnchorInp) {
+        cloneAnchorInp.disabled = false;
+        cloneAnchorInp.removeAttribute("value");
+        cloneAnchorInp.value = "";
+        cloneAnchorInp.title = "请选择周日作为第1周起点";
+      }
+      if (cloneAnchorClr) {
+        cloneAnchorClr.hidden = false;
+        cloneAnchorClr.disabled = false;
+      }
+      if (cloneAnchorHint) {
+        cloneAnchorHint.innerHTML =
+          "起算日须为<strong>周日</strong>；未选或清除时，下方日期为「待定」，仍可填写任务与子任务。";
+      }
       grid.appendChild(clone);
       clone.querySelectorAll("textarea.anniversary-tw-vision-goal-input").forEach(function (ta) {
         delete ta.dataset.twelveWeekGoalBound;
+        delete ta.dataset.twelveWeekGoalModuleBound;
         ta.readOnly = true;
       });
       clone.querySelectorAll("textarea.anniversary-tw-vision-long-input").forEach(function (ta) {
@@ -165703,9 +165902,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       oRow.className = "anniversary-tw-okr-o-row";
       const oText = document.createElement("p");
       oText.className = "anniversary-tw-okr-o-text";
-      const goal = String(mod.twelveWeekGoal || "").trim();
-      if (goal) {
-        oText.textContent = "O：" + goal;
+      const goalPair = normalizeAnniversaryTwelveWeekGoalsOnModule(mod, moduleKey);
+      const goalLines = goalPair.filter(Boolean);
+      if (goalLines.length) {
+        if (anniversaryTwSupportsDualTwelveWeekGoals(moduleKey) && goalLines.length > 1) {
+          oText.textContent = goalLines
+            .map(function (g, idx) {
+              return "O" + String(idx + 1) + "：" + g;
+            })
+            .join("\n");
+          oText.style.whiteSpace = "pre-line";
+        } else {
+          oText.textContent = "O：" + goalLines.join("；");
+        }
       } else {
         oText.classList.add("anniversary-tw-okr-o-text--empty");
         oText.textContent = "O：请先在「愿景与周期」填写 12周目标";
@@ -166920,68 +167129,102 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     const anniversaryFutureStoryTimers = { t020: null, t021: null, t022: null };
     const anniversaryTwelveWeekGoalTimers = Object.create(null);
 
-    /** #021 起：12周目标可编辑框与 state 同步（#020 仍为静态文案） */
-    function syncAnniversaryTwelveWeekGoalFromState(inp, twelveWeekGoal) {
+    function parseAnniversaryTwelveWeekGoalInputId(inp) {
+      if (!inp || !inp.id) return null;
+      const m = /^anniversary(\d{3})VisionGoalMain(\d?)$/.exec(inp.id);
+      if (!m) return null;
+      const num = parseInt(m[1], 10);
+      if (num < 21) return null;
+      const moduleKey = "tw" + String(num).padStart(3, "0");
+      const slotRaw = m[2] ? parseInt(m[2], 10) : 0;
+      const slot = Number.isFinite(slotRaw) && slotRaw >= 1 ? slotRaw - 1 : 0;
+      return { moduleKey: moduleKey, suffix: m[1], slot: slot, pre: "anniversary" + m[1] };
+    }
+
+    function getAnniversaryTwelveWeekGoalInputsForModule(moduleKey) {
+      const suffix = anniversaryTwSuffixFromModuleKey(moduleKey);
+      if (!suffix) return [];
+      const dual = anniversaryTwSupportsDualTwelveWeekGoals(moduleKey);
+      if (dual) {
+        return [
+          document.getElementById("anniversary" + suffix + "VisionGoalMain1"),
+          document.getElementById("anniversary" + suffix + "VisionGoalMain2")
+        ].filter(Boolean);
+      }
+      const single = document.getElementById("anniversary" + suffix + "VisionGoalMain");
+      return single ? [single] : [];
+    }
+
+    /** #021 起：12周目标可编辑框与 state 同步（#020 仍为静态文案；#022 起双槽） */
+    function syncAnniversaryTwelveWeekGoalFromState(inp, twelveWeekGoalOrSlotValue) {
       if (!inp) {
         return;
       }
       if (!inp.readOnly && document.activeElement === inp) {
         return;
       }
-      const v = typeof twelveWeekGoal === "string" ? twelveWeekGoal : "";
+      const v = typeof twelveWeekGoalOrSlotValue === "string" ? twelveWeekGoalOrSlotValue : "";
       if (inp.value !== v) {
         inp.value = v;
       }
     }
 
+    function syncAnniversaryTwelveWeekGoalsUiFromModule(moduleKey) {
+      const mod = getAnniversaryTwStateModule(moduleKey);
+      if (!mod) return;
+      const pair = normalizeAnniversaryTwelveWeekGoalsOnModule(mod, moduleKey);
+      const inputs = getAnniversaryTwelveWeekGoalInputsForModule(moduleKey);
+      if (!inputs.length) return;
+      if (anniversaryTwSupportsDualTwelveWeekGoals(moduleKey)) {
+        syncAnniversaryTwelveWeekGoalFromState(inputs[0], pair[0] || "");
+        if (inputs[1]) syncAnniversaryTwelveWeekGoalFromState(inputs[1], pair[1] || "");
+      } else {
+        syncAnniversaryTwelveWeekGoalFromState(inputs[0], String(mod.twelveWeekGoal || ""));
+      }
+      refreshAnniversaryTwelveWeekGoalActionButtonsForModule(moduleKey);
+    }
+
     function getAnniversaryTwelveWeekGoalModuleKeyFromInput(inp) {
-      if (!inp || !inp.id) {
-        return null;
-      }
-      const m = /^anniversary(\d{3})VisionGoalMain$/.exec(inp.id);
-      if (!m) {
-        return null;
-      }
-      const num = parseInt(m[1], 10);
-      if (num < 21) {
-        return null;
-      }
-      return "tw" + String(num).padStart(3, "0");
+      const parsed = parseAnniversaryTwelveWeekGoalInputId(inp);
+      return parsed ? parsed.moduleKey : null;
     }
 
     function refreshAnniversaryTwelveWeekGoalActionButtons(inp) {
-      if (!inp || !inp.id) {
-        return;
-      }
-      const m = /^anniversary(\d{3})VisionGoalMain$/.exec(inp.id);
-      if (!m) {
-        return;
-      }
-      const pre = "anniversary" + m[1];
-      const editBtn = document.getElementById(pre + "VisionGoalEditBtn");
-      const saveBtn = document.getElementById(pre + "VisionGoalSaveBtn");
-      if (editBtn) {
-        editBtn.disabled = !inp.readOnly;
-      }
-      if (saveBtn) {
-        saveBtn.disabled = inp.readOnly;
-      }
+      const parsed = parseAnniversaryTwelveWeekGoalInputId(inp);
+      if (!parsed) return;
+      refreshAnniversaryTwelveWeekGoalActionButtonsForModule(parsed.moduleKey);
     }
 
-    function commitAnniversaryTwelveWeekGoalFromInput(inp) {
-      if (!inp || !inp.id) {
-        return;
-      }
-      const moduleKey = getAnniversaryTwelveWeekGoalModuleKeyFromInput(inp);
-      if (!moduleKey) {
-        return;
-      }
+    function refreshAnniversaryTwelveWeekGoalActionButtonsForModule(moduleKey) {
+      const suffix = anniversaryTwSuffixFromModuleKey(moduleKey);
+      if (!suffix) return;
+      const pre = "anniversary" + suffix;
+      const editBtn = document.getElementById(pre + "VisionGoalEditBtn");
+      const saveBtn = document.getElementById(pre + "VisionGoalSaveBtn");
+      const inputs = getAnniversaryTwelveWeekGoalInputsForModule(moduleKey);
+      if (!inputs.length) return;
+      const editing = inputs.some(function (inp) {
+        return inp && !inp.readOnly;
+      });
+      if (editBtn) editBtn.disabled = editing;
+      if (saveBtn) saveBtn.disabled = !editing;
+    }
+
+    function commitAnniversaryTwelveWeekGoalsForModule(moduleKey) {
+      if (!moduleKey) return;
       normalizeAnniversaryTwModuleStateByKey(moduleKey);
       const mod = getAnniversaryTwStateModule(moduleKey);
-      if (!mod) {
-        return;
+      if (!mod) return;
+      const inputs = getAnniversaryTwelveWeekGoalInputsForModule(moduleKey);
+      if (anniversaryTwSupportsDualTwelveWeekGoals(moduleKey)) {
+        const g0 = inputs[0] ? String(inputs[0].value || "").trim() : "";
+        const g1 = inputs[1] ? String(inputs[1].value || "").trim() : "";
+        mod.twelveWeekGoals = [g0, g1];
+        mod.twelveWeekGoal = [g0, g1].filter(Boolean).join("；");
+      } else if (inputs[0]) {
+        mod.twelveWeekGoal = String(inputs[0].value || "").trim();
       }
-      mod.twelveWeekGoal = String(inp.value || "").trim();
+      normalizeAnniversaryTwelveWeekGoalsOnModule(mod, moduleKey);
       try {
         if (typeof notifyAliyunAnnivRealMetaAfterLocalChange === "function") {
           notifyAliyunAnnivRealMetaAfterLocalChange("anniv-shell:twelveWeekGoal");
@@ -166989,44 +167232,84 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } catch (_ng) {}
     }
 
-    function bindAnniversaryTwelveWeekGoalInput(inp) {
-      if (!inp || inp.dataset.twelveWeekGoalBound) {
-        return;
+    function commitAnniversaryTwelveWeekGoalFromInput(inp) {
+      const moduleKey = getAnniversaryTwelveWeekGoalModuleKeyFromInput(inp);
+      if (!moduleKey) return;
+      commitAnniversaryTwelveWeekGoalsForModule(moduleKey);
+    }
+
+    function setAnniversaryTwelveWeekGoalsEditing(moduleKey, editing) {
+      const inputs = getAnniversaryTwelveWeekGoalInputsForModule(moduleKey);
+      inputs.forEach(function (inp) {
+        if (!inp) return;
+        inp.readOnly = !editing;
+      });
+      refreshAnniversaryTwelveWeekGoalActionButtonsForModule(moduleKey);
+      if (editing && inputs[0]) {
+        inputs[0].focus();
+        const caretAt = inputs[0].value.length;
+        try {
+          inputs[0].setSelectionRange(caretAt, caretAt);
+        } catch (_sel) {}
       }
-      inp.dataset.twelveWeekGoalBound = "1";
-      inp.readOnly = true;
-      refreshAnniversaryTwelveWeekGoalActionButtons(inp);
-      const m = /^anniversary(\d{3})VisionGoalMain$/.exec(inp.id);
-      const pre = m ? "anniversary" + m[1] : "";
-      const editBtn = pre ? document.getElementById(pre + "VisionGoalEditBtn") : null;
-      const saveBtn = pre ? document.getElementById(pre + "VisionGoalSaveBtn") : null;
-      if (editBtn) {
+    }
+
+    function bindAnniversaryTwelveWeekGoalModule(moduleKey) {
+      if (!moduleKey) return;
+      const suffix = anniversaryTwSuffixFromModuleKey(moduleKey);
+      if (!suffix) return;
+      const pre = "anniversary" + suffix;
+      const editBtn = document.getElementById(pre + "VisionGoalEditBtn");
+      const saveBtn = document.getElementById(pre + "VisionGoalSaveBtn");
+      const inputs = getAnniversaryTwelveWeekGoalInputsForModule(moduleKey);
+      if (!inputs.length) return;
+      inputs.forEach(function (inp) {
+        if (!inp || inp.dataset.twelveWeekGoalBound) return;
+        inp.dataset.twelveWeekGoalBound = "1";
+        inp.readOnly = true;
+        inp.addEventListener("keydown", function (ev) {
+          if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
+            ev.preventDefault();
+            if (saveBtn && !saveBtn.disabled) saveBtn.click();
+          }
+        });
+      });
+      if (editBtn && !editBtn.dataset.twelveWeekGoalBound) {
+        editBtn.dataset.twelveWeekGoalBound = "1";
         editBtn.addEventListener("click", function () {
-          inp.readOnly = false;
-          refreshAnniversaryTwelveWeekGoalActionButtons(inp);
-          inp.focus();
-          const caretAt = inp.value.length;
-          inp.setSelectionRange(caretAt, caretAt);
+          setAnniversaryTwelveWeekGoalsEditing(moduleKey, true);
         });
       }
-      if (saveBtn) {
+      if (saveBtn && !saveBtn.dataset.twelveWeekGoalBound) {
+        saveBtn.dataset.twelveWeekGoalBound = "1";
         saveBtn.addEventListener("click", function () {
-          clearTimeout(anniversaryTwelveWeekGoalTimers[inp.id]);
-          commitAnniversaryTwelveWeekGoalFromInput(inp);
+          inputs.forEach(function (inp) {
+            if (inp && inp.id) clearTimeout(anniversaryTwelveWeekGoalTimers[inp.id]);
+          });
+          commitAnniversaryTwelveWeekGoalsForModule(moduleKey);
           saveState();
-          inp.readOnly = true;
-          refreshAnniversaryTwelveWeekGoalActionButtons(inp);
-          const moduleKey = getAnniversaryTwelveWeekGoalModuleKeyFromInput(inp);
-          if (moduleKey && anniversaryTwModuleHasOkr(moduleKey)) {
+          setAnniversaryTwelveWeekGoalsEditing(moduleKey, false);
+          if (anniversaryTwModuleHasOkr(moduleKey)) {
             renderAnniversaryTwOkrPanel(anniversaryTwSuffixFromModuleKey(moduleKey), moduleKey);
           }
         });
       }
+      refreshAnniversaryTwelveWeekGoalActionButtonsForModule(moduleKey);
+    }
+
+    function bindAnniversaryTwelveWeekGoalInput(inp) {
+      const moduleKey = getAnniversaryTwelveWeekGoalModuleKeyFromInput(inp);
+      if (!moduleKey) return;
+      bindAnniversaryTwelveWeekGoalModule(moduleKey);
     }
 
     function bindAnniversaryTwelveWeekGoalInputs() {
+      const seen = Object.create(null);
       document.querySelectorAll("#anniversaryModule textarea.anniversary-tw-vision-goal-input").forEach(function (inp) {
-        bindAnniversaryTwelveWeekGoalInput(inp);
+        const moduleKey = getAnniversaryTwelveWeekGoalModuleKeyFromInput(inp);
+        if (!moduleKey || seen[moduleKey]) return;
+        seen[moduleKey] = true;
+        bindAnniversaryTwelveWeekGoalModule(moduleKey);
       });
     }
 
@@ -168976,10 +169259,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (notStarted) {
           centerEl.textContent = "还未开始";
         } else if (remainDays > 0) {
-          const goalEl = document.createElement("span");
-          goalEl.className = "anniversary-cycle-remain-strip__goal";
-          goalEl.textContent = "副业净利润达10万元";
-          centerEl.appendChild(goalEl);
+          const modForGoal = getAnniversaryTwStateModule(moduleKey);
+          const goalText = getAnniversaryTwelveWeekGoalsDisplay(modForGoal, moduleKey);
+          if (goalText) {
+            const goalEl = document.createElement("span");
+            goalEl.className = "anniversary-cycle-remain-strip__goal";
+            goalEl.textContent = goalText;
+            centerEl.appendChild(goalEl);
+            centerEl.appendChild(document.createTextNode(" "));
+          }
           centerEl.appendChild(document.createTextNode("仅剩 "));
           const numEl = document.createElement("span");
           numEl.className = "anniversary-cycle-remain-strip__remain-num";
@@ -169038,8 +169326,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
 
       if (anchorInp) {
-        const cur = mod.anchor == null ? "" : String(mod.anchor).trim();
-        anchorInp.value = cur;
+        if (moduleKey === "tw022") {
+          anchorInp.value = ANNIVERSARY_TW022_FIXED_ANCHOR;
+          anchorInp.disabled = true;
+          anchorInp.title = "十二周年#22 固定起算日：2026-10-04（周日）";
+          const clr022 = document.getElementById("anniversary022AnchorClear");
+          if (clr022) {
+            clr022.hidden = true;
+            clr022.disabled = true;
+          }
+        } else {
+          const cur = mod.anchor == null ? "" : String(mod.anchor).trim();
+          anchorInp.value = cur;
+        }
       }
 
       const hasAnchor = Boolean(anniversaryTwAnchorDateForModule(moduleKey));
@@ -169118,17 +169417,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const elCycleStart = document.getElementById("anniversary" + suffix + "VisionCycleStart");
       const elCycleEnd = document.getElementById("anniversary" + suffix + "VisionCycleEnd");
       const gLongMain = document.getElementById("anniversary" + suffix + "VisionLongMain");
-      const gGoalMain = document.getElementById("anniversary" + suffix + "VisionGoalMain");
       if (gLongMain) {
         syncAnniversaryVisionLongFromState(gLongMain, mod.longTermVision);
         bindAnniversaryVisionLongInput(gLongMain);
         refreshAnniversaryVisionLongActionButtons(gLongMain);
       }
-      if (gGoalMain) {
-        syncAnniversaryTwelveWeekGoalFromState(gGoalMain, mod.twelveWeekGoal);
-        bindAnniversaryTwelveWeekGoalInput(gGoalMain);
-        refreshAnniversaryTwelveWeekGoalActionButtons(gGoalMain);
-      }
+      bindAnniversaryTwelveWeekGoalModule(moduleKey);
+      syncAnniversaryTwelveWeekGoalsUiFromModule(moduleKey);
       if (elCycleStart && elCycleEnd) {
         if (!hasAnchor) {
           elCycleStart.textContent = "待定";
@@ -169243,14 +169538,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function normalizeAnniversaryTw022State() {
       if (!state.anniversaryTw022 || typeof state.anniversaryTw022 !== "object") {
-        state.anniversaryTw022 = { anchor: null, weeks: {}, futureStory: "" };
+        state.anniversaryTw022 = {
+          anchor: ANNIVERSARY_TW022_FIXED_ANCHOR,
+          weeks: {},
+          futureStory: "",
+          twelveWeekGoals: ["", ""]
+        };
       }
-      if (!("anchor" in state.anniversaryTw022)) {
-        state.anniversaryTw022.anchor = null;
-      }
-      if (state.anniversaryTw022.anchor != null && typeof state.anniversaryTw022.anchor !== "string") {
-        state.anniversaryTw022.anchor = null;
-      }
+      /* #22 起算日固定，禁止被清空或改成非周日 */
+      state.anniversaryTw022.anchor = ANNIVERSARY_TW022_FIXED_ANCHOR;
       if (!state.anniversaryTw022.weeks || typeof state.anniversaryTw022.weeks !== "object") {
         state.anniversaryTw022.weeks = {};
       }
@@ -169266,6 +169562,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (typeof state.anniversaryTw022.twelveWeekGoal !== "string") {
         state.anniversaryTw022.twelveWeekGoal = "";
       }
+      normalizeAnniversaryTwelveWeekGoalsOnModule(state.anniversaryTw022, "tw022");
       normalizeAnniversaryTwKeyResultsOnModule(state.anniversaryTw022);
       for (let w = 1; w <= 13; w++) {
         const key = String(w);
@@ -169307,15 +169604,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function tw022AnchorDate() {
-      if (!state.anniversaryTw022 || state.anniversaryTw022.anchor == null) {
-        return null;
+      if (state.anniversaryTw022 && state.anniversaryTw022.anchor !== ANNIVERSARY_TW022_FIXED_ANCHOR) {
+        state.anniversaryTw022.anchor = ANNIVERSARY_TW022_FIXED_ANCHOR;
       }
-      const raw = String(state.anniversaryTw022.anchor).trim();
-      if (!raw) {
-        return null;
-      }
-      const d = parseDateInputToLocalNoon(raw);
-      return d && !isNaN(d.getTime()) ? d : null;
+      const d = new Date(ANNIVERSARY_TW022_ANCHOR);
+      d.setHours(0, 0, 0, 0);
+      return d;
     }
 
     function tw022WeekStartSunday(week1Based) {
@@ -169413,6 +169707,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (typeof mod.okrWhys !== "string") mod.okrWhys = "";
       if (typeof mod.longTermVision !== "string") mod.longTermVision = "";
       if (typeof mod.twelveWeekGoal !== "string") mod.twelveWeekGoal = "";
+      normalizeAnniversaryTwelveWeekGoalsOnModule(mod, moduleKey);
       normalizeAnniversaryTwKeyResultsOnModule(mod);
       for (let w = 1; w <= 13; w++) {
         const key = String(w);
@@ -177565,37 +177860,33 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       render();
     });
 
-    document.getElementById("anniversary022AnchorInput").addEventListener("change", (event) => {
-      normalizeAnniversaryTw022State();
-      const v = String(event.target.value || "").trim();
-      if (!v) {
-        state.anniversaryTw022.anchor = null;
-        saveState();
-        render();
-        return;
+    (function bindAnniversary022FixedAnchorUi() {
+      const inp = document.getElementById("anniversary022AnchorInput");
+      const clr = document.getElementById("anniversary022AnchorClear");
+      if (inp) {
+        inp.value = ANNIVERSARY_TW022_FIXED_ANCHOR;
+        inp.disabled = true;
+        inp.title = "十二周年#22 固定起算日：2026-10-04（周日）";
+        inp.addEventListener("change", function (event) {
+          /* 固定起算日：忽略用户改动，强制回写 */
+          normalizeAnniversaryTw022State();
+          event.target.value = ANNIVERSARY_TW022_FIXED_ANCHOR;
+          state.anniversaryTw022.anchor = ANNIVERSARY_TW022_FIXED_ANCHOR;
+          saveState();
+          render();
+        });
       }
-      const d = parseDateInputToLocalNoon(v);
-      if (!d || isNaN(d.getTime())) {
-        alert("日期无效。");
-        event.target.value = state.anniversaryTw022.anchor == null ? "" : String(state.anniversaryTw022.anchor);
-        return;
+      if (clr) {
+        clr.hidden = true;
+        clr.disabled = true;
+        clr.addEventListener("click", function () {
+          normalizeAnniversaryTw022State();
+          state.anniversaryTw022.anchor = ANNIVERSARY_TW022_FIXED_ANCHOR;
+          saveState();
+          render();
+        });
       }
-      if (d.getDay() !== 0) {
-        alert("起算日须为周日（与「每周从周日起算」一致）。");
-        event.target.value = state.anniversaryTw022.anchor == null ? "" : String(state.anniversaryTw022.anchor);
-        return;
-      }
-      state.anniversaryTw022.anchor = v;
-      saveState();
-      render();
-    });
-
-    document.getElementById("anniversary022AnchorClear").addEventListener("click", () => {
-      normalizeAnniversaryTw022State();
-      state.anniversaryTw022.anchor = null;
-      saveState();
-      render();
-    });
+    })();
 
     dailyWinDateFilter.addEventListener("change", (event) => {
       selectedDailyWinDate = event.target.value || formatDateInputValue(new Date());
