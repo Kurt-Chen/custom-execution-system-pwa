@@ -96544,7 +96544,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261002s";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261002t";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -139347,6 +139347,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         lane: "closeLoop"
       });
       startSprintMarqueeTrackRunning(track);
+      bindCloseLoopFlashProbe(track);
+      logCloseLoopFlashDiag("arm/mount", {
+        passSec: passSec,
+        passesN: passesN,
+        wallSec: wallSec,
+        elapsedSec: elapsedSec,
+        peekSec: peekSec,
+        duration: track.style.getPropertyValue("--marquee-duration"),
+        shift: track.style.getPropertyValue("--marquee-shift"),
+        continuous: track.classList.contains("is-continuous"),
+        clones: track.querySelectorAll(":scope > .marquee-continuous-seq").length,
+        spacers: track.querySelectorAll(":scope > .marquee-cycle-spacer").length
+      });
       return passSec;
     }
 
@@ -139437,6 +139450,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         stale.push(host);
       });
       if (!stale.length) return;
+      logCloseLoopFlashDiag("ensure-remount", {
+        staleCount: stale.length,
+        hostCount: hosts.length,
+        passSecGuess: passSec,
+        note: "playing 期间 ensure 发现 overlay 不健康 → 将 clear+重建 track（可疑闪点）"
+      });
       if (!passSec) {
         passSec =
           mountSprintFinishCloseLoopMarqueeOverlay(stale[0], 0, 0) ||
@@ -140224,6 +140243,58 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } catch (err) {
         return false;
       }
+    }
+
+    function isCloseLoopMarqueePlayingNow() {
+      try {
+        return (
+          typeof sprintFinishCloseLoopMarqueeState !== "undefined" &&
+          sprintFinishCloseLoopMarqueeState.phase === "playing"
+        );
+      } catch (err) {
+        return false;
+      }
+    }
+
+    /**
+     * 临时诊断：闭环 vs hour-task 闪动差异。
+     * 控制台执行 window.__DEBUG_CLOSE_LOOP_FLASH = true 后刷新/等 :15/:30/:45。
+     * 不改动画行为，只打日志。
+     */
+    function logCloseLoopFlashDiag(tag, detail) {
+      try {
+        if (window.__DEBUG_CLOSE_LOOP_FLASH !== true) return;
+        const t = marqueeDiagNowMs();
+        console.log(
+          "[close-loop-flash] " + String(tag || "event") + " @" + t + "ms",
+          detail && typeof detail === "object" ? detail : { note: detail }
+        );
+      } catch (err) {
+        /* ignore */
+      }
+    }
+
+    function bindCloseLoopFlashProbe(track) {
+      if (!track || track.getAttribute("data-close-loop-flash-probe") === "1") return;
+      if (window.__DEBUG_CLOSE_LOOP_FLASH !== true) return;
+      track.setAttribute("data-close-loop-flash-probe", "1");
+      ["animationstart", "animationend", "animationiteration"].forEach(function (evName) {
+        try {
+          track.addEventListener(evName, function (ev) {
+            logCloseLoopFlashDiag(evName, {
+              anim: ev && ev.animationName,
+              elapsed: ev && ev.elapsedTime,
+              duration: track.style.getPropertyValue("--marquee-duration"),
+              shift: track.style.getPropertyValue("--marquee-shift"),
+              continuous: track.classList.contains("is-continuous"),
+              running: track.classList.contains("is-running"),
+              delay: track.style.animationDelay || ""
+            });
+          });
+        } catch (errBind) {
+          /* ignore */
+        }
+      });
     }
 
     /** render() 内：Done 时间轴因跑马灯/冻结被跳过时，勿 clear done 脏标记 */
@@ -147990,6 +148061,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         });
         return;
       }
+      if (isCloseLoopMarqueePlayingNow()) {
+        logCloseLoopFlashDiag("PARENT_PROGRESS_WHILE_CLOSE_LOOP", {
+          via: "updateDoneTimeBlockSprintProgressDom",
+          note: "hour-task 会 freeze；close-loop 不会"
+        });
+      }
       const sm = parseInt(blockLi.getAttribute("data-done-block-start-min"), 10);
       const em = parseInt(blockLi.getAttribute("data-done-block-end-min"), 10);
       if (!Number.isFinite(sm) || !Number.isFinite(em)) return;
@@ -155200,6 +155277,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           trace: true
         });
         return;
+      }
+      /* 诊断：闭环播放中若仍走进整表 rebuild，即为与 hour-task 的关键差异 */
+      if (isCloseLoopMarqueePlayingNow()) {
+        logCloseLoopFlashDiag("PARENT_RENDER_WHILE_CLOSE_LOOP", {
+          via: "renderDoneTimeBlockTimeline",
+          taskCount: Array.isArray(orderedTasks) ? orderedTasks.length : 0,
+          note: "hour-task 会 freeze；close-loop 不会 → 高嫌疑闪点"
+        });
       }
       logHourRowEvent("render", {
         reason: "renderDoneTimeBlockTimeline",
