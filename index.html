@@ -68204,6 +68204,115 @@
       min-width: 0;
     }
 
+    /* 1–12 周网格：默认折叠；摘要栏为纯 UI，不进 state / 云同步 */
+    #anniversaryModule .tw020-week-nav-summary {
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 8px 10px;
+      width: 100%;
+      min-width: 0;
+      margin: 0;
+      padding: 7px 10px;
+      box-sizing: border-box;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      background: #fff;
+      color: #0f172a;
+      text-align: left;
+      cursor: pointer;
+      font: inherit;
+      line-height: 1.2;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    #anniversaryModule .tw020-week-nav-summary:hover {
+      border-color: #cbd5e1;
+      background: #f8fafc;
+    }
+
+    #anniversaryModule .tw020-week-nav-summary:focus-visible {
+      outline: 2px solid rgba(219, 39, 119, 0.35);
+      outline-offset: 1px;
+    }
+
+    #anniversaryModule .tw020-week-nav-summary__left {
+      display: inline-flex;
+      flex-wrap: nowrap;
+      align-items: baseline;
+      gap: 6px;
+      flex: 0 1 auto;
+      min-width: 0;
+    }
+
+    #anniversaryModule .tw020-week-nav-summary__current {
+      flex: 0 0 auto;
+      font-size: 11px;
+      font-weight: 600;
+      color: #be185d;
+      opacity: 0.75;
+      white-space: nowrap;
+    }
+
+    #anniversaryModule .tw020-week-nav-summary__week {
+      flex: 0 1 auto;
+      min-width: 0;
+      font-size: 13px;
+      font-weight: 800;
+      color: #db2777;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #anniversaryModule .tw020-week-nav-summary__range {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-size: 12px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      color: #64748b;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-align: center;
+    }
+
+    #anniversaryModule .tw020-week-nav-summary__stats {
+      flex: 0 0 auto;
+      font-size: 12px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: #475569;
+      white-space: nowrap;
+    }
+
+    #anniversaryModule .tw020-week-nav-summary__stats.is-complete {
+      color: #065f46;
+    }
+
+    #anniversaryModule .tw020-week-nav-summary__chev {
+      flex: 0 0 auto;
+      width: 1em;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: #94a3b8;
+      line-height: 1;
+      transition: transform 0.18s ease;
+      transform: rotate(0deg);
+    }
+
+    #anniversaryModule .tw020-week-nav-shell:not(.is-weeks-collapsed) .tw020-week-nav-summary__chev {
+      transform: rotate(180deg);
+    }
+
+    #anniversaryModule .tw020-week-nav-shell.is-weeks-collapsed > .tw020-week-capsule-nav {
+      display: none;
+    }
+
     #anniversaryModule .tw020-week-capsule-nav {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -68397,6 +68506,24 @@
     }
 
     @media (max-width: 767px) {
+      #anniversaryModule .tw020-week-nav-summary {
+        gap: 6px;
+        padding: 6px 8px;
+      }
+
+      #anniversaryModule .tw020-week-nav-summary__current {
+        font-size: 10px;
+      }
+
+      #anniversaryModule .tw020-week-nav-summary__week {
+        font-size: 12px;
+      }
+
+      #anniversaryModule .tw020-week-nav-summary__range,
+      #anniversaryModule .tw020-week-nav-summary__stats {
+        font-size: 11px;
+      }
+
       #anniversaryModule .tw020-week-capsule-nav {
         grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
         gap: 6px;
@@ -96866,7 +96993,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261003e";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261003f";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -167543,6 +167670,25 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           ? getAnniversaryTwWeekIndexForModule(wantModule)
           : -1;
       applyAnniversaryTwWeekCapsuleStatusClasses(cap, Number(weekNum), currentWk, p, bands);
+      // 当前周进度局部 patch 时同步摘要栏数字（不触碰折叠态 / 不整表 render）
+      let summaryWeek = Math.floor(Number(currentWk));
+      if (!(summaryWeek >= 1 && summaryWeek <= 12)) {
+        summaryWeek = summaryWeek > 12 ? 12 : 1;
+      }
+      if (Math.floor(Number(weekNum)) === summaryWeek) {
+        const shell = cap.closest(".tw020-week-nav-shell");
+        const summaryEl = shell && shell.querySelector(":scope > .tw020-week-nav-summary");
+        const summaryStats =
+          summaryEl && summaryEl.querySelector(".tw020-week-nav-summary__stats");
+        if (summaryStats) {
+          summaryStats.textContent =
+            String(p.done) + "/" + String(p.total) + " · " + String(p.pct) + "%";
+          summaryStats.classList.toggle(
+            "is-complete",
+            Number(p.total) > 0 && Number(p.pct) >= 100
+          );
+        }
+      }
       return true;
     }
 
@@ -168794,13 +168940,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /**
      * 13 周胶囊导航 V1：在 WeekList 前插入导航壳；下方 ol 仅承载选中周详情。
      * 不改 state 任务结构；选中态复用 ui.weekExpanded（仅保留一个 true）。
+     * 壳上另挂「当前周摘要」折叠条（纯 UI，默认折叠；不写 state / 不同步云）。
      */
     function ensureAnniversaryTwWeekNavShell(elOl) {
       if (!elOl || !elOl.parentNode) return null;
       let shell = elOl.closest(".tw020-week-nav-shell");
       if (!shell) {
         shell = document.createElement("div");
-        shell.className = "tw020-week-nav-shell";
+        shell.className = "tw020-week-nav-shell is-weeks-collapsed";
         elOl.parentNode.insertBefore(shell, elOl);
         const nav = document.createElement("div");
         nav.className = "tw020-week-capsule-nav";
@@ -168809,9 +168956,122 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         shell.appendChild(nav);
         shell.appendChild(elOl);
       }
-      const navEl = shell.querySelector(".tw020-week-capsule-nav");
+      const navEl = shell.querySelector(":scope > .tw020-week-capsule-nav") ||
+        shell.querySelector(".tw020-week-capsule-nav");
+      let summaryEl = shell.querySelector(":scope > .tw020-week-nav-summary");
+      if (!summaryEl) {
+        summaryEl = document.createElement("button");
+        summaryEl.type = "button";
+        summaryEl.className = "tw020-week-nav-summary";
+        summaryEl.setAttribute("aria-expanded", "false");
+        summaryEl.setAttribute("aria-controls", "");
+        summaryEl.setAttribute("aria-label", "展开十二周导航");
+
+        const left = document.createElement("span");
+        left.className = "tw020-week-nav-summary__left";
+        const curLab = document.createElement("span");
+        curLab.className = "tw020-week-nav-summary__current";
+        curLab.textContent = "当前 ·";
+        const weekLab = document.createElement("span");
+        weekLab.className = "tw020-week-nav-summary__week";
+        weekLab.textContent = "第1周";
+        left.appendChild(curLab);
+        left.appendChild(weekLab);
+
+        const rangeEl = document.createElement("span");
+        rangeEl.className = "tw020-week-nav-summary__range";
+        rangeEl.textContent = "—";
+
+        const statsEl = document.createElement("span");
+        statsEl.className = "tw020-week-nav-summary__stats";
+        statsEl.textContent = "0/0 · 0%";
+
+        const chev = document.createElement("span");
+        chev.className = "tw020-week-nav-summary__chev";
+        chev.setAttribute("aria-hidden", "true");
+        chev.textContent = "▼";
+
+        summaryEl.appendChild(left);
+        summaryEl.appendChild(rangeEl);
+        summaryEl.appendChild(statsEl);
+        summaryEl.appendChild(chev);
+
+        if (navEl) {
+          if (!navEl.id) {
+            const hostId = elOl.id || "anniversaryWeekList";
+            navEl.id = hostId + "CapsuleNav";
+          }
+          summaryEl.setAttribute("aria-controls", navEl.id);
+          shell.insertBefore(summaryEl, navEl);
+        } else {
+          shell.insertBefore(summaryEl, shell.firstChild);
+        }
+
+        if (!shell.classList.contains("is-weeks-collapsed") &&
+            !shell.classList.contains("is-weeks-expanded")) {
+          shell.classList.add("is-weeks-collapsed");
+        }
+
+        summaryEl.addEventListener("click", function () {
+          const collapsed = shell.classList.toggle("is-weeks-collapsed");
+          shell.classList.toggle("is-weeks-expanded", !collapsed);
+          summaryEl.setAttribute("aria-expanded", collapsed ? "false" : "true");
+          summaryEl.setAttribute(
+            "aria-label",
+            collapsed ? "展开十二周导航" : "收起十二周导航"
+          );
+        });
+      }
+      const expanded = !shell.classList.contains("is-weeks-collapsed");
+      summaryEl.setAttribute("aria-expanded", expanded ? "true" : "false");
+      summaryEl.setAttribute(
+        "aria-label",
+        expanded ? "收起十二周导航" : "展开十二周导航"
+      );
       elOl.classList.add("tw020-week-detail-host");
-      return { shell: shell, nav: navEl, detailOl: elOl };
+      return { shell: shell, nav: navEl, summary: summaryEl, detailOl: elOl };
+    }
+
+    /**
+     * 更新 1–12 周导航「当前周摘要」文案（仅 DOM；不改折叠态、不 saveState）。
+     * weekNum 优先用日历当前周；越界时回退到 1–12 边界以便仍显示真实周数据。
+     */
+    function updateAnniversaryTwWeekNavSummary(shellParts, opts) {
+      if (!shellParts || !shellParts.summary) return;
+      const o = opts || {};
+      const summaryEl = shellParts.summary;
+      const currentWk = Math.floor(Number(o.currentWeekIndex));
+      let weekNum = currentWk;
+      if (!(weekNum >= 1 && weekNum <= 12)) {
+        weekNum = weekNum > 12 ? 12 : 1;
+      }
+      const hasAnchor = o.hasAnchor !== false;
+      const s =
+        hasAnchor && typeof o.getWeekStart === "function" ? o.getWeekStart(weekNum) : null;
+      const e =
+        hasAnchor && typeof o.getWeekEnd === "function" ? o.getWeekEnd(weekNum) : null;
+      const tasks = typeof o.getTasks === "function" ? o.getTasks(weekNum) : [];
+      const pW =
+        typeof computeAnniversaryWeekTaskProgress === "function"
+          ? computeAnniversaryWeekTaskProgress(tasks)
+          : { done: 0, total: 0, pct: 0 };
+
+      const weekLab = summaryEl.querySelector(".tw020-week-nav-summary__week");
+      if (weekLab) weekLab.textContent = "第" + weekNum + "周";
+      const rangeEl = summaryEl.querySelector(".tw020-week-nav-summary__range");
+      if (rangeEl) {
+        rangeEl.textContent = formatAnniversaryTwCapsuleDateRange(s, e);
+      }
+      const statsEl = summaryEl.querySelector(".tw020-week-nav-summary__stats");
+      if (statsEl) {
+        statsEl.textContent =
+          String(pW.done) + "/" + String(pW.total) + " · " + String(pW.pct) + "%";
+        statsEl.classList.toggle(
+          "is-complete",
+          Number(pW.total) > 0 && Number(pW.pct) >= 100
+        );
+      }
+      summaryEl.dataset.tw020SummaryWeek = String(weekNum);
     }
 
     function formatAnniversaryTwCapsuleDateRange(startDate, endDate) {
@@ -169072,6 +169332,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         mod,
         getAnniversaryTwSelectedWeekNum(mod, currentWk, preferred)
       );
+
+      updateAnniversaryTwWeekNavSummary(shellParts, {
+        currentWeekIndex: currentWk,
+        hasAnchor: hasAnchor,
+        getWeekStart: o.getWeekStart,
+        getWeekEnd: o.getWeekEnd,
+        getTasks: o.getTasks
+      });
 
       shellParts.nav.replaceChildren();
       for (let w = 1; w <= 12; w++) {
