@@ -124228,23 +124228,87 @@
       }
     }
 
+    /**
+     * Habit/Forge 壳层切换用内容签名：用于 uiPaintDirty===null（markAll）时判断本模块是否真变了。
+     * 未变则 warm 切回只做 CSS 显隐，避免「切换 ≡ 整块重绘」。
+     */
+    const lastPrimaryModuleContentPaintSig = { habit: "", forge: "" };
+
+    function getPrimaryModuleContentPaintSig(moduleKey) {
+      const key = String(moduleKey || "");
+      try {
+        if (key === "habit") {
+          const payload = {
+            habitCheckins: state && state.habitCheckins,
+            dailyWin: state && state.dailyWin,
+            stopDoing: state && state.stopDoing,
+            notToDo: state && state.notToDo
+          };
+          if (typeof stableHeavyDepJson === "function") return stableHeavyDepJson(payload);
+          return JSON.stringify(payload);
+        }
+        if (key === "forge") {
+          const extras =
+            typeof getLiveHeavyModuleRenderExtras === "function"
+              ? getLiveHeavyModuleRenderExtras()
+              : {};
+          if (typeof collectForgeMinsHeavyDepPayload === "function") {
+            const payload = collectForgeMinsHeavyDepPayload(state, extras);
+            if (typeof stableHeavyDepJson === "function") return stableHeavyDepJson(payload);
+            return JSON.stringify(payload);
+          }
+        }
+      } catch (_sigErr) {
+        return "";
+      }
+      return "";
+    }
+
+    function notePrimaryModuleContentPainted(moduleKey) {
+      const key = String(moduleKey || "");
+      if (key !== "habit" && key !== "forge") return;
+      const sig = getPrimaryModuleContentPaintSig(key);
+      if (sig) lastPrimaryModuleContentPaintSig[key] = sig;
+    }
+
+    /** Habit/Forge：仅本模块切片/内容/heavy 真脏才整块 paint；他域 markAll 不默认重挂 DOM */
+    function primaryModuleHabitForgeNeedsPaint(moduleKey) {
+      const key = String(moduleKey || "");
+      if (key !== "habit" && key !== "forge") return true;
+      const slices = PRIMARY_MODULE_PAINT_SLICES[key] || [];
+      if (uiPaintDirty != null) {
+        for (let i = 0; i < slices.length; i++) {
+          if (uiPaintDirty[slices[i]]) return true;
+        }
+        return primaryModuleHeavyDepNeedsPaint(key);
+      }
+      /* null = markAll 全脏信号：用内容签名区分「真变了」与「他域全脏」 */
+      const sig = getPrimaryModuleContentPaintSig(key);
+      const prev = lastPrimaryModuleContentPaintSig[key] || "";
+      if (sig && prev && sig === prev) {
+        return primaryModuleHeavyDepNeedsPaint(key);
+      }
+      /* 无历史签名或签名已变 → 需要 paint */
+      return true;
+    }
+
     /** 底栏切入：无脏且非首次则只做壳层显隐，跳过完整 render */
     function primaryModuleNeedsPaint(moduleKey) {
       const key = String(moduleKey || "");
       if (!key) return true;
       if (!primaryModulePaintedOnce[key]) return true;
       if (!primaryModuleDomLooksReady(key)) return true;
+      /*
+       * Habit/Forge：勿因 uiPaintDirty===null（他域 markAll / 细标脏误扩）默认整块 render。
+       * dynamic/goals/purpose 仍保留 null→全脏 的保守语义。
+       */
+      if (key === "habit" || key === "forge") {
+        return primaryModuleHabitForgeNeedsPaint(key);
+      }
       if (uiPaintDirty == null) return true;
       const slices = PRIMARY_MODULE_PAINT_SLICES[key] || [];
       for (let i = 0; i < slices.length; i++) {
         if (isUiPaintSliceDirty(slices[i])) return true;
-      }
-      /*
-       * Habit/Forge：按本模块相关 heavy 指纹决定，不再「heavyModulesDepDirty 一律整表 render」。
-       * dynamic 仍只看本模块切片。
-       */
-      if (key === "habit" || key === "forge") {
-        return primaryModuleHeavyDepNeedsPaint(key);
       }
       return false;
     }
@@ -124254,7 +124318,18 @@
         markAllUiPaintSlicesDirty();
         return;
       }
-      if (uiPaintDirty == null) uiPaintDirty = createAllDirtyUiPaintMap();
+      /*
+       * uiPaintDirty===null 表示「尚未分片」。细标脏时必须先收束为全 false 再点名，
+       * 切勿 createAllDirtyUiPaintMap()：否则 mark(["done"]) 会误把 habit/forge 等全部拉脏，
+       * warm 切回 Habit/Forge 被迫整块 render（DOM 上千重建）。
+       * 真正「全脏」仍走 markAllUiPaintSlicesDirty() → null。
+       */
+      if (uiPaintDirty == null) {
+        uiPaintDirty = {};
+        UI_PAINT_SLICE_KEYS.forEach(function (k) {
+          uiPaintDirty[k] = false;
+        });
+      }
       let habitTouched = false;
       let weeklyTouched = false;
       let closedTouched = false;
@@ -124354,7 +124429,12 @@
      * 纯文案编辑勿顺带脏 Done。会改 Done 的调用方须显式把 "done" 放进 lists。
      */
     function uiPaintSlicesForListName(listName) {
-      if (listName === "done") return ["done", "weeklyPlan", "closedList", "habit", "forge"];
+      /*
+       * Done 变更默认只脏 Done + 周计划/封闭清单镜像。
+       * 勿顺带脏 habit/forge：否则删改 Done 后 warm 切 Habit/Forge 会整块重绘。
+       * Habit/Forge 打卡与阿里云域合并已显式 lists:["habit"|"forge",...]。
+       */
+      if (listName === "done") return ["done", "weeklyPlan", "closedList"];
       /* 纯文案/结构默认只脏封闭清单；改 Done / 周计划的调用方须显式把对应切片放进 lists */
       if (listName === "closedList") return ["closedList"];
       if (listName === "memo") return ["memo"];
@@ -172243,6 +172323,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         clearUiPaintSlice("habit");
         clearUiPaintSlice("dailyWin");
+        if (typeof notePrimaryModuleContentPainted === "function") {
+          notePrimaryModuleContentPainted("habit");
+        }
       }
       if (paintGoalsSlice) {
         try { renderAgeGoalsCountdown(); } catch (e) { console.warn("[My Goals] renderAgeGoalsCountdown 失败:", e); }
@@ -172281,6 +172364,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         try { refreshAllForgeTodayTaskRowsFromDone(); } catch (e) { console.warn("[Forge] 刷新今日行失败:", e); }
         try { renderForgeTodaysForgeList(); } catch (e) { console.warn("[Forge] 今日打卡列表渲染失败:", e); }
         clearUiPaintSlice("forge");
+        if (typeof notePrimaryModuleContentPainted === "function") {
+          notePrimaryModuleContentPainted("forge");
+        }
       }
       if (paintPurposeSlice) {
         clearUiPaintSlice("purpose");
