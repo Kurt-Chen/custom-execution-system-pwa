@@ -99924,9 +99924,17 @@
       return false;
     }
 
-    /** SWITCH_PERF 或卡顿捕获任一开启时，才挂诊断钩子（关时零开销） */
+    /** SWITCH_PERF / 卡顿捕获 / FLOW_DIAG 任一开启时，才挂诊断钩子（关时零开销） */
     function isSwitchDiagEnabled() {
-      return isSwitchPerfEnabled() || isJankCaptureEnabled();
+      if (isSwitchPerfEnabled() || isJankCaptureEnabled()) return true;
+      try {
+        if (typeof isFlowDiagEnabled === "function") return isFlowDiagEnabled();
+      } catch (_fd) {}
+      try {
+        if (localStorage.getItem("todo-app-flow-diag-v1") === "1") return true;
+        if (new URLSearchParams(location.search).get("flowDiag") === "1") return true;
+      } catch (_e3) {}
+      return false;
     }
 
     const switchPerfState = {
@@ -99963,19 +99971,23 @@
       if (typeof PerformanceObserver === "undefined") return;
       try {
         const po = new PerformanceObserver(function (list) {
-          if (!switchPerfState.active) return;
           const entries = list.getEntries();
           for (let i = 0; i < entries.length; i++) {
             const e = entries[i];
             const ms = switchPerfRound(e.duration);
             if (ms < 50) continue;
             const tier = ms >= 300 ? ">=300" : ms >= 100 ? ">=100" : ">=50";
-            switchPerfState.active.longTasks.push({
+            const rec = {
               name: e.name || "longtask",
               ms: ms,
               tier: tier,
               startTime: switchPerfRound(e.startTime)
-            });
+            };
+            if (switchPerfState.active) switchPerfState.active.longTasks.push(rec);
+            if (typeof flowDiagActiveCheckin === "function") {
+              const ck = flowDiagActiveCheckin();
+              if (ck && Array.isArray(ck.longTasks)) ck.longTasks.push(rec);
+            }
           }
         });
         po.observe({ type: "longtask", buffered: true });
@@ -100151,11 +100163,17 @@
     }
 
     function switchPerfBegin(label, meta) {
-      if (!isSwitchDiagEnabled()) return null;
+      if (!isSwitchDiagEnabled() && !(typeof isFlowDiagEnabled === "function" && isFlowDiagEnabled())) return null;
       switchPerfEnsureLongTaskObserver();
       if (switchPerfState.finishTimer) {
         clearTimeout(switchPerfState.finishTimer);
         switchPerfState.finishTimer = null;
+      }
+      /* 新切换开始前：若上一窗尚未打完 MODULE SWITCH，先收口 */
+      if (switchPerfState.active && !switchPerfState.active._flowFinalized) {
+        try {
+          switchPerfFinishReport();
+        } catch (_finPrev) {}
       }
       const t0 = switchPerfNow();
       const fromRoute = switchDiagSnapshotRoute();
@@ -100199,10 +100217,15 @@
           warmBefore: warmBefore,
           dirtyBefore: switchDiagSnapshotDirtyLight(),
           nodesBefore: switchDiagCountDomNodes()
-        }
+        },
+        _flowFinalized: false,
+        _localPaintCaptured: false
       };
+      if (typeof flowDiagAttachTimelineFields === "function") {
+        flowDiagAttachTimelineFields(switchPerfState.active);
+      }
       switchPerfDomHookInstall();
-      if (isSwitchPerfEnabled()) {
+      if (isSwitchPerfEnabled() || (typeof isFlowDiagEnabled === "function" && isFlowDiagEnabled())) {
         try {
           console.log("[SWITCH_PERF] begin", label, meta || "");
         } catch (_log0) {}
@@ -100231,12 +100254,29 @@
 
     function switchPerfNoteRender(name, ms) {
       const a = switchPerfState.active;
-      if (!a) return;
       const k = String(name);
-      if (!a.renders[k]) a.renders[k] = { ms: 0, calls: 0 };
-      a.renders[k].ms += Number(ms || 0);
-      a.renders[k].calls += 1;
-      a.flags.didRender = true;
+      if (a) {
+        if (!a.renders[k]) a.renders[k] = { ms: 0, calls: 0 };
+        a.renders[k].ms += Number(ms || 0);
+        a.renders[k].calls += 1;
+        a.flags.didRender = true;
+      }
+      if (typeof flowDiagActiveCheckin === "function" && flowDiagActiveCheckin()) {
+        if (k === "render") {
+          if (typeof flowDiagNoteFullRenderCall === "function") flowDiagNoteFullRenderCall();
+          if (typeof flowDiagNoteCheckinSourceRender === "function") flowDiagNoteCheckinSourceRender(ms);
+          if (typeof flowDiagNoteCheckinDoneRender === "function") flowDiagNoteCheckinDoneRender(ms);
+        } else if (
+          k === "renderHabitCheckins" ||
+          k === "renderForgeTodaysForgeList" ||
+          k === "renderForgeDailyMinRows" ||
+          k === "renderForgeWeeklyMinRows"
+        ) {
+          if (typeof flowDiagNoteCheckinSourceRender === "function") flowDiagNoteCheckinSourceRender(ms);
+        } else if (k === "renderList" || k === "renderDoneTimeBlockTimeline") {
+          if (typeof flowDiagNoteCheckinDoneRender === "function") flowDiagNoteCheckinDoneRender(ms);
+        }
+      }
     }
 
     function switchPerfNoteSync(bucket, ms) {
@@ -100249,6 +100289,12 @@
         /* counts already absolute increments from caller */
       } else if (ms > 0) {
         a.flags.ownSyncDuring = true;
+      }
+      if (typeof flowDiagNoteMerge === "function" && k === "mergeMs" && ms > 0) {
+        flowDiagNoteMerge(ms);
+      }
+      if (typeof flowDiagNoteCloudRender === "function" && k === "cloudUiRenderMs" && ms > 0) {
+        flowDiagNoteCloudRender(ms);
       }
     }
 
@@ -100266,6 +100312,54 @@
       if (a.tActivateStart != null) {
         a.phases.activateLogicMs = a.tActivateEnd - a.tActivateStart;
       }
+    }
+
+
+    function switchPerfBuildFlowSwitchReport(a, reportBase) {
+      const tl = a.timeline || {};
+      const localStartWall =
+        a.tActivateStart != null && a.wallClick != null
+          ? a.wallClick + (a.tActivateStart - a.tClick)
+          : a.wallClick;
+      const localEndPerf = a.tActivateEnd != null ? a.tActivateEnd : a.tJsHandlersEnd != null ? a.tJsHandlersEnd : a.tPaint;
+      const localEndWall =
+        localEndPerf != null && a.wallClick != null
+          ? a.wallClick + (localEndPerf - a.tClick)
+          : a.wallClick;
+      const renderTotalMs = (reportBase.renders || []).reduce(function (s, x) {
+        return s + (x.ms || 0);
+      }, 0);
+      const localRenderMs = switchPerfRound(
+        (a.phases && a.phases.activateLogicMs) || renderTotalMs || (localEndPerf != null && a.tActivateStart != null
+          ? localEndPerf - a.tActivateStart
+          : reportBase.clickToJsEndMs || 0)
+      );
+      const domRebuildCount =
+        (a.dom.createElement || 0) + (a.dom.replaceChildren || 0) + (a.dom.appendChild || 0);
+      const longTasks = reportBase.longTasks || [];
+      const contention = typeof flowDiagComputeContention === "function"
+        ? flowDiagComputeContention(tl, localStartWall, localEndWall)
+        : !!(tl.syncHitDuring && (tl.mergeMs > 0 || tl.cloudRenderMs > 0));
+      if (tl) tl.mainThreadContention = contention;
+      const flowReport = {
+        label: a.label,
+        from: reportBase.from,
+        to: reportBase.to,
+        clickTimeWall: a.wallClick,
+        warmOrCold: reportBase.warmOrCold,
+        needsPaint: reportBase.flags ? reportBase.flags.needsPaint : null,
+        localRenderStart: localStartWall,
+        localRenderEnd: localEndWall,
+        localRenderMs: localRenderMs,
+        domRebuildCount: domRebuildCount,
+        timeline: tl,
+        longTaskCount: longTasks.length,
+        longTaskMaxMs: longTasks[0] ? longTasks[0].ms : 0,
+        totalSwitchMs: reportBase.clickToPaintMs,
+        mainThreadContention: !!contention,
+        switchPerf: reportBase
+      };
+      return flowReport;
     }
 
     function switchPerfFinishReport() {
@@ -100435,11 +100529,29 @@
           );
         } catch (_log1) {}
       }
+      if (typeof flowDiagPrintModuleSwitch === "function" && a.timeline) {
+        const flowReport = switchPerfBuildFlowSwitchReport(a, report);
+        flowReport.traffic = typeof flowDiagTrafficSlice === "function"
+          ? flowDiagTrafficSlice(a.wallClick - 100, a.wallClick + FLOW_DIAG_SWITCH_WINDOW_MS)
+          : [];
+        if (typeof flowDiagState !== "undefined" && flowDiagState.switchReports) {
+          flowDiagState.switchReports.push(flowReport);
+          if (flowDiagState.switchReports.length > 40) flowDiagState.switchReports.shift();
+        }
+        if (isSwitchPerfEnabled() || (typeof isFlowDiagEnabled === "function" && isFlowDiagEnabled())) {
+          flowDiagPrintModuleSwitch(flowReport);
+          if (typeof flowDiagPrintTrafficAround === "function") {
+            flowDiagPrintTrafficAround("switch", a.wallClick - 100, a.wallClick + FLOW_DIAG_SWITCH_WINDOW_MS);
+          }
+        }
+        a._flowFinalized = true;
+      }
       return report;
     }
 
     function switchPerfScheduleFinishAfterPaint() {
-      if (!isSwitchDiagEnabled() || !switchPerfState.active) return;
+      if (!isSwitchDiagEnabled() && !(typeof isFlowDiagEnabled === "function" && isFlowDiagEnabled())) return;
+      if (!switchPerfState.active) return;
       const token = switchPerfState.active;
       Promise.resolve().then(function () {
         if (switchPerfState.active !== token) return;
@@ -100450,7 +100562,22 @@
           requestAnimationFrame(function () {
             if (switchPerfState.active !== token) return;
             token.tPaint = switchPerfNow();
-            switchPerfFinishReport();
+            token._localPaintCaptured = true;
+            /* 保留 active 至 click+1000ms，捕获切换窗内 poll/merge/render 争用 */
+            const remain = Math.max(
+              0,
+              (typeof FLOW_DIAG_SWITCH_WINDOW_MS === "number" ? FLOW_DIAG_SWITCH_WINDOW_MS : 1000) -
+                (switchPerfNow() - token.tClick)
+            );
+            if (switchPerfState.finishTimer) {
+              clearTimeout(switchPerfState.finishTimer);
+              switchPerfState.finishTimer = null;
+            }
+            switchPerfState.finishTimer = setTimeout(function () {
+              switchPerfState.finishTimer = null;
+              if (switchPerfState.active !== token) return;
+              switchPerfFinishReport();
+            }, remain);
           });
         });
       });
@@ -100502,6 +100629,7 @@
       wrapAssign("renderTrash", function () { return renderTrash; }, function (f) { renderTrash = f; });
       wrapAssign("renderDailyReminder", function () { return renderDailyReminder; }, function (f) { renderDailyReminder = f; });
       wrapAssign("renderKineticCountdowns", function () { return renderKineticCountdowns; }, function (f) { renderKineticCountdowns = f; });
+      wrapAssign("renderDoneTimeBlockTimeline", function () { return renderDoneTimeBlockTimeline; }, function (f) { renderDoneTimeBlockTimeline = f; });
       /* setPrimaryModuleFocus 已内联埋点，勿再包一层以免双计 */
     }
 
@@ -100568,8 +100696,12 @@
         try {
           localStorage.setItem(SWITCH_PERF_KEY, "1");
         } catch (_e) {}
+        try {
+          if (typeof flowDiagForceOn !== "undefined") flowDiagForceOn = true;
+          localStorage.setItem("todo-app-flow-diag-v1", "1");
+        } catch (_f) {}
         ensureSwitchDiagBooted();
-        return "switch-perf on（刷新后仍生效；或带 ?switchPerf=1）";
+        return "switch-perf + flow-diag on（MODULE SWITCH / CHECKIN→DONE；刷新后仍生效）";
       },
       disable: function () {
         switchPerfForceOn = false;
@@ -100753,6 +100885,564 @@
     };
 
     if (isSwitchDiagEnabled()) {
+      ensureSwitchDiagBooted();
+    }
+
+
+    /* ========== FLOW_DIAG · MODULE SWITCH / CHECKIN→DONE（只日志，不改行为）==========
+     * 开启：与 SWITCH_PERF / JANK_CAPTURE 共用，或
+     *   localStorage todo-app-flow-diag-v1=1 / ?flowDiag=1 / __flowDiag.enable()
+     * 输出：
+     *   ===== MODULE SWITCH =====
+     *   ===== CHECKIN -> DONE =====
+     * 配套：dumpAliyunOtsTrafficDiag()；__flowDiag.dumpSwitch() / dumpCheckin()
+     */
+    const FLOW_DIAG_KEY = "todo-app-flow-diag-v1";
+    const FLOW_DIAG_SWITCH_WINDOW_MS = 1000;
+    const FLOW_DIAG_CHECKIN_WINDOW_MS = 2000;
+    let flowDiagForceOn = false;
+    try {
+      flowDiagForceOn =
+        localStorage.getItem(FLOW_DIAG_KEY) === "1" ||
+        new URLSearchParams(location.search).get("flowDiag") === "1";
+    } catch (_flowBoot) {
+      flowDiagForceOn = false;
+    }
+
+    function isFlowDiagEnabled() {
+      if (flowDiagForceOn) return true;
+      try {
+        if (localStorage.getItem(FLOW_DIAG_KEY) === "1") return true;
+        if (new URLSearchParams(location.search).get("flowDiag") === "1") return true;
+      } catch (_e) {}
+      /* 与 SWITCH_PERF / JANK 共用：开任一即可采 MODULE SWITCH / CHECKIN 日志 */
+      return isSwitchPerfEnabled() || isJankCaptureEnabled();
+    }
+
+    const flowDiagState = {
+      switchReports: [],
+      checkinReports: [],
+      checkin: null,
+      checkinTimer: null
+    };
+
+    function flowDiagWallNow() {
+      return Date.now();
+    }
+
+    function flowDiagFmt(v) {
+      if (v == null || v === "") return "";
+      if (typeof v === "boolean") return v ? "true" : "false";
+      if (typeof v === "number" && Number.isFinite(v)) return String(switchPerfRound(v));
+      return String(v);
+    }
+
+    function flowDiagRouteStr(route) {
+      if (!route) return "";
+      const p = route.primary || "";
+      const s = route.sub ? "/" + route.sub : "";
+      return p + s;
+    }
+
+    function flowDiagIsSyncActiveNow() {
+      try {
+        if (typeof aliyunSyncPrimaryPullInFlight !== "undefined" && aliyunSyncPrimaryPullInFlight) {
+          return true;
+        }
+      } catch (_a) {}
+      try {
+        if (typeof cloudSyncMachineStatus === "string" && cloudSyncMachineStatus === "syncing") {
+          return true;
+        }
+      } catch (_c) {}
+      try {
+        if (typeof aliyunSyncPrimaryAnyDomainFlushBusy === "function" && aliyunSyncPrimaryAnyDomainFlushBusy()) {
+          return true;
+        }
+      } catch (_f) {}
+      return false;
+    }
+
+    function flowDiagTrafficSlice(fromMs, toMs) {
+      const out = [];
+      try {
+        const evs = aliyunOtsTrafficDiag && Array.isArray(aliyunOtsTrafficDiag.events)
+          ? aliyunOtsTrafficDiag.events
+          : [];
+        for (let i = 0; i < evs.length; i++) {
+          const e = evs[i];
+          const t = Number(e && e.timestamp);
+          if (!Number.isFinite(t)) continue;
+          if (t < fromMs - 50 || t > toMs + 50) continue;
+          out.push({
+            timestamp: t,
+            module: e.module,
+            trigger: e.trigger,
+            requestType: e.requestType,
+            method: e.method,
+            elapsedMs: e.elapsedMs,
+            responseBytes: e.responseBytes,
+            httpStatus: e.httpStatus
+          });
+        }
+      } catch (_t) {}
+      return out;
+    }
+
+    function flowDiagPrintTrafficAround(label, fromMs, toMs) {
+      const slice = flowDiagTrafficSlice(fromMs, toMs);
+      try {
+        console.log(
+          "[FLOW_DIAG] traffic around " + label + " windowMs=" + (toMs - fromMs) + " count=" + slice.length,
+          slice
+        );
+      } catch (_l) {}
+      return slice;
+    }
+
+    function flowDiagAttachTimelineFields(target) {
+      target.timeline = {
+        localRenderStart: null,
+        localRenderEnd: null,
+        cloudPullTriggered: false,
+        cloudPushTriggered: false,
+        syncActiveAtClick: flowDiagIsSyncActiveNow(),
+        syncHitDuring: false,
+        apiRequestStart: null,
+        apiRequestEnd: null,
+        apiRequestMs: 0,
+        apiRequestCount: 0,
+        mergeStart: null,
+        mergeEnd: null,
+        mergeMs: 0,
+        mergeCount: 0,
+        cloudRenderStart: null,
+        cloudRenderEnd: null,
+        cloudRenderMs: 0,
+        cloudRenderCount: 0,
+        blockedByAwait: false,
+        mainThreadContention: false,
+        parseMs: 0,
+        traffic: []
+      };
+      target.wallClick = flowDiagWallNow();
+      return target;
+    }
+
+    function flowDiagNoteApi(startWall, endWall, elapsedMs, meta) {
+      const sessions = [];
+      if (switchPerfState.active && switchPerfState.active.timeline) sessions.push(switchPerfState.active);
+      if (flowDiagState.checkin && flowDiagState.checkin.timeline) sessions.push(flowDiagState.checkin);
+      if (!sessions.length) return;
+      for (let i = 0; i < sessions.length; i++) {
+        const s = sessions[i];
+        const tl = s.timeline;
+        tl.syncHitDuring = true;
+        tl.apiRequestCount += 1;
+        tl.apiRequestMs += Number(elapsedMs || 0);
+        if (tl.apiRequestStart == null) tl.apiRequestStart = startWall;
+        tl.apiRequestEnd = endWall;
+        if (meta && meta.isPull) tl.cloudPullTriggered = true;
+        if (meta && meta.isPush) tl.cloudPushTriggered = true;
+      }
+    }
+
+    function flowDiagNoteMerge(ms, wallStart) {
+      const sessions = [];
+      if (switchPerfState.active && switchPerfState.active.timeline) sessions.push(switchPerfState.active);
+      if (flowDiagState.checkin && flowDiagState.checkin.timeline) sessions.push(flowDiagState.checkin);
+      if (!sessions.length) return;
+      const end = flowDiagWallNow();
+      const start = wallStart != null ? wallStart : end - Number(ms || 0);
+      for (let i = 0; i < sessions.length; i++) {
+        const tl = sessions[i].timeline;
+        tl.syncHitDuring = true;
+        tl.mergeCount += 1;
+        tl.mergeMs += Number(ms || 0);
+        if (tl.mergeStart == null) tl.mergeStart = start;
+        tl.mergeEnd = end;
+      }
+    }
+
+    function flowDiagNoteCloudRender(ms, wallStart) {
+      const sessions = [];
+      if (switchPerfState.active && switchPerfState.active.timeline) sessions.push(switchPerfState.active);
+      if (flowDiagState.checkin && flowDiagState.checkin.timeline) sessions.push(flowDiagState.checkin);
+      if (!sessions.length) return;
+      const end = flowDiagWallNow();
+      const start = wallStart != null ? wallStart : end - Number(ms || 0);
+      for (let i = 0; i < sessions.length; i++) {
+        const tl = sessions[i].timeline;
+        tl.syncHitDuring = true;
+        tl.cloudRenderCount += 1;
+        tl.cloudRenderMs += Number(ms || 0);
+        if (tl.cloudRenderStart == null) tl.cloudRenderStart = start;
+        tl.cloudRenderEnd = end;
+      }
+    }
+
+    function flowDiagNotePull(reason) {
+      const sessions = [];
+      if (switchPerfState.active && switchPerfState.active.timeline) sessions.push(switchPerfState.active);
+      if (flowDiagState.checkin && flowDiagState.checkin.timeline) sessions.push(flowDiagState.checkin);
+      for (let i = 0; i < sessions.length; i++) {
+        sessions[i].timeline.cloudPullTriggered = true;
+        sessions[i].timeline.syncHitDuring = true;
+        sessions[i].timeline.lastPullReason = String(reason || "");
+      }
+    }
+
+    function flowDiagNotePush(reason) {
+      const sessions = [];
+      if (switchPerfState.active && switchPerfState.active.timeline) sessions.push(switchPerfState.active);
+      if (flowDiagState.checkin && flowDiagState.checkin.timeline) sessions.push(flowDiagState.checkin);
+      for (let i = 0; i < sessions.length; i++) {
+        sessions[i].timeline.cloudPushTriggered = true;
+        sessions[i].timeline.syncHitDuring = true;
+        sessions[i].timeline.lastPushReason = String(reason || "");
+      }
+    }
+
+    function flowDiagNoteParse(ms) {
+      const sessions = [];
+      if (switchPerfState.active && switchPerfState.active.timeline) sessions.push(switchPerfState.active);
+      if (flowDiagState.checkin && flowDiagState.checkin.timeline) sessions.push(flowDiagState.checkin);
+      for (let i = 0; i < sessions.length; i++) {
+        sessions[i].timeline.parseMs += Number(ms || 0);
+      }
+    }
+
+    function flowDiagComputeContention(tl, localStart, localEnd) {
+      if (!tl) return false;
+      const ls = localStart;
+      const le = localEnd;
+      if (ls == null || le == null) {
+        return !!(tl.syncHitDuring && (tl.mergeMs > 0 || tl.cloudRenderMs > 0 || tl.apiRequestMs > 0));
+      }
+      function overlaps(a0, a1, b0, b1) {
+        if (a0 == null || a1 == null || b0 == null || b1 == null) return false;
+        return a0 <= b1 && b0 <= a1;
+      }
+      return (
+        overlaps(ls, le, tl.mergeStart, tl.mergeEnd) ||
+        overlaps(ls, le, tl.cloudRenderStart, tl.cloudRenderEnd) ||
+        overlaps(ls, le, tl.apiRequestStart, tl.apiRequestEnd)
+      );
+    }
+
+    function flowDiagPrintModuleSwitch(report) {
+      const tl = report.timeline || {};
+      const from = flowDiagRouteStr(report.from);
+      const to = flowDiagRouteStr(report.to);
+      const localStart = report.localRenderStart;
+      const localEnd = report.localRenderEnd;
+      const lines = [
+        "===== MODULE SWITCH =====",
+        "from=" + from,
+        "to=" + to,
+        "clickTime=" + flowDiagFmt(report.clickTimeWall),
+        "warmOrCold=" + flowDiagFmt(report.warmOrCold),
+        "needsPaint=" + flowDiagFmt(report.needsPaint),
+        "localRenderStart=" + flowDiagFmt(localStart),
+        "localRenderEnd=" + flowDiagFmt(localEnd),
+        "localRenderMs=" + flowDiagFmt(report.localRenderMs),
+        "domRebuildCount=" + flowDiagFmt(report.domRebuildCount),
+        "cloudPullTriggered=" + flowDiagFmt(!!tl.cloudPullTriggered),
+        "cloudPushTriggered=" + flowDiagFmt(!!tl.cloudPushTriggered),
+        "syncActiveAtClick=" + flowDiagFmt(!!tl.syncActiveAtClick),
+        "syncHitDuringSwitch=" + flowDiagFmt(!!tl.syncHitDuring),
+        "apiRequestStart=" + flowDiagFmt(tl.apiRequestStart),
+        "apiRequestEnd=" + flowDiagFmt(tl.apiRequestEnd),
+        "apiRequestMs=" + flowDiagFmt(tl.apiRequestMs),
+        "mergeStart=" + flowDiagFmt(tl.mergeStart),
+        "mergeEnd=" + flowDiagFmt(tl.mergeEnd),
+        "mergeMs=" + flowDiagFmt(tl.mergeMs),
+        "cloudRenderStart=" + flowDiagFmt(tl.cloudRenderStart),
+        "cloudRenderEnd=" + flowDiagFmt(tl.cloudRenderEnd),
+        "cloudRenderMs=" + flowDiagFmt(tl.cloudRenderMs),
+        "parseMs=" + flowDiagFmt(tl.parseMs),
+        "longTaskCount=" + flowDiagFmt(report.longTaskCount),
+        "longTaskMaxMs=" + flowDiagFmt(report.longTaskMaxMs),
+        "totalSwitchMs=" + flowDiagFmt(report.totalSwitchMs),
+        "blockedByAwait=" + flowDiagFmt(!!tl.blockedByAwait),
+        "mainThreadContention=" + flowDiagFmt(!!report.mainThreadContention),
+        "========================="
+      ];
+      try {
+        console.log(lines.join("\n"));
+      } catch (_p) {}
+    }
+
+    function flowDiagPrintCheckin(report) {
+      const tl = report.timeline || {};
+      const lines = [
+        "===== CHECKIN -> DONE =====",
+        "sourceModule=" + flowDiagFmt(report.sourceModule),
+        "itemId=" + flowDiagFmt(report.itemId),
+        "checkinClickTime=" + flowDiagFmt(report.checkinClickTime),
+        "localStateWriteStart=" + flowDiagFmt(report.localStateWriteStart),
+        "localStateWriteEnd=" + flowDiagFmt(report.localStateWriteEnd),
+        "localStateWriteMs=" + flowDiagFmt(report.localStateWriteMs),
+        "sourceRenderStart=" + flowDiagFmt(report.sourceRenderStart),
+        "sourceRenderEnd=" + flowDiagFmt(report.sourceRenderEnd),
+        "sourceRenderMs=" + flowDiagFmt(report.sourceRenderMs),
+        "doneDirtyMarkedAt=" + flowDiagFmt(report.doneDirtyMarkedAt),
+        "cloudPushTriggered=" + flowDiagFmt(!!tl.cloudPushTriggered),
+        "cloudPullTriggered=" + flowDiagFmt(!!tl.cloudPullTriggered),
+        "apiRequestMs=" + flowDiagFmt(tl.apiRequestMs),
+        "mergeStart=" + flowDiagFmt(tl.mergeStart),
+        "mergeEnd=" + flowDiagFmt(tl.mergeEnd),
+        "mergeMs=" + flowDiagFmt(tl.mergeMs),
+        "doneRenderStart=" + flowDiagFmt(report.doneRenderStart),
+        "doneRenderEnd=" + flowDiagFmt(report.doneRenderEnd),
+        "doneRenderMs=" + flowDiagFmt(report.doneRenderMs),
+        "doneInStateAt=" + flowDiagFmt(report.doneInStateAt),
+        "doneVisibleAt=" + flowDiagFmt(report.doneVisibleAt),
+        "clickToDoneVisibleMs=" + flowDiagFmt(report.clickToDoneVisibleMs),
+        "syncActiveAtClick=" + flowDiagFmt(!!tl.syncActiveAtClick),
+        "syncHitDuringFlow=" + flowDiagFmt(!!tl.syncHitDuring),
+        "parseMs=" + flowDiagFmt(tl.parseMs),
+        "longTaskCount=" + flowDiagFmt(report.longTaskCount),
+        "longTaskMaxMs=" + flowDiagFmt(report.longTaskMaxMs),
+        "waitedForCloudBeforeDoneVisible=" + flowDiagFmt(!!report.waitedForCloudBeforeDoneVisible),
+        "fullModuleRenderCalls=" + flowDiagFmt(report.fullModuleRenderCalls),
+        "blockedByAwait=" + flowDiagFmt(!!tl.blockedByAwait),
+        "mainThreadContention=" + flowDiagFmt(!!report.mainThreadContention),
+        "==========================="
+      ];
+      try {
+        console.log(lines.join("\n"));
+      } catch (_p) {}
+    }
+
+    function flowDiagProbeDoneDom(itemId) {
+      if (!itemId) return false;
+      try {
+        const sid = String(itemId);
+        const nodes = document.querySelectorAll(
+          "#doneList li[data-done-id], #forgeTodaysForgeList li[data-done-id], li.timeline-item.done[data-done-id]"
+        );
+        for (let i = 0; i < nodes.length; i++) {
+          if (nodes[i].getAttribute("data-done-id") === sid) return true;
+        }
+      } catch (_d) {}
+      return false;
+    }
+
+    function flowDiagBeginCheckin(sourceModule, itemIdOpt) {
+      if (!isFlowDiagEnabled()) return null;
+      switchPerfEnsureLongTaskObserver();
+      if (flowDiagState.checkinTimer) {
+        clearTimeout(flowDiagState.checkinTimer);
+        flowDiagState.checkinTimer = null;
+      }
+      if (flowDiagState.checkin && !flowDiagState.checkin.closed) {
+        flowDiagFinalizeCheckin("superseded");
+      }
+      const t0 = switchPerfNow();
+      const wall = flowDiagWallNow();
+      const sess = {
+        closed: false,
+        sourceModule: String(sourceModule || "unknown"),
+        itemId: itemIdOpt ? String(itemIdOpt) : "",
+        tClick: t0,
+        checkinClickTime: wall,
+        localStateWriteStart: null,
+        localStateWriteEnd: null,
+        sourceRenderStart: null,
+        sourceRenderEnd: null,
+        doneDirtyMarkedAt: null,
+        doneRenderStart: null,
+        doneRenderEnd: null,
+        doneInStateAt: null,
+        doneVisibleAt: null,
+        fullModuleRenderCalls: 0,
+        longTasks: [],
+        wallClick: wall
+      };
+      flowDiagAttachTimelineFields(sess);
+      flowDiagState.checkin = sess;
+      try {
+        console.log("[FLOW_DIAG] checkin begin", sess.sourceModule, sess.itemId || "");
+      } catch (_l) {}
+      flowDiagState.checkinTimer = setTimeout(function () {
+        flowDiagFinalizeCheckin("timeout");
+      }, FLOW_DIAG_CHECKIN_WINDOW_MS);
+      return sess;
+    }
+
+    function flowDiagActiveCheckin() {
+      return flowDiagState.checkin && !flowDiagState.checkin.closed ? flowDiagState.checkin : null;
+    }
+
+    function flowDiagNoteCheckinLocalWrite(startNow, endNow, itemId) {
+      const s = flowDiagActiveCheckin();
+      if (!s) return;
+      if (itemId && !s.itemId) s.itemId = String(itemId);
+      if (s.localStateWriteStart == null) s.localStateWriteStart = flowDiagWallNow() - Math.max(0, endNow - startNow);
+      s.localStateWriteEnd = flowDiagWallNow();
+      if (itemId) {
+        try {
+          const found =
+            state &&
+            Array.isArray(state.done) &&
+            state.done.some(function (it) {
+              return it && String(it.id) === String(itemId);
+            });
+          if (found && s.doneInStateAt == null) s.doneInStateAt = flowDiagWallNow();
+        } catch (_f) {}
+      }
+    }
+
+    function flowDiagNoteCheckinSourceRender(ms) {
+      const s = flowDiagActiveCheckin();
+      if (!s) return;
+      const end = flowDiagWallNow();
+      const start = end - Number(ms || 0);
+      if (s.sourceRenderStart == null) s.sourceRenderStart = start;
+      s.sourceRenderEnd = end;
+      s.sourceRenderMs = (s.sourceRenderMs || 0) + Number(ms || 0);
+    }
+
+    function flowDiagNoteCheckinDoneRender(ms) {
+      const s = flowDiagActiveCheckin();
+      if (!s) return;
+      const end = flowDiagWallNow();
+      const start = end - Number(ms || 0);
+      if (s.doneRenderStart == null) s.doneRenderStart = start;
+      s.doneRenderEnd = end;
+      s.doneRenderMs = (s.doneRenderMs || 0) + Number(ms || 0);
+      if (s.itemId && flowDiagProbeDoneDom(s.itemId) && s.doneVisibleAt == null) {
+        s.doneVisibleAt = end;
+      }
+    }
+
+    function flowDiagNoteDoneDirty() {
+      const s = flowDiagActiveCheckin();
+      if (!s) return;
+      if (s.doneDirtyMarkedAt == null) s.doneDirtyMarkedAt = flowDiagWallNow();
+    }
+
+    function flowDiagNoteFullRenderCall() {
+      const s = flowDiagActiveCheckin();
+      if (!s) return;
+      s.fullModuleRenderCalls += 1;
+    }
+
+    function flowDiagProbeCheckinDoneVisible() {
+      const s = flowDiagActiveCheckin();
+      if (!s || !s.itemId || s.doneVisibleAt != null) return;
+      if (flowDiagProbeDoneDom(s.itemId)) {
+        s.doneVisibleAt = flowDiagWallNow();
+      }
+    }
+
+    function flowDiagFinalizeCheckin(reason) {
+      const s = flowDiagState.checkin;
+      if (!s || s.closed) return null;
+      s.closed = true;
+      if (flowDiagState.checkinTimer) {
+        clearTimeout(flowDiagState.checkinTimer);
+        flowDiagState.checkinTimer = null;
+      }
+      flowDiagProbeCheckinDoneVisible();
+      const longTasks = (s.longTasks || []).slice();
+      longTasks.sort(function (a, b) {
+        return (b.ms || 0) - (a.ms || 0);
+      });
+      const tl = s.timeline || {};
+      const localStart = s.localStateWriteStart;
+      const localEnd = s.sourceRenderEnd || s.localStateWriteEnd;
+      const contention = flowDiagComputeContention(tl, localStart, localEnd);
+      tl.mainThreadContention = contention;
+      const waitedCloud =
+        s.doneVisibleAt != null &&
+        tl.mergeStart != null &&
+        s.doneVisibleAt >= tl.mergeStart &&
+        (s.doneInStateAt == null || s.doneVisibleAt - s.doneInStateAt > 30) &&
+        tl.mergeMs > 0;
+      const report = {
+        reason: reason || "end",
+        sourceModule: s.sourceModule,
+        itemId: s.itemId,
+        checkinClickTime: s.checkinClickTime,
+        localStateWriteStart: s.localStateWriteStart,
+        localStateWriteEnd: s.localStateWriteEnd,
+        localStateWriteMs:
+          s.localStateWriteStart != null && s.localStateWriteEnd != null
+            ? s.localStateWriteEnd - s.localStateWriteStart
+            : null,
+        sourceRenderStart: s.sourceRenderStart,
+        sourceRenderEnd: s.sourceRenderEnd,
+        sourceRenderMs: s.sourceRenderMs || 0,
+        doneDirtyMarkedAt: s.doneDirtyMarkedAt,
+        doneRenderStart: s.doneRenderStart,
+        doneRenderEnd: s.doneRenderEnd,
+        doneRenderMs: s.doneRenderMs || 0,
+        doneInStateAt: s.doneInStateAt,
+        doneVisibleAt: s.doneVisibleAt,
+        clickToDoneVisibleMs:
+          s.doneVisibleAt != null && s.checkinClickTime != null
+            ? s.doneVisibleAt - s.checkinClickTime
+            : null,
+        timeline: tl,
+        longTaskCount: longTasks.length,
+        longTaskMaxMs: longTasks[0] ? longTasks[0].ms : 0,
+        longTasks: longTasks,
+        waitedForCloudBeforeDoneVisible: !!waitedCloud,
+        fullModuleRenderCalls: s.fullModuleRenderCalls || 0,
+        mainThreadContention: !!contention,
+        traffic: flowDiagTrafficSlice(s.wallClick - 100, s.wallClick + FLOW_DIAG_CHECKIN_WINDOW_MS)
+      };
+      flowDiagState.checkinReports.push(report);
+      if (flowDiagState.checkinReports.length > 40) flowDiagState.checkinReports.shift();
+      flowDiagPrintCheckin(report);
+      flowDiagPrintTrafficAround("checkin", s.wallClick - 100, s.wallClick + FLOW_DIAG_CHECKIN_WINDOW_MS);
+      flowDiagState.checkin = null;
+      return report;
+    }
+
+    window.__flowDiag = {
+      enable: function () {
+        flowDiagForceOn = true;
+        try {
+          localStorage.setItem(FLOW_DIAG_KEY, "1");
+        } catch (_e) {}
+        if (typeof ensureSwitchDiagBooted === "function") ensureSwitchDiagBooted();
+        return "flow-diag on（MODULE SWITCH + CHECKIN→DONE；刷新后仍生效）";
+      },
+      disable: function () {
+        flowDiagForceOn = false;
+        try {
+          localStorage.setItem(FLOW_DIAG_KEY, "0");
+        } catch (_e) {}
+        return "flow-diag off";
+      },
+      isEnabled: isFlowDiagEnabled,
+      dumpSwitch: function () {
+        return flowDiagState.switchReports.slice();
+      },
+      dumpCheckin: function () {
+        return flowDiagState.checkinReports.slice();
+      },
+      lastSwitch: function () {
+        return flowDiagState.switchReports.length
+          ? flowDiagState.switchReports[flowDiagState.switchReports.length - 1]
+          : null;
+      },
+      lastCheckin: function () {
+        return flowDiagState.checkinReports.length
+          ? flowDiagState.checkinReports[flowDiagState.checkinReports.length - 1]
+          : null;
+      },
+      clear: function () {
+        flowDiagState.switchReports = [];
+        flowDiagState.checkinReports = [];
+        return "flow-diag cleared";
+      }
+    };
+
+    if (isFlowDiagEnabled() && typeof ensureSwitchDiagBooted === "function") {
       ensureSwitchDiagBooted();
     }
 
@@ -106785,7 +107475,15 @@
       names.forEach(function (n) {
         logUiPartialUpdate(n === "weeklyPlan" ? "today-plan" : n);
       });
+      const _flowCloudRenT0 = typeof switchPerfNow === "function" ? switchPerfNow() : Date.now();
       if (typeof render === "function") render();
+      try {
+        if (typeof flowDiagNoteCloudRender === "function") {
+          const _ms =
+            (typeof switchPerfNow === "function" ? switchPerfNow() : Date.now()) - _flowCloudRenT0;
+          flowDiagNoteCloudRender(_ms);
+        }
+      } catch (_flowCloudRen) {}
     }
 
     function aliyunSyncPrimaryAnyDomainFlushBusy() {
@@ -106922,6 +107620,9 @@
       if (aliyunSyncPrimaryPullInFlight) {
         return { ok: false, skipped: true, reason: "in-flight" };
       }
+      try {
+        if (typeof flowDiagNotePull === "function") flowDiagNotePull(reason || "poll");
+      } catch (_flowPull) {}
       try {
         if (typeof document !== "undefined" && document.visibilityState === "hidden") {
           return { ok: false, skipped: true, reason: "hidden" };
@@ -107569,6 +108270,9 @@
         env.roomId = String(cloudSyncRoomId || env.roomId || "");
         env.envelopeUpdatedAt = Date.now();
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
         aliyunDoneRealPerfMark("merge-end");
 
         let bodyJson = "";
@@ -107828,6 +108532,9 @@
           }
         }
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         if (mergedCount || tombstoneApplied) {
           /* 只脏 Done：避免 uiPaintDirty===null 时全量 paint */
@@ -107871,6 +108578,9 @@
             } catch (_mbRen) {}
           }
           renderMs = Date.now() - tRen0;
+          try {
+            if (typeof flowDiagNoteCloudRender === "function" && renderMs > 0) flowDiagNoteCloudRender(renderMs);
+          } catch (_flowRenNote) {}
         }
         aliyunSyncPrimaryMarkPullFingerprint("done", donePullFp);
         ok = true;
@@ -109473,6 +110183,9 @@
         env.roomId = String(cloudSyncRoomId || env.roomId || "");
         env.envelopeUpdatedAt = Date.now();
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
         envAfterApply = env;
         const missingAfterApply = batchIds.filter(function (id) {
           return id && id !== "?" && !(env.items && env.items[id]);
@@ -109913,6 +110626,9 @@
           );
         }
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         const tRen0 = Date.now();
         const paintHabit = function () {
@@ -109937,6 +110653,9 @@
           paintHabit();
         }
         renderMs = Date.now() - tRen0;
+          try {
+            if (typeof flowDiagNoteCloudRender === "function" && renderMs > 0) flowDiagNoteCloudRender(renderMs);
+          } catch (_flowRenNote) {}
         aliyunSyncPrimaryMarkPullFingerprint("habit", habitPullFp);
         ok = true;
         if (isAliyunSyncMetaGateEnabled()) {
@@ -110666,6 +111385,9 @@
         env.roomId = String(cloudSyncRoomId || env.roomId || "");
         env.envelopeUpdatedAt = Date.now();
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         let bodyJson = "";
         try {
@@ -110870,6 +111592,9 @@
           aliyunForgeRealSuppressPush = false;
         }
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         const tRen0 = Date.now();
         if (mergedCount || tombstoneApplied || settingsChanged) {
@@ -110898,6 +111623,9 @@
           }
         }
         renderMs = Date.now() - tRen0;
+          try {
+            if (typeof flowDiagNoteCloudRender === "function" && renderMs > 0) flowDiagNoteCloudRender(renderMs);
+          } catch (_flowRenNote) {}
         aliyunSyncPrimaryMarkPullFingerprint("forge", forgePullFp);
         ok = true;
         aliyunForgeRealAppendLog(
@@ -111720,6 +112448,9 @@
         env.roomId = String(cloudSyncRoomId || env.roomId || "");
         env.envelopeUpdatedAt = Date.now();
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         let bodyJson = "";
         try {
@@ -111979,6 +112710,9 @@
           aliyunAnnivRealSuppressPush = false;
         }
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         const tRen0 = Date.now();
         if (mergedCount || tombstoneApplied || metaChanged) {
@@ -112028,6 +112762,9 @@
           }
         }
         renderMs = Date.now() - tRen0;
+          try {
+            if (typeof flowDiagNoteCloudRender === "function" && renderMs > 0) flowDiagNoteCloudRender(renderMs);
+          } catch (_flowRenNote) {}
         aliyunSyncPrimaryMarkPullFingerprint("anniv", annivPullFp);
         ok = true;
         aliyunAnnivRealAppendLog(
@@ -112606,6 +113343,9 @@
         env.roomId = String(cloudSyncRoomId || env.roomId || "");
         env.envelopeUpdatedAt = Date.now();
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         let bodyJson = "";
         try {
@@ -112837,6 +113577,9 @@
           aliyunSprintRealSuppressPush = false;
         }
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         const tRen0 = Date.now();
         if (mergedCount || tombstoneApplied || metaChanged) {
@@ -112875,6 +113618,9 @@
           }
         }
         renderMs = Date.now() - tRen0;
+          try {
+            if (typeof flowDiagNoteCloudRender === "function" && renderMs > 0) flowDiagNoteCloudRender(renderMs);
+          } catch (_flowRenNote) {}
         aliyunSyncPrimaryMarkPullFingerprint("sprint", sprintPullFp);
         ok = true;
         aliyunSprintRealAppendLog(
@@ -113248,6 +113994,9 @@
         env.roomId = String(cloudSyncRoomId || env.roomId || "");
         env.envelopeUpdatedAt = Date.now();
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         let bodyJson = "";
         try {
@@ -113410,6 +114159,9 @@
           aliyunTodayPlanRealSuppressPush = false;
         }
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         const tRen0 = Date.now();
         try {
@@ -113423,6 +114175,9 @@
           }
         } catch (_rf) {}
         renderMs = Date.now() - tRen0;
+          try {
+            if (typeof flowDiagNoteCloudRender === "function" && renderMs > 0) flowDiagNoteCloudRender(renderMs);
+          } catch (_flowRenNote) {}
         ok = true;
         aliyunTodayPlanRealAppendLog(
           "合并完成：标记更新 " +
@@ -114024,6 +114779,9 @@
           aliyunAmbRealPaintLocalUiAfterMerge();
         }
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         let bodyJson = "";
         try {
@@ -114184,6 +114942,9 @@
           aliyunAmbRealSuppressPush = false;
         }
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         const tRen0 = Date.now();
         aliyunSyncPrimaryMarkPullFingerprint("amb", ambPullFp);
@@ -114203,6 +114964,9 @@
           }
         }
         renderMs = Date.now() - tRen0;
+          try {
+            if (typeof flowDiagNoteCloudRender === "function" && renderMs > 0) flowDiagNoteCloudRender(renderMs);
+          } catch (_flowRenNote) {}
         ok = true;
         return { ok: true, docId: docId, changed: changed };
       } catch (err) {
@@ -114555,6 +115319,9 @@
           aliyunRule100RealSuppressPush = false;
         }
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         let bodyJson = "";
         try {
@@ -114696,6 +115463,9 @@
           aliyunRule100RealSuppressPush = false;
         }
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         const tRen0 = Date.now();
         aliyunSyncPrimaryMarkPullFingerprint("rule100", pullFp);
@@ -114717,6 +115487,9 @@
           }
         }
         renderMs = Date.now() - tRen0;
+          try {
+            if (typeof flowDiagNoteCloudRender === "function" && renderMs > 0) flowDiagNoteCloudRender(renderMs);
+          } catch (_flowRenNote) {}
         ok = true;
         return { ok: true, docId: docId, changed: changed };
       } catch (err) {
@@ -115179,6 +115952,9 @@
           aliyunListsRealSuppressPush = false;
         }
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         let bodyJson = "";
         try {
@@ -115330,6 +116106,9 @@
           aliyunListsRealSuppressPush = false;
         }
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         const tRen0 = Date.now();
         aliyunSyncPrimaryMarkPullFingerprint("lists", pullFp);
@@ -115351,6 +116130,9 @@
           }
         }
         renderMs = Date.now() - tRen0;
+          try {
+            if (typeof flowDiagNoteCloudRender === "function" && renderMs > 0) flowDiagNoteCloudRender(renderMs);
+          } catch (_flowRenNote) {}
         ok = true;
         return { ok: true, docId: docId, changed: changed };
       } catch (err) {
@@ -115836,6 +116618,9 @@
           aliyunGoalsRealSuppressPush = false;
         }
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         let bodyJson = "";
         try {
@@ -115977,6 +116762,9 @@
           aliyunGoalsRealSuppressPush = false;
         }
         mergeMs = Date.now() - tMerge0;
+        try {
+          if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
+        } catch (_flowMergeNote) {}
 
         const tRen0 = Date.now();
         aliyunSyncPrimaryMarkPullFingerprint("goals", pullFp);
@@ -115998,6 +116786,9 @@
           }
         }
         renderMs = Date.now() - tRen0;
+          try {
+            if (typeof flowDiagNoteCloudRender === "function" && renderMs > 0) flowDiagNoteCloudRender(renderMs);
+          } catch (_flowRenNote) {}
         ok = true;
         return { ok: true, docId: docId, changed: changed };
       } catch (err) {
@@ -116384,11 +117175,21 @@
       const text = await res.text();
       const bytes = text ? text.length : 0;
       const elapsedMs = Date.now() - t0;
+      const tParse0 = Date.now();
       try {
         data = text ? JSON.parse(text) : null;
       } catch (_parseErr) {
         data = { raw: text };
       }
+      const parseMs = Date.now() - tParse0;
+      try {
+        if (typeof flowDiagNoteParse === "function") flowDiagNoteParse(parseMs);
+        const methodU = String(method || "GET").toUpperCase();
+        const isPush = methodU === "POST" || methodU === "PUT" || methodU === "PATCH";
+        if (typeof flowDiagNoteApi === "function") {
+          flowDiagNoteApi(t0, Date.now(), elapsedMs, { isPull: methodU === "GET", isPush: isPush });
+        }
+      } catch (_flowFetch) {}
       try {
         if (typeof aliyunSyncCheckNoteFetchBytes === "function") {
           aliyunSyncCheckNoteFetchBytes(String(url || ""), bytes, method);
@@ -119086,6 +119887,14 @@
           console.warn("[习惯] 打卡后强制刷新失败:", habitForceErr);
         }
       }
+      try {
+        if (typeof flowDiagProbeCheckinDoneVisible === "function") flowDiagProbeCheckinDoneVisible();
+        if (typeof requestAnimationFrame === "function") {
+          requestAnimationFrame(function () {
+            if (typeof flowDiagProbeCheckinDoneVisible === "function") flowDiagProbeCheckinDoneVisible();
+          });
+        }
+      } catch (_flowHabitVis) {}
     }
 
     /**
@@ -119129,6 +119938,9 @@
       if (opts.hygieneDomains && opts.hygieneDomains.length) {
         saveOpts.hygieneDomains = opts.hygieneDomains.slice();
       }
+      try {
+        if (typeof flowDiagNotePush === "function") flowDiagNotePush("habit-checkin-pulse");
+      } catch (_flowHabitPush) {}
       saveStateWithCloudPulseImmediate(saveOpts);
       try {
         flushLocalPersistedState("force");
@@ -123435,12 +124247,19 @@
       let habitTouched = false;
       let weeklyTouched = false;
       let closedTouched = false;
+      let doneTouched = false;
       names.forEach(function (n) {
         if (n) uiPaintDirty[n] = true;
         if (n === "habit") habitTouched = true;
         if (n === "weeklyPlan") weeklyTouched = true;
         if (n === "closedList") closedTouched = true;
+        if (n === "done") doneTouched = true;
       });
+      if (doneTouched && typeof flowDiagNoteDoneDirty === "function") {
+        try {
+          flowDiagNoteDoneDirty();
+        } catch (_flowDirty) {}
+      }
       if (habitTouched) markHabitCheckinsSubTabDirty();
       if (weeklyTouched) markSprintTaskShellsDirty();
       if (closedTouched) {
@@ -126972,12 +127791,23 @@
         const clock = formatHabitWeekClockLabel(meta.stampAt || completedAt);
         if (clock) text += " · " + clock;
       }
+      const _flowDoneId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+      const _flowWriteT0 = typeof switchPerfNow === "function" ? switchPerfNow() : Date.now();
       state.done.unshift({
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        id: _flowDoneId,
         text,
         completedAt: completedAt,
         habitMeta: meta
       });
+      try {
+        if (typeof flowDiagNoteCheckinLocalWrite === "function") {
+          flowDiagNoteCheckinLocalWrite(
+            _flowWriteT0,
+            typeof switchPerfNow === "function" ? switchPerfNow() : Date.now(),
+            _flowDoneId
+          );
+        }
+      } catch (_flowSyncDone) {}
     }
 
     /** 每天三赢：非空、非纯标点/空白符，才算「写满」一条 */
@@ -128738,6 +129568,9 @@
 
     function toggleHabitCheckin(habitKey) {
       if (!habitKey) return;
+      try {
+        if (typeof flowDiagBeginCheckin === "function") flowDiagBeginCheckin("habit", "");
+      } catch (_flowHabitBegin) {}
       if (habitKey === "weightAndBodyFat") {
         toggleWeightBodyFatCheckin();
         return;
@@ -134417,12 +135250,23 @@
         } catch (_rowSyncErr) {}
       }
       render();
+      try {
+        if (typeof flowDiagProbeCheckinDoneVisible === "function") flowDiagProbeCheckinDoneVisible();
+        if (typeof requestAnimationFrame === "function") {
+          requestAnimationFrame(function () {
+            if (typeof flowDiagProbeCheckinDoneVisible === "function") flowDiagProbeCheckinDoneVisible();
+          });
+        }
+      } catch (_flowForgeVis) {}
     }
 
     function appendForgeBodyCheckinToDone(rowEl, amountText) {
       if (!rowEl) return;
       const amt = String(amountText || "").trim();
       if (!amt) return;
+      try {
+        if (typeof flowDiagBeginCheckin === "function") flowDiagBeginCheckin("forge-body", "");
+      } catch (_flowForgeBodyBegin) {}
       /** 勿用 textContent：会带上 ×终身胶囊与 em 英文，导致 Done 文案/旧推断键与 DOM 主键分叉 */
       const canonicalKey = forgeWpRowBeforeSlashFromDom(rowEl);
       const rowKeyForMeta =
@@ -134443,7 +135287,18 @@
         completedAt: ts,
         forgeBodyMeta: { dateKey: dateKey, amount: amt, rowKey: rowKeyForMeta }
       };
+      const _flowForgeWriteT0 = typeof switchPerfNow === "function" ? switchPerfNow() : Date.now();
       state.done.unshift(newItem);
+      try {
+        if (typeof flowDiagNoteCheckinLocalWrite === "function") {
+          flowDiagNoteCheckinLocalWrite(
+            _flowForgeWriteT0,
+            typeof switchPerfNow === "function" ? switchPerfNow() : Date.now(),
+            newItem.id
+          );
+        }
+        if (typeof flowDiagNotePush === "function") flowDiagNotePush("forge-body-checkin");
+      } catch (_flowForgeBodyWrite) {}
       saveStateWithCloudPulseImmediate();
       scheduleCloudSyncFullPushAfterCheckin();
       try {
@@ -134458,6 +135313,9 @@
       if (!rowEl) return;
       const amt = String(amountText || "").trim();
       if (!amt) return;
+      try {
+        if (typeof flowDiagBeginCheckin === "function") flowDiagBeginCheckin("forge-mind", "");
+      } catch (_flowForgeMindBegin) {}
       extras = extras && typeof extras === "object" ? extras : {};
       const label = forgeMindCheckinDoneLabelFromDom(rowEl) || "Forge 心理训练";
       const dateKey = selectedDoneDate || formatDateInputValue(new Date());
@@ -134482,7 +135340,18 @@
         completedAt: ts,
         forgeMindMeta: forgeMindMeta
       };
+      const _flowForgeMindWriteT0 = typeof switchPerfNow === "function" ? switchPerfNow() : Date.now();
       state.done.unshift(newItem);
+      try {
+        if (typeof flowDiagNoteCheckinLocalWrite === "function") {
+          flowDiagNoteCheckinLocalWrite(
+            _flowForgeMindWriteT0,
+            typeof switchPerfNow === "function" ? switchPerfNow() : Date.now(),
+            newItem.id
+          );
+        }
+        if (typeof flowDiagNotePush === "function") flowDiagNotePush("forge-mind-checkin");
+      } catch (_flowForgeMindWrite) {}
       saveStateWithCloudPulseImmediate();
       scheduleCloudSyncFullPushAfterCheckin();
       try {
