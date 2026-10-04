@@ -97587,7 +97587,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004e";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -157968,6 +157968,26 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return latest;
     }
 
+    /**
+     * 其他任务完成落在哪个本地日历日（YYYY-MM-DD）。
+     * 优先 completedAt → 子步骤最晚完成 → statusAt；无可靠时间戳返回 ""。
+     */
+    function getWeeklyPlanTaskCompletedDateKey(task) {
+      if (!task || !isWeeklyPlanMainComplete(task)) return "";
+      let ms = normalizeWeeklyPlanCompletedAtMs(task.completedAt);
+      if (ms == null) ms = getWeeklyPlanMainCompletionFromMicros(task);
+      if (ms == null) {
+        const st = Number(task.statusAt) || 0;
+        if (st > 0) ms = st;
+      }
+      if (ms == null || !(ms > 0)) return "";
+      try {
+        return formatDateInputValue(new Date(ms));
+      } catch (_doneDayErr) {
+        return "";
+      }
+    }
+
     function touchWeeklyPlanTaskRevision(task) {
       if (!task || typeof task !== "object") return;
       task.updatedAt = Date.now();
@@ -158292,12 +158312,59 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return changed;
     }
 
-    /** 日界：Closed List 硬截当日上限；其他任务未完成项结转到今天 */
+    /**
+     * 其他任务：昨日（或更早）已完成的项移出今日挂牌。
+     * 覆盖「本机先结转 todayPlanDate→今天，随后合入昨日完成态」导致已完成项仍挂在今天的情况。
+     */
+    function retireCompletedTodayPlanOtherTasksBeforeToday() {
+      const todayKey = formatDateInputValue(new Date());
+      if (!todayKey || !state.weeklyPlan || typeof state.weeklyPlan !== "object") return false;
+      let changed = false;
+      const dirtyWeeks = Object.create(null);
+      const weekKeys = Object.keys(state.weeklyPlan);
+      for (let w = 0; w < weekKeys.length; w++) {
+        const wk = weekKeys[w];
+        const arr = state.weeklyPlan[wk];
+        if (!Array.isArray(arr)) continue;
+        for (let i = 0; i < arr.length; i++) {
+          const task = arr[i];
+          if (!task || task.id == null) continue;
+          const date = normalizeWeeklyPlanTodayPlanDate(task.todayPlanDate);
+          if (!date) continue;
+          if (!isWeeklyPlanMainComplete(task)) continue;
+          const doneDay = getWeeklyPlanTaskCompletedDateKey(task);
+          const pastHang = date < todayKey;
+          const doneBeforeToday = !!(doneDay && doneDay < todayKey);
+          if (!pastHang && !doneBeforeToday) continue;
+          task.todayPlanDate = "";
+          touchWeeklyPlanTaskRevision(task);
+          noteCloudSyncTodayPlanPulseTaskId(task.id);
+          try {
+            noteCloudSyncWeeklyPlanPulseWeekKey(wk);
+          } catch (_wkNoteErr) {}
+          dirtyWeeks[wk] = 1;
+          changed = true;
+        }
+      }
+      if (changed) {
+        try {
+          Object.keys(dirtyWeeks).forEach(function (wk) {
+            if (typeof notifyAliyunSprintRealWeekUpsert === "function") {
+              notifyAliyunSprintRealWeekUpsert(wk, "today-plan-retire-done");
+            }
+          });
+        } catch (_sprintRetire) {}
+      }
+      return changed;
+    }
+
+    /** 日界：Closed List 硬截当日上限；其他任务未完成结转 + 昨日已完成摘牌 */
     function tickClosedListDayRollover() {
       const todayKey = formatDateInputValue(new Date());
       closedListRolloverAnchorDate = todayKey;
       let changed = clampClosedListDayToMaxItems(todayKey);
       if (rolloverIncompleteTodayPlanOtherTasksToToday()) changed = true;
+      if (retireCompletedTodayPlanOtherTasksBeforeToday()) changed = true;
       return changed;
     }
 
@@ -165932,7 +165999,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     /**
      * 收集「其他任务」源：当日挂牌，或过去日未完成（结转展示兜底；正式推进日期见 rollover）。
-     * 已移出（无 todayPlanDate）与过去日已完成不进入。
+     * 已移出（无 todayPlanDate）、过去日已完成、以及「挂牌虽是今天但完成日落在今日之前」均不进入。
      */
     function collectRawWeeklyPlanTasksForTodayPlan(todayKey) {
       const out = [];
@@ -165951,7 +166018,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           const date = normalizeWeeklyPlanTodayPlanDate(task.todayPlanDate);
           if (!date) continue;
           if (date === want) {
-            /* 当日：含已完成，便于在「其他任务」里看到今日打卡 */
+            /* 当日挂牌：今日完成仍显示；昨日及更早完成的不显示（防结转+云合并残留） */
+            if (isWeeklyPlanMainComplete(task)) {
+              const doneDay = getWeeklyPlanTaskCompletedDateKey(task);
+              if (doneDay && doneDay < want) continue;
+            }
           } else if (date < want && !isWeeklyPlanMainComplete(task)) {
             /* 过去未完成：一直结转到今天展示 */
           } else {
@@ -174311,9 +174382,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (typeof rolloverWeeklyPlanIncompleteToCurrentWeek === "function") {
         if (rolloverWeeklyPlanIncompleteToCurrentWeek()) rolled = true;
       }
-      /* 其他任务：未完成挂牌跨日推进到今天（云合并后也补跑） */
+      /* 其他任务：未完成挂牌跨日推进到今天；昨日已完成摘牌（云合并后也补跑） */
       if (typeof rolloverIncompleteTodayPlanOtherTasksToToday === "function") {
         if (rolloverIncompleteTodayPlanOtherTasksToToday()) {
+          repairChanged = true;
+        }
+      }
+      if (typeof retireCompletedTodayPlanOtherTasksBeforeToday === "function") {
+        if (retireCompletedTodayPlanOtherTasksBeforeToday()) {
           repairChanged = true;
         }
       }
