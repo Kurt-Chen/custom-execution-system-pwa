@@ -98294,7 +98294,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004z";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004aa";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -109483,6 +109483,23 @@
         /* 复用启动串行拉取；Phase 1b domains meta 未变则跳过正文；域内指纹未变再跳过 merge/render */
         const report = await runAliyunSyncPrimaryBootPull({ reason: pullReason });
         if (report && report.ok) {
+          /*
+           * boot / 回前台：强制回补本机已有「每天三赢」Done → 阿里云（修历史漏传，无需重填）。
+           * 静默 5s poll 不跑，避免每轮刷上传。
+           */
+          if (
+            (pullReason === "boot" || pullReason === "visible" || pullReason === "manual-full") &&
+            typeof backfillDailyThreeWinsDoneMirrorsToAliyun === "function"
+          ) {
+            try {
+              const bf = backfillDailyThreeWinsDoneMirrorsToAliyun("after-" + pullReason);
+              if (report && typeof report === "object") report.dailyThreeWinsBackfill = bf;
+            } catch (_bfErr) {
+              try {
+                console.warn("[aliyun-sync-primary] dailyThreeWins backfill", _bfErr);
+              } catch (_cBf) {}
+            }
+          }
           /* 静默轮询且全域 meta 未变：不刷新角标时钟，避免无意义 UI 抖动 */
           if (!(quietPoll && report.skippedAll)) {
             paintAliyunSyncPrimaryBadgeOk();
@@ -110277,13 +110294,47 @@
         }
         payloadKB = Math.round((payloadStr.length / 1024) * 10) / 10;
         const donePullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
+        const envEarly = aliyunDoneRealParseEnvelope(payloadRaw);
         if (aliyunSyncPrimaryIsUnchangedPull("done", donePullFp)) {
-          ok = true;
-          logSyncNoDataChangeSkipRender("done");
-          aliyunDoneRealAppendLog("拉取无变化，跳过 merge/render");
-          return;
+          /*
+           * 指纹未变仍可能本机缺云端行（上次 merge 被跳过/本地误删未 tombstone）：
+           * 已下载正文，做轻量缺 id / 未应用 tombstone 检查，有缺口则继续 merge。
+           */
+          let localMiss = 0;
+          let tombPending = 0;
+          try {
+            const locIds = Object.create(null);
+            (state.done || []).forEach(function (it) {
+              if (it && it.id != null) locIds[String(it.id)] = true;
+            });
+            const rItems = (envEarly && envEarly.items) || {};
+            const rTombs = (envEarly && envEarly.tombstones) || {};
+            Object.keys(rItems).forEach(function (rid) {
+              const remote = rItems[rid];
+              if (!remote || remote.deleted) return;
+              if (rTombs[rid] && aliyunDoneRealItemTs(rTombs[rid]) > aliyunDoneRealItemTs(remote)) {
+                return;
+              }
+              if (!locIds[rid]) localMiss += 1;
+            });
+            Object.keys(rTombs).forEach(function (tid) {
+              if (locIds[tid]) tombPending += 1;
+            });
+          } catch (_gap) {
+            localMiss = 0;
+            tombPending = 0;
+          }
+          if (!localMiss && !tombPending) {
+            ok = true;
+            logSyncNoDataChangeSkipRender("done");
+            aliyunDoneRealAppendLog("拉取无变化，跳过 merge/render");
+            return;
+          }
+          aliyunDoneRealAppendLog(
+            "拉取指纹未变但本机缺口：missing=" + localMiss + " tombPending=" + tombPending + " → 继续 merge"
+          );
         }
-        const env = aliyunDoneRealParseEnvelope(payloadRaw);
+        const env = envEarly;
         parseMs = Date.now() - tParse0;
 
         const tMerge0 = Date.now();
@@ -110315,6 +110366,20 @@
               state.done.unshift(accept);
               localById[rid] = accept;
               mergedCount += 1;
+              /* 每天三赢从云端回来：清掉本机 tombstone/suppressed，允许显示 */
+              if (
+                accept.habitMeta &&
+                String(accept.habitMeta.key || "") === "dailyThreeWins" &&
+                accept.habitMeta.date
+              ) {
+                try {
+                  clearSyncTombstone(rid);
+                } catch (_clrTs) {}
+                const dkAcc = String(accept.habitMeta.date);
+                if (!state.habitCheckins[dkAcc]) state.habitCheckins[dkAcc] = {};
+                delete state.habitCheckins[dkAcc].dailyThreeWinsDoneSuppressed;
+                state.habitCheckins[dkAcc].dailyThreeWins = true;
+              }
               if (accept.dailyWinTomorrowMeta && accept.dailyWinTomorrowMeta.targetDateKey) {
                 try {
                   console.log(
@@ -110398,14 +110463,40 @@
           const tomb = remoteTombs[tid];
           const tTs = aliyunDoneRealItemTs(tomb);
           const local = localById[tid];
-          if (!local) continue;
-          const lTs = aliyunDoneRealItemTs(local);
-          if (tTs < lTs) continue;
-          state.done = state.done.filter(function (d) {
-            return !(d && String(d.id) === tid);
-          });
-          delete localById[tid];
-          tombstoneApplied += 1;
+          if (local) {
+            const lTs = aliyunDoneRealItemTs(local);
+            if (tTs < lTs) continue;
+            state.done = state.done.filter(function (d) {
+              return !(d && String(d.id) === tid);
+            });
+            delete localById[tid];
+            tombstoneApplied += 1;
+          }
+          /*
+           * 每天三赢 Done 被他端删除：即使本机已无该行，也要记下 suppressed + syncTombstones，
+           * 否则后续 AMB reconcile / hygiene 会因「写满 3 条」再造一行。
+           */
+          let dwDate = "";
+          if (String(tid).indexOf("dw-today-") === 0) {
+            dwDate = String(tid).slice("dw-today-".length);
+          } else if (
+            local &&
+            local.habitMeta &&
+            String(local.habitMeta.key || "") === "dailyThreeWins"
+          ) {
+            dwDate = String(local.habitMeta.date || "");
+          }
+          if (dwDate && /^\d{4}-\d{2}-\d{2}$/.test(dwDate)) {
+            try {
+              recordSyncTombstone(tid);
+            } catch (_tsDw) {}
+            if (!state.habitCheckins[dwDate]) state.habitCheckins[dwDate] = {};
+            state.habitCheckins[dwDate].dailyThreeWinsDoneSuppressed = true;
+            if (typeof countDailyWinEntriesForDate === "function") {
+              state.habitCheckins[dwDate].dailyThreeWins =
+                countDailyWinEntriesForDate(dwDate) >= 3;
+            }
+          }
         }
         /* Sex Training：信封顶层 moveBreakDay → state（原 Firebase pulse 路径在主路径下已跳过） */
         let moveBreakMerged = false;
@@ -121682,10 +121773,12 @@
           if (k === "dailyThreeWinsDoneSuppressed") return;
           day[k] = mergeHabitCheckinValueForSync(a[k], b[k]);
         });
-        /* 每日三赢已打卡时，不让他端的「撤销抑制」把勾选盖掉 */
-        if (isHabitCheckinValueChecked(day.dailyThreeWins)) {
-          delete day.dailyThreeWinsDoneSuppressed;
-        } else if (a.dailyThreeWinsDoneSuppressed || b.dailyThreeWinsDoneSuppressed) {
+        /*
+         * dailyThreeWinsDoneSuppressed = 用户删过 Done 镜像，须跨端保留（OR）。
+         * 旧逻辑在「已打卡」时清掉 suppressed，会导致 AMB/hygiene 把已删 Done 补回。
+         * 勾选态仍由 dailyThreeWins 本身合并，不受 suppressed 影响。
+         */
+        if (a.dailyThreeWinsDoneSuppressed || b.dailyThreeWinsDoneSuppressed) {
           day.dailyThreeWinsDoneSuppressed = true;
         }
         out[d] = day;
@@ -130240,29 +130333,53 @@
       return true;
     }
 
+    function isDailyThreeWinsDoneTombstoned(dateStr) {
+      const stableId = stableDailyThreeWinsDoneId(dateStr);
+      try {
+        if (
+          state.syncTombstones &&
+          typeof state.syncTombstones === "object" &&
+          state.syncTombstones[stableId]
+        ) {
+          return true;
+        }
+      } catch (_ts) {}
+      return false;
+    }
+
     function refreshDailyWinCheckin(dateStr, opts) {
       if (!state.habitCheckins[dateStr]) state.habitCheckins[dateStr] = {};
       const day = state.habitCheckins[dateStr];
       const skipNotify = !!(opts && opts.skipNotify);
+      /*
+       * allowRemove：仅用户删减每天三赢条目导致不足 3 条时为 true。
+       * 默认 false —— AMB 暂缺正文 / 拉取顺序交错时禁止误删已有 Done 镜像。
+       */
+      const allowRemove = !!(opts && opts.allowRemove);
       const count = countDailyWinEntriesForDate(dateStr);
       const should = count >= 3;
       const hadEntry = hasHabitDoneEntry("dailyThreeWins", dateStr);
       const suppressed = Boolean(day.dailyThreeWinsDoneSuppressed);
+      const tombstoned = isDailyThreeWinsDoneTombstoned(dateStr);
       const prevFlag = Boolean(day.dailyThreeWins);
       const prevSuppressed = suppressed;
 
       day.dailyThreeWins = should;
 
-      if (should && !hadEntry && !suppressed) {
+      if (should && !hadEntry && !suppressed && !tombstoned) {
         const todayKey = formatDateInputValue(new Date());
         /* 只在「今天刚写满 3 条」时自动入 Done；历史日补记走 stampDailyThreeWinsToDone，避免 Date.now 错落到今日时间线 */
         if (dateStr === todayKey) {
           syncHabitToDone("dailyThreeWins", dateStr, null, null, { skipNotify: skipNotify });
         }
       } else if (!should && hadEntry) {
-        removeHabitFromDone("dailyThreeWins", dateStr, { skipNotify: skipNotify });
-        delete day.dailyThreeWinsDoneSuppressed;
-      } else if (!should) {
+        if (!allowRemove) {
+          /* 保留 Done：与预设明天三赢 allowRemove 同契约 */
+        } else {
+          removeHabitFromDone("dailyThreeWins", dateStr, { skipNotify: skipNotify });
+          delete day.dailyThreeWinsDoneSuppressed;
+        }
+      } else if (!should && allowRemove) {
         delete day.dailyThreeWinsDoneSuppressed;
       } else if (suppressed && hadEntry) {
         removeHabitFromDone("dailyThreeWins", dateStr, { skipNotify: skipNotify });
@@ -130304,6 +130421,114 @@
       });
       return changed;
     }
+
+    /**
+     * 历史漏项回补：本机已有「每天三赢」Done（含今日 23:02 那条）强制进入阿里云 Done 队列。
+     * 不要求用户重填；文案/completedAt 沿用本机原行。亦顺带推一把 AMB dailyWin（若本机有今天正文）。
+     */
+    function backfillDailyThreeWinsDoneMirrorsToAliyun(reason) {
+      const report = {
+        reason: reason || "backfill",
+        pushed: 0,
+        ids: [],
+        ambNotified: false,
+        skippedSuppressed: 0,
+        skippedTombstoned: 0,
+        vdBefore: null
+      };
+      try {
+        if (typeof diagDoneVdDayBreakdown === "function") {
+          report.vdBefore = diagDoneVdDayBreakdown();
+        }
+      } catch (_vd0) {}
+      if (typeof isAliyunDoneRealSyncEnabled === "function" && !isAliyunDoneRealSyncEnabled()) {
+        report.error = "done-sync-disabled";
+        return report;
+      }
+      const rows = (state.done || []).filter(function (row) {
+        return (
+          row &&
+          row.habitMeta &&
+          String(row.habitMeta.key || "") === "dailyThreeWins" &&
+          row.habitMeta.date
+        );
+      });
+      rows.forEach(function (row) {
+        const dateStr = String(row.habitMeta.date);
+        const day = state.habitCheckins && state.habitCheckins[dateStr];
+        if (day && day.dailyThreeWinsDoneSuppressed) {
+          report.skippedSuppressed += 1;
+          return;
+        }
+        if (isDailyThreeWinsDoneTombstoned(dateStr)) {
+          report.skippedTombstoned += 1;
+          return;
+        }
+        const stableId = stableDailyThreeWinsDoneId(dateStr);
+        if (row.id != null && String(row.id) !== stableId) {
+          try {
+            recordSyncTombstone(row.id);
+          } catch (_oldTs) {}
+          if (typeof notifyAliyunDoneRealTombstone === "function") {
+            try {
+              notifyAliyunDoneRealTombstone("dailyThreeWins-stable-id", row.id, row);
+            } catch (_oldRm) {}
+          }
+          row.id = stableId;
+        } else if (!row.id) {
+          row.id = stableId;
+        }
+        if (!row.updatedAt) row.updatedAt = Date.now();
+        else row.updatedAt = Math.max(Number(row.updatedAt) || 0, Date.now());
+        if (typeof notifyAliyunDoneRealUpsert === "function") {
+          try {
+            notifyAliyunDoneRealUpsert("dailyThreeWins-backfill", row);
+            report.pushed += 1;
+            report.ids.push(String(row.id));
+          } catch (_up) {}
+        }
+      });
+      /* 本机今天已有三赢正文但 AMB 云端可能尚未带上：顺带推源域（不改文案） */
+      try {
+        const todayKey = formatDateInputValue(new Date());
+        if (
+          typeof countDailyWinEntriesForDate === "function" &&
+          countDailyWinEntriesForDate(todayKey) > 0 &&
+          typeof notifyAliyunAmbRealAfterLocalChange === "function"
+        ) {
+          notifyAliyunAmbRealAfterLocalChange("dailyWin-backfill");
+          report.ambNotified = true;
+        }
+      } catch (_ambBf) {}
+      if (report.pushed > 0 && typeof flushAliyunDoneRealQueue === "function") {
+        Promise.resolve(flushAliyunDoneRealQueue()).catch(function (err) {
+          try {
+            console.warn("[dailyThreeWins-backfill] flush", err);
+          } catch (_c) {}
+        });
+      }
+      try {
+        console.log("[dailyThreeWins-backfill]", report);
+        if (typeof aliyunDoneRealAppendLog === "function") {
+          aliyunDoneRealAppendLog(
+            "backfill dailyThreeWins pushed=" +
+              report.pushed +
+              " ids=" +
+              report.ids.join(",") +
+              " amb=" +
+              report.ambNotified
+          );
+        }
+      } catch (_log) {}
+      try {
+        window.__dailyThreeWinsBackfillReport = report;
+      } catch (_w) {}
+      return report;
+    }
+
+    try {
+      window.backfillDailyThreeWinsDoneMirrorsToAliyun = backfillDailyThreeWinsDoneMirrorsToAliyun;
+    } catch (_wBf) {}
 
     function listMeaningfulDailyWinTomorrowRef(targetDateKey) {
       ensureDailyWinTomorrowRefState();
@@ -139807,7 +140032,8 @@
       }
       if (listName === "dailyWin" && task) {
         const dk = getDailyWinItemDateKey(task);
-        if (dk) refreshDailyWinCheckin(dk);
+        /* 用户删减三赢条目：允许在不足 3 条时移除 Done 镜像 */
+        if (dk) refreshDailyWinCheckin(dk, { allowRemove: true });
       }
       if (listName === "closedList") {
         saveState({ lists: ["closedList", "done"] });
