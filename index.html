@@ -98294,7 +98294,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004w";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004x";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -99467,6 +99467,22 @@
       startedAt: 0
     };
     let dailyWinEditSessionLeaveBound = false;
+    /**
+     * AMB「始终向后衡量」显式编辑会话（gain / 旧向后衡量条目 / Think Day）。
+     * 不依赖 blur：IME/软键盘失焦不结束；期间禁止 forceLists 拆输入节点。
+     */
+    let ambMeasureEditSession = {
+      editing: false,
+      dirty: false,
+      scope: "",
+      kind: "",
+      startedAt: 0
+    };
+    let ambMeasureEditSessionLeaveBound = false;
+    /** 旧向后衡量（周/月/季）未点保存的 DOM 草稿；null=跟 state */
+    const ambBackwardPendingDrafts = { weekly: null, monthly: null, quarterly: null };
+    /** Think Day 未点保存的 q1–q5 草稿；null=跟 state */
+    let ambThinkDayPendingDraft = null;
     /**
      * 全局 IME 合成中：软键盘/中文输入会短暂 blur，不得据此结束编辑会话或放行列表重建。
      */
@@ -113440,11 +113456,25 @@
           } catch (_rf) {}
           try {
             if (settingsChanged) {
-              if (typeof syncForgeKbWeightUi === "function") syncForgeKbWeightUi();
-              if (typeof syncForgeCcProgressUi === "function") syncForgeCcProgressUi();
-              if (typeof renderForgeDailyMinRows === "function") renderForgeDailyMinRows();
-              if (typeof renderForgeWeeklyMinRows === "function") renderForgeWeeklyMinRows();
-              logUiPartialUpdate("forge");
+              const forgeSettingsBusy =
+                (typeof isAppUiBusyForBackgroundRefresh === "function" &&
+                  isAppUiBusyForBackgroundRefresh()) ||
+                !!appUiImeComposing ||
+                (typeof isTextEntryHot === "function" && isTextEntryHot());
+              if (forgeSettingsBusy) {
+                /* 日/周最低目标输入中：禁止 innerHTML 清空；state 已合入，退出编辑后再渲 */
+                renderDeferredWhileEditing = true;
+                if (typeof scheduleRenderWhenEditingEnds === "function") {
+                  scheduleRenderWhenEditingEnds();
+                }
+                aliyunForgeRealAppendLog("settings UI deferred: input busy");
+              } else {
+                if (typeof syncForgeKbWeightUi === "function") syncForgeKbWeightUi();
+                if (typeof syncForgeCcProgressUi === "function") syncForgeCcProgressUi();
+                if (typeof renderForgeDailyMinRows === "function") renderForgeDailyMinRows();
+                if (typeof renderForgeWeeklyMinRows === "function") renderForgeWeeklyMinRows();
+                logUiPartialUpdate("forge");
+              }
             }
           } catch (_setUi) {}
           /* 仅 Done/Forge 条目变更才走切片 render；纯 settings 已局部刷新，禁止整页重绘 */
@@ -116448,21 +116478,27 @@
     /**
      * AMB 合并后强制刷新「始终向后衡量」相关 UI。
      * render() 里多块被 paint 脏位 gate；pull/flush 常用 skipUiPaintDirty。
-     * 每天三赢显式编辑会话中：state 已 merge；刷新油箱/向后衡量/成功标准，
-     * 但绝不调用 render()/renderList(dailyWin)，保证编辑节点 100% 原地保留。
+     * 每天三赢 / AMB 衡量面显式编辑会话中：state 已 merge；
+     * 可刷新未在编辑的 chrome，但绝不 forceLists 拆输入节点，也绝不 renderList(dailyWin)。
      */
     function aliyunAmbRealPaintLocalUiAfterMerge() {
       const dwSession =
         typeof isDailyWinEditSessionActive === "function" && isDailyWinEditSessionActive();
+      const ambSession =
+        typeof isAmbMeasureEditSessionActive === "function" && isAmbMeasureEditSessionActive();
+      const fieldBusy =
+        typeof isAppUiBusyForBackgroundRefresh === "function" && isAppUiBusyForBackgroundRefresh();
+      const preserveAmbLists = !!(dwSession || ambSession || fieldBusy || appUiImeComposing);
       try {
         if (typeof markUiPaintSlicesDirty === "function") {
-          /* 会话中仍记 dirty，结束会话后再补渲 dailyWin */
+          /* 会话中仍记 dirty，结束会话后再补渲 dailyWin / AMB 列表 */
           markUiPaintSlicesDirty(["dailyWin", "habit", "stopDoing", "notToDo", "done"]);
         }
       } catch (_dirty) {}
       try {
         if (typeof renderBackwardMeasure === "function") {
-          renderBackwardMeasure({ forceLists: true });
+          /* 编辑中禁止 forceLists：否则 amb-gain / 向后衡量 textarea 会被 replaceChildren 拆掉 */
+          renderBackwardMeasure({ forceLists: !preserveAmbLists });
         }
       } catch (_bm) {
         console.warn("[aliyun-amb-real] renderBackwardMeasure 失败:", _bm);
@@ -116473,12 +116509,12 @@
       try {
         if (typeof renderSuccessCriteria === "function") renderSuccessCriteria();
       } catch (_sc) {}
-      if (dwSession) {
+      if (preserveAmbLists) {
         renderDeferredWhileEditing = true;
         if (typeof scheduleRenderWhenEditingEnds === "function") {
           scheduleRenderWhenEditingEnds();
         }
-        /* 局部刷新其他 AMB 列表，绕开会碰 dailyWin 的整页 render */
+        /* 局部刷新其他 AMB 列表，绕开会碰 dailyWin / AMB 输入的整页 render */
         try {
           if (
             typeof isUiPaintSliceDirty === "function" &&
@@ -121803,6 +121839,21 @@
             aliyunHabitRealAppendLog("paint deferred: numeric checkin dialog open");
           }
         } catch (_habitPaintLog) {}
+        return;
+      }
+      if (
+        (typeof isAppUiBusyForBackgroundRefresh === "function" && isAppUiBusyForBackgroundRefresh()) ||
+        appUiImeComposing
+      ) {
+        renderDeferredWhileEditing = true;
+        if (typeof scheduleRenderWhenEditingEnds === "function") {
+          scheduleRenderWhenEditingEnds();
+        }
+        try {
+          if (typeof aliyunHabitRealAppendLog === "function") {
+            aliyunHabitRealAppendLog("paint deferred: ui editing / IME");
+          }
+        } catch (_habitPaintBusy) {}
         return;
       }
       if (typeof renderCloudDomainPartial === "function") {
@@ -174350,8 +174401,139 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     };
     const ambGainPendingCount = { sprint3: 1, weekly: 1, monthly: 1, quarterly: 1, yearly: 1, triennial: 1 };
-    /** 填写中的未点「记录」草稿；再加一条重绘时写回，避免输入被冲掉 */
+    /** 填写中的未点「记录」草稿；再加一条重绘时写回，避免输入被冲掉（不入 state、不上传） */
     const ambGainPendingDrafts = { sprint3: [], weekly: [], monthly: [], quarterly: [], yearly: [], triennial: [] };
+
+    function isAmbMeasureEditSessionActive() {
+      return !!(ambMeasureEditSession && ambMeasureEditSession.editing);
+    }
+
+    function beginAmbMeasureEditSession(opts) {
+      const o = opts && typeof opts === "object" ? opts : {};
+      const scope = String(o.scope || ambMeasureEditSession.scope || "amb");
+      const kind = String(o.kind || ambMeasureEditSession.kind || "");
+      const wasEditing = ambMeasureEditSession.editing;
+      ambMeasureEditSession.editing = true;
+      ambMeasureEditSession.dirty = !!(o.dirty || ambMeasureEditSession.dirty);
+      ambMeasureEditSession.scope = scope;
+      ambMeasureEditSession.kind = kind;
+      if (!wasEditing) ambMeasureEditSession.startedAt = Date.now();
+      ensureAmbMeasureEditSessionLeaveDetection();
+      ensureAppUiImeComposeTracking();
+    }
+
+    function endAmbMeasureEditSession(reason) {
+      if (!ambMeasureEditSession.editing) return;
+      ambMeasureEditSession.editing = false;
+      ambMeasureEditSession.dirty = false;
+      ambMeasureEditSession.scope = "";
+      ambMeasureEditSession.kind = "";
+      ambMeasureEditSession.startedAt = 0;
+      try {
+        if (typeof console !== "undefined" && console.debug) {
+          console.debug("[amb-measure-edit-session] end", reason || "");
+        }
+      } catch (_ambSessEnd) {}
+      if (renderDeferredWhileEditing && typeof scheduleRenderWhenEditingEnds === "function") {
+        scheduleRenderWhenEditingEnds();
+      }
+    }
+
+    function isEventInsideAmbMeasureEditSurface(target) {
+      if (!target || typeof target.closest !== "function") return false;
+      return !!(
+        target.closest(".amb-gain-input") ||
+        target.closest(".amb-gain-card--pending") ||
+        target.closest(".amb-gain-footer") ||
+        target.closest(".habit-backward-item-input") ||
+        target.closest(".habit-backward-item-row") ||
+        target.closest("#backwardWeeklyItems") ||
+        target.closest("#backwardMonthlyItems") ||
+        target.closest("#backwardQuarterlyItems") ||
+        target.closest("#thinkDayInput1") ||
+        target.closest("#thinkDayInput2") ||
+        target.closest("#thinkDayInput3") ||
+        target.closest("#thinkDayInput4") ||
+        target.closest("#thinkDayInput5") ||
+        target.closest("#thinkDaySave") ||
+        target.closest("#backwardWeeklySave") ||
+        target.closest("#backwardMonthlySave") ||
+        target.closest("#backwardQuarterlySave") ||
+        target.closest("#fuelNoteInput") ||
+        target.closest("#successCriteriaList")
+      );
+    }
+
+    function ensureAmbMeasureEditSessionLeaveDetection() {
+      if (ambMeasureEditSessionLeaveBound) return;
+      ambMeasureEditSessionLeaveBound = true;
+      document.addEventListener(
+        "pointerdown",
+        function (ev) {
+          if (!isAmbMeasureEditSessionActive()) return;
+          if (appUiImeComposing) return;
+          if (isEventInsideAmbMeasureEditSurface(ev.target)) return;
+          endAmbMeasureEditSession("leave-panel");
+        },
+        true
+      );
+    }
+
+    function bindAmbMeasurePendingInputShield(inputEl, bindOpts) {
+      if (!inputEl || inputEl.dataset.ambShieldBound === "1") return;
+      inputEl.dataset.ambShieldBound = "1";
+      const o = bindOpts && typeof bindOpts === "object" ? bindOpts : {};
+      const scope = String(o.scope || "amb");
+      const kind = String(o.kind || "");
+      const markSession = function (dirty) {
+        beginAmbMeasureEditSession({
+          scope: scope,
+          kind: kind,
+          dirty: !!dirty
+        });
+      };
+      inputEl.addEventListener("focus", function () {
+        markSession(!!String(inputEl.value || "").trim() || ambMeasureEditSession.dirty);
+      });
+      inputEl.addEventListener("compositionstart", function () {
+        markSession(true);
+      });
+      inputEl.addEventListener("compositionupdate", function () {
+        markSession(true);
+      });
+      inputEl.addEventListener("compositionend", function () {
+        markSession(!!String(inputEl.value || "").trim());
+      });
+      inputEl.addEventListener("input", function () {
+        markSession(true);
+      });
+      inputEl.addEventListener("keydown", function (ev) {
+        if (ev.key === "Escape") {
+          endAmbMeasureEditSession("cancel-escape");
+        }
+      });
+    }
+
+    /**
+     * 列表重建是否应跳过（焦点 / IME / 显式会话）。
+     * forceRefresh（再加一条/删除空白等本地结构操作）在焦点不在可编辑控件且非 IME 时可重建；
+     * 同步 forceLists 在会话中应已降为 false，此处再挡一层焦点/IME。
+     */
+    function shouldPreserveAmbMeasureListDom(listEl, forceRefresh) {
+      if (!listEl) return false;
+      const ae = document.activeElement;
+      const editingFocus =
+        !!(
+          ae &&
+          listEl.contains(ae) &&
+          (typeof isActiveEditableField !== "function" || isActiveEditableField(ae))
+        );
+      if (editingFocus) return true;
+      if (appUiImeComposing && ae && listEl.contains(ae)) return true;
+      if (forceRefresh) return false;
+      if (isAmbMeasureEditSessionActive()) return true;
+      return false;
+    }
 
     function collectAmbGainPendingDrafts(kind, listEl) {
       const drafts = [];
@@ -174361,6 +174543,32 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
       ambGainPendingDrafts[kind] = drafts;
       return drafts;
+    }
+
+    function collectAmbBackwardPendingDrafts(kind) {
+      const ui = BACKWARD_MEASURE_UI[kind];
+      if (!ui) return null;
+      const listEl = document.getElementById(ui.listId);
+      if (!listEl) return null;
+      const items = getBackwardMeasureItemsFromListEl(listEl);
+      ambBackwardPendingDrafts[kind] = items;
+      return items;
+    }
+
+    function collectAmbThinkDayPendingDraft() {
+      const draft = {};
+      for (let i = 1; i <= 5; i++) {
+        const el = document.getElementById("thinkDayInput" + i);
+        draft["q" + i] = el ? String(el.value || "") : "";
+      }
+      try {
+        ensureBackwardMeasurePeriod();
+        draft.monthKey = state.backwardMeasurePeriod && state.backwardMeasurePeriod.monthly;
+      } catch (_mk) {
+        draft.monthKey = "";
+      }
+      ambThinkDayPendingDraft = draft;
+      return draft;
     }
 
     function getAmbPeriodKey(kind) {
@@ -174455,7 +174663,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!ui) return;
       const listEl = document.getElementById(ui.listId);
       if (!listEl) return;
-      if (!forceRefresh && listEl.contains(document.activeElement)) return;
       const nowRef = new Date();
       const due = getAmbDueDate(kind, nowRef);
       const writable = isAmbKindWritableToday(kind, nowRef);
@@ -174477,6 +174684,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (cardEl) {
         cardEl.classList.toggle("amb-card--due-today", writable);
         cardEl.classList.toggle("amb-card--writing-pending", writable && !saved.length);
+      }
+      /* 编辑中：只更新截止日期等 chrome，绝不 replaceChildren 拆输入框 */
+      if (shouldPreserveAmbMeasureListDom(listEl, forceRefresh)) {
+        collectAmbGainPendingDrafts(kind, listEl);
+        renderDeferredWhileEditing = true;
+        if (typeof scheduleRenderWhenEditingEnds === "function") {
+          scheduleRenderWhenEditingEnds();
+        }
+        return;
       }
       listEl.replaceChildren();
       saved.forEach(function (item, i) {
@@ -174543,6 +174759,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         inp.placeholder = ui.placeholder;
         const draft = ambGainPendingDrafts[kind] && ambGainPendingDrafts[kind][p];
         if (draft) inp.value = draft;
+        if (typeof bindAmbMeasurePendingInputShield === "function") {
+          bindAmbMeasurePendingInputShield(inp, { scope: "amb-gain", kind: kind });
+        }
         pendingInputs.push(inp);
         wrap.appendChild(title);
         wrap.appendChild(inp);
@@ -174608,6 +174827,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         ambSaveLock = true;
         ambGainPendingCount[kind] = 0;
         ambGainPendingDrafts[kind] = [];
+        if (typeof endAmbMeasureEditSession === "function") {
+          endAmbMeasureEditSession("amb-gain-save");
+        }
         try {
           saveBtn.blur();
         } catch (_ambBlur) {}
@@ -174705,11 +174927,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
     }
 
-    function buildBackwardMeasureItemRow(item, index, placeholder) {
+    function buildBackwardMeasureItemRow(item, index, placeholder, kindOpt) {
       const row = document.createElement("div");
       row.className = "habit-backward-item-row";
       row.setAttribute("role", "listitem");
       row.setAttribute("data-item-id", item.id);
+      const rowKind = kindOpt ? String(kindOpt) : "";
 
       const numEl = document.createElement("span");
       numEl.className = "habit-backward-item-num";
@@ -174721,6 +174944,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       inp.maxLength = 2000;
       inp.placeholder = placeholder;
       inp.value = typeof item.text === "string" ? item.text : "";
+      if (typeof bindAmbMeasurePendingInputShield === "function") {
+        bindAmbMeasurePendingInputShield(inp, { scope: "amb-backward", kind: rowKind });
+      }
+      inp.addEventListener("input", function () {
+        if (rowKind && BACKWARD_MEASURE_UI[rowKind]) {
+          collectAmbBackwardPendingDrafts(rowKind);
+          return;
+        }
+        const listEl = row.parentElement;
+        if (!listEl) return;
+        ["weekly", "monthly", "quarterly"].forEach(function (k) {
+          const uiK = BACKWARD_MEASURE_UI[k];
+          if (uiK && document.getElementById(uiK.listId) === listEl) {
+            collectAmbBackwardPendingDrafts(k);
+          }
+        });
+      });
 
       const actions = document.createElement("div");
       actions.className = "habit-backward-item-actions";
@@ -174746,9 +174986,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           renumberBackwardMeasureList(listEl);
           if (!listEl.querySelector(".habit-backward-item-row")) {
             listEl.appendChild(
-              buildBackwardMeasureItemRow({ id: newBackwardMeasureItemId(), text: "" }, 1, placeholder)
+              buildBackwardMeasureItemRow(
+                { id: newBackwardMeasureItemId(), text: "" },
+                1,
+                placeholder,
+                rowKind
+              )
             );
           }
+          if (rowKind) collectAmbBackwardPendingDrafts(rowKind);
         }
       });
 
@@ -174765,17 +175011,29 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!ui) return;
       const listEl = document.getElementById(ui.listId);
       if (!listEl) return;
-      if (!forceRefresh && listEl.contains(document.activeElement)) return;
+      if (shouldPreserveAmbMeasureListDom(listEl, forceRefresh)) {
+        collectAmbBackwardPendingDrafts(kind);
+        renderDeferredWhileEditing = true;
+        if (typeof scheduleRenderWhenEditingEnds === "function") {
+          scheduleRenderWhenEditingEnds();
+        }
+        return;
+      }
 
-      const norm = normalizeBackwardMeasurePeriodEntry(state.backwardMeasure[kind][periodKey]);
-      let items = norm.items.slice();
+      let items = null;
+      if (Array.isArray(ambBackwardPendingDrafts[kind])) {
+        items = ambBackwardPendingDrafts[kind].slice();
+      } else {
+        const norm = normalizeBackwardMeasurePeriodEntry(state.backwardMeasure[kind][periodKey]);
+        items = norm.items.slice();
+      }
       if (!items.length) {
         items = [{ id: newBackwardMeasureItemId(), text: "" }];
       }
 
       listEl.replaceChildren();
       items.forEach((item, i) => {
-        listEl.appendChild(buildBackwardMeasureItemRow(item, i + 1, ui.placeholder));
+        listEl.appendChild(buildBackwardMeasureItemRow(item, i + 1, ui.placeholder, kind));
       });
     }
 
@@ -174789,8 +175047,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           const listEl = document.getElementById(ui.listId);
           if (!listEl) return;
           const n = listEl.querySelectorAll(".habit-backward-item-row").length;
-          const row = buildBackwardMeasureItemRow({ id: newBackwardMeasureItemId(), text: "" }, n + 1, ui.placeholder);
+          const row = buildBackwardMeasureItemRow(
+            { id: newBackwardMeasureItemId(), text: "" },
+            n + 1,
+            ui.placeholder,
+            kind
+          );
           listEl.appendChild(row);
+          collectAmbBackwardPendingDrafts(kind);
           const inp = row.querySelector(".habit-backward-item-input");
           if (inp) inp.focus();
         });
@@ -175318,12 +175582,29 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         tdRaw && typeof tdRaw === "object"
           ? tdRaw
           : null;
+      const thinkEditing =
+        (typeof isAmbMeasureEditSessionActive === "function" &&
+          isAmbMeasureEditSessionActive() &&
+          ambMeasureEditSession.scope === "thinkDay") ||
+        (document.activeElement &&
+          /^thinkDayInput[1-5]$/.test(String(document.activeElement.id || "")));
+      if (thinkEditing && typeof collectAmbThinkDayPendingDraft === "function") {
+        collectAmbThinkDayPendingDraft();
+      }
       for (let i = 1; i <= 5; i++) {
         const ta = document.getElementById("thinkDayInput" + i);
-        if (ta && (forceLists || document.activeElement !== ta)) {
-          const v = td && typeof td["q" + i] === "string" ? td["q" + i] : "";
-          ta.value = v;
+        if (!ta) continue;
+        /* 禁止 forceLists 覆盖正在编辑/会话中的 Think Day；草稿优先于远端 state */
+        if (document.activeElement === ta || thinkEditing) continue;
+        let v = td && typeof td["q" + i] === "string" ? td["q" + i] : "";
+        if (
+          ambThinkDayPendingDraft &&
+          ambThinkDayPendingDraft.monthKey === mk &&
+          typeof ambThinkDayPendingDraft["q" + i] === "string"
+        ) {
+          v = ambThinkDayPendingDraft["q" + i];
         }
+        ta.value = v;
       }
       const thinkMeta = document.getElementById("thinkDayMeta");
       if (thinkMeta) {
@@ -175376,6 +175657,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         updatedAt: Date.now()
       };
       state.backwardMeasure.thinkDay[mk] = payload;
+      ambThinkDayPendingDraft = null;
+      if (typeof endAmbMeasureEditSession === "function") {
+        endAmbMeasureEditSession("thinkDay-save");
+      }
       if (thinkDayEntryHasContent(payload)) {
         backwardMeasureHoldPeriodAfterSave = { kind: "monthly", key: mk };
       }
@@ -175421,6 +175706,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } else {
         state.backwardMeasure[kind][key] = { items: [], text: "", updatedAt: 0 };
         removeBackwardMeasureDoneCopy(kind, key);
+      }
+      ambBackwardPendingDrafts[kind] = null;
+      if (typeof endAmbMeasureEditSession === "function") {
+        endAmbMeasureEditSession("backward-save");
       }
       blurBackwardMeasureListFocus(listEl);
       /* 与 persistAmbGainItems 相同：写 Done 后必须脏 done 切片，否则 preserveDoneClean 跳过重渲 */
@@ -175490,6 +175779,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (typeof isDailyWinEditSessionActive === "function" && isDailyWinEditSessionActive()) {
         return true;
       }
+      if (typeof isAmbMeasureEditSessionActive === "function" && isAmbMeasureEditSessionActive()) {
+        return true;
+      }
       if (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) return true;
       if (ageGoalsEditMode) return true;
       return isAppUiFieldEditingInProgress();
@@ -175512,6 +175804,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return true;
       }
       if (typeof isDailyWinEditSessionActive === "function" && isDailyWinEditSessionActive()) {
+        return true;
+      }
+      if (typeof isAmbMeasureEditSessionActive === "function" && isAmbMeasureEditSessionActive()) {
         return true;
       }
       if (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) return true;
@@ -179296,6 +179591,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     if (backwardQuarterlySave) backwardQuarterlySave.addEventListener("click", () => saveBackwardMeasure("quarterly"));
     const thinkDaySave = document.getElementById("thinkDaySave");
     if (thinkDaySave) thinkDaySave.addEventListener("click", saveThinkDay);
+    for (let thinkIdx = 1; thinkIdx <= 5; thinkIdx++) {
+      const thinkInp = document.getElementById("thinkDayInput" + thinkIdx);
+      if (!thinkInp || typeof bindAmbMeasurePendingInputShield !== "function") continue;
+      bindAmbMeasurePendingInputShield(thinkInp, { scope: "thinkDay", kind: "thinkDay" });
+      thinkInp.addEventListener("input", function () {
+        if (typeof collectAmbThinkDayPendingDraft === "function") collectAmbThinkDayPendingDraft();
+      });
+    }
+    const fuelNoteInp = document.getElementById("fuelNoteInput");
+    if (fuelNoteInp && typeof bindAmbMeasurePendingInputShield === "function") {
+      bindAmbMeasurePendingInputShield(fuelNoteInp, { scope: "fuel-note", kind: "fuel" });
+    }
 
     if (addDoneManualBtn) {
       addDoneManualBtn.addEventListener("mousedown", function (event) {
@@ -183555,6 +183862,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const bodyWrap = document.getElementById("forgeWeeklyMinRowsBody");
       const sptWrap = document.getElementById("forgeWeeklyMinRowsSpt");
       const rangeEl = document.getElementById("forgeWeeklyMinWeekRange");
+      const forgeWmHostBusy = function (host) {
+        if (!host) return false;
+        const ae = document.activeElement;
+        return !!(
+          ae &&
+          host.contains(ae) &&
+          (typeof isActiveEditableField !== "function" || isActiveEditableField(ae))
+        );
+      };
+      if (
+        forgeWmHostBusy(mindWrap) ||
+        forgeWmHostBusy(bodyWrap) ||
+        forgeWmHostBusy(sptWrap) ||
+        appUiImeComposing
+      ) {
+        renderDeferredWhileEditing = true;
+        if (typeof scheduleRenderWhenEditingEnds === "function") {
+          scheduleRenderWhenEditingEnds();
+        }
+        return;
+      }
       ensureForgeWeeklyMinimumsState();
       refreshForgeWeeklyMinTaskDatalist();
       const weekKey = forgeGetThisWeekSundayKeyFromSelectedOrToday();
@@ -183839,6 +184167,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const bodyWrap = document.getElementById("forgeDailyMinRowsBody");
       const sptWrap = document.getElementById("forgeDailyMinRowsSpt");
       const rangeEl = document.getElementById("forgeDailyMinDayRange");
+      const forgeDmHostBusy = function (host) {
+        if (!host) return false;
+        const ae = document.activeElement;
+        return !!(
+          ae &&
+          host.contains(ae) &&
+          (typeof isActiveEditableField !== "function" || isActiveEditableField(ae))
+        );
+      };
+      if (
+        forgeDmHostBusy(mindWrap) ||
+        forgeDmHostBusy(bodyWrap) ||
+        forgeDmHostBusy(sptWrap) ||
+        appUiImeComposing
+      ) {
+        renderDeferredWhileEditing = true;
+        if (typeof scheduleRenderWhenEditingEnds === "function") {
+          scheduleRenderWhenEditingEnds();
+        }
+        return;
+      }
       ensureForgeDailyMinimumsState();
       refreshForgeDailyMinTaskDatalist();
       const dateKey = selectedDoneDate || formatDateInputValue(new Date());
@@ -185023,7 +185372,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
 
       const tAct0 = isSwitchDiagEnabled() && switchPerfState.active ? switchPerfNow() : null;
-      /* 离开 Habit 主模块 = 明确结束每天三赢编辑会话 */
+      /* 离开 Habit 主模块 = 明确结束每天三赢 / AMB 衡量面编辑会话 */
       if (
         target.key !== "habit" &&
         typeof isDailyWinEditSessionActive === "function" &&
@@ -185031,6 +185380,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         typeof endDailyWinEditSession === "function"
       ) {
         endDailyWinEditSession("leave-module");
+      }
+      if (
+        target.key !== "habit" &&
+        typeof isAmbMeasureEditSessionActive === "function" &&
+        isAmbMeasureEditSessionActive() &&
+        typeof endAmbMeasureEditSession === "function"
+      ) {
+        endAmbMeasureEditSession("leave-module");
       }
       activePrimaryModuleKey = target.key;
       document.body.classList.add("primary-module-fullscreen");
