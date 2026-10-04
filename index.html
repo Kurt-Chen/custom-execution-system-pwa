@@ -98123,7 +98123,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004n";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004o";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -124438,7 +124438,35 @@
           return;
         }
         /* 勿用更少 Done 的快照覆盖紧急备份（防止错误整包覆盖冲掉可恢复副本） */
-        if (prevDone > 0 && nextDone < prevDone) return;
+        if (prevDone > 0 && nextDone < prevDone) {
+          /* 例外：变少的 id 均已记入 syncTombstones（用户主动删除）时允许更新，避免刷新后从备份复活 */
+          let allowFewer = false;
+          try {
+            const prevParsed = JSON.parse(localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY) || "null");
+            const nextParsed = JSON.parse(s);
+            const ts =
+              nextParsed && nextParsed.syncTombstones && typeof nextParsed.syncTombstones === "object"
+                ? nextParsed.syncTombstones
+                : {};
+            const nextIds = {};
+            (Array.isArray(nextParsed.done) ? nextParsed.done : []).forEach(function (t) {
+              if (t && t.id != null) nextIds[String(t.id)] = true;
+            });
+            const removed = (Array.isArray(prevParsed && prevParsed.done) ? prevParsed.done : []).filter(
+              function (t) {
+                return t && t.id != null && !nextIds[String(t.id)];
+              }
+            );
+            allowFewer =
+              removed.length > 0 &&
+              removed.every(function (t) {
+                return !!ts[String(t.id)];
+              });
+          } catch (_allowFewer) {
+            allowFewer = false;
+          }
+          if (!allowFewer) return;
+        }
         localStorage.setItem(STATE_EMERGENCY_BACKUP_KEY, s);
         _emergencyBackupJsonCache = s;
       } catch (_e) {}
@@ -124469,9 +124497,16 @@
           const beforeForgeMeta = (Array.isArray(state.done) ? state.done : []).filter(function (t) {
             return t && (t.forgeMindMeta || t.forgeBodyMeta);
           }).length;
+          /* 已 tombstone 的 id 禁止从紧急备份复活（删除后刷新必须仍生效） */
+          const localTs =
+            state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
+          const bakDone = parsed.done.filter(function (t) {
+            if (!t || t.id == null) return false;
+            return !localTs[String(t.id)];
+          });
           const next = mergeDoneArraysForSync(
             Array.isArray(state.done) ? state.done : [],
-            parsed.done,
+            bakDone,
             false
           );
           const afterForge = computeForgeLifetimeSignatureFromState({ done: next });
