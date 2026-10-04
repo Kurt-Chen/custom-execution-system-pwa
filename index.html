@@ -2009,9 +2009,50 @@
       font-weight: 800;
       font-style: normal;
       line-height: 1.2;
-      color: inherit;
+      /* 滚动态不用按钮白字/蓝字 inherit，与静态「12 Week Year」区分 */
+      color: #fde68a;
       will-change: transform;
       transform: translate3d(0, 0, 0);
+    }
+
+    #dynamicModule
+      .kinetic-tab-btn#kineticTabBtn-anniversary
+      .kinetic-anniversary-goal-marquee__track
+      .anniv-tab-goal {
+      flex-shrink: 0;
+    }
+
+    #dynamicModule
+      .kinetic-tab-btn#kineticTabBtn-anniversary
+      .kinetic-anniversary-goal-marquee__track
+      .anniv-tab-goal--1 {
+      color: #fde68a;
+    }
+
+    #dynamicModule
+      .kinetic-tab-btn#kineticTabBtn-anniversary
+      .kinetic-anniversary-goal-marquee__track
+      .anniv-tab-goal--2 {
+      color: #f9a8d4;
+    }
+
+    #dynamicModule
+      .kinetic-tab-btn#kineticTabBtn-anniversary
+      .kinetic-anniversary-goal-marquee__track
+      .anniv-tab-goal-sep {
+      color: #bfdbfe;
+      margin: 0 0.1em;
+      font-weight: 700;
+    }
+
+    #dynamicModule
+      .kinetic-tab-btn#kineticTabBtn-anniversary
+      .kinetic-anniversary-goal-marquee__track
+      .anniv-tab-remain {
+      color: #a5f3fc;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei",
+        sans-serif;
+      font-weight: 700;
     }
 
     #dynamicModule
@@ -2022,6 +2063,41 @@
       font-weight: 800;
       font-variant-numeric: tabular-nums;
       margin: 0 0.12em;
+    }
+
+    /* 未选中时蓝底未开，滚动字改深色以免浅字贴白底 */
+    #dynamicModule
+      .kinetic-tab-btn#kineticTabBtn-anniversary:not([aria-selected="true"])
+      .kinetic-anniversary-goal-marquee__track {
+      color: #b45309;
+    }
+
+    #dynamicModule
+      .kinetic-tab-btn#kineticTabBtn-anniversary:not([aria-selected="true"])
+      .kinetic-anniversary-goal-marquee__track
+      .anniv-tab-goal--1 {
+      color: #b45309;
+    }
+
+    #dynamicModule
+      .kinetic-tab-btn#kineticTabBtn-anniversary:not([aria-selected="true"])
+      .kinetic-anniversary-goal-marquee__track
+      .anniv-tab-goal--2 {
+      color: #be185d;
+    }
+
+    #dynamicModule
+      .kinetic-tab-btn#kineticTabBtn-anniversary:not([aria-selected="true"])
+      .kinetic-anniversary-goal-marquee__track
+      .anniv-tab-goal-sep {
+      color: #64748b;
+    }
+
+    #dynamicModule
+      .kinetic-tab-btn#kineticTabBtn-anniversary:not([aria-selected="true"])
+      .kinetic-anniversary-goal-marquee__track
+      .anniv-tab-remain {
+      color: #0e7490;
     }
 
     #dynamicModule
@@ -97309,7 +97385,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261003q";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261003r";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -163711,6 +163787,25 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         .filter(Boolean);
     }
 
+    /**
+     * 顶栏完整文案滚动：将「降到 X%」补成「降到 X%以下」（已有「以下」不重复）。
+     * 仅影响滚动轨，不改进度条静态短指标 / 固定 goals 源文案。
+     */
+    function formatAnniversaryTwelveWeekGoalForFullMarquee(goalText) {
+      const s = String(goalText || "").trim();
+      if (!s) return "";
+      return s.replace(/(降到\s*\d+(?:\.\d+)?\s*%)(?!以下)/g, "$1以下");
+    }
+
+    function getAnniversaryTwelveWeekGoalsForFullMarquee(mod, moduleKey) {
+      const pair = normalizeAnniversaryTwelveWeekGoalsOnModule(mod, moduleKey);
+      return (pair || [])
+        .map(function (g) {
+          return formatAnniversaryTwelveWeekGoalForFullMarquee(g);
+        })
+        .filter(Boolean);
+    }
+
     function formatChineseWeekdayLabel(d) {
       if (!d || isNaN(d.getTime())) {
         return "";
@@ -170705,7 +170800,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       kineticAnniversaryGoalMarqueeState.phase = "idle";
     }
 
-    /** 顶栏滚动用完整中文目标（非进度条短指标） */
+    /** 顶栏滚动用完整中文目标（非进度条短指标；「降到X%」补「以下」） */
     function getKineticAnniversaryTabGoalMarqueeParts() {
       const moduleKey =
         typeof getCurrentAnniversaryModuleForDate === "function"
@@ -170718,11 +170813,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         typeof getAnniversaryTwStateModule === "function"
           ? getAnniversaryTwStateModule(moduleKey)
           : null;
-      const goalText =
-        typeof getAnniversaryTwelveWeekGoalsDisplay === "function"
-          ? getAnniversaryTwelveWeekGoalsDisplay(mod, moduleKey)
-          : "";
-      if (!String(goalText || "").trim()) return null;
+      const goals =
+        typeof getAnniversaryTwelveWeekGoalsForFullMarquee === "function"
+          ? getAnniversaryTwelveWeekGoalsForFullMarquee(mod, moduleKey)
+          : [];
+      if (!goals.length) return null;
       let remainDays = null;
       if (
         typeof getAnniversaryTwWeek12DeadlineMsForModule === "function" &&
@@ -170733,22 +170828,44 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           remainDays = kineticCalendarDaysFromToday(deadlineMs);
         }
       }
-      return { goalText: String(goalText).trim(), remainDays: remainDays };
+      return {
+        goals: goals,
+        goalText: goals.join("；"),
+        remainDays: remainDays
+      };
     }
 
     function buildKineticAnniversaryTabGoalMarqueeTrack(track, parts) {
       if (!track || !parts) return;
       track.replaceChildren();
-      track.appendChild(document.createTextNode(parts.goalText));
+      const goals = Array.isArray(parts.goals) ? parts.goals : [];
+      goals.forEach(function (goal, idx) {
+        if (idx > 0) {
+          const sep = document.createElement("span");
+          sep.className = "anniv-tab-goal-sep";
+          sep.textContent = "；";
+          track.appendChild(sep);
+        }
+        const gEl = document.createElement("span");
+        gEl.className = "anniv-tab-goal anniv-tab-goal--" + (idx === 0 ? "1" : "2");
+        gEl.textContent = goal;
+        track.appendChild(gEl);
+      });
       if (parts.remainDays != null && Number(parts.remainDays) > 0) {
-        track.appendChild(document.createTextNode(" 仅剩 "));
+        const remainWrap = document.createElement("span");
+        remainWrap.className = "anniv-tab-remain";
+        remainWrap.appendChild(document.createTextNode(" 仅剩 "));
         const num = document.createElement("span");
         num.className = "anniv-tab-remain-num";
         num.textContent = String(parts.remainDays);
-        track.appendChild(num);
-        track.appendChild(document.createTextNode(" 天"));
+        remainWrap.appendChild(num);
+        remainWrap.appendChild(document.createTextNode(" 天"));
+        track.appendChild(remainWrap);
       } else if (parts.remainDays === 0) {
-        track.appendChild(document.createTextNode(" 今天截止"));
+        const remainWrap = document.createElement("span");
+        remainWrap.className = "anniv-tab-remain";
+        remainWrap.textContent = " 今天截止";
+        track.appendChild(remainWrap);
       }
     }
 
