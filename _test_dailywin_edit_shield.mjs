@@ -39,13 +39,16 @@ assert.match(renderListFn, /return;/);
 /* AMB paint 会话中不走整页 render */
 const paintFn = html.slice(
   html.indexOf("function aliyunAmbRealPaintLocalUiAfterMerge"),
-  html.indexOf("function aliyunAmbRealPaintLocalUiAfterMerge") + 2200
+  html.indexOf("function aliyunAmbRealPaintLocalUiAfterMerge") + 3600
 );
 assert.match(paintFn, /isDailyWinEditSessionActive|dwSession/);
 assert.match(paintFn, /return;/);
 assert.ok(
-  paintFn.includes("绝不调用") || paintFn.includes("绕开会碰 dailyWin"),
-  "paint must document skip full render during session"
+  paintFn.includes("绝不调用") ||
+    paintFn.includes("绕开会碰 dailyWin") ||
+    paintFn.includes("绝不 forceLists") ||
+    paintFn.includes("禁止 forceLists"),
+  "paint must document skip full render / forceLists during session"
 );
 
 /* 保存 / 离开模块结束会话 */
@@ -53,7 +56,7 @@ mustInclude('endDailyWinEditSession("composer-save")', "end on composer save");
 mustInclude('endDailyWinEditSession("leave-module")', "end on leave module");
 mustInclude('endDailyWinEditSession("leave-panel")', "end on leave panel");
 
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261001eg"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261001eg"/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004x"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261004x"/);
 
 console.log("OK dailywin-edit-session");
