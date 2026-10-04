@@ -98294,7 +98294,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004y";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004z";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -109376,6 +109376,14 @@
 
     function paintAliyunSyncPrimaryBadgeOk() {
       if (typeof isAliyunSyncPrimaryEnabled !== "function" || !isAliyunSyncPrimaryEnabled()) return;
+      /*
+       * 「已同步」≠ 某次 HTTP 200：本地各域仍有待 flush 队列时只表示「刚才那次请求成功」，
+       * 不能宣称所有本地改动已上传；保持「同步中…」直到队列清空。
+       */
+      if (typeof aliyunSyncPrimaryAnyDomainFlushBusy === "function" && aliyunSyncPrimaryAnyDomainFlushBusy()) {
+        paintAliyunSyncPrimaryBadgeSyncing();
+        return;
+      }
       cloudSyncLastErrorMsg = "";
       if (typeof markCloudSyncSuccess === "function") markCloudSyncSuccess();
       setCloudSyncStatus(buildCloudSyncConnectedBadgeText(), "status-connected");
@@ -109406,6 +109414,11 @@
       if (!report || report.skipped) return;
       if (report.error === "disabled") return;
       if (report.ok) {
+        /* 单域请求成功但本地仍有待上传时，不刷成「已同步」 */
+        if (typeof aliyunSyncPrimaryAnyDomainFlushBusy === "function" && aliyunSyncPrimaryAnyDomainFlushBusy()) {
+          paintAliyunSyncPrimaryBadgeSyncing();
+          return;
+        }
         paintAliyunSyncPrimaryBadgeOk();
         return;
       }
@@ -109710,8 +109723,24 @@
       /*
        * 清空油箱 / 预设明天三赢 / 封闭清单 / 备忘录 → Done 镜像：
        * 必须进阿里云 Done，否则他端只有源域数据、Done List 永远看不到。
-       * Habit 仍走 habitCheckins + pull 后 repair（habitMeta 不作为 Done 主同步路径）。
+       * 普通 Habit 仍走 habitCheckins + pull 后 repair（habitMeta 不作为 Done 主同步路径）。
+       * 例外：每天三赢（dailyThreeWins）——Habit repair / rebuild 显式跳过该槽，
+       * 若不进 Done 域，他端永远补不回 23:xx「每天三赢」行（与「预设明天三赢」不对齐）。
        */
+      if (
+        item.habitMeta &&
+        typeof item.habitMeta === "object" &&
+        String(item.habitMeta.key || "") === "dailyThreeWins"
+      ) {
+        const hm = item.habitMeta;
+        const meta = {
+          key: "dailyThreeWins",
+          date: hm.date != null ? String(hm.date) : ""
+        };
+        const stampAt = Number(hm.stampAt);
+        if (Number.isFinite(stampAt) && stampAt > 0) meta.stampAt = stampAt;
+        out.habitMeta = meta;
+      }
       if (item.fuelMeta && typeof item.fuelMeta === "object") {
         const fm = item.fuelMeta;
         const meta = { date: fm.date != null ? String(fm.date) : "" };
@@ -110342,6 +110371,20 @@
             else if (local.closedListMeta) next.closedListMeta = local.closedListMeta;
             if (remote.memoMeta) next.memoMeta = remote.memoMeta;
             else if (local.memoMeta) next.memoMeta = local.memoMeta;
+            /* 每天三赢：Done 域例外携带 habitMeta，合并时保留 */
+            if (
+              remote.habitMeta &&
+              typeof remote.habitMeta === "object" &&
+              String(remote.habitMeta.key || "") === "dailyThreeWins"
+            ) {
+              next.habitMeta = remote.habitMeta;
+            } else if (
+              local.habitMeta &&
+              typeof local.habitMeta === "object" &&
+              String(local.habitMeta.key || "") === "dailyThreeWins"
+            ) {
+              next.habitMeta = local.habitMeta;
+            }
             Object.keys(next).forEach(function (k) {
               local[k] = next[k];
             });
@@ -129394,7 +129437,8 @@
       return habitDateToNoonCompletedAt(dateStr);
     }
 
-    function removeHabitFromDone(habitKey, dateStr) {
+    function removeHabitFromDone(habitKey, dateStr, opts) {
+      const skipNotify = !!(opts && opts.skipNotify);
       const next = [];
       (Array.isArray(state.done) ? state.done : []).forEach(function (item) {
         if (
@@ -129403,7 +129447,24 @@
           item.habitMeta.key === habitKey &&
           item.habitMeta.date === dateStr
         ) {
-          if (item.id != null) recordSyncTombstone(item.id);
+          if (item.id != null) {
+            try {
+              recordSyncTombstone(item.id);
+            } catch (_ts) {}
+            /*
+             * 每天三赢走 Done 域例外：删除须 tombstone 云端，否则他端 Done pull 会复活。
+             * 其它 Habit 镜像仍只靠 Habit 域，不通知 Done。
+             */
+            if (
+              !skipNotify &&
+              habitKey === "dailyThreeWins" &&
+              typeof notifyAliyunDoneRealTombstone === "function"
+            ) {
+              try {
+                notifyAliyunDoneRealTombstone("dailyThreeWins-remove", item.id, item);
+              } catch (_dwRm) {}
+            }
+          }
           return;
         }
         next.push(item);
@@ -129880,7 +129941,12 @@
       });
     }
 
-    function syncHabitToDone(habitKey, dateStr, stampTimesOpt, atMs) {
+    /** 每天三赢 → Done 稳定 id（跨设备 Done 域与本地 random id 收敛到同一行） */
+    function stableDailyThreeWinsDoneId(dateStr) {
+      return "dw-today-" + String(dateStr || "");
+    }
+
+    function syncHabitToDone(habitKey, dateStr, stampTimesOpt, atMs, opts) {
       if (habitKey === "weightAndBodyFat") return;
       if (isHabitMinutesKey(habitKey)) return;
       if (isHabitWordCountKey(habitKey)) return;
@@ -129891,6 +129957,7 @@
       if (isHabitExperimentKey(habitKey)) return;
       if (isHabitOptionalRemarkKey(habitKey)) return;
       if (isScheduledLetterKey(habitKey)) return;
+      const skipNotify = !!(opts && opts.skipNotify);
       const label = HABIT_LABELS[habitKey] || habitKey;
       const tc = Number.isFinite(stampTimesOpt) && stampTimesOpt > 0 ? stampTimesOpt : null;
       let text =
@@ -129914,6 +129981,70 @@
         if (stampAt && !isSyntheticHabitNoonAt(stampAt)) meta.stampAt = stampAt;
         const clock = formatHabitWeekClockLabel(meta.stampAt || completedAt);
         if (clock) text += " · " + clock;
+      }
+      /*
+       * 每天三赢：稳定 id + Done 域 upsert（Habit repair 跳过该槽，只能靠 Done/AMB 安全网）。
+       * 已有同行则就地更新，避免 random id 叠双。
+       */
+      if (habitKey === "dailyThreeWins") {
+        const stableId = stableDailyThreeWinsDoneId(dateStr);
+        const existingIdx = findDailyThreeWinsDoneIndex(dateStr);
+        if (existingIdx !== -1) {
+          const row = state.done[existingIdx];
+          let changed = false;
+          if (row.id != null && String(row.id) !== stableId && !skipNotify) {
+            try {
+              recordSyncTombstone(row.id);
+            } catch (_oldTs) {}
+            if (typeof notifyAliyunDoneRealTombstone === "function") {
+              try {
+                notifyAliyunDoneRealTombstone("dailyThreeWins-stable-id", row.id, row);
+              } catch (_oldRm) {}
+            }
+            row.id = stableId;
+            changed = true;
+          } else if (row.id == null || String(row.id) !== stableId) {
+            row.id = stableId;
+            changed = true;
+          }
+          if (row.text !== text) {
+            row.text = text;
+            changed = true;
+          }
+          if (!row.habitMeta || typeof row.habitMeta !== "object") {
+            row.habitMeta = meta;
+            changed = true;
+          } else {
+            row.habitMeta.key = "dailyThreeWins";
+            row.habitMeta.date = dateStr;
+            if (meta.stampAt) row.habitMeta.stampAt = meta.stampAt;
+          }
+          if (!row.completedAt) row.completedAt = completedAt;
+          if (changed) {
+            row.updatedAt = Date.now();
+            if (!skipNotify && typeof notifyAliyunDoneRealUpsert === "function") {
+              try {
+                notifyAliyunDoneRealUpsert("dailyThreeWins", row);
+              } catch (_dwUp) {}
+            }
+          }
+          return;
+        }
+        const newItem = {
+          id: stableId,
+          text: text,
+          completedAt: completedAt,
+          createdAt: completedAt,
+          updatedAt: Date.now(),
+          habitMeta: meta
+        };
+        state.done.unshift(newItem);
+        if (!skipNotify && typeof notifyAliyunDoneRealUpsert === "function") {
+          try {
+            notifyAliyunDoneRealUpsert("dailyThreeWins", newItem);
+          } catch (_dwAdd) {}
+        }
+        return;
       }
       const _flowDoneId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
       const _flowWriteT0 = typeof switchPerfNow === "function" ? switchPerfNow() : Date.now();
@@ -130030,12 +130161,25 @@
       );
     }
 
+    function findDailyThreeWinsDoneIndex(dateStr) {
+      return (state.done || []).findIndex(function (row) {
+        return (
+          row &&
+          row.habitMeta &&
+          row.habitMeta.key === "dailyThreeWins" &&
+          row.habitMeta.date === dateStr
+        );
+      });
+    }
+
     /** 已有 Done 行时同步三条原文；新建仍走 syncHabitToDone */
-    function syncDailyThreeWinsDoneText(dateStr) {
+    function syncDailyThreeWinsDoneText(dateStr, opts) {
       if (!dateStr) return false;
+      const skipNotify = !!(opts && opts.skipNotify);
       const text = buildDailyThreeWinsDoneText(dateStr);
       if (!text || text === "每天三赢") return false;
       let changed = false;
+      const stableId = stableDailyThreeWinsDoneId(dateStr);
       (state.done || []).forEach(function (row) {
         if (
           !row ||
@@ -130045,9 +130189,32 @@
         ) {
           return;
         }
+        if (row.id != null && String(row.id) !== stableId && !skipNotify) {
+          try {
+            recordSyncTombstone(row.id);
+          } catch (_oldTs) {}
+          if (typeof notifyAliyunDoneRealTombstone === "function") {
+            try {
+              notifyAliyunDoneRealTombstone("dailyThreeWins-stable-id", row.id, row);
+            } catch (_oldRm) {}
+          }
+          row.id = stableId;
+          changed = true;
+        } else if (row.id == null || String(row.id) !== stableId) {
+          row.id = stableId;
+          changed = true;
+        }
         if (row.text !== text) {
           row.text = text;
           changed = true;
+        }
+        if (changed) {
+          row.updatedAt = Date.now();
+          if (!skipNotify && typeof notifyAliyunDoneRealUpsert === "function") {
+            try {
+              notifyAliyunDoneRealUpsert("dailyThreeWins", row);
+            } catch (_dwTxt) {}
+          }
         }
       });
       return changed;
@@ -130073,9 +130240,10 @@
       return true;
     }
 
-    function refreshDailyWinCheckin(dateStr) {
+    function refreshDailyWinCheckin(dateStr, opts) {
       if (!state.habitCheckins[dateStr]) state.habitCheckins[dateStr] = {};
       const day = state.habitCheckins[dateStr];
+      const skipNotify = !!(opts && opts.skipNotify);
       const count = countDailyWinEntriesForDate(dateStr);
       const should = count >= 3;
       const hadEntry = hasHabitDoneEntry("dailyThreeWins", dateStr);
@@ -130089,20 +130257,20 @@
         const todayKey = formatDateInputValue(new Date());
         /* 只在「今天刚写满 3 条」时自动入 Done；历史日补记走 stampDailyThreeWinsToDone，避免 Date.now 错落到今日时间线 */
         if (dateStr === todayKey) {
-          syncHabitToDone("dailyThreeWins", dateStr);
+          syncHabitToDone("dailyThreeWins", dateStr, null, null, { skipNotify: skipNotify });
         }
       } else if (!should && hadEntry) {
-        removeHabitFromDone("dailyThreeWins", dateStr);
+        removeHabitFromDone("dailyThreeWins", dateStr, { skipNotify: skipNotify });
         delete day.dailyThreeWinsDoneSuppressed;
       } else if (!should) {
         delete day.dailyThreeWinsDoneSuppressed;
       } else if (suppressed && hadEntry) {
-        removeHabitFromDone("dailyThreeWins", dateStr);
+        removeHabitFromDone("dailyThreeWins", dateStr, { skipNotify: skipNotify });
       }
 
       let textSynced = false;
       if (should && hasHabitDoneEntry("dailyThreeWins", dateStr)) {
-        textSynced = syncDailyThreeWinsDoneText(dateStr);
+        textSynced = syncDailyThreeWinsDoneText(dateStr, { skipNotify: skipNotify });
       }
 
       const hasEntryNow = hasHabitDoneEntry("dailyThreeWins", dateStr);
@@ -130114,7 +130282,7 @@
       );
     }
 
-    function refreshAllDailyWinCheckins() {
+    function refreshAllDailyWinCheckins(opts) {
       const dates = new Set();
       state.dailyWin.forEach(function (item) {
         if (!item) return;
@@ -130132,7 +130300,7 @@
       });
       let changed = false;
       dates.forEach(function (dateStr) {
-        if (refreshDailyWinCheckin(dateStr)) changed = true;
+        if (refreshDailyWinCheckin(dateStr, opts)) changed = true;
       });
       return changed;
     }
@@ -139201,6 +139369,16 @@
             state.habitCheckins[dk].dailyThreeWinsDoneSuppressed = true;
             state.habitCheckins[dk].dailyThreeWins = countDailyWinEntriesForDate(dk) >= 3;
           }
+          if (removed.id != null) {
+            try {
+              recordSyncTombstone(removed.id);
+            } catch (_dwTs) {}
+            if (typeof notifyAliyunDoneRealTombstone === "function") {
+              try {
+                notifyAliyunDoneRealTombstone("dailyThreeWins-toggle-off", removed.id, removed);
+              } catch (_dwTomb) {}
+            }
+          }
         } else {
           rebuildHabitCheckinFromDoneList(removed.habitMeta.key, removed.habitMeta.date, {
             intentional: true
@@ -139654,9 +139832,13 @@
       if (
         listName === "done" &&
         task &&
-        /* Habit 镜像走 Habit 域；其余进入 Done List 的业务行都要 tombstone */
-        !(task.habitMeta && typeof task.habitMeta === "object") &&
-        typeof notifyAliyunDoneRealTombstone === "function"
+        typeof notifyAliyunDoneRealTombstone === "function" &&
+        /*
+         * Habit 镜像走 Habit 域；例外：每天三赢已进 Done 域，删除必须 tombstone。
+         * 其余进入 Done List 的业务行都要 tombstone。
+         */
+        (!(task.habitMeta && typeof task.habitMeta === "object") ||
+          (task.habitMeta && String(task.habitMeta.key || "") === "dailyThreeWins"))
       ) {
         try {
           notifyAliyunDoneRealTombstone("delete", task.id, task);
@@ -146702,6 +146884,68 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       badge.appendChild(badgeText);
       container.appendChild(badge);
     }
+
+    /**
+     * 诊断：按日拆开 V/D 底层得分行（id / 文案 / 分值 / meta），用于跨端比对，禁止硬改总分。
+     * 用法：window.__diagDoneVdDayBreakdown("2026-10-04")
+     */
+    function diagDoneVdDayBreakdown(dateKeyOpt) {
+      const dateKey =
+        typeof dateKeyOpt === "string" && dateKeyOpt
+          ? dateKeyOpt
+          : typeof selectedDoneDate === "string" && selectedDoneDate
+            ? selectedDoneDate
+            : formatDateInputValue(new Date());
+      const raw = (state.done || []).filter(function (task) {
+        return typeof doneTaskMatchesFilterDate === "function"
+          ? doneTaskMatchesFilterDate(task, dateKey)
+          : true;
+      });
+      const display =
+        typeof dedupeDoneTasksForDisplay === "function" ? dedupeDoneTasksForDisplay(raw) : raw;
+      const scored = display.filter(function (t) {
+        return typeof isDoneCountedAsDayProduction === "function"
+          ? isDoneCountedAsDayProduction(t)
+          : true;
+      });
+      const rows = scored.map(function (t) {
+        const score =
+          typeof getDoneOutcomeVdScore === "function" ? getDoneOutcomeVdScore(t) : 0;
+        return {
+          id: t && t.id != null ? String(t.id) : "",
+          text: String((t && t.text) || "").slice(0, 80),
+          score: score,
+          completedAt: Number(t && t.completedAt) || 0,
+          habitKey: t && t.habitMeta ? String(t.habitMeta.key || "") : "",
+          dailyWinTomorrow: !!(t && t.dailyWinTomorrowMeta),
+          powerBadgeOnly:
+            typeof doneTaskUsesPowerBadgeOnly === "function"
+              ? !!doneTaskUsesPowerBadgeOnly(t)
+              : false
+        };
+      });
+      const summary =
+        typeof computeDoneVdIndex === "function"
+          ? computeDoneVdIndex(scored)
+          : { index: rows.reduce(function (a, r) { return a + r.score; }, 0) };
+      const out = {
+        dateKey: dateKey,
+        rawCount: raw.length,
+        displayCount: display.length,
+        scoredCount: scored.length,
+        index: summary.index,
+        powerPts: summary.powerPts,
+        treasonPts: summary.treasonPts,
+        rows: rows
+      };
+      try {
+        console.log("[diag-done-vd]", out);
+      } catch (_c) {}
+      return out;
+    }
+    try {
+      window.__diagDoneVdDayBreakdown = diagDoneVdDayBreakdown;
+    } catch (_wDiag) {}
 
     /** 汇总当日 Victory/Defeat Index（正分合计 / 负分合计 / 净值 / 分档次数） */
     function computeDoneVdIndex(tasks) {
@@ -156102,6 +156346,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const hk = String(task.habitMeta.key || "").trim();
         const hd = String(task.habitMeta.date || "").trim();
         if (hk && hd) {
+          /* 每天三赢：同日只留一行（稳定 id 与旧 random id 收敛，勿按分钟桶叠双） */
+          if (hk === "dailyThreeWins") {
+            return "habit:dailyThreeWins:" + hd;
+          }
           const text = String(task.text || "");
           const timesMatch = text.match(/第\s*(\d+)\s*次/);
           if (timesMatch) {
@@ -156164,6 +156412,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function doneDedupePreferenceScore(task) {
+      /* 每天三赢：稳定 id 优先于旧 random id，避免 prune 留下不可跨端对齐的行 */
+      if (
+        task &&
+        task.habitMeta &&
+        task.habitMeta.key === "dailyThreeWins" &&
+        task.id != null &&
+        String(task.id).indexOf("dw-today-") === 0
+      ) {
+        return 5;
+      }
       if (task && task.weeklyPlanMeta) return 4;
       if (task && task.closedListMeta) return 2;
       if (task && task.memoMeta) return 1;
@@ -175436,8 +175694,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * AMB 相关 Done 镜像总入口：向后衡量 + 清空油箱 + 预设明天三赢。
-     * Habit 打卡镜像仍由 Habit 域 pull 后的 repairHabitDoneMirrorsAfterAliyunHabitPull 负责。
+     * AMB 相关 Done 镜像总入口：向后衡量 + 清空油箱 + 每天三赢 + 预设明天三赢。
+     * 普通 Habit 打卡镜像仍由 Habit 域 pull 后的 repairHabitDoneMirrorsAfterAliyunHabitPull 负责；
+     * 每天三赢在 Habit repair 中被显式跳过，必须在此（及 Done 域）补齐。
      */
     function reconcileAmbDerivedDoneMirrorsFromState() {
       let changed = false;
@@ -175460,6 +175719,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
       } catch (_fuel) {
         console.warn("[amb] reconcileFuelScoreDoneMirrorsFromState 失败:", _fuel);
+      }
+      try {
+        /* skipNotify：AMB pull 安全网只补本地 Done，避免拉取风暴；上传仍靠本机写满时的 upsert */
+        if (
+          typeof refreshAllDailyWinCheckins === "function" &&
+          refreshAllDailyWinCheckins({ skipNotify: true })
+        ) {
+          changed = true;
+        }
+      } catch (_dwToday) {
+        console.warn("[amb] refreshAllDailyWinCheckins 失败:", _dwToday);
       }
       try {
         if (
