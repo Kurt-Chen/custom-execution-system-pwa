@@ -98294,7 +98294,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004w";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004x";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -103283,8 +103283,10 @@
         dailyDecisionReportOpen: false,
         vdIndexMethodOpen: false,
         vdIndexPanelTab: "trends",
-        /** 已对哪一日做过 22:00 自动展开（YYYY-MM-DD） */
+        /** 已对哪一日做过 22:00–22:30 自动展开每日决策报告（YYYY-MM-DD） */
         dailyDecisionReportAutoOpenedDateKey: "",
+        /** 已对哪一日做过 22:30–23:00 自动展开 V/D 趋势（YYYY-MM-DD） */
+        vdTrendsAutoOpenedDateKey: "",
         vdDesireMarqueeLastSlotKey: "",
         vdDesireMarqueeLastItemId: ""
       },
@@ -126817,6 +126819,7 @@
               vdIndexMethodOpen: false,
               vdIndexPanelTab: "trends",
               dailyDecisionReportAutoOpenedDateKey: "",
+              vdTrendsAutoOpenedDateKey: "",
               vdDesireMarqueeLastSlotKey: "",
               vdDesireMarqueeLastItemId: ""
             };
@@ -126832,6 +126835,9 @@
             }
             if (typeof state.doneUi.dailyDecisionReportAutoOpenedDateKey !== "string") {
               state.doneUi.dailyDecisionReportAutoOpenedDateKey = "";
+            }
+            if (typeof state.doneUi.vdTrendsAutoOpenedDateKey !== "string") {
+              state.doneUi.vdTrendsAutoOpenedDateKey = "";
             }
             if (typeof state.doneUi.vdDesireMarqueeLastSlotKey !== "string") {
               state.doneUi.vdDesireMarqueeLastSlotKey = "";
@@ -146414,6 +146420,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           vdIndexMethodOpen: false,
           vdIndexPanelTab: "trends",
           dailyDecisionReportAutoOpenedDateKey: "",
+          vdTrendsAutoOpenedDateKey: "",
           vdDesireMarqueeLastSlotKey: "",
           vdDesireMarqueeLastItemId: ""
         };
@@ -146430,6 +146437,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (typeof state.doneUi.dailyDecisionReportAutoOpenedDateKey !== "string") {
         state.doneUi.dailyDecisionReportAutoOpenedDateKey = "";
       }
+      if (typeof state.doneUi.vdTrendsAutoOpenedDateKey !== "string") {
+        state.doneUi.vdTrendsAutoOpenedDateKey = "";
+      }
       if (typeof state.doneUi.vdDesireMarqueeLastSlotKey !== "string") {
         state.doneUi.vdDesireMarqueeLastSlotKey = "";
       }
@@ -146439,46 +146449,109 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return state.doneUi;
     }
 
-    const DONE_DAILY_DECISION_AUTO_OPEN_HOUR = 22;
+    const DONE_EVENING_AUTO_EXPAND_HOUR = 22;
     let dailyDecisionReportAutoOpenTimer = null;
 
     /**
-     * 每天 22:00 起自动展开「每日决策报告」（每日历日最多一次；用户可手动收起）
-     * @returns {boolean} 是否本次触发了展开
+     * 晚间默认展开槽位：
+     * - 22:00–22:30 → 每日决策报告
+     * - 22:30–23:00 → V/D「趋势」
+     * @returns {"report"|"trends"|null}
      */
-    function maybeAutoOpenDailyDecisionReportAt22() {
-      const now = new Date();
-      if (now.getHours() < DONE_DAILY_DECISION_AUTO_OPEN_HOUR) return false;
-      const todayKey = formatDateInputValue(now);
-      const ui = ensureDoneUi();
-      if (ui.dailyDecisionReportAutoOpenedDateKey === todayKey) return false;
-      ui.dailyDecisionReportAutoOpenedDateKey = todayKey;
-      ui.dailyDecisionReportOpen = true;
+    function getDoneEveningAutoExpandSlot(nowOpt) {
+      const now = nowOpt instanceof Date ? nowOpt : new Date();
+      const h = now.getHours();
+      const m = now.getMinutes();
+      if (h !== DONE_EVENING_AUTO_EXPAND_HOUR) return null;
+      if (m < 30) return "report";
+      return "trends";
+    }
+
+    /** 切到 Done 动能页（自动展开时尽量可见） */
+    function activateDoneKineticTabForEveningAutoExpand() {
       if (typeof activateKineticTab === "function") {
         try {
           activateKineticTab("done");
         } catch (_tabErr) {}
       }
+    }
+
+    /**
+     * 按本地时段默认展开：
+     * 22:00–22:30 每日决策报告；22:30–23:00 趋势。
+     * 每个槽位每日历日最多自动一次；用户可手动收起。
+     * @returns {boolean} 是否本次触发了展开
+     */
+    function maybeApplyDoneEveningAutoExpand() {
+      const now = new Date();
+      const slot = getDoneEveningAutoExpandSlot(now);
+      if (!slot) return false;
+      const todayKey = formatDateInputValue(now);
+      const ui = ensureDoneUi();
+
+      if (slot === "report") {
+        if (ui.dailyDecisionReportAutoOpenedDateKey === todayKey) return false;
+        ui.dailyDecisionReportAutoOpenedDateKey = todayKey;
+        ui.dailyDecisionReportOpen = true;
+        ui.vdIndexMethodOpen = false;
+        syncDoneVdMainColumnFill(false);
+        activateDoneKineticTabForEveningAutoExpand();
+        saveState();
+        render();
+        return true;
+      }
+
+      /* trends · 22:30–23:00 */
+      if (ui.vdTrendsAutoOpenedDateKey === todayKey) return false;
+      ui.vdTrendsAutoOpenedDateKey = todayKey;
+      ui.vdIndexMethodOpen = true;
+      ui.vdIndexPanelTab = "trends";
+      ui.dailyDecisionReportOpen = false;
+      syncDoneVdMainColumnFill(true);
+      activateDoneKineticTabForEveningAutoExpand();
       saveState();
       render();
       return true;
     }
 
-    /** 对准下一本地 22:00 设超时，减少仅靠 30s 轮询的误差 */
+    /** @deprecated 兼容旧调用名；实际走晚间双槽位自动展开 */
+    function maybeAutoOpenDailyDecisionReportAt22() {
+      return maybeApplyDoneEveningAutoExpand();
+    }
+
+    /** 对准下一本地 22:00 或 22:30 设超时，减少仅靠 30s 轮询的误差 */
     function scheduleNextDailyDecisionReportAutoOpen() {
       if (dailyDecisionReportAutoOpenTimer) {
         clearTimeout(dailyDecisionReportAutoOpenTimer);
         dailyDecisionReportAutoOpenTimer = null;
       }
       const now = new Date();
-      const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), DONE_DAILY_DECISION_AUTO_OPEN_HOUR, 0, 0, 0);
-      if (now.getTime() >= next.getTime()) {
-        next.setDate(next.getDate() + 1);
+      const candidates = [
+        new Date(now.getFullYear(), now.getMonth(), now.getDate(), DONE_EVENING_AUTO_EXPAND_HOUR, 0, 0, 0),
+        new Date(now.getFullYear(), now.getMonth(), now.getDate(), DONE_EVENING_AUTO_EXPAND_HOUR, 30, 0, 0)
+      ];
+      let next = null;
+      for (let i = 0; i < candidates.length; i++) {
+        if (candidates[i].getTime() > now.getTime()) {
+          next = candidates[i];
+          break;
+        }
+      }
+      if (!next) {
+        next = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate() + 1,
+          DONE_EVENING_AUTO_EXPAND_HOUR,
+          0,
+          0,
+          0
+        );
       }
       const delay = Math.min(Math.max(1000, next.getTime() - now.getTime()), 2147483647);
       dailyDecisionReportAutoOpenTimer = setTimeout(function () {
         dailyDecisionReportAutoOpenTimer = null;
-        maybeAutoOpenDailyDecisionReportAt22();
+        maybeApplyDoneEveningAutoExpand();
         scheduleNextDailyDecisionReportAutoOpen();
       }, delay);
     }
