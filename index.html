@@ -36264,6 +36264,8 @@
     #todayPlanPanel
       #kineticTabsCountdownCluster.today-plan-cd-watermark
       .today-plan-anniv-goal-marquee__track.is-running.is-continuous,
+    #anniversaryModule
+      .anniversary-cycle-remain-strip-marquee__track.is-running.is-continuous,
     #dynamicModule
       .kinetic-tab-btn#kineticTabBtn-weekly
       .kinetic-weekly-sprint-day-marquee__track.is-running.is-continuous,
@@ -64828,6 +64830,101 @@
       font-variant-numeric: tabular-nums;
     }
 
+    /* 进度条半点跑马灯：短指标在整条蓝框内 continuous 滚一轮 */
+    #anniversaryModule .anniversary-cycle-remain-strip.is-anniv-cycle-marquee-playing
+      .anniversary-cycle-remain-strip__left,
+    #anniversaryModule .anniversary-cycle-remain-strip.is-anniv-cycle-marquee-playing
+      .anniversary-cycle-remain-strip__urgency,
+    #anniversaryModule .anniversary-cycle-remain-strip.is-anniv-cycle-marquee-playing
+      .anniversary-cycle-remain-strip__right {
+      visibility: hidden;
+    }
+
+    #anniversaryModule .anniversary-cycle-remain-strip-marquee-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      display: none;
+      align-items: center;
+      overflow: hidden;
+      pointer-events: none;
+      box-sizing: border-box;
+      padding: 0 10px;
+    }
+
+    #anniversaryModule
+      .anniversary-cycle-remain-strip.is-anniv-cycle-marquee-playing
+      .anniversary-cycle-remain-strip-marquee-overlay {
+      display: flex;
+    }
+
+    #anniversaryModule .anniversary-cycle-remain-strip-marquee {
+      display: block;
+      width: 100%;
+      overflow: hidden;
+      line-height: 1.2;
+      mask-image: linear-gradient(
+        90deg,
+        transparent 0,
+        #000 10px,
+        #000 calc(100% - 10px),
+        transparent 100%
+      );
+      -webkit-mask-image: linear-gradient(
+        90deg,
+        transparent 0,
+        #000 10px,
+        #000 calc(100% - 10px),
+        transparent 100%
+      );
+    }
+
+    #anniversaryModule .anniversary-cycle-remain-strip-marquee__track {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      will-change: transform;
+      white-space: nowrap;
+      transform: translate3d(0, 0, 0);
+    }
+
+    #anniversaryModule
+      .anniversary-cycle-remain-strip-marquee__track.is-running.is-continuous {
+      animation: done-sprint-finish-hour-task-marquee-continuous-rtl
+        var(--marquee-duration, 12s) linear 1 forwards;
+    }
+
+    #anniversaryModule .anniversary-cycle-remain-strip-marquee__pill {
+      display: inline-flex;
+      align-items: center;
+      flex-shrink: 0;
+      padding: 2px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(109, 40, 217, 0.28);
+      background: rgba(245, 243, 255, 0.95);
+      color: #6d28d9;
+      font-family: var(--font-fangsong), "Songti SC", serif;
+      font-size: 14px;
+      font-weight: 800;
+      line-height: 1.25;
+      white-space: nowrap;
+    }
+
+    #anniversaryModule .anniversary-cycle-remain-strip-marquee__pill--remain {
+      border-color: rgba(234, 88, 12, 0.35);
+      background: rgba(255, 247, 237, 0.96);
+      color: #c2410c;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei",
+        sans-serif;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #anniversaryModule .anniversary-cycle-remain-strip-marquee__pill--remain .remain-num {
+      color: #ea580c;
+      font-weight: 800;
+      margin: 0 0.15em;
+    }
+
     #anniversaryModule .anniversary-cycle-remain-strip__start-date,
     #anniversaryModule .anniversary-cycle-remain-strip__end-date {
       display: flex;
@@ -64877,8 +64974,20 @@
         font-size: 13px;
       }
 
+      /* 短指标（10万元 / 25%以下）手机也显示；原先整句目标过长才隐藏 */
       #anniversaryModule .anniversary-cycle-remain-strip__goal {
-        display: none !important;
+        display: inline;
+        font-size: 12px;
+        margin-right: 0.35em;
+      }
+
+      #anniversaryModule .anniversary-cycle-remain-strip-marquee-overlay {
+        padding: 0 8px;
+      }
+
+      #anniversaryModule .anniversary-cycle-remain-strip-marquee__pill {
+        font-size: 12px;
+        padding: 1px 8px;
       }
 
       #anniversaryModule .anniversary-cycle-remain-strip__start-date,
@@ -97192,7 +97301,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261003o";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261003p";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -149537,12 +149646,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         last = todayAnnivGoalMarqueeState.lastSlotKey || "";
       }
       const slotKey = getTodayAnnivGoalMarqueeSlotKey(now);
-      if (slotKey && slotKey === last) return;
-      if (!playTodayAnnivGoalMarqueeOnce(false)) return;
-      todayAnnivGoalMarqueeState.lastSlotKey = slotKey;
-      try {
-        sessionStorage.setItem(TODAY_ANNIV_GOAL_MARQUEE_SLOT_KEY, slotKey);
-      } catch (_ss2) {}
+      if (!(slotKey && slotKey === last)) {
+        if (playTodayAnnivGoalMarqueeOnce(false)) {
+          todayAnnivGoalMarqueeState.lastSlotKey = slotKey;
+          try {
+            sessionStorage.setItem(TODAY_ANNIV_GOAL_MARQUEE_SLOT_KEY, slotKey);
+          } catch (_ss2) {}
+        }
+      }
+      /* 同源半点：十二周年进度条蓝框短指标跑马灯 */
+      if (typeof maybePlayAnniversaryCycleRemainMarqueeForClock === "function") {
+        maybePlayAnniversaryCycleRemainMarqueeForClock();
+      }
     }
 
     function ensureTodayAnnivGoalMarqueeScheduler() {
@@ -163563,6 +163678,31 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return pair.filter(Boolean).join("；");
     }
 
+    /**
+     * 进度条/半点跑马灯用短指标：从完整 12 周目标抽出金额或百分比。
+     * 「降到 X%」展示为「X%以下」（如 体脂率降到25% → 25%以下）。
+     */
+    function formatAnniversaryTwelveWeekGoalShortMetric(goalText) {
+      const s = String(goalText || "").trim();
+      if (!s) return "";
+      const money = s.match(/(\d+(?:\.\d+)?)\s*(万(?:元)?)/);
+      if (money) return money[1] + money[2];
+      const downPct = s.match(/降到\s*(\d+(?:\.\d+)?)\s*%/);
+      if (downPct) return downPct[1] + "%以下";
+      const pct = s.match(/(\d+(?:\.\d+)?)\s*%/);
+      if (pct) return pct[1] + "%";
+      return s.length > 10 ? s.slice(0, 10) + "…" : s;
+    }
+
+    function getAnniversaryTwelveWeekGoalShortMetrics(mod, moduleKey) {
+      const pair = normalizeAnniversaryTwelveWeekGoalsOnModule(mod, moduleKey);
+      return (pair || [])
+        .map(function (g) {
+          return formatAnniversaryTwelveWeekGoalShortMetric(g);
+        })
+        .filter(Boolean);
+    }
+
     function formatChineseWeekdayLabel(d) {
       if (!d || isNaN(d.getTime())) {
         return "";
@@ -170413,6 +170553,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return null;
     }
 
+    /** 进度条半点跑马灯：短指标（10万元 / 25%以下 / 仅剩N天）在蓝框内 continuous 滚一轮 */
+    const ANNIVERSARY_CYCLE_REMAIN_MARQUEE_PASSES = 2;
+    const ANNIVERSARY_CYCLE_REMAIN_MARQUEE_SLOT_KEY = "anniv-cycle-remain-marquee-last-slot-v1";
+    let anniversaryCycleRemainMarqueeState = {
+      phase: "idle",
+      lastSlotKey: "",
+      playToken: 0,
+      finishTimerId: null
+    };
+
     function syncAnniversaryCycleRemainStrip() {
       const host = document.getElementById("anniversaryCycleRemainStrip");
       if (!host) return;
@@ -170462,29 +170612,36 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           typeof formatIsoDate === "function" ? formatIsoDate(endDay) : "";
       }
       if (centerEl) {
-        centerEl.replaceChildren();
-        if (notStarted) {
-          centerEl.textContent = "还未开始";
-        } else if (remainDays > 0) {
-          const modForGoal = getAnniversaryTwStateModule(moduleKey);
-          const goalText = getAnniversaryTwelveWeekGoalsDisplay(modForGoal, moduleKey);
-          if (goalText) {
-            const goalEl = document.createElement("span");
-            goalEl.className = "anniversary-cycle-remain-strip__goal";
-            goalEl.textContent = goalText;
-            centerEl.appendChild(goalEl);
-            centerEl.appendChild(document.createTextNode(" "));
+        /* 半点跑马灯播放中勿重写中间文案，避免打断 continuous */
+        const marqueePlaying =
+          host.classList.contains("is-anniv-cycle-marquee-playing") ||
+          (typeof anniversaryCycleRemainMarqueeState !== "undefined" &&
+            anniversaryCycleRemainMarqueeState.phase === "playing");
+        if (!marqueePlaying) {
+          centerEl.replaceChildren();
+          if (notStarted) {
+            centerEl.textContent = "还未开始";
+          } else if (remainDays > 0) {
+            const modForGoal = getAnniversaryTwStateModule(moduleKey);
+            const shorts = getAnniversaryTwelveWeekGoalShortMetrics(modForGoal, moduleKey);
+            if (shorts.length) {
+              const goalEl = document.createElement("span");
+              goalEl.className = "anniversary-cycle-remain-strip__goal";
+              goalEl.textContent = shorts.join("，");
+              centerEl.appendChild(goalEl);
+              centerEl.appendChild(document.createTextNode(" "));
+            }
+            centerEl.appendChild(document.createTextNode("仅剩 "));
+            const numEl = document.createElement("span");
+            numEl.className = "anniversary-cycle-remain-strip__remain-num";
+            numEl.textContent = String(remainDays);
+            centerEl.appendChild(numEl);
+            centerEl.appendChild(document.createTextNode(" 天"));
+          } else if (remainDays === 0) {
+            centerEl.textContent = "今天截止";
+          } else {
+            centerEl.textContent = "已过" + -remainDays + "天";
           }
-          centerEl.appendChild(document.createTextNode("仅剩 "));
-          const numEl = document.createElement("span");
-          numEl.className = "anniversary-cycle-remain-strip__remain-num";
-          numEl.textContent = String(remainDays);
-          centerEl.appendChild(numEl);
-          centerEl.appendChild(document.createTextNode(" 天"));
-        } else if (remainDays === 0) {
-          centerEl.textContent = "今天截止";
-        } else {
-          centerEl.textContent = "已过" + -remainDays + "天";
         }
       }
       if (elapsedEl) {
@@ -170503,7 +170660,175 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         restEl.style.flexShrink = "0";
         restEl.style.flexBasis = "0";
       }
+      if (typeof ensureTodayAnnivGoalMarqueeScheduler === "function") {
+        ensureTodayAnnivGoalMarqueeScheduler();
+      }
     }
+
+    function clearAnniversaryCycleRemainMarqueeFinishTimer() {
+      if (anniversaryCycleRemainMarqueeState.finishTimerId) {
+        clearTimeout(anniversaryCycleRemainMarqueeState.finishTimerId);
+        anniversaryCycleRemainMarqueeState.finishTimerId = null;
+      }
+    }
+
+    function ensureAnniversaryCycleRemainMarqueeHost(host) {
+      if (!host) return null;
+      const bar = host.querySelector(".anniversary-cycle-remain-strip__bar");
+      if (!bar) return null;
+      let overlay = bar.querySelector(":scope > .anniversary-cycle-remain-strip-marquee-overlay");
+      if (!overlay) {
+        overlay = document.createElement("span");
+        overlay.className = "anniversary-cycle-remain-strip-marquee-overlay";
+        overlay.setAttribute("aria-hidden", "true");
+        bar.appendChild(overlay);
+      }
+      return overlay;
+    }
+
+    function resetAnniversaryCycleRemainMarqueeIdle(hostOpt) {
+      clearAnniversaryCycleRemainMarqueeFinishTimer();
+      const host = hostOpt || document.getElementById("anniversaryCycleRemainStrip");
+      if (host) {
+        host.classList.remove("is-anniv-cycle-marquee-playing");
+        const overlay = host.querySelector(".anniversary-cycle-remain-strip-marquee-overlay");
+        if (overlay) overlay.replaceChildren();
+      }
+      anniversaryCycleRemainMarqueeState.phase = "idle";
+      if (typeof syncAnniversaryCycleRemainStrip === "function") {
+        syncAnniversaryCycleRemainStrip();
+      }
+    }
+
+    function buildAnniversaryCycleRemainMarqueeTrack(track, shorts, remainDays) {
+      if (!track) return;
+      track.replaceChildren();
+      (shorts || []).forEach(function (text) {
+        const pill = document.createElement("span");
+        pill.className = "anniversary-cycle-remain-strip-marquee__pill";
+        pill.textContent = text;
+        track.appendChild(pill);
+      });
+      if (remainDays != null && Number(remainDays) > 0) {
+        const remainPill = document.createElement("span");
+        remainPill.className =
+          "anniversary-cycle-remain-strip-marquee__pill anniversary-cycle-remain-strip-marquee__pill--remain";
+        remainPill.appendChild(document.createTextNode("仅剩"));
+        const num = document.createElement("span");
+        num.className = "remain-num";
+        num.textContent = String(remainDays);
+        remainPill.appendChild(num);
+        remainPill.appendChild(document.createTextNode("天"));
+        track.appendChild(remainPill);
+      }
+    }
+
+    /** 进度条蓝框内播一轮短指标跑马灯；force 供控制台调试 */
+    function playAnniversaryCycleRemainMarqueeOnce(forceOpt) {
+      const force = !!forceOpt;
+      if (typeof syncAnniversaryCycleRemainStrip === "function") {
+        syncAnniversaryCycleRemainStrip();
+      }
+      const host = document.getElementById("anniversaryCycleRemainStrip");
+      if (!host || host.hidden) return false;
+      if (anniversaryCycleRemainMarqueeState.phase === "playing" && !force) return false;
+      const moduleKey = getVisibleAnniversaryTwModuleKey();
+      if (!moduleKey) return false;
+      const mod = getAnniversaryTwStateModule(moduleKey);
+      const shorts = getAnniversaryTwelveWeekGoalShortMetrics(mod, moduleKey);
+      if (!shorts.length) return false;
+      let remainDays = null;
+      if (
+        typeof getAnniversaryTwWeek12DeadlineMsForModule === "function" &&
+        typeof kineticCalendarDaysFromToday === "function"
+      ) {
+        const deadlineMs = getAnniversaryTwWeek12DeadlineMsForModule(moduleKey);
+        if (deadlineMs != null) {
+          remainDays = kineticCalendarDaysFromToday(deadlineMs);
+        }
+      }
+      const overlay = ensureAnniversaryCycleRemainMarqueeHost(host);
+      if (!overlay) return false;
+      const reduceMotion =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      clearAnniversaryCycleRemainMarqueeFinishTimer();
+      overlay.replaceChildren();
+      const viewport = document.createElement("span");
+      viewport.className = "anniversary-cycle-remain-strip-marquee";
+      const track = document.createElement("span");
+      track.className = "anniversary-cycle-remain-strip-marquee__track";
+      buildAnniversaryCycleRemainMarqueeTrack(track, shorts, remainDays);
+      viewport.appendChild(track);
+      overlay.appendChild(viewport);
+      host.classList.add("is-anniv-cycle-marquee-playing");
+      anniversaryCycleRemainMarqueeState.phase = "playing";
+      anniversaryCycleRemainMarqueeState.playToken += 1;
+      const token = anniversaryCycleRemainMarqueeState.playToken;
+      const remainForDur =
+        remainDays != null && Number(remainDays) > 0 ? "仅剩" + remainDays + "天" : "";
+      const joined = shorts.join("，") + (remainForDur ? "，" + remainForDur : "");
+      const passSec = Math.max(
+        6,
+        Math.min(14, Math.round(String(joined).length * 0.32 + 5))
+      );
+      const passes = Math.max(1, Number(ANNIVERSARY_CYCLE_REMAIN_MARQUEE_PASSES) || 2);
+      let playMs;
+      if (!reduceMotion && typeof armSharedMarqueeContinuousTrack === "function") {
+        armSharedMarqueeContinuousTrack(track, passSec, passes, 0, {
+          lane: "annivCycleRemain"
+        });
+        if (typeof startSprintMarqueeTrackRunning === "function") {
+          startSprintMarqueeTrackRunning(track);
+        } else {
+          track.classList.add("is-running");
+        }
+        playMs =
+          typeof readMarqueeTrackPlayMs === "function"
+            ? readMarqueeTrackPlayMs(track, Math.round(passSec * passes * 1000))
+            : Math.round(passSec * passes * 1000);
+      } else {
+        playMs = Math.min(3500, passSec * 1000);
+      }
+      anniversaryCycleRemainMarqueeState.finishTimerId = window.setTimeout(function () {
+        if (anniversaryCycleRemainMarqueeState.playToken !== token) return;
+        resetAnniversaryCycleRemainMarqueeIdle(host);
+      }, playMs + 40);
+      return true;
+    }
+
+    function maybePlayAnniversaryCycleRemainMarqueeForClock() {
+      if (document.visibilityState === "hidden") return;
+      const now = new Date();
+      const mins = now.getMinutes();
+      if (mins !== 0 && mins !== 30) return;
+      if (now.getSeconds() > 12) return;
+      let last = "";
+      try {
+        last = String(sessionStorage.getItem(ANNIVERSARY_CYCLE_REMAIN_MARQUEE_SLOT_KEY) || "");
+      } catch (_ss) {
+        last = anniversaryCycleRemainMarqueeState.lastSlotKey || "";
+      }
+      const slotKey =
+        typeof getTodayAnnivGoalMarqueeSlotKey === "function"
+          ? getTodayAnnivGoalMarqueeSlotKey(now)
+          : formatDateInputValue(now) +
+            "-" +
+            String(now.getHours()).padStart(2, "0") +
+            (mins < 30 ? "00" : "30");
+      if (slotKey && slotKey === last) return;
+      if (!playAnniversaryCycleRemainMarqueeOnce(false)) return;
+      anniversaryCycleRemainMarqueeState.lastSlotKey = slotKey;
+      try {
+        sessionStorage.setItem(ANNIVERSARY_CYCLE_REMAIN_MARQUEE_SLOT_KEY, slotKey);
+      } catch (_ss2) {}
+    }
+
+    try {
+      window.__playAnniversaryCycleRemainMarqueeOnce = function () {
+        return playAnniversaryCycleRemainMarqueeOnce(true);
+      };
+    } catch (_wAnnivStrip) {}
 
     function renderAnniversaryTwAnchorModule(moduleKey) {
       if (
