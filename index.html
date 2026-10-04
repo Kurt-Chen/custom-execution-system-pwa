@@ -98123,11 +98123,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-<<<<<<< HEAD
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004l";
-=======
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004m";
->>>>>>> 586afbe (fix(mobile): Closed List 完成勾选回到左侧，完成态沿用桌面绿底)
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004n";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -99206,6 +99202,8 @@
     let weeklyPlanDnD = null;
     /** 周计划子步骤展开态（仅内存，刷新后默认折叠） */
     let weeklyPlanMicroExpandedIds = new Set();
+    /** 周计划删除进行中：防连点重复请求（仅内存） */
+    let weeklyPlanDeleteInFlightIds = new Set();
     /** My Done 已结束时段：用户展开后记住，冲刺刷新 / render 重建不得立刻折回（仅内存） */
     let donePastBlockExpandedKeys = new Set();
     /** My Done 任务行正文展开（仅内存） */
@@ -114462,6 +114460,8 @@
     const ALIYUN_SPRINT_REAL_SYNC_ENABLED = false;
     let aliyunSprintRealQueue = [];
     let aliyunSprintRealFlushTimer = null;
+    let aliyunSprintRealFlushRetryTimer = null;
+    let aliyunSprintRealFlushFailStreak = 0;
     let aliyunSprintRealFlushing = false;
     let aliyunSprintRealLastReport = null;
     let aliyunSprintRealSuppressPush = false;
@@ -115037,8 +115037,38 @@
           mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
           error: errMsg || undefined
         });
-        if (aliyunSprintRealQueue.length) {
-          Promise.resolve(flushAliyunSprintRealQueue()).catch(function () {});
+        /* 失败必须把本批 mutation（含 tombstone）塞回队列并退避重试，禁止静默丢删除 */
+        if (!ok && batch.length) {
+          aliyunSprintRealQueue = batch.concat(aliyunSprintRealQueue);
+          aliyunSprintRealFlushFailStreak += 1;
+          const retryMs = Math.min(
+            30000,
+            1000 * Math.pow(2, Math.min(aliyunSprintRealFlushFailStreak - 1, 4))
+          );
+          aliyunSprintRealAppendLog(
+            "flush fail requeue: batch=" +
+              batch.length +
+              " queueLen=" +
+              aliyunSprintRealQueue.length +
+              " retryMs=" +
+              retryMs +
+              " err=" +
+              (errMsg || "")
+          );
+          if (aliyunSprintRealFlushRetryTimer) clearTimeout(aliyunSprintRealFlushRetryTimer);
+          aliyunSprintRealFlushRetryTimer = setTimeout(function () {
+            aliyunSprintRealFlushRetryTimer = null;
+            Promise.resolve(flushAliyunSprintRealQueue()).catch(function (err2) {
+              aliyunSprintRealAppendLog(
+                "flush retry reject: " + (err2 && err2.message ? err2.message : String(err2))
+              );
+            });
+          }, retryMs);
+        } else {
+          if (ok) aliyunSprintRealFlushFailStreak = 0;
+          if (aliyunSprintRealQueue.length) {
+            Promise.resolve(flushAliyunSprintRealQueue()).catch(function () {});
+          }
         }
       }
     }
@@ -115116,6 +115146,10 @@
         aliyunSprintRealSuppressPush = true;
         try {
           metaChanged = !!aliyunSprintRealApplyRemoteMeta(env);
+          const localSyncTombs =
+            state.syncTombstones && typeof state.syncTombstones === "object"
+              ? state.syncTombstones
+              : {};
           for (let r = 0; r < remoteIds.length; r++) {
             const rid = remoteIds[r];
             const remote = remoteItems[rid];
@@ -115126,6 +115160,9 @@
             const rTs = aliyunSprintRealItemTs(remote);
             const tTs = aliyunSprintRealItemTs(tomb);
             if (tTs > rTs) continue;
+            /* 本机已删（syncTombstones）优先：避免阿里云 tombstone 未落盘时旧快照复活 */
+            const localTombAt = Number(localSyncTombs[rid]) || 0;
+            if (localTombAt > 0 && localTombAt >= rTs) continue;
 
             if (!Array.isArray(state.weeklyPlan[wk])) state.weeklyPlan[wk] = [];
             const arr = state.weeklyPlan[wk];
@@ -161269,52 +161306,170 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       focusWeeklyPlanComposerInput();
     }
 
+    /**
+     * Open List / Life / Work 主任务删除。
+     * 本地优先：先改 state 并局部移除卡片；阿里云 tombstone / Firebase pulse 后台执行。
+     * 禁止走 saveWeeklyPlanTasksForWeek（会整周 upsert + 二次 saveState + 全量列表重建）。
+     */
     function deleteWeeklyPlanTask(taskId) {
-      const located = findWeeklyPlanTaskInStorage(taskId);
-      const weekKey = located ? located.weekKey : getWeeklyPlanViewSprintStartKey();
-      const tasksAll = getWeeklyPlanTasksForWeekKey(weekKey);
-      const hit = located ? located.task : tasksAll.find((t) => t.id === taskId);
-      if (hit) {
+      const tid = taskId != null ? String(taskId) : "";
+      if (!tid) return;
+      if (weeklyPlanDeleteInFlightIds.has(tid)) return;
+      weeklyPlanDeleteInFlightIds.add(tid);
+      const tAll0 =
+        typeof perfNow === "function"
+          ? perfNow()
+          : typeof performance !== "undefined" && performance.now
+            ? performance.now()
+            : Date.now();
+      const split = { localMs: 0, uiMs: 0, cloudEnqueueMs: 0, persistScheduleMs: 0 };
+      let weekKey = "";
+      let hadTodayPlan = false;
+      try {
+        const tLocal0 = tAll0;
+        const located = findWeeklyPlanTaskInStorage(tid);
+        weekKey = located ? located.weekKey : getWeeklyPlanViewSprintStartKey();
+        if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") state.weeklyPlan = {};
+        const tasksAll = getWeeklyPlanTasksForWeekKey(weekKey);
+        const hit = located ? located.task : tasksAll.find((t) => t && String(t.id) === tid);
+        if (!hit) return;
+        hadTodayPlan = Boolean(hit.todayPlanDate);
+
         pushTrashEntry({
           sourceList: "weeklyPlan",
           originalId: hit.id,
           payload: deepCloneForTrash(hit),
           meta: { weekKey: weekKey }
         });
-        removeWeeklyPlanTaskDoneMirrors(weekKey, taskId);
-      }
-      if (hit && hit.id) {
+        removeWeeklyPlanTaskDoneMirrors(weekKey, tid);
         recordSyncTombstone(hit.id);
+        if (Array.isArray(hit.microTasks)) {
+          hit.microTasks.forEach(function (m) {
+            if (m && m.id != null) recordSyncTombstone(weeklyPlanMicroTombstoneId(m.id));
+          });
+        }
+
+        state.weeklyPlan[weekKey] = tasksAll.filter(function (t) {
+          return !(t && String(t.id) === tid);
+        });
+        noteCloudSyncWeeklyPlanPulseWeekKey(weekKey);
+
+        state.closedList
+          .filter(function (item) {
+            const mo = item && item.mirrorOf;
+            return mo && mo.kind === "weeklyPlan" && mo.weekKey === weekKey && String(mo.id) === tid;
+          })
+          .forEach(function (item) {
+            pushTrashEntry({
+              sourceList: "closedList",
+              originalId: item.id,
+              payload: deepCloneForTrash(item),
+              meta: { removedWithWeeklyPlanTask: tid }
+            });
+            if (item.id != null) recordSyncTombstone(item.id);
+            removeClosedListDoneCopy(item.id);
+          });
+        state.closedList = state.closedList.filter(function (item) {
+          const mo = item && item.mirrorOf;
+          if (!mo || mo.kind !== "weeklyPlan" || mo.weekKey !== weekKey || String(mo.id) !== tid) {
+            return true;
+          }
+          return false;
+        });
+        split.localMs =
+          (typeof perfNow === "function"
+            ? perfNow()
+            : typeof performance !== "undefined" && performance.now
+              ? performance.now()
+              : Date.now()) - tLocal0;
+
+        const tUi0 =
+          typeof perfNow === "function"
+            ? perfNow()
+            : typeof performance !== "undefined" && performance.now
+              ? performance.now()
+              : Date.now();
+        if (!patchWeeklyPlanAfterTaskDeleted(tid)) {
+          refreshWeeklyPlanListAfterStructureChange();
+        } else if (hadTodayPlan && typeof todayPlanPanelExpanded !== "undefined" && todayPlanPanelExpanded) {
+          try {
+            if (typeof patchTodayPlanUiAfterOtherTaskRemoved === "function") {
+              patchTodayPlanUiAfterOtherTaskRemoved(tid);
+            }
+          } catch (_tpPatch) {}
+        }
+        split.uiMs =
+          (typeof perfNow === "function"
+            ? perfNow()
+            : typeof performance !== "undefined" && performance.now
+              ? performance.now()
+              : Date.now()) - tUi0;
+
+        const tCloud0 =
+          typeof perfNow === "function"
+            ? perfNow()
+            : typeof performance !== "undefined" && performance.now
+              ? performance.now()
+              : Date.now();
         try {
           if (typeof notifyAliyunSprintRealTaskDelete === "function") {
             notifyAliyunSprintRealTaskDelete(hit, weekKey);
           }
         } catch (_sprintTomb) {}
-      }
-      const tasks = tasksAll.filter((t) => t.id !== taskId);
-      saveWeeklyPlanTasksForWeek(tasks, weekKey);
-      state.closedList
-        .filter(function (item) {
-          const mo = item.mirrorOf;
-          return mo && mo.kind === "weeklyPlan" && mo.weekKey === weekKey && mo.id === taskId;
-        })
-        .forEach(function (item) {
-          pushTrashEntry({
-            sourceList: "closedList",
-            originalId: item.id,
-            payload: deepCloneForTrash(item),
-            meta: { removedWithWeeklyPlanTask: taskId }
+        try {
+          if (typeof notifyAliyunSprintRealMetaAfterLocalChange === "function") {
+            notifyAliyunSprintRealMetaAfterLocalChange("sprint-task-delete-meta");
+          }
+        } catch (_sprintMeta) {}
+        split.cloudEnqueueMs =
+          (typeof perfNow === "function"
+            ? perfNow()
+            : typeof performance !== "undefined" && performance.now
+              ? performance.now()
+              : Date.now()) - tCloud0;
+
+        const tPersist0 =
+          typeof perfNow === "function"
+            ? perfNow()
+            : typeof performance !== "undefined" && performance.now
+              ? performance.now()
+              : Date.now();
+        saveState({ lists: ["weeklyPlan", "done", "closedList", "trash"] });
+        /* 落盘 + Firebase pulse 放到下一 macrotask，避免阻塞点击后的首帧移除 */
+        setTimeout(function () {
+          try {
+            flushLocalPersistedState("force");
+          } catch (_persistErr) {}
+          try {
+            flushCloudSyncPulseImmediate();
+          } catch (_pulseErr) {}
+        }, 0);
+        split.persistScheduleMs =
+          (typeof perfNow === "function"
+            ? perfNow()
+            : typeof performance !== "undefined" && performance.now
+              ? performance.now()
+              : Date.now()) - tPersist0;
+      } finally {
+        weeklyPlanDeleteInFlightIds.delete(tid);
+        const totalMs =
+          (typeof perfNow === "function"
+            ? perfNow()
+            : typeof performance !== "undefined" && performance.now
+              ? performance.now()
+              : Date.now()) - tAll0;
+        try {
+          console.log("[sprint-delete]", {
+            taskId: tid,
+            weekKey: weekKey,
+            totalMs: Math.round(totalMs * 10) / 10,
+            localMs: Math.round(split.localMs * 10) / 10,
+            uiMs: Math.round(split.uiMs * 10) / 10,
+            cloudEnqueueMs: Math.round(split.cloudEnqueueMs * 10) / 10,
+            persistScheduleMs: Math.round(split.persistScheduleMs * 10) / 10
           });
-          if (item.id != null) recordSyncTombstone(item.id);
-          removeClosedListDoneCopy(item.id);
-        });
-      state.closedList = state.closedList.filter(function (item) {
-        const mo = item.mirrorOf;
-        if (!mo || mo.kind !== "weeklyPlan" || mo.weekKey !== weekKey || mo.id !== taskId) return true;
-        return false;
-      });
-      saveState({ lists: ["weeklyPlan", "done", "closedList"] });
-      refreshWeeklyPlanListAfterStructureChange();
+        } catch (_logErr) {}
+      }
     }
 
     /** 将周计划主任务同步到当日 Closed List（mirrorOf 联动：任一侧完成则另一侧对齐） */
@@ -162507,28 +162662,63 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function deleteWeeklyPlanMicroTask(taskId, microId) {
-      const wk = getWeeklyPlanViewSprintStartKey();
-      const tasks = getWeeklyPlanTasksForViewSprint();
-      const task = tasks.find((t) => t.id === taskId);
-      if (!task) return;
-      const micro = (task.microTasks || []).find((x) => x.id === microId);
-      if (micro) {
-        pushTrashEntry({
-          sourceList: "weeklyPlanMicro",
-          originalId: microId,
-          payload: deepCloneForTrash(micro),
-          meta: { weekKey: wk, taskId: taskId }
-        });
-        recordSyncTombstone(weeklyPlanMicroTombstoneId(microId));
+      const tid = taskId != null ? String(taskId) : "";
+      const mid = microId != null ? String(microId) : "";
+      if (!tid || !mid) return;
+      const flightKey = "micro:" + tid + ":" + mid;
+      if (weeklyPlanDeleteInFlightIds.has(flightKey)) return;
+      weeklyPlanDeleteInFlightIds.add(flightKey);
+      try {
+        const located = findWeeklyPlanTaskInStorage(tid);
+        const wk = located ? located.weekKey : getWeeklyPlanViewSprintStartKey();
+        const tasks = getWeeklyPlanTasksForWeekKey(wk);
+        const task = located ? located.task : tasks.find((t) => t && String(t.id) === tid);
+        if (!task) return;
+        const micro = (task.microTasks || []).find((x) => x && String(x.id) === mid);
+        if (micro) {
+          pushTrashEntry({
+            sourceList: "weeklyPlanMicro",
+            originalId: mid,
+            payload: deepCloneForTrash(micro),
+            meta: { weekKey: wk, taskId: tid }
+          });
+          recordSyncTombstone(weeklyPlanMicroTombstoneId(mid));
+          try {
+            if (typeof notifyAliyunSprintRealTombstone === "function") {
+              notifyAliyunSprintRealTombstone("sprint-micro-delete", mid, micro, wk);
+            }
+          } catch (_microTomb) {}
+        }
+        task.microTasks = (task.microTasks || []).filter((x) => !(x && String(x.id) === mid));
+        applyWeeklyPlanMainDoneFromMicros(task);
+        touchWeeklyPlanTaskRevision(task);
+        noteCloudSyncWeeklyPlanPulseWeekKey(wk);
+        try {
+          if (typeof notifyAliyunSprintRealUpsert === "function") {
+            notifyAliyunSprintRealUpsert("sprint-micro-delete-parent", wk, task);
+          }
+        } catch (_parentUpsert) {}
+        try {
+          if (typeof notifyAliyunSprintRealMetaAfterLocalChange === "function") {
+            notifyAliyunSprintRealMetaAfterLocalChange("sprint-micro-delete-meta");
+          }
+        } catch (_metaErr) {}
+        syncAllWeeklyPlanMirrorsForWeek(wk);
+        if (!patchWeeklyPlanAfterMicroDeleted(tid, mid)) {
+          refreshWeeklyPlanListAfterStructureChange();
+        }
+        saveState({ lists: ["weeklyPlan", "done", "closedList", "trash"] });
+        setTimeout(function () {
+          try {
+            flushLocalPersistedState("force");
+          } catch (_persistErr) {}
+          try {
+            flushCloudSyncPulseImmediate();
+          } catch (_pulseErr) {}
+        }, 0);
+      } finally {
+        weeklyPlanDeleteInFlightIds.delete(flightKey);
       }
-      task.microTasks = task.microTasks.filter((x) => x.id !== microId);
-      applyWeeklyPlanMainDoneFromMicros(task);
-      touchWeeklyPlanTaskRevision(task);
-      saveWeeklyPlanTasksForWeek(tasks);
-      syncAllWeeklyPlanMirrorsForWeek(getWeeklyPlanViewSprintStartKey());
-      noteCloudSyncWeeklyPlanPulseWeekKey(wk);
-      flushCloudSyncPulseImmediate();
-      refreshWeeklyPlanListAfterStructureChange();
     }
 
     function renderWeeklyPlanChrome() {
@@ -163132,6 +163322,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         (task.microTasks || []).forEach((m, mi) => {
           const mLi = document.createElement("li");
           mLi.className = "weekly-plan-micro-item";
+          if (m && m.id != null) mLi.setAttribute("data-micro-id", String(m.id));
           if (m.done) {
             mLi.classList.add("weekly-plan-micro-item-done");
           }
@@ -166185,6 +166376,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function createWeeklyPlanMicroItemLi(taskId, micro, index) {
       const mLi = document.createElement("li");
       mLi.className = "weekly-plan-micro-item";
+      if (micro && micro.id != null) mLi.setAttribute("data-micro-id", String(micro.id));
       if (micro.done) {
         mLi.classList.add("weekly-plan-micro-item-done");
       }
@@ -166277,6 +166469,93 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       const index = microUl.querySelectorAll(".weekly-plan-micro-item").length;
       microUl.appendChild(createWeeklyPlanMicroItemLi(taskId, micro, index));
+      return true;
+    }
+
+    /** 删除主任务：只移除当前卡片 + 更新进度条；看板模式回退全量刷新 */
+    function patchWeeklyPlanAfterTaskDeleted(taskId) {
+      const tid = taskId != null ? String(taskId) : "";
+      if (!tid) return false;
+      const shell = getWeeklyPlanShell();
+      if (
+        isWeeklyPlanTaskShell(shell) &&
+        typeof isSprintKanbanDesktopEnabled === "function" &&
+        isSprintKanbanDesktopEnabled() &&
+        typeof getSprintViewMode === "function" &&
+        getSprintViewMode(shell) === "kanban"
+      ) {
+        return false;
+      }
+      const li = document.getElementById("weeklyPlanTask-" + tid);
+      if (!li || !li.parentNode) return false;
+      li.parentNode.removeChild(li);
+      weeklyPlanMicroExpandedIds.delete(tid);
+      if (weeklyPlanList && weeklyPlanEmpty) {
+        const remaining = weeklyPlanList.querySelectorAll(".weekly-plan-item");
+        if (!remaining.length) {
+          weeklyPlanEmpty.style.display = "block";
+          const viewLane = isWeeklyPlanTaskShell(shell) ? shell : getWeeklyPlanAddLane();
+          const curKey = getCurrentWeeklyPlanSprintStartKey();
+          const emptyPrefix =
+            getWeeklyPlanViewSprintStartKey() === curKey ? "本期暂无" : "该期暂无";
+          weeklyPlanEmpty.textContent =
+            emptyPrefix +
+            (viewLane === "work"
+              ? "工作任务"
+              : viewLane === "open"
+                ? " Open List 任务"
+                : "生活任务");
+        }
+      }
+      try {
+        renderWeeklyPlanChrome();
+      } catch (_chromeErr) {}
+      try {
+        clearUiPaintSlice("weeklyPlan");
+      } catch (_sliceErr) {}
+      return true;
+    }
+
+    /** 删除微任务：只移除当前子行并重编号；失败则回退全量列表刷新 */
+    function patchWeeklyPlanAfterMicroDeleted(taskId, microId) {
+      const tid = taskId != null ? String(taskId) : "";
+      const mid = microId != null ? String(microId) : "";
+      if (!tid || !mid) return false;
+      const shell = getWeeklyPlanShell();
+      if (
+        isWeeklyPlanTaskShell(shell) &&
+        typeof isSprintKanbanDesktopEnabled === "function" &&
+        isSprintKanbanDesktopEnabled() &&
+        typeof getSprintViewMode === "function" &&
+        getSprintViewMode(shell) === "kanban"
+      ) {
+        return false;
+      }
+      const li = document.getElementById("weeklyPlanTask-" + tid);
+      if (!li) return false;
+      const microUl = li.querySelector(".weekly-plan-micro-list");
+      if (!microUl) return false;
+      const row = microUl.querySelector('.weekly-plan-micro-item[data-micro-id="' + mid + '"]');
+      if (row && row.parentNode) {
+        row.parentNode.removeChild(row);
+        const left = microUl.querySelectorAll(".weekly-plan-micro-item");
+        for (let n = 0; n < left.length; n++) {
+          const stepNum = left[n].querySelector(".weekly-plan-micro-step-num");
+          if (stepNum) stepNum.textContent = String(n + 1);
+        }
+      } else {
+        /* 旧 DOM 无 data-micro-id：按当前 state 只重建该卡微任务列表 */
+        const located = findWeeklyPlanTaskInStorage(tid);
+        const task = located && located.task;
+        if (!task) return false;
+        microUl.innerHTML = "";
+        (task.microTasks || []).forEach(function (m, idx) {
+          microUl.appendChild(createWeeklyPlanMicroItemLi(tid, m, idx));
+        });
+      }
+      try {
+        renderWeeklyPlanChrome();
+      } catch (_chromeErr) {}
       return true;
     }
 
