@@ -97928,7 +97928,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004i";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004j";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -179721,15 +179721,71 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           return;
         }
         if (isHabitOptionalRemarkKey(habitKey)) {
-          if (getHabitDoneRowsForDay(habitKey, dateStr).length > 0) return;
-          syncHabitReadingToDone(
-            habitKey,
-            dateStr,
-            getHabitRemarkFromCheckinValue(v),
-            getSimpleHabitStampTimes(v) || 1,
-            atMs
+          /*
+           * optional-remark（Gemini Notebook / 听网课·有声书等）：与简单习惯一致，
+           * 按 times + stamps[N-1] 增量补齐「第 N 次」；禁止「已有任一行就 return」。
+           * 幂等：已有第 N 次（文案）则不新建；仅当 completedAt 与 stamps[N-1] 明显偏离时校正时刻。
+           */
+          const expectTimes = Math.max(
+            1,
+            (typeof getOptionalRemarkStampTimes === "function"
+              ? getOptionalRemarkStampTimes(v)
+              : getSimpleHabitStampTimes(v)) || 1
           );
-          changed = true;
+          const existingRows = getHabitDoneRowsForDay(habitKey, dateStr);
+          const haveN = new Set();
+          const rowByN = Object.create(null);
+          existingRows.forEach(function (row) {
+            const m = String((row && row.text) || "").match(/第\s*(\d+)\s*次/);
+            if (!m) return;
+            const nn = Number(m[1]);
+            if (!Number.isFinite(nn) || nn < 1) return;
+            haveN.add(nn);
+            if (!rowByN[nn]) rowByN[nn] = row;
+          });
+          /* 无「第 N 次」旧文案：按条数占位 1..len，避免误再补第1次叠双 */
+          if (haveN.size === 0 && existingRows.length > 0) {
+            for (let i = 0; i < existingRows.length; i++) {
+              const nn = i + 1;
+              haveN.add(nn);
+              if (!rowByN[nn]) rowByN[nn] = existingRows[i];
+            }
+          }
+          const stampList =
+            v && typeof v === "object" && Array.isArray(v.stamps)
+              ? v.stamps
+                  .map(function (t) {
+                    return Number(t);
+                  })
+                  .filter(function (t) {
+                    return Number.isFinite(t) && t > 0 && !isSyntheticHabitNoonAt(t);
+                  })
+              : [];
+          const remark = getHabitRemarkFromCheckinValue(v);
+          for (let n = 1; n <= expectTimes; n++) {
+            const stampMs =
+              stampList[n - 1] ||
+              stampList[stampList.length - 1] ||
+              atMs;
+            if (haveN.has(n)) {
+              const row = rowByN[n];
+              if (row && stampMs > 0) {
+                const curAt = Number(row.completedAt) || 0;
+                const wantAt = completedAtForHabitDoneRow(dateStr, stampMs);
+                if (wantAt > 0 && Math.abs(curAt - wantAt) > 60000) {
+                  row.completedAt = wantAt;
+                  if (!row.habitMeta || typeof row.habitMeta !== "object") {
+                    row.habitMeta = { key: habitKey, date: dateStr };
+                  }
+                  row.habitMeta.stampAt = wantAt;
+                  changed = true;
+                }
+              }
+              continue;
+            }
+            syncHabitReadingToDone(habitKey, dateStr, remark, n, stampMs);
+            changed = true;
+          }
           return;
         }
         /*
@@ -179827,6 +179883,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
                 changed = true;
               }
             }
+            return;
+          }
+
+          /*
+           * optional-remark：缺行时不删已有 Done，交给 rebuild 按 stamps[N-1] 增量补第 N 次。
+           * 多出来的行（rows > expect）仍走下方清空再补，避免重复镜像。
+           */
+          if (
+            typeof isHabitOptionalRemarkKey === "function" &&
+            isHabitOptionalRemarkKey(habitKey) &&
+            rows.length < expect
+          ) {
             return;
           }
 
