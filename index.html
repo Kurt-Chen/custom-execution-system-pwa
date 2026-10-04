@@ -12953,6 +12953,27 @@
       color: #065f46;
     }
 
+    /*
+     * Closed List：✅ 挂在 wrap 内、⋯ 之前（不在折叠 icon 组里），折叠时也可见。
+     * 桌面端仍由下方 min-width:768 规则隐藏，继续用左侧勾选。
+     */
+    #closedList .lane-task-card-toolbar .closed-list-main-actions-wrap > .closed-list-mark-done-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      box-sizing: border-box;
+      min-height: 18px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.1;
+      white-space: nowrap;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+
     /* 3-Day Sprint「+ 今日」：与 →封闭 同尺寸，蓝色系；菜单未展开时不占行高 */
     #weeklyPlanSection .weekly-plan-today-plan-btn {
       flex-shrink: 0;
@@ -78813,6 +78834,18 @@
         line-height: 1 !important;
       }
 
+      /* 手机：左侧勾选已隐藏，✅ 常显并加大触控（与 ⋯ 同高） */
+      #closedList .lane-task-card-toolbar .closed-list-main-actions-wrap > .closed-list-mark-done-btn {
+        display: inline-flex !important;
+        height: 28px !important;
+        min-height: 28px !important;
+        max-height: 28px !important;
+        padding: 0 8px !important;
+        border-radius: 999px !important;
+        font-size: 14px !important;
+        line-height: 1 !important;
+      }
+
       #closedList .closed-list-title-area,
       #closedList .closed-list-title-main-row,
       #closedList .closed-list-header-swipeable {
@@ -132393,6 +132426,8 @@
         delete item.completedAt;
         removeClosedListDoneCopy(item.id);
       }
+      /* 抬高 updatedAt，避免跨端 LWW / Lists 域合并时本机完成态被旧副本盖回 */
+      stampEntityRevision(item);
       const mo = item.mirrorOf;
       if (mo && mo.kind === "weeklyPlan") {
         applyWeeklyPlanCompletionFromMirror(mo, Boolean(checked), item.completedAt);
@@ -154577,8 +154612,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             }
           });
 
-          const clActIcons = toolbar.querySelector(".compact-manual-item-icons");
-          if (clActIcons) {
+          /*
+           * 手机端左侧勾选已 display:none；若 ✅ 仍塞进 .compact-manual-item-icons，
+           * 未展开 ⋯ 时整组隐藏 → 用户看不到任何完成入口。挂到 wrap 内、⋯ 之前，折叠时也常显。
+           * 桌面端仍由 @media (min-width:768px) 隐藏此按钮，继续用左侧勾选。
+           */
+          const clActWrap = toolbar.querySelector(".closed-list-main-actions-wrap");
+          if (clActWrap) {
             const clDoneNow = isClosedListItemEffectivelyComplete(task);
             const clMarkDoneBtn = document.createElement("button");
             clMarkDoneBtn.type = "button";
@@ -154592,7 +154632,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               ev.stopPropagation();
               toggleClosedListComplete(task.id, !clDoneNow);
             });
-            clActIcons.insertBefore(clMarkDoneBtn, clActIcons.firstChild);
+            const clMoreBtn = clActWrap.querySelector(":scope > .manual-item-more-btn");
+            if (clMoreBtn) clActWrap.insertBefore(clMarkDoneBtn, clMoreBtn);
+            else clActWrap.appendChild(clMarkDoneBtn);
           }
 
           function toggleClosedListCardExpanded() {
@@ -158737,6 +158779,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!want || item.completed) return;
       item.completed = true;
       item.completedAt = Date.now();
+      stampEntityRevision(item);
       syncClosedListToDone(item);
     }
 
@@ -158968,6 +159011,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           delete item.completedAt;
           removeClosedListDoneCopy(item.id);
         }
+        stampEntityRevision(item);
       });
     }
 
@@ -161531,6 +161575,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           delete item.completedAt;
           removeClosedListDoneCopy(item.id);
         }
+        stampEntityRevision(item);
       });
     }
 
