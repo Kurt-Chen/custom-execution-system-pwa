@@ -11,8 +11,8 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 const sw = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");
 
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004aa"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261004aa"/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004ab"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261004ab"/);
 
 assert.match(html, /function stableDailyThreeWinsDoneId\(/);
 assert.match(html, /dw-today-/);
@@ -20,6 +20,10 @@ assert.match(html, /notifyAliyunDoneRealUpsert\("dailyThreeWins"/);
 assert.match(html, /notifyAliyunDoneRealUpsert\("dailyThreeWins-backfill"/);
 assert.match(html, /function backfillDailyThreeWinsDoneMirrorsToAliyun\(/);
 assert.match(html, /backfillDailyThreeWinsDoneMirrorsToAliyun\("after-" \+ pullReason\)/);
+assert.match(html, /不按「今天」过滤：跨日后仍须回补昨日\/历史日已有 Done 行/);
+assert.match(html, /focusDate: "2026-10-04"/);
+assert.match(html, /dailyWin-backfill-historical/);
+assert.match(html, /frozenCompletedAt/);
 assert.match(html, /refreshAllDailyWinCheckins\(\{ skipNotify: true \}\)/);
 assert.match(html, /allowRemove/);
 assert.match(html, /isDailyThreeWinsDoneTombstoned/);

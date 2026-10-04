@@ -50,12 +50,37 @@ assert.match(siteHtml, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004/);
 assert.match(siteSw, /CACHE_NAME = "exec-system-pwa-v20261004/);
 const liveVer = (siteSw.match(/CACHE_NAME = "exec-system-pwa-(v[^"]+)"/) || [])[1];
 console.log("live_version", liveVer);
+assert.ok(
+  /v20261004a[ab]/.test(String(liveVer || "")),
+  "正式站应至少为 v20261004aa/ab，当前=" + liveVer
+);
 
 const before = parseEnv(await getJson(BASE + "/smoke/" + encodeURIComponent(DOC)));
-const hasDwToday = Object.keys(before.items).some((k) => k.startsWith("dw-today-2026-10-04"));
+const focusId = "dw-today-2026-10-04";
+const focus = before.items[focusId];
+const hasDwToday = !!focus;
 const hasTomorrow = !!before.items["dw-tomorrow-2026-10-05"];
 console.log("cloud_has_dw_today_2026-10-04", hasDwToday);
 console.log("cloud_has_dw_tomorrow_2026-10-05", hasTomorrow);
+if (focus) {
+  const ts = Number(focus.completedAt) || 0;
+  const clock = ts
+    ? new Date(ts).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })
+    : "";
+  console.log(
+    "focus_row",
+    JSON.stringify({
+      id: focusId,
+      text: String(focus.text || "").slice(0, 120),
+      habitDate: focus.habitMeta && focus.habitMeta.date,
+      completedAt: focus.completedAt,
+      clockCST: clock
+    })
+  );
+  assert.equal(focus.habitMeta && focus.habitMeta.date, "2026-10-04");
+  assert.ok(String(focus.text || "").includes("每天三赢"), "原文应含每天三赢");
+  assert.ok(/23:02/.test(clock), "completedAt 墙钟应为 23:02 CST，实际=" + clock);
+}
 assert.equal(hasTomorrow, true, "现场 23:04 预设明天应仍在云端");
 
 /* 探针：模拟电脑回补 upsert → 云端 → 手机缺口 merge */
@@ -111,13 +136,13 @@ console.log(
     {
       ok: true,
       live_version: liveVer,
-      historical_dw_today_present: hasDwToday,
+      historical_dw_today_2026_10_04_present: hasDwToday,
       tomorrow_present: hasTomorrow,
       probe_upsert_ok: true,
       probe_tombstone_ok: true,
       note: hasDwToday
-        ? "历史 dw-today 已在云端"
-        : "历史 dw-today 仍缺：需电脑端加载 v20261004aa 触发 backfill（勿重填）"
+        ? "历史 dw-today-2026-10-04 已在云端（含原文/日期/23:02）"
+        : "历史 dw-today-2026-10-04 仍缺：需电脑端加载新版本触发跨日 backfill（勿重填、勿清 IDB）"
     },
     null,
     2
