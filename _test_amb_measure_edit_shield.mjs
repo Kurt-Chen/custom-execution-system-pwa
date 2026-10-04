@@ -22,8 +22,10 @@ mustInclude("function endAmbMeasureEditSession", "end session");
 mustInclude("function ensureAmbMeasureEditSessionLeaveDetection", "leave via pointerdown");
 mustInclude("function bindAmbMeasurePendingInputShield", "pending input bind");
 mustInclude("function shouldPreserveAmbMeasureListDom", "list preserve helper");
+mustInclude('forceRefresh === "structure"', "structure rebuild bypass for 再加一条");
 mustInclude("ambBackwardPendingDrafts", "backward measure local drafts");
 mustInclude("ambThinkDayPendingDraft", "think day local draft");
+mustInclude("window.__ambMeasureEditTestApi", "browser test hook");
 
 /* AMB paint：编辑中不得 forceLists:true */
 const paintFn = html.slice(

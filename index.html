@@ -174408,6 +174408,47 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return !!(ambMeasureEditSession && ambMeasureEditSession.editing);
     }
 
+    /** 诊断/浏览器测试钩子：不改变生产路径，仅暴露闭包内 AMB 编辑保护 API */
+    try {
+      window.__ambMeasureEditTestApi = {
+        isActive: function () {
+          return isAmbMeasureEditSessionActive();
+        },
+        begin: function (opts) {
+          beginAmbMeasureEditSession(opts || {});
+        },
+        end: function (reason) {
+          endAmbMeasureEditSession(reason || "test");
+        },
+        paintAfterMerge: function () {
+          if (typeof aliyunAmbRealPaintLocalUiAfterMerge === "function") {
+            aliyunAmbRealPaintLocalUiAfterMerge();
+          }
+        },
+        renderGain: function (kind, force) {
+          if (typeof renderAmbGainList === "function") {
+            renderAmbGainList(kind, !!force);
+          }
+        },
+        renderBackward: function (forceLists) {
+          if (typeof renderBackwardMeasure === "function") {
+            renderBackwardMeasure({ forceLists: !!forceLists });
+          }
+        },
+        getDrafts: function (kind) {
+          return {
+            gain: ambGainPendingDrafts[kind] || [],
+            session: {
+              editing: !!ambMeasureEditSession.editing,
+              dirty: !!ambMeasureEditSession.dirty,
+              scope: ambMeasureEditSession.scope,
+              kind: ambMeasureEditSession.kind
+            }
+          };
+        }
+      };
+    } catch (_ambTestApi) {}
+
     function beginAmbMeasureEditSession(opts) {
       const o = opts && typeof opts === "object" ? opts : {};
       const scope = String(o.scope || ambMeasureEditSession.scope || "amb");
@@ -174516,8 +174557,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     /**
      * 列表重建是否应跳过（焦点 / IME / 显式会话）。
-     * forceRefresh（再加一条/删除空白等本地结构操作）在焦点不在可编辑控件且非 IME 时可重建；
-     * 同步 forceLists 在会话中应已降为 false，此处再挡一层焦点/IME。
+     * forceRefresh === true：同步/普通强制，会话中仍禁止拆节点。
+     * forceRefresh === "structure"：仅「再加一条 / 删除空白」等本地结构操作可重建。
      */
     function shouldPreserveAmbMeasureListDom(listEl, forceRefresh) {
       if (!listEl) return false;
@@ -174530,8 +174571,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         );
       if (editingFocus) return true;
       if (appUiImeComposing && ae && listEl.contains(ae)) return true;
-      if (forceRefresh) return false;
+      if (forceRefresh === "structure") return false;
       if (isAmbMeasureEditSessionActive()) return true;
+      if (forceRefresh) return false;
+      if (ae && listEl.contains(ae)) return true;
       return false;
     }
 
@@ -174779,7 +174822,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             drafts.splice(pendingIdx, 1);
             ambGainPendingDrafts[kind] = drafts;
             ambGainPendingCount[kind] = Math.max(0, pendingN - 1);
-            renderAmbGainList(kind, true);
+            renderAmbGainList(kind, "structure");
           });
         })(p);
         li.appendChild(delPending);
@@ -174796,7 +174839,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       addBtn.addEventListener("click", function () {
         collectAmbGainPendingDrafts(kind, listEl);
         ambGainPendingCount[kind] = pendingN + 1;
-        renderAmbGainList(kind, true);
+        renderAmbGainList(kind, "structure");
       });
       const saveBtn = document.createElement("button");
       saveBtn.type = "button";
