@@ -99905,7 +99905,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261005v";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261005w";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -110923,64 +110923,45 @@
       } catch (_flowCloudRen) {}
     }
 
+    /**
+     * 各域是否仍有实际上传/待刷队列。
+     * 注意：不得把 *SuppressPush（合并中禁止推送）当成 busy——否则角标「同步中」无法收尾，
+     * 且 Open List 保留守卫会被误拉长。
+     */
     function aliyunSyncPrimaryAnyDomainFlushBusy() {
       try {
         if (aliyunDoneRealFlushing || (aliyunDoneRealQueue && aliyunDoneRealQueue.length)) return true;
       } catch (_d) {}
       try {
-        if (aliyunHabitRealFlushing || aliyunHabitRealSuppressPush || (aliyunHabitRealQueue && aliyunHabitRealQueue.length))
-          return true;
+        if (aliyunHabitRealFlushing || (aliyunHabitRealQueue && aliyunHabitRealQueue.length)) return true;
       } catch (_h) {}
       try {
-        if (aliyunForgeRealFlushing || aliyunForgeRealSuppressPush || (aliyunForgeRealQueue && aliyunForgeRealQueue.length))
-          return true;
+        if (aliyunForgeRealFlushing || (aliyunForgeRealQueue && aliyunForgeRealQueue.length)) return true;
       } catch (_f) {}
       try {
-        if (aliyunAnnivRealFlushing || aliyunAnnivRealSuppressPush || (aliyunAnnivRealQueue && aliyunAnnivRealQueue.length))
-          return true;
+        if (aliyunAnnivRealFlushing || (aliyunAnnivRealQueue && aliyunAnnivRealQueue.length)) return true;
       } catch (_a) {}
       try {
-        if (
-          aliyunSprintRealFlushing ||
-          aliyunSprintRealSuppressPush ||
-          (aliyunSprintRealQueue && aliyunSprintRealQueue.length)
-        )
-          return true;
+        if (aliyunSprintRealFlushing || (aliyunSprintRealQueue && aliyunSprintRealQueue.length)) return true;
       } catch (_s) {}
       try {
         if (
           aliyunTodayPlanRealFlushing ||
-          aliyunTodayPlanRealSuppressPush ||
           (aliyunTodayPlanRealQueue && aliyunTodayPlanRealQueue.length)
         )
           return true;
       } catch (_t) {}
       try {
-        if (aliyunAmbRealFlushing || aliyunAmbRealSuppressPush || aliyunAmbRealPendingReason) return true;
+        if (aliyunAmbRealFlushing || aliyunAmbRealPendingReason) return true;
       } catch (_amb) {}
       try {
-        if (
-          aliyunRule100RealFlushing ||
-          aliyunRule100RealSuppressPush ||
-          aliyunRule100RealPendingReason
-        )
-          return true;
+        if (aliyunRule100RealFlushing || aliyunRule100RealPendingReason) return true;
       } catch (_r100) {}
       try {
-        if (
-          aliyunListsRealFlushing ||
-          aliyunListsRealSuppressPush ||
-          aliyunListsRealPendingReason
-        )
-          return true;
+        if (aliyunListsRealFlushing || aliyunListsRealPendingReason) return true;
       } catch (_lists) {}
       try {
-        if (
-          aliyunGoalsRealFlushing ||
-          aliyunGoalsRealSuppressPush ||
-          aliyunGoalsRealPendingReason
-        )
-          return true;
+        if (aliyunGoalsRealFlushing || aliyunGoalsRealPendingReason) return true;
       } catch (_goals) {}
       return false;
     }
@@ -110988,10 +110969,71 @@
     /**
      * 右上角角标 · 阿里云主路径三态（只改展示，不改拉取/上传逻辑、不加网络）。
      * 已同步 · HH:MM | 同步中… | 同步异常
+     * 「同步中」须在成功 / 失败 / 超时后收尾，避免截图级长期蓝标。
      */
+    let aliyunSyncPrimaryBadgeSyncingWatchTimer = null;
+    let aliyunSyncPrimaryBadgeSyncingWatchStartedAt = 0;
+    const ALIYUN_SYNC_PRIMARY_BADGE_SYNCING_MAX_MS = 45000;
+
+    function clearAliyunSyncPrimaryBadgeSyncingWatchdog() {
+      if (aliyunSyncPrimaryBadgeSyncingWatchTimer) {
+        clearTimeout(aliyunSyncPrimaryBadgeSyncingWatchTimer);
+        aliyunSyncPrimaryBadgeSyncingWatchTimer = null;
+      }
+      aliyunSyncPrimaryBadgeSyncingWatchStartedAt = 0;
+    }
+
+    function armAliyunSyncPrimaryBadgeSyncingWatchdog() {
+      if (!aliyunSyncPrimaryBadgeSyncingWatchStartedAt) {
+        aliyunSyncPrimaryBadgeSyncingWatchStartedAt = Date.now();
+      }
+      if (aliyunSyncPrimaryBadgeSyncingWatchTimer) {
+        clearTimeout(aliyunSyncPrimaryBadgeSyncingWatchTimer);
+        aliyunSyncPrimaryBadgeSyncingWatchTimer = null;
+      }
+      const startedAt = aliyunSyncPrimaryBadgeSyncingWatchStartedAt;
+      const elapsed = Math.max(0, Date.now() - startedAt);
+      const remain = Math.max(250, ALIYUN_SYNC_PRIMARY_BADGE_SYNCING_MAX_MS - elapsed);
+      aliyunSyncPrimaryBadgeSyncingWatchTimer = window.setTimeout(function () {
+        aliyunSyncPrimaryBadgeSyncingWatchTimer = null;
+        try {
+          if (typeof isAliyunSyncPrimaryEnabled === "function" && !isAliyunSyncPrimaryEnabled()) {
+            clearAliyunSyncPrimaryBadgeSyncingWatchdog();
+            return;
+          }
+          if (cloudSyncMachineStatus !== "syncing") {
+            clearAliyunSyncPrimaryBadgeSyncingWatchdog();
+            return;
+          }
+          const stillPull = !!aliyunSyncPrimaryPullInFlight;
+          const stillFlush =
+            typeof aliyunSyncPrimaryAnyDomainFlushBusy === "function" &&
+            aliyunSyncPrimaryAnyDomainFlushBusy();
+          const lived = Date.now() - (aliyunSyncPrimaryBadgeSyncingWatchStartedAt || Date.now());
+          if ((stillPull || stillFlush) && lived < ALIYUN_SYNC_PRIMARY_BADGE_SYNCING_MAX_MS) {
+            armAliyunSyncPrimaryBadgeSyncingWatchdog();
+            return;
+          }
+          try {
+            console.warn("[aliyun-sync-primary] badge syncing watchdog settle", {
+              stillPull: stillPull,
+              stillFlush: stillFlush,
+              livedMs: lived
+            });
+          } catch (_c) {}
+          /* 超时仍忙：强制结束「同步中」，避免角标永久卡住（不阻断后台队列） */
+          clearAliyunSyncPrimaryBadgeSyncingWatchdog();
+          cloudSyncLastErrorMsg = "";
+          if (typeof markCloudSyncSuccess === "function") markCloudSyncSuccess();
+          setCloudSyncStatus(buildCloudSyncConnectedBadgeText(), "status-connected");
+        } catch (_wd) {}
+      }, remain);
+    }
+
     function paintAliyunSyncPrimaryBadgeSyncing() {
       if (typeof isAliyunSyncPrimaryEnabled !== "function" || !isAliyunSyncPrimaryEnabled()) return;
       setCloudSyncStatus("同步中…", "status-syncing");
+      armAliyunSyncPrimaryBadgeSyncingWatchdog();
     }
 
     function paintAliyunSyncPrimaryBadgeOk() {
@@ -111004,6 +111046,7 @@
         paintAliyunSyncPrimaryBadgeSyncing();
         return;
       }
+      clearAliyunSyncPrimaryBadgeSyncingWatchdog();
       cloudSyncLastErrorMsg = "";
       if (typeof markCloudSyncSuccess === "function") markCloudSyncSuccess();
       setCloudSyncStatus(buildCloudSyncConnectedBadgeText(), "status-connected");
@@ -111011,6 +111054,7 @@
 
     function paintAliyunSyncPrimaryBadgeError(errMsg) {
       if (typeof isAliyunSyncPrimaryEnabled !== "function" || !isAliyunSyncPrimaryEnabled()) return;
+      clearAliyunSyncPrimaryBadgeSyncingWatchdog();
       cloudSyncLastErrorMsg = String(errMsg || "阿里云同步失败");
       setCloudSyncStatus("同步异常", "status-error");
     }
@@ -116511,9 +116555,20 @@
     }
 
     function logOpenListSyncDiag(event, fields) {
+      let roomId = "";
+      try {
+        roomId =
+          typeof getAliyunSyncRoomIdForDocs === "function"
+            ? String(getAliyunSyncRoomIdForDocs() || "")
+            : String(cloudSyncRoomId || "");
+      } catch (_r) {
+        roomId = String(typeof cloudSyncRoomId !== "undefined" ? cloudSyncRoomId || "" : "");
+      }
       const payload = Object.assign(
         {
           event: String(event || ""),
+          t: Date.now(),
+          roomId: roomId,
           pullSeq: aliyunSprintRealPullSeq,
           pullInFlight: !!aliyunSprintRealPullInFlight,
           primaryPullInFlight:
@@ -116529,6 +116584,60 @@
       try {
         console.log("[open-list-sync]", payload);
       } catch (_c) {}
+    }
+
+    function listWeeklyPlanOpenIdsFromTasks(tasks) {
+      const ids = [];
+      const arr = Array.isArray(tasks) ? tasks : [];
+      for (let i = 0; i < arr.length; i++) {
+        const t = arr[i];
+        if (!t || t.id == null) continue;
+        const lane =
+          typeof getWeeklyPlanTaskLane === "function" ? getWeeklyPlanTaskLane(t) : t.lane;
+        if (lane !== "open") continue;
+        ids.push(String(t.id));
+      }
+      return ids;
+    }
+
+    function isWeeklyPlanIdTombstonedLocally(id) {
+      const sid = id != null ? String(id) : "";
+      if (!sid) return false;
+      try {
+        const ts =
+          state.syncTombstones && typeof state.syncTombstones === "object"
+            ? Number(state.syncTombstones[sid]) || 0
+            : 0;
+        return ts > 0;
+      } catch (_e) {
+        return false;
+      }
+    }
+
+    /**
+     * 相对最近有效 Open 过滤集：本次是否「无 tombstone 的收缩」（4→1 类局部假列表）。
+     * 合法删除（已记 syncTombstones）的 id 不计为异常 missing。
+     */
+    function getWeeklyPlanOpenFilterRegression(lastValid, nextIds) {
+      if (!lastValid || !Array.isArray(lastValid.ids) || !lastValid.ids.length) return null;
+      const nextArr = Array.isArray(nextIds) ? nextIds.map(String) : [];
+      const nextSet = new Set(nextArr);
+      if (nextSet.size >= lastValid.ids.length) return null;
+      const missing = [];
+      for (let i = 0; i < lastValid.ids.length; i++) {
+        const id = String(lastValid.ids[i] || "");
+        if (!id || nextSet.has(id)) continue;
+        if (isWeeklyPlanIdTombstonedLocally(id)) continue;
+        missing.push(id);
+      }
+      if (!missing.length) return null;
+      return {
+        missingIds: missing.slice(0, 40),
+        prevIds: lastValid.ids.slice(0, 40),
+        nextIds: nextArr.slice(0, 40),
+        prevCount: lastValid.ids.length,
+        nextCount: nextSet.size
+      };
     }
 
     /**
@@ -116644,10 +116753,27 @@
       return String(shell || "") + "|" + String(weekKey || "") + "|" + String(viewDate || "");
     }
 
-    function noteWeeklyPlanShellLastValidFilter(shell, weekKey, viewDate, filteredCount) {
-      if (!shell || filteredCount <= 0) return;
+    /** 记录最近有效过滤快照（count + id 集）；同步中局部收缩时按 id 保留 DOM */
+    function noteWeeklyPlanShellLastValidFilter(shell, weekKey, viewDate, filteredCountOrIds, idsOpt) {
+      if (!shell) return;
+      let ids = [];
+      let count = 0;
+      if (Array.isArray(filteredCountOrIds)) {
+        ids = filteredCountOrIds.map(String).filter(Boolean);
+        count = ids.length;
+      } else {
+        count = Number(filteredCountOrIds) || 0;
+        if (Array.isArray(idsOpt)) {
+          ids = idsOpt.map(String).filter(Boolean);
+        }
+      }
+      if (count <= 0 && !ids.length) return;
+      if (!ids.length && count > 0) {
+        /* 仅 count 的旧调用：仍记数量，缺 id 时局部收缩守卫退化 */
+      }
       weeklyPlanShellLastValidFilter[weeklyPlanShellLastValidKey(shell, weekKey, viewDate)] = {
-        count: filteredCount,
+        count: ids.length ? ids.length : count,
+        ids: ids.slice(0, 40),
         at: Date.now()
       };
     }
@@ -116658,6 +116784,29 @@
 
     function clearWeeklyPlanShellLastValidFilter(shell, weekKey, viewDate) {
       delete weeklyPlanShellLastValidFilter[weeklyPlanShellLastValidKey(shell, weekKey, viewDate)];
+    }
+
+    /** 本地真实删除一条后：从 lastValid 去掉该 id，避免同步中误保留已删卡片 */
+    function dropWeeklyPlanShellLastValidFilterId(shell, weekKey, viewDate, taskId) {
+      const sid = taskId != null ? String(taskId) : "";
+      if (!shell || !sid) return;
+      const key = weeklyPlanShellLastValidKey(shell, weekKey, viewDate);
+      const prev = weeklyPlanShellLastValidFilter[key];
+      if (!prev) return;
+      const ids = Array.isArray(prev.ids)
+        ? prev.ids.filter(function (id) {
+            return String(id) !== sid;
+          })
+        : [];
+      if (!ids.length) {
+        delete weeklyPlanShellLastValidFilter[key];
+        return;
+      }
+      weeklyPlanShellLastValidFilter[key] = {
+        count: ids.length,
+        ids: ids.slice(0, 40),
+        at: Date.now()
+      };
     }
 
     /**
@@ -117706,31 +117855,84 @@
 
         let localOpenAfter = countWeeklyPlanLaneTasksInPlan(state.weeklyPlan, viewWeekKey, "open");
         let restoredOpenAfterAnomaly = 0;
+        let restoredOpenLaneAfterAnomaly = 0;
         /*
-         * 异常空盖：合并前本机有 Open，合并后变 0，且本轮未应用任何 tombstone。
-         * upsert 路径本不应删本机独有任务；若仍变空则回滚快照，禁止写回空 Open。
+         * 异常收缩：合并前本机有 Open，合并后变少/变空，且 missing id 无远端/本机 tombstone。
+         * 覆盖截图级 4→1（局部列表）与 4→0（空盖）；upsert 本不应无墓碑删本机 Open。
+         * 若 id 仍在但 lane 被远端改走：无 tombstone 时恢复 open（防 Open 假消失）。
          */
         if (
           localOpenBefore > 0 &&
-          localOpenAfter === 0 &&
-          tombstoneApplied === 0 &&
+          localOpenAfter < localOpenBefore &&
           openSnapshotBeforeMerge.length > 0
         ) {
+          const missingBeforeRestore = [];
           try {
             if (!Array.isArray(state.weeklyPlan[viewWeekKey])) state.weeklyPlan[viewWeekKey] = [];
             const arrRestore = state.weeklyPlan[viewWeekKey];
-            const have = new Set(
-              arrRestore.map(function (t) {
-                return t && t.id != null ? String(t.id) : "";
-              })
+            const openAfterIds = new Set(
+              listWeeklyPlanOpenIdsFromTasks(arrRestore)
             );
+            const findTaskAnywhere = function (oid) {
+              const plan = state.weeklyPlan || {};
+              const weeks = Object.keys(plan);
+              for (let wi = 0; wi < weeks.length; wi++) {
+                const bucket = Array.isArray(plan[weeks[wi]]) ? plan[weeks[wi]] : [];
+                for (let bi = 0; bi < bucket.length; bi++) {
+                  if (bucket[bi] && String(bucket[bi].id) === oid) {
+                    return { weekKey: weeks[wi], task: bucket[bi], index: bi };
+                  }
+                }
+              }
+              return null;
+            };
             for (let ri = 0; ri < openSnapshotBeforeMerge.length; ri++) {
               const ot = openSnapshotBeforeMerge[ri];
               if (!ot || ot.id == null) continue;
               const oid = String(ot.id);
-              if (have.has(oid)) continue;
+              if (openAfterIds.has(oid)) continue;
+              const rTomb = remoteTombs && remoteTombs[oid];
+              const rTombTs = aliyunSprintRealItemTs(rTomb);
+              const snapTs = aliyunSprintRealItemTs(ot);
+              if (rTombTs > 0 && rTombTs >= snapTs) continue;
+              const localTombAt =
+                state.syncTombstones && typeof state.syncTombstones === "object"
+                  ? Number(state.syncTombstones[oid]) || 0
+                  : 0;
+              if (localTombAt > 0) continue;
+              missingBeforeRestore.push(oid);
+              const located = findTaskAnywhere(oid);
+              if (located && located.task) {
+                const laneNow =
+                  typeof getWeeklyPlanTaskLane === "function"
+                    ? getWeeklyPlanTaskLane(located.task)
+                    : located.task.lane;
+                if (laneNow !== "open") {
+                  located.task.lane = "open";
+                  restoredOpenLaneAfterAnomaly += 1;
+                  restoredOpenAfterAnomaly += 1;
+                  openAfterIds.add(oid);
+                  continue;
+                }
+                if (located.weekKey !== viewWeekKey) {
+                  /* 被挪到其他周期且当前周无 open：迁回本期视图周（无 tombstone） */
+                  const fromArr = state.weeklyPlan[located.weekKey];
+                  if (Array.isArray(fromArr)) {
+                    state.weeklyPlan[located.weekKey] = fromArr.filter(function (t) {
+                      return !(t && String(t.id) === oid);
+                    });
+                  }
+                  const moved = located.task;
+                  moved.lane = "open";
+                  arrRestore.push(moved);
+                  restoredOpenAfterAnomaly += 1;
+                  openAfterIds.add(oid);
+                  continue;
+                }
+                continue;
+              }
               arrRestore.push(ot);
-              have.add(oid);
+              openAfterIds.add(oid);
               restoredOpenAfterAnomaly += 1;
             }
             if (restoredOpenAfterAnomaly > 0) {
@@ -117742,15 +117944,23 @@
               saveState({ lists: ["weeklyPlan", "done", "closedList"] });
             }
           } catch (_restoreOpen) {}
-          logOpenListSyncDiag("pull-merge-anomaly-restore-open", {
-            pullSeq: pullSeq,
-            weekKey: viewWeekKey,
-            localOpenBefore: localOpenBefore,
-            localOpenAfter: localOpenAfter,
-            restored: restoredOpenAfterAnomaly,
-            cloudOpen: cloudCounts.open,
-            reason: "open-empty-without-tombstone"
-          });
+          if (restoredOpenAfterAnomaly > 0 || missingBeforeRestore.length > 0) {
+            logOpenListSyncDiag("pull-merge-anomaly-restore-open", {
+              pullSeq: pullSeq,
+              weekKey: viewWeekKey,
+              localOpenBefore: localOpenBefore,
+              localOpenAfter: localOpenAfter,
+              restored: restoredOpenAfterAnomaly,
+              restoredLane: restoredOpenLaneAfterAnomaly,
+              missingIds: missingBeforeRestore.slice(0, 40),
+              tombstoneApplied: tombstoneApplied,
+              cloudOpen: cloudCounts.open,
+              reason:
+                localOpenBefore > 0 && localOpenAfter === 0
+                  ? "open-empty-without-tombstone"
+                  : "open-partial-shrink-without-tombstone"
+            });
+          }
         }
         const layersAfterMerge =
           typeof collectOpenListLayerSnapshot === "function"
@@ -117773,9 +117983,11 @@
           reason:
             localOpenBefore > 0 && localOpenAfter === 0
               ? "open-became-empty-after-merge"
-              : restoredOpenAfterAnomaly > 0
-                ? "restored-open-after-anomaly"
-                : "ok"
+              : localOpenBefore > localOpenAfter
+                ? "open-partial-shrink-after-merge"
+                : restoredOpenAfterAnomaly > 0
+                  ? "restored-open-after-anomaly"
+                  : "ok"
         });
 
         const tRen0 = Date.now();
@@ -164604,7 +164816,36 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
         state.weeklyPlan = {};
       }
+      const prevArr = Array.isArray(state.weeklyPlan[k]) ? state.weeklyPlan[k] : [];
+      const prevOpenIds = listWeeklyPlanOpenIdsFromTasks(prevArr);
+      const nextOpenIds = listWeeklyPlanOpenIdsFromTasks(tasks);
       state.weeklyPlan[k] = tasks;
+      if (
+        typeof logOpenListSyncDiag === "function" &&
+        (prevOpenIds.length !== nextOpenIds.length ||
+          prevOpenIds.join(",") !== nextOpenIds.join(","))
+      ) {
+        let caller = "";
+        try {
+          const stack = String(new Error().stack || "")
+            .split("\n")
+            .map(function (l) {
+              return String(l || "").trim();
+            })
+            .filter(Boolean);
+          caller = stack.length > 2 ? stack[2] : stack[1] || "";
+        } catch (_st) {}
+        logOpenListSyncDiag("weekly-plan-week-assign", {
+          weekKey: k,
+          source: "saveWeeklyPlanTasksForWeek",
+          caller: caller.slice(0, 160),
+          prevOpenIds: prevOpenIds.slice(0, 40),
+          nextOpenIds: nextOpenIds.slice(0, 40),
+          prevOpenCount: prevOpenIds.length,
+          nextOpenCount: nextOpenIds.length,
+          shrink: nextOpenIds.length < prevOpenIds.length
+        });
+      }
       noteCloudSyncWeeklyPlanPulseWeekKey(k);
       saveState({ lists: ["weeklyPlan", "done", "closedList"] });
       /* 阿里云 3-Day Sprint：默认随主路径；不阻塞 UI */
@@ -166461,7 +166702,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!weeklyPlanList || !weeklyPlanEmpty) {
         return;
       }
-      if (dedupeWeeklyPlanTasksInStorage()) {
+      /*
+       * 同步中跳过跨周去重/迁桶：dedupe 可能把 Open 任务挪到其它 weekKey，
+       * 造成过滤结果 4→1，随后 innerHTML 重建把 DOM 换成局部列表。
+       */
+      const skipDedupeDuringSync =
+        isWeeklyPlanTaskShell(sprintShell) && shouldPreserveWeeklyPlanListDuringSync(sprintShell);
+      if (!skipDedupeDuringSync && dedupeWeeklyPlanTasksInStorage()) {
         saveState();
       }
       const viewDateKey = formatDateInputValue(new Date());
@@ -166478,27 +166725,46 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             isWeeklyPlanTaskVisibleForViewDate(t, viewDateKey)
         );
         const tasksSorted = sortWeeklyPlanTasksForDisplay(filtered);
-        if (
-          !tasksSorted.length &&
-          shouldPreserveWeeklyPlanListDuringSync(sprintShell)
-        ) {
-          const lastValid = getWeeklyPlanShellLastValidFilter(
-            sprintShell,
-            viewWeekKeyKanban,
-            viewDateKey
-          );
-          const hasDom =
-            (weeklyPlanKanban && weeklyPlanKanban.querySelector(".sprint-kanban-card")) ||
-            (weeklyPlanList && weeklyPlanList.querySelector(".weekly-plan-item"));
-          if (hasDom || (lastValid && lastValid.count > 0)) {
+        const nextIdsKanban = tasksSorted.map(function (t) {
+          return t && t.id != null ? String(t.id) : "";
+        }).filter(Boolean);
+        const lastValidKanban = getWeeklyPlanShellLastValidFilter(
+          sprintShell,
+          viewWeekKeyKanban,
+          viewDateKey
+        );
+        const preserveKanban = shouldPreserveWeeklyPlanListDuringSync(sprintShell);
+        const hasDomKanban =
+          (weeklyPlanKanban && weeklyPlanKanban.querySelector(".sprint-kanban-card")) ||
+          (weeklyPlanList && weeklyPlanList.querySelector(".weekly-plan-item"));
+        if (!tasksSorted.length && preserveKanban) {
+          if (hasDomKanban || (lastValidKanban && lastValidKanban.count > 0)) {
             if (typeof logOpenListSyncDiag === "function") {
               logOpenListSyncDiag("render-preserve-last-valid-kanban", {
                 shell: sprintShell,
                 weekKey: viewWeekKeyKanban,
                 viewDate: viewDateKey,
                 filteredCount: 0,
-                lastValidCount: lastValid ? lastValid.count : 0,
+                lastValidCount: lastValidKanban ? lastValidKanban.count : 0,
+                lastValidIds: lastValidKanban && lastValidKanban.ids ? lastValidKanban.ids : [],
                 reason: "sync-or-not-loaded-suppress-empty"
+              });
+            }
+            weeklyPlanEmpty.style.display = "none";
+            return;
+          }
+        }
+        if (tasksSorted.length && preserveKanban && lastValidKanban) {
+          const regK = getWeeklyPlanOpenFilterRegression(lastValidKanban, nextIdsKanban);
+          if (regK && (hasDomKanban || regK.prevCount > regK.nextCount)) {
+            if (typeof logOpenListSyncDiag === "function") {
+              logOpenListSyncDiag("render-preserve-partial-regression-kanban", {
+                shell: sprintShell,
+                weekKey: viewWeekKeyKanban,
+                viewDate: viewDateKey,
+                filteredCount: tasksSorted.length,
+                regression: regK,
+                reason: "sync-partial-list-not-applied"
               });
             }
             weeklyPlanEmpty.style.display = "none";
@@ -166513,7 +166779,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             sprintShell,
             viewWeekKeyKanban,
             viewDateKey,
-            tasksSorted.length
+            nextIdsKanban
           );
         } else {
           clearWeeklyPlanShellLastValidFilter(sprintShell, viewWeekKeyKanban, viewDateKey);
@@ -166532,17 +166798,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           isWeeklyPlanTaskVisibleForViewDate(t, viewDateKey)
       );
       const tasksSorted = sortWeeklyPlanTasksForDisplay(filtered);
+      const nextIds = tasksSorted.map(function (t) {
+        return t && t.id != null ? String(t.id) : "";
+      }).filter(Boolean);
       const curKey = getCurrentWeeklyPlanSprintStartKey();
       const emptyPrefix = viewWeekKey === curKey ? "本期暂无" : "该期暂无";
       const emptyLabel =
         emptyPrefix +
         (viewLane === "work" ? "工作任务" : viewLane === "open" ? " Open List 任务" : "生活任务");
       /*
-       * 后台同步 / 尚未完成有效 Sprint 加载：过滤结果暂时为空时，保留最近一次有效列表 DOM，
-       * 不先清空再恢复，也不显示「本期暂无」（避免与「同步中」同时出现假空态）。
-       * 真实删除 / 真实空列表：完成有效加载且确认过滤为空后仍正常显示空态。
+       * 后台同步 / 尚未完成有效 Sprint 加载：
+       * - 过滤结果暂时为空：保留最近有效 DOM（防假空）
+       * - 过滤结果局部收缩（4→1）：同样保留，禁止用局部列表 innerHTML 替换
+       * 真实删除：已记 syncTombstones 的 id 不计入 regression；确认空后再显示空态。
        */
-      if (!tasksSorted.length && isWeeklyPlanTaskShell(viewLane)) {
+      if (isWeeklyPlanTaskShell(viewLane)) {
         const lastValid = getWeeklyPlanShellLastValidFilter(viewLane, viewWeekKey, viewDateKey);
         const preserve = shouldPreserveWeeklyPlanListDuringSync(viewLane);
         const hasDomItems =
@@ -166551,64 +166821,85 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           typeof collectOpenListLayerSnapshot === "function"
             ? collectOpenListLayerSnapshot(viewWeekKey, viewDateKey)
             : null;
-        /*
-         * 其它周期仍有 Open、当前周期过滤为空：可能是 weekKey/rollover 错位。
-         * 同步中一律不当「真实空」展示。
-         */
         const otherWeekOpen =
           layers && layers.memoryAllOpenCount > 0 && layers.memoryWeekOpenCount === 0;
-        if (preserve && (hasDomItems || (lastValid && lastValid.count > 0))) {
-          if (typeof logOpenListSyncDiag === "function") {
-            logOpenListSyncDiag("render-preserve-last-valid", {
-              shell: viewLane,
-              weekKey: viewWeekKey,
-              viewDate: viewDateKey,
-              localTotal: tasks.length,
-              filteredCount: 0,
-              lastValidCount: lastValid ? lastValid.count : 0,
-              hasDomItems: !!hasDomItems,
-              layers: layers,
-              reason: "sync-or-not-loaded-suppress-empty"
-            });
+        if (tasksSorted.length && preserve && lastValid) {
+          const regression = getWeeklyPlanOpenFilterRegression(lastValid, nextIds);
+          if (regression && (hasDomItems || regression.prevCount > regression.nextCount)) {
+            if (typeof logOpenListSyncDiag === "function") {
+              logOpenListSyncDiag("render-preserve-partial-regression", {
+                shell: viewLane,
+                weekKey: viewWeekKey,
+                viewDate: viewDateKey,
+                localTotal: tasks.length,
+                filteredCount: tasksSorted.length,
+                filteredIds: nextIds.slice(0, 40),
+                lastValidCount: lastValid.count,
+                lastValidIds: lastValid.ids || [],
+                regression: regression,
+                layers: layers,
+                reason: "sync-partial-list-not-applied"
+              });
+            }
+            weeklyPlanEmpty.style.display = "none";
+            return;
           }
-          weeklyPlanEmpty.style.display = "none";
-          /* 不 mark painted：保持 dirty，加载完成后再刷 */
-          return;
         }
-        if (
-          preserve &&
-          !hasDomItems &&
-          !(lastValid && lastValid.count > 0)
-        ) {
-          if (typeof logOpenListSyncDiag === "function") {
-            logOpenListSyncDiag("render-suppress-empty-unconfirmed", {
-              shell: viewLane,
-              weekKey: viewWeekKey,
-              viewDate: viewDateKey,
-              localTotal: tasks.length,
-              filteredCount: 0,
-              layers: layers,
-              otherWeekOpen: !!otherWeekOpen,
-              reason: otherWeekOpen
-                ? "awaiting-load-or-weekkey-mismatch"
-                : "awaiting-valid-sprint-load"
-            });
+        if (!tasksSorted.length) {
+          if (preserve && (hasDomItems || (lastValid && lastValid.count > 0))) {
+            if (typeof logOpenListSyncDiag === "function") {
+              logOpenListSyncDiag("render-preserve-last-valid", {
+                shell: viewLane,
+                weekKey: viewWeekKey,
+                viewDate: viewDateKey,
+                localTotal: tasks.length,
+                filteredCount: 0,
+                lastValidCount: lastValid ? lastValid.count : 0,
+                lastValidIds: lastValid && lastValid.ids ? lastValid.ids : [],
+                hasDomItems: !!hasDomItems,
+                layers: layers,
+                reason: "sync-or-not-loaded-suppress-empty"
+              });
+            }
+            weeklyPlanEmpty.style.display = "none";
+            /* 不 mark painted：保持 dirty，加载完成后再刷 */
+            return;
           }
-          weeklyPlanList.innerHTML = "";
-          weeklyPlanEmpty.style.display = "none";
-          return;
-        }
-        /* 硬闸：角标/状态仍为同步中时，绝不以「本期暂无」落屏（截图级假空） */
-        if (preserve) {
-          weeklyPlanEmpty.style.display = "none";
-          return;
+          if (
+            preserve &&
+            !hasDomItems &&
+            !(lastValid && lastValid.count > 0)
+          ) {
+            if (typeof logOpenListSyncDiag === "function") {
+              logOpenListSyncDiag("render-suppress-empty-unconfirmed", {
+                shell: viewLane,
+                weekKey: viewWeekKey,
+                viewDate: viewDateKey,
+                localTotal: tasks.length,
+                filteredCount: 0,
+                layers: layers,
+                otherWeekOpen: !!otherWeekOpen,
+                reason: otherWeekOpen
+                  ? "awaiting-load-or-weekkey-mismatch"
+                  : "awaiting-valid-sprint-load"
+              });
+            }
+            weeklyPlanList.innerHTML = "";
+            weeklyPlanEmpty.style.display = "none";
+            return;
+          }
+          /* 硬闸：角标/状态仍为同步中时，绝不以「本期暂无」落屏（截图级假空） */
+          if (preserve) {
+            weeklyPlanEmpty.style.display = "none";
+            return;
+          }
         }
       }
       weeklyPlanList.innerHTML = "";
       weeklyPlanEmpty.style.display = tasksSorted.length ? "none" : "block";
       weeklyPlanEmpty.textContent = emptyLabel;
       if (tasksSorted.length) {
-        noteWeeklyPlanShellLastValidFilter(viewLane, viewWeekKey, viewDateKey, tasksSorted.length);
+        noteWeeklyPlanShellLastValidFilter(viewLane, viewWeekKey, viewDateKey, nextIds);
       } else if (isWeeklyPlanTaskShell(viewLane)) {
         clearWeeklyPlanShellLastValidFilter(viewLane, viewWeekKey, viewDateKey);
         if (typeof logOpenListSyncDiag === "function") {
@@ -170184,10 +170475,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       weeklyPlanMicroExpandedIds.delete(tid);
       if (weeklyPlanList && weeklyPlanEmpty) {
         const remaining = weeklyPlanList.querySelectorAll(".weekly-plan-item");
+        const viewLane = isWeeklyPlanTaskShell(shell) ? shell : getWeeklyPlanAddLane();
+        const viewWeekKeyDel = getWeeklyPlanViewSprintStartKey();
+        const viewDateDel = formatDateInputValue(new Date());
+        /* 本地真实删除：从 lastValid 去掉该 id，避免同步中按旧 id 集误保留 */
+        if (typeof dropWeeklyPlanShellLastValidFilterId === "function") {
+          dropWeeklyPlanShellLastValidFilterId(viewLane, viewWeekKeyDel, viewDateDel, tid);
+        }
         if (!remaining.length) {
           weeklyPlanEmpty.style.display = "block";
-          const viewLane = isWeeklyPlanTaskShell(shell) ? shell : getWeeklyPlanAddLane();
-          const viewWeekKeyDel = getWeeklyPlanViewSprintStartKey();
           const curKey = getCurrentWeeklyPlanSprintStartKey();
           const emptyPrefix = viewWeekKeyDel === curKey ? "本期暂无" : "该期暂无";
           weeklyPlanEmpty.textContent =
@@ -170202,7 +170498,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             clearWeeklyPlanShellLastValidFilter(
               viewLane,
               viewWeekKeyDel,
-              formatDateInputValue(new Date())
+              viewDateDel
             );
           }
           if (typeof logOpenListSyncDiag === "function") {
@@ -189756,6 +190052,46 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
                 ? shouldPreserveWeeklyPlanListDuringSync("open")
                 : null,
               machineStatus: cloudSyncMachineStatus
+            };
+          } catch (_e) {
+            return { error: String(_e && _e.message ? _e.message : _e) };
+          }
+        };
+        window.__agentGetWeeklyPlanLastValid = function (shell, weekKey, viewDate) {
+          if (typeof getWeeklyPlanShellLastValidFilter === "function") {
+            return getWeeklyPlanShellLastValidFilter(
+              shell || "open",
+              weekKey || "",
+              viewDate ||
+                (typeof formatDateInputValue === "function"
+                  ? formatDateInputValue(new Date())
+                  : "")
+            );
+          }
+          return null;
+        };
+        window.__agentSimulateOpenListPartialShrink = function (keepId) {
+          try {
+            const weekKey =
+              typeof getWeeklyPlanViewSprintStartKey === "function"
+                ? getWeeklyPlanViewSprintStartKey()
+                : "";
+            const arr =
+              state.weeklyPlan && Array.isArray(state.weeklyPlan[weekKey])
+                ? state.weeklyPlan[weekKey]
+                : [];
+            const kid = keepId != null ? String(keepId) : "";
+            state.weeklyPlan[weekKey] = arr.filter(function (t) {
+              if (!t || t.id == null) return false;
+              const lane =
+                typeof getWeeklyPlanTaskLane === "function" ? getWeeklyPlanTaskLane(t) : t.lane;
+              if (lane !== "open") return true;
+              return kid && String(t.id) === kid;
+            });
+            return {
+              weekKey: weekKey,
+              keepId: kid,
+              openIds: listWeeklyPlanOpenIdsFromTasks(state.weeklyPlan[weekKey])
             };
           } catch (_e) {
             return { error: String(_e && _e.message ? _e.message : _e) };
