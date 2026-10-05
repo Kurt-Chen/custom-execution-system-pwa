@@ -99272,7 +99272,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261005l";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261005m";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -115815,6 +115815,16 @@
     let aliyunSprintRealFlushing = false;
     let aliyunSprintRealLastReport = null;
     let aliyunSprintRealSuppressPush = false;
+    /** Sprint 拉取序号：乱序/过期响应不得覆盖较新结果 */
+    let aliyunSprintRealPullSeq = 0;
+    let aliyunSprintRealPullInFlight = false;
+    /** 至少完成过一次有效 Sprint 拉取（含云端尚无文档）；此前不得宣称「本期暂无」 */
+    let aliyunSprintRealEverLoadedOk = false;
+    /**
+     * 各任务壳最近一次「有任务」的过滤快照（不含正文）：同步中若暂时算空则保留 DOM。
+     * key = shell|weekKey|viewDate
+     */
+    const weeklyPlanShellLastValidFilter = Object.create(null);
 
     function isAliyunSprintRealSyncEnabled() {
       if (typeof isAliyunSyncPrimaryEnabled === "function" && isAliyunSyncPrimaryEnabled()) return true;
@@ -115822,6 +115832,100 @@
         if (window.__ALIYUN_SPRINT_REAL_SYNC_ENABLED === true) return true;
       } catch (_w) {}
       return ALIYUN_SPRINT_REAL_SYNC_ENABLED === true;
+    }
+
+    /** Open List / Sprint 诊断：只记数量与原因，不打印任务正文 */
+    function countWeeklyPlanLaneTasksInPlan(plan, weekKey, lane) {
+      const wp = plan && typeof plan === "object" ? plan : {};
+      const arr = weekKey ? (Array.isArray(wp[weekKey]) ? wp[weekKey] : []) : [];
+      if (!lane) return arr.length;
+      let n = 0;
+      for (let i = 0; i < arr.length; i++) {
+        const t = arr[i];
+        if (!t) continue;
+        const ln =
+          typeof normalizeWeeklyPlanLane === "function"
+            ? normalizeWeeklyPlanLane(t.lane)
+            : t.lane === "work" || t.lane === "open"
+              ? t.lane
+              : "life";
+        if (ln === lane) n += 1;
+      }
+      return n;
+    }
+
+    function countAliyunSprintEnvelopeItems(env) {
+      const items = env && env.items && typeof env.items === "object" ? env.items : {};
+      let total = 0;
+      let open = 0;
+      const ids = Object.keys(items);
+      for (let i = 0; i < ids.length; i++) {
+        const it = items[ids[i]];
+        if (!it || it.deleted) continue;
+        total += 1;
+        if (it.lane === "open") open += 1;
+      }
+      return { total: total, open: open, tombstones: Object.keys((env && env.tombstones) || {}).length };
+    }
+
+    function logOpenListSyncDiag(event, fields) {
+      const payload = Object.assign(
+        {
+          event: String(event || ""),
+          pullSeq: aliyunSprintRealPullSeq,
+          pullInFlight: !!aliyunSprintRealPullInFlight,
+          everLoadedOk: !!aliyunSprintRealEverLoadedOk
+        },
+        fields && typeof fields === "object" ? fields : {}
+      );
+      try {
+        console.log("[open-list-sync]", payload);
+      } catch (_c) {}
+    }
+
+    function weeklyPlanShellLastValidKey(shell, weekKey, viewDate) {
+      return String(shell || "") + "|" + String(weekKey || "") + "|" + String(viewDate || "");
+    }
+
+    function noteWeeklyPlanShellLastValidFilter(shell, weekKey, viewDate, filteredCount) {
+      if (!shell || filteredCount <= 0) return;
+      weeklyPlanShellLastValidFilter[weeklyPlanShellLastValidKey(shell, weekKey, viewDate)] = {
+        count: filteredCount,
+        at: Date.now()
+      };
+    }
+
+    function getWeeklyPlanShellLastValidFilter(shell, weekKey, viewDate) {
+      return weeklyPlanShellLastValidFilter[weeklyPlanShellLastValidKey(shell, weekKey, viewDate)] || null;
+    }
+
+    function clearWeeklyPlanShellLastValidFilter(shell, weekKey, viewDate) {
+      delete weeklyPlanShellLastValidFilter[weeklyPlanShellLastValidKey(shell, weekKey, viewDate)];
+    }
+
+    /** 后台同步中或尚未完成有效 Sprint 加载：不得用空列表覆盖最近有效 UI */
+    function shouldPreserveWeeklyPlanListDuringSync(shell) {
+      if (!isWeeklyPlanTaskShell(shell)) return false;
+      if (aliyunSprintRealPullInFlight) return true;
+      if (
+        typeof isAliyunSprintRealSyncEnabled === "function" &&
+        isAliyunSprintRealSyncEnabled() &&
+        !aliyunSprintRealEverLoadedOk
+      ) {
+        return true;
+      }
+      try {
+        if (
+          typeof cloudSyncMachineStatus === "string" &&
+          cloudSyncMachineStatus === "syncing" &&
+          typeof isAliyunSyncPrimaryEnabled === "function" &&
+          isAliyunSyncPrimaryEnabled() &&
+          !aliyunSprintRealEverLoadedOk
+        ) {
+          return true;
+        }
+      } catch (_s) {}
+      return false;
     }
 
     function aliyunSprintRealAppendLog(msg) {
@@ -116006,25 +116110,51 @@
       return changed;
     }
 
-    function aliyunSprintRealParseEnvelope(rawPayload) {
+    /**
+     * 解析 Sprint 信封（区分：真实空 / 字段缺失 / 解析失败）。
+     * @returns {{ ok: boolean, reason: string, env: object, missingItems?: boolean }}
+     */
+    function aliyunSprintRealTryParseEnvelope(rawPayload) {
       let p = rawPayload;
       if (typeof p === "string") {
+        const trimmed = p.trim();
+        if (!trimmed) {
+          return { ok: false, reason: "empty-string", env: aliyunSprintRealEmptyEnvelope(), missingItems: true };
+        }
         try {
-          p = JSON.parse(p);
+          p = JSON.parse(trimmed);
         } catch (_e) {
-          return aliyunSprintRealEmptyEnvelope();
+          return { ok: false, reason: "json-parse", env: aliyunSprintRealEmptyEnvelope(), missingItems: true };
         }
       }
-      if (!p || typeof p !== "object") return aliyunSprintRealEmptyEnvelope();
+      if (!p || typeof p !== "object") {
+        return { ok: false, reason: "not-object", env: aliyunSprintRealEmptyEnvelope(), missingItems: true };
+      }
       const env = aliyunSprintRealEmptyEnvelope();
       env.roomId = p.roomId != null ? String(p.roomId) : env.roomId;
       env.envelopeUpdatedAt = Number(p.envelopeUpdatedAt) || 0;
-      if (p.items && typeof p.items === "object") env.items = p.items;
+      const hasItemsField = Object.prototype.hasOwnProperty.call(p, "items");
+      if (hasItemsField && p.items && typeof p.items === "object") {
+        env.items = p.items;
+      } else if (hasItemsField && (p.items == null || typeof p.items !== "object")) {
+        return { ok: false, reason: "items-invalid", env: env, missingItems: true };
+      }
       if (p.tombstones && typeof p.tombstones === "object") env.tombstones = p.tombstones;
       if (p.doneRef && typeof p.doneRef === "object") env.doneRef = p.doneRef;
       if (p.doneSuppress && typeof p.doneSuppress === "object") env.doneSuppress = p.doneSuppress;
       env.metaUpdatedAt = Number(p.metaUpdatedAt) || 0;
-      return env;
+      return {
+        ok: true,
+        reason: hasItemsField ? "ok" : "items-missing",
+        env: env,
+        missingItems: !hasItemsField
+      };
+    }
+
+    /** 兼容旧调用：只返回 env；失败时空信封（flush/pull 须用 TryParse + 守卫） */
+    function aliyunSprintRealParseEnvelope(rawPayload) {
+      const parsed = aliyunSprintRealTryParseEnvelope(rawPayload);
+      return parsed && parsed.env ? parsed.env : aliyunSprintRealEmptyEnvelope();
     }
 
     function aliyunSprintRealApplyMutationToEnvelope(env, mutation) {
@@ -116310,22 +116440,85 @@
 
         const tParse0 = Date.now();
         let env = aliyunSprintRealEmptyEnvelope();
+        const getNotFound =
+          getRes.status === 404 || (getRes.data && getRes.data.error === "not_found");
         if (getRes.ok && getRes.data && getRes.data.data) {
           const row = getRes.data.data;
           const attrs = row.attrs || row;
-          env = aliyunSprintRealParseEnvelope(attrs.payload != null ? attrs.payload : attrs);
-        } else if (getRes.status !== 404 && !(getRes.data && getRes.data.error === "not_found")) {
+          const rawPayload = attrs.payload != null ? attrs.payload : attrs;
+          /* 正文在但解析失败：禁止落到空信封再 POST（会整域清空云端 Sprint / Open List） */
+          const parsed = aliyunSprintRealTryParseEnvelope(rawPayload);
+          if (!parsed.ok) {
+            throw new Error(
+              "Sprint envelope parse failed (" +
+                (parsed.reason || "?") +
+                ") — abort flush to avoid empty Sprint overwrite"
+            );
+          }
+          if (parsed.missingItems) {
+            throw new Error(
+              "Sprint envelope items missing — abort flush to avoid empty Sprint overwrite"
+            );
+          }
+          env = parsed.env;
+        } else if (getNotFound) {
+          aliyunSprintRealAppendLog("flush GET not_found：首次写入，使用空信封");
+        } else {
+          /* 非 404 的失败 GET：绝不能用空信封覆盖云端 */
           console.warn("[aliyun-sprint-real] GET status", getRes.status, getRes.data);
+          throw new Error(
+            "GET HTTP " +
+              (getRes.status != null ? getRes.status : "?") +
+              " — abort flush to avoid empty Sprint overwrite"
+          );
         }
         parseMs = Date.now() - tParse0;
 
         const tMerge0 = Date.now();
+        const localOpenBeforeFlush = countWeeklyPlanLaneTasksInPlan(
+          state.weeklyPlan,
+          typeof getCurrentWeeklyPlanSprintStartKey === "function"
+            ? getCurrentWeeklyPlanSprintStartKey()
+            : "",
+          "open"
+        );
+        const cloudBefore = countAliyunSprintEnvelopeItems(env);
         for (let i = 0; i < batch.length; i++) {
           aliyunSprintRealApplyMutationToEnvelope(env, batch[i].mutation);
         }
         aliyunSprintRealMergeMetaIntoEnvelope(env, aliyunSprintRealCloneMetaFromState());
         env.roomId = String(cloudSyncRoomId || env.roomId || "");
         env.envelopeUpdatedAt = Date.now();
+        const cloudAfter = countAliyunSprintEnvelopeItems(env);
+        /*
+         * 本机本期仍有 Open List，但 RMW 后云端 open 从有变无且本批无 tombstone：
+         * 视为异常空盖，中止上传（真实删空须带 tombstone mutation）。
+         */
+        let batchHasTomb = false;
+        for (let bi = 0; bi < batch.length; bi++) {
+          if (batch[bi] && batch[bi].mutation && batch[bi].mutation.op === "tombstone") {
+            batchHasTomb = true;
+            break;
+          }
+        }
+        if (
+          localOpenBeforeFlush > 0 &&
+          cloudBefore.open > 0 &&
+          cloudAfter.open === 0 &&
+          !batchHasTomb
+        ) {
+          logOpenListSyncDiag("flush-abort-empty-open-cover", {
+            localOpen: localOpenBeforeFlush,
+            cloudOpenBefore: cloudBefore.open,
+            cloudOpenAfter: cloudAfter.open,
+            cloudTotalBefore: cloudBefore.total,
+            cloudTotalAfter: cloudAfter.total,
+            batchLen: batch.length
+          });
+          throw new Error(
+            "Sprint flush would drop Open List items without tombstone — abort empty cover"
+          );
+        }
         mergeMs = Date.now() - tMerge0;
         try {
           if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
@@ -116437,6 +116630,23 @@
         aliyunSprintRealAppendLog(!base ? "请填写 Function URL" : "中止：URL 疑似 AccessKey");
         return { ok: false, error: "bad-url" };
       }
+      const pullSeq = ++aliyunSprintRealPullSeq;
+      aliyunSprintRealPullInFlight = true;
+      const viewWeekKey =
+        typeof getWeeklyPlanViewSprintStartKey === "function"
+          ? getWeeklyPlanViewSprintStartKey()
+          : typeof getCurrentWeeklyPlanSprintStartKey === "function"
+            ? getCurrentWeeklyPlanSprintStartKey()
+            : "";
+      const localOpenBefore = countWeeklyPlanLaneTasksInPlan(state.weeklyPlan, viewWeekKey, "open");
+      const localTotalBefore = countWeeklyPlanLaneTasksInPlan(state.weeklyPlan, viewWeekKey, null);
+      logOpenListSyncDiag("pull-start", {
+        pullSeq: pullSeq,
+        weekKey: viewWeekKey,
+        localOpen: localOpenBefore,
+        localTotal: localTotalBefore,
+        dateRange: viewWeekKey
+      });
       const lt = aliyunSprintRealStartLtObserver();
       const tAll = Date.now();
       let networkWaitMs = 0;
@@ -116449,8 +116659,9 @@
       let errMsg = "";
       let mergedCount = 0;
       let tombstoneApplied = 0;
+      let staleSkipped = false;
       try {
-        aliyunSprintRealAppendLog("拉取 Sprint docId=" + docId);
+        aliyunSprintRealAppendLog("拉取 Sprint docId=" + docId + " seq=" + pullSeq);
         const tDl0 = Date.now();
         const getRes = await aliyunExpFetchJson(
           "GET",
@@ -116459,10 +116670,40 @@
         );
         downloadMs = Date.now() - tDl0;
         networkWaitMs += downloadMs;
+        if (pullSeq !== aliyunSprintRealPullSeq) {
+          staleSkipped = true;
+          logOpenListSyncDiag("pull-stale-after-get", {
+            pullSeq: pullSeq,
+            latestSeq: aliyunSprintRealPullSeq,
+            reason: "newer-pull-started"
+          });
+          return { ok: true, stale: true, docId: docId, pullSeq: pullSeq };
+        }
         if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+          /* 云端尚无文档：真实空（首次）；标记已加载，允许 UI 显示空态 */
+          aliyunSprintRealEverLoadedOk = true;
           aliyunSprintRealAppendLog("云端尚无 Sprint 文档（首次写入前正常）");
+          logOpenListSyncDiag("pull-cloud-missing-doc", {
+            pullSeq: pullSeq,
+            weekKey: viewWeekKey,
+            localOpen: localOpenBefore,
+            cloudOpen: 0,
+            cloudTotal: 0,
+            reason: "not_found-real-empty"
+          });
           ok = true;
-          return { ok: true, empty: true, docId: docId };
+          try {
+            if (typeof markSprintTaskShellsDirty === "function") markSprintTaskShellsDirty();
+            if (
+              typeof getWeeklyPlanShell === "function" &&
+              typeof isWeeklyPlanTaskShell === "function" &&
+              isWeeklyPlanTaskShell(getWeeklyPlanShell()) &&
+              typeof renderWeeklyPlanList === "function"
+            ) {
+              renderWeeklyPlanList();
+            }
+          } catch (_emptyUi) {}
+          return { ok: true, empty: true, docId: docId, pullSeq: pullSeq };
         }
         if (!getRes.ok) throw new Error("GET HTTP " + getRes.status);
 
@@ -116477,15 +116718,70 @@
           payloadStr = "";
         }
         payloadKB = Math.round((payloadStr.length / 1024) * 10) / 10;
+        const parsed = aliyunSprintRealTryParseEnvelope(payloadRaw);
+        parseMs = Date.now() - tParse0;
+        if (!parsed.ok) {
+          /* 解析失败 / 字段无效：不得当空列表合并，也不记指纹 */
+          logOpenListSyncDiag("pull-parse-reject", {
+            pullSeq: pullSeq,
+            weekKey: viewWeekKey,
+            localOpen: localOpenBefore,
+            reason: parsed.reason || "parse-failed",
+            missingItems: !!parsed.missingItems
+          });
+          throw new Error("Sprint pull parse failed: " + (parsed.reason || "unknown"));
+        }
+        if (parsed.missingItems) {
+          logOpenListSyncDiag("pull-items-missing-keep-local", {
+            pullSeq: pullSeq,
+            weekKey: viewWeekKey,
+            localOpen: localOpenBefore,
+            reason: "items-field-missing"
+          });
+          /* 字段缺失：保留本机；仍记 everLoaded 以免永久挡住空态？否——未确认列表内容 */
+          ok = true;
+          return { ok: true, skippedMissingItems: true, docId: docId, pullSeq: pullSeq };
+        }
+        const env = parsed.env;
+        const cloudCounts = countAliyunSprintEnvelopeItems(env);
         const sprintPullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
         if (aliyunSyncPrimaryIsUnchangedPull("sprint", sprintPullFp)) {
+          const wasLoaded = aliyunSprintRealEverLoadedOk;
+          aliyunSprintRealEverLoadedOk = true;
           ok = true;
           logSyncNoDataChangeSkipRender("sprint");
           aliyunSprintRealAppendLog("拉取无变化，跳过 merge/render");
-          return { ok: true, unchanged: true, docId: docId };
+          logOpenListSyncDiag("pull-unchanged", {
+            pullSeq: pullSeq,
+            weekKey: viewWeekKey,
+            localOpen: localOpenBefore,
+            cloudOpen: cloudCounts.open,
+            cloudTotal: cloudCounts.total
+          });
+          /* 首次确认加载完成：补刷一次，解除「同步中抑制空态」 */
+          if (!wasLoaded) {
+            try {
+              if (typeof markSprintTaskShellsDirty === "function") markSprintTaskShellsDirty();
+              if (
+                typeof getWeeklyPlanShell === "function" &&
+                typeof isWeeklyPlanTaskShell === "function" &&
+                isWeeklyPlanTaskShell(getWeeklyPlanShell()) &&
+                typeof renderWeeklyPlanList === "function"
+              ) {
+                renderWeeklyPlanList();
+              }
+            } catch (_firstLoadUi) {}
+          }
+          return { ok: true, unchanged: true, docId: docId, pullSeq: pullSeq };
         }
-        const env = aliyunSprintRealParseEnvelope(payloadRaw);
-        parseMs = Date.now() - tParse0;
+        if (pullSeq !== aliyunSprintRealPullSeq) {
+          staleSkipped = true;
+          logOpenListSyncDiag("pull-stale-before-merge", {
+            pullSeq: pullSeq,
+            latestSeq: aliyunSprintRealPullSeq
+          });
+          return { ok: true, stale: true, docId: docId, pullSeq: pullSeq };
+        }
 
         const tMerge0 = Date.now();
         if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") state.weeklyPlan = {};
@@ -116598,9 +116894,36 @@
           aliyunSprintRealSuppressPush = false;
         }
         mergeMs = Date.now() - tMerge0;
+        if (pullSeq !== aliyunSprintRealPullSeq) {
+          staleSkipped = true;
+          logOpenListSyncDiag("pull-stale-after-merge", {
+            pullSeq: pullSeq,
+            latestSeq: aliyunSprintRealPullSeq,
+            mergedCount: mergedCount,
+            tombstoneApplied: tombstoneApplied
+          });
+          return { ok: true, stale: true, docId: docId, pullSeq: pullSeq };
+        }
         try {
           if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
         } catch (_flowMergeNote) {}
+
+        const localOpenAfter = countWeeklyPlanLaneTasksInPlan(state.weeklyPlan, viewWeekKey, "open");
+        logOpenListSyncDiag("pull-merged", {
+          pullSeq: pullSeq,
+          weekKey: viewWeekKey,
+          localOpenBefore: localOpenBefore,
+          localOpenAfter: localOpenAfter,
+          cloudOpen: cloudCounts.open,
+          cloudTotal: cloudCounts.total,
+          mergedCount: mergedCount,
+          tombstoneApplied: tombstoneApplied,
+          metaChanged: !!metaChanged,
+          reason:
+            localOpenBefore > 0 && localOpenAfter === 0
+              ? "open-became-empty-after-merge"
+              : "ok"
+        });
 
         const tRen0 = Date.now();
         if (mergedCount || tombstoneApplied || metaChanged) {
@@ -116643,6 +116966,7 @@
             if (typeof flowDiagNoteCloudRender === "function" && renderMs > 0) flowDiagNoteCloudRender(renderMs);
           } catch (_flowRenNote) {}
         aliyunSyncPrimaryMarkPullFingerprint("sprint", sprintPullFp);
+        aliyunSprintRealEverLoadedOk = true;
         ok = true;
         aliyunSprintRealAppendLog(
           "合并完成：upsert/更新 " +
@@ -116650,24 +116974,37 @@
             "，tombstone 生效 " +
             tombstoneApplied +
             "，meta=" +
-            !!metaChanged
+            !!metaChanged +
+            "，seq=" +
+            pullSeq
         );
         return {
           ok: true,
           docId: docId,
           mergedCount: mergedCount,
           tombstoneApplied: tombstoneApplied,
-          metaChanged: metaChanged
+          metaChanged: metaChanged,
+          pullSeq: pullSeq
         };
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
         aliyunSprintRealAppendLog("拉取失败: " + errMsg);
-        return { ok: false, error: errMsg };
+        logOpenListSyncDiag("pull-fail-keep-local", {
+          pullSeq: pullSeq,
+          weekKey: viewWeekKey,
+          localOpen: localOpenBefore,
+          error: errMsg,
+          reason: "request-failed-no-overwrite"
+        });
+        return { ok: false, error: errMsg, pullSeq: pullSeq };
       } finally {
+        if (pullSeq === aliyunSprintRealPullSeq) {
+          aliyunSprintRealPullInFlight = false;
+        }
         lt.stop();
         aliyunSprintRealLogReport({
           ok: ok,
-          reason: "manual pull",
+          reason: staleSkipped ? "stale pull" : "manual pull",
           docId: docId,
           payloadKB: payloadKB,
           uploadMs: 0,
@@ -116693,6 +117030,7 @@
       window.notifyAliyunSprintRealMetaAfterLocalChange = notifyAliyunSprintRealMetaAfterLocalChange;
       window.aliyunSprintRealDocId = aliyunSprintRealDocId;
       window.aliyunSprintRealParseEnvelope = aliyunSprintRealParseEnvelope;
+      window.aliyunSprintRealTryParseEnvelope = aliyunSprintRealTryParseEnvelope;
     } catch (_sprintWin) {}
 
     /**
@@ -123356,6 +123694,21 @@
         (r && Object.prototype.hasOwnProperty.call(r, "todayPlanDate"))
       ) {
         merged.todayPlanDate = pickWeeklyPlanTodayPlanDateForSync(l, r, preferRemote);
+      }
+      /*
+       * lane：远端缺字段或非法值时保留本机 open/work/life，避免 Open List 被默默归到 life 后「消失」。
+       * 两侧都有合法 lane 时仍按 preferRemote / updatedAt 合并结果（merged 已 Object.assign）。
+       */
+      const lLane = l && (l.lane === "work" || l.lane === "open" || l.lane === "life") ? l.lane : null;
+      const rHasLane = r && Object.prototype.hasOwnProperty.call(r, "lane");
+      const rLane =
+        rHasLane && (r.lane === "work" || r.lane === "open" || r.lane === "life") ? r.lane : null;
+      if (lLane && !rLane) merged.lane = lLane;
+      else if (!lLane && rLane) merged.lane = rLane;
+      else if (lLane && rLane) {
+        if (rU > lU) merged.lane = rLane;
+        else if (lU > rU) merged.lane = lLane;
+        else merged.lane = preferRemote ? rLane : lLane;
       }
       return normalizeWeeklyPlanTask(merged);
     }
@@ -165259,6 +165612,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         isSprintKanbanDesktopEnabled() &&
         getSprintViewMode(sprintShell) === "kanban"
       ) {
+        const viewWeekKeyKanban = getWeeklyPlanViewSprintStartKey();
         const tasks = getWeeklyPlanTasksForViewSprint();
         const filtered = tasks.filter(
           (t) =>
@@ -165266,15 +165620,53 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             isWeeklyPlanTaskVisibleForViewDate(t, viewDateKey)
         );
         const tasksSorted = sortWeeklyPlanTasksForDisplay(filtered);
+        if (
+          !tasksSorted.length &&
+          shouldPreserveWeeklyPlanListDuringSync(sprintShell)
+        ) {
+          const lastValid = getWeeklyPlanShellLastValidFilter(
+            sprintShell,
+            viewWeekKeyKanban,
+            viewDateKey
+          );
+          const hasDom =
+            (weeklyPlanKanban && weeklyPlanKanban.querySelector(".sprint-kanban-card")) ||
+            (weeklyPlanList && weeklyPlanList.querySelector(".weekly-plan-item"));
+          if (hasDom || (lastValid && lastValid.count > 0)) {
+            if (typeof logOpenListSyncDiag === "function") {
+              logOpenListSyncDiag("render-preserve-last-valid-kanban", {
+                shell: sprintShell,
+                weekKey: viewWeekKeyKanban,
+                viewDate: viewDateKey,
+                filteredCount: 0,
+                lastValidCount: lastValid ? lastValid.count : 0,
+                reason: "sync-or-not-loaded-suppress-empty"
+              });
+            }
+            weeklyPlanEmpty.style.display = "none";
+            return;
+          }
+        }
         weeklyPlanList.innerHTML = "";
         weeklyPlanEmpty.style.display = "none";
         renderWeeklyPlanKanban(tasksSorted, sprintShell);
+        if (tasksSorted.length) {
+          noteWeeklyPlanShellLastValidFilter(
+            sprintShell,
+            viewWeekKeyKanban,
+            viewDateKey,
+            tasksSorted.length
+          );
+        } else {
+          clearWeeklyPlanShellLastValidFilter(sprintShell, viewWeekKeyKanban, viewDateKey);
+        }
         noteSprintShellPainted(sprintShell);
         sprintShellListLiveOwner = sprintShell;
         return;
       }
       const viewLane =
         isWeeklyPlanTaskShell(sprintShell) ? sprintShell : getWeeklyPlanAddLane();
+      const viewWeekKey = getWeeklyPlanViewSprintStartKey();
       const tasks = getWeeklyPlanTasksForViewSprint();
       const filtered = tasks.filter(
         (t) =>
@@ -165282,13 +165674,76 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           isWeeklyPlanTaskVisibleForViewDate(t, viewDateKey)
       );
       const tasksSorted = sortWeeklyPlanTasksForDisplay(filtered);
-      weeklyPlanList.innerHTML = "";
-      weeklyPlanEmpty.style.display = tasksSorted.length ? "none" : "block";
       const curKey = getCurrentWeeklyPlanSprintStartKey();
-      const emptyPrefix = getWeeklyPlanViewSprintStartKey() === curKey ? "本期暂无" : "该期暂无";
-      weeklyPlanEmpty.textContent =
+      const emptyPrefix = viewWeekKey === curKey ? "本期暂无" : "该期暂无";
+      const emptyLabel =
         emptyPrefix +
         (viewLane === "work" ? "工作任务" : viewLane === "open" ? " Open List 任务" : "生活任务");
+      /*
+       * 后台同步 / 尚未完成有效 Sprint 加载：过滤结果暂时为空时，保留最近一次有效列表 DOM，
+       * 不先清空再恢复，也不显示「本期暂无」（避免与「同步中」同时出现假空态）。
+       * 真实删除 / 真实空列表：完成有效加载且确认过滤为空后仍正常显示空态。
+       */
+      if (!tasksSorted.length && isWeeklyPlanTaskShell(viewLane)) {
+        const lastValid = getWeeklyPlanShellLastValidFilter(viewLane, viewWeekKey, viewDateKey);
+        const preserve = shouldPreserveWeeklyPlanListDuringSync(viewLane);
+        const hasDomItems =
+          weeklyPlanList && weeklyPlanList.querySelectorAll(".weekly-plan-item").length > 0;
+        if (preserve && (hasDomItems || (lastValid && lastValid.count > 0))) {
+          if (typeof logOpenListSyncDiag === "function") {
+            logOpenListSyncDiag("render-preserve-last-valid", {
+              shell: viewLane,
+              weekKey: viewWeekKey,
+              viewDate: viewDateKey,
+              localTotal: tasks.length,
+              filteredCount: 0,
+              lastValidCount: lastValid ? lastValid.count : 0,
+              hasDomItems: !!hasDomItems,
+              reason: "sync-or-not-loaded-suppress-empty"
+            });
+          }
+          weeklyPlanEmpty.style.display = "none";
+          /* 不 mark painted：保持 dirty，加载完成后再刷 */
+          return;
+        }
+        if (preserve && !hasDomItems && !(lastValid && lastValid.count > 0)) {
+          if (typeof logOpenListSyncDiag === "function") {
+            logOpenListSyncDiag("render-suppress-empty-unconfirmed", {
+              shell: viewLane,
+              weekKey: viewWeekKey,
+              viewDate: viewDateKey,
+              localTotal: tasks.length,
+              filteredCount: 0,
+              reason: "awaiting-valid-sprint-load"
+            });
+          }
+          weeklyPlanList.innerHTML = "";
+          weeklyPlanEmpty.style.display = "none";
+          return;
+        }
+      }
+      weeklyPlanList.innerHTML = "";
+      weeklyPlanEmpty.style.display = tasksSorted.length ? "none" : "block";
+      weeklyPlanEmpty.textContent = emptyLabel;
+      if (tasksSorted.length) {
+        noteWeeklyPlanShellLastValidFilter(viewLane, viewWeekKey, viewDateKey, tasksSorted.length);
+      } else if (isWeeklyPlanTaskShell(viewLane)) {
+        clearWeeklyPlanShellLastValidFilter(viewLane, viewWeekKey, viewDateKey);
+        if (typeof logOpenListSyncDiag === "function") {
+          logOpenListSyncDiag("render-confirmed-empty", {
+            shell: viewLane,
+            weekKey: viewWeekKey,
+            viewDate: viewDateKey,
+            localTotal: tasks.length,
+            filteredCount: 0,
+            everLoadedOk:
+              typeof aliyunSprintRealEverLoadedOk !== "undefined"
+                ? !!aliyunSprintRealEverLoadedOk
+                : null,
+            reason: "confirmed-filter-empty"
+          });
+        }
+      }
 
       const shouldBlockWeeklyPlanHeadDrag = (tgt) => {
         if (!tgt || typeof tgt.closest !== "function") return true;
@@ -168841,9 +169296,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (!remaining.length) {
           weeklyPlanEmpty.style.display = "block";
           const viewLane = isWeeklyPlanTaskShell(shell) ? shell : getWeeklyPlanAddLane();
+          const viewWeekKeyDel = getWeeklyPlanViewSprintStartKey();
           const curKey = getCurrentWeeklyPlanSprintStartKey();
-          const emptyPrefix =
-            getWeeklyPlanViewSprintStartKey() === curKey ? "本期暂无" : "该期暂无";
+          const emptyPrefix = viewWeekKeyDel === curKey ? "本期暂无" : "该期暂无";
           weeklyPlanEmpty.textContent =
             emptyPrefix +
             (viewLane === "work"
@@ -168851,6 +169306,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               : viewLane === "open"
                 ? " Open List 任务"
                 : "生活任务");
+          /* 本地真实删空：清掉 lastValid，避免同步中误保留旧快照 */
+          if (typeof clearWeeklyPlanShellLastValidFilter === "function") {
+            clearWeeklyPlanShellLastValidFilter(
+              viewLane,
+              viewWeekKeyDel,
+              formatDateInputValue(new Date())
+            );
+          }
+          if (typeof logOpenListSyncDiag === "function") {
+            logOpenListSyncDiag("local-delete-confirmed-empty", {
+              shell: viewLane,
+              weekKey: viewWeekKeyDel,
+              filteredCount: 0,
+              reason: "local-task-delete"
+            });
+          }
         }
       }
       try {
