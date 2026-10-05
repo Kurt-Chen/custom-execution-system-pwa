@@ -99905,7 +99905,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261005x";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261005y";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -111087,6 +111087,21 @@
         return;
       }
       if (report.ok === false) {
+        const errStr = String((report && report.error) || "");
+        /*
+         * Lists 大正文（tombstone 膨胀）GET/解析失败时会 abort flush 防空覆盖；
+         * 属可重试软失败，勿把整机角标打成「同步异常」造成恐慌。
+         */
+        if (
+          errStr.indexOf("abort flush to avoid empty Lists overwrite") >= 0 ||
+          errStr.indexOf("Lists envelope parse failed") >= 0
+        ) {
+          try {
+            console.warn("[aliyun-sync-primary] Lists soft-fail (no hard badge):", errStr);
+          } catch (_c) {}
+          paintAliyunSyncPrimaryBadgeSyncing();
+          return;
+        }
         paintAliyunSyncPrimaryBadgeError(report.error);
       }
     }
@@ -120013,15 +120028,108 @@
       }
     }
 
+    /** Lists 信封 tombstone 上限：禁止把全局 syncTombstones（可达数万）整包写入 OTS */
+    const ALIYUN_LISTS_ENVELOPE_TOMBSTONE_MAX = 2000;
+    const ALIYUN_LISTS_ENVELOPE_TOMBSTONE_LOCAL_EXTRA = 300;
+
+    function aliyunListsRealCollectSliceIds(slice) {
+      const ids = Object.create(null);
+      if (!slice || typeof slice !== "object") return ids;
+      const keys = ["closedList", "memo", "hatersDoubtersLog", "trash"];
+      for (let k = 0; k < keys.length; k++) {
+        const arr = slice[keys[k]];
+        if (!Array.isArray(arr)) continue;
+        for (let i = 0; i < arr.length; i++) {
+          const it = arr[i];
+          if (it && it.id != null) ids[String(it.id)] = true;
+        }
+      }
+      return ids;
+    }
+
+    /**
+     * Lists 域只用「列表相关」tombstone：当前 closedList/memo/haters/trash 的 id
+     * + 本机最近少量 forever-delete。禁止把 Done/Sprint/周年等全局 tombstone 灌进 Lists 信封
+     *（线上曾膨胀到 6 万+ / ~2MB，触发 OTS 单字段上限 → 同步异常）。
+     */
+    function aliyunListsRealScopeTombstonesForEnvelope(mergedTs, localTs, locSlice, remSlice, mergedSlice) {
+      const live = aliyunListsRealCollectSliceIds(mergedSlice);
+      const locIds = aliyunListsRealCollectSliceIds(locSlice);
+      const remIds = aliyunListsRealCollectSliceIds(remSlice);
+      Object.keys(locIds).forEach(function (id) {
+        live[id] = true;
+      });
+      Object.keys(remIds).forEach(function (id) {
+        live[id] = true;
+      });
+      const src = mergedTs && typeof mergedTs === "object" ? mergedTs : {};
+      const out = {};
+      Object.keys(src).forEach(function (k) {
+        if (!live[k]) return;
+        const v = Number(src[k]);
+        if (Number.isFinite(v) && v > 0) out[k] = v;
+      });
+      /* 本机最近 forever-delete：不在任一列表里但仍需防复活；绝不从远端 6 万+ 里回灌 */
+      const locSrc = localTs && typeof localTs === "object" ? localTs : {};
+      const extras = [];
+      Object.keys(locSrc).forEach(function (k) {
+        if (out[k]) return;
+        const v = Number(locSrc[k]);
+        if (Number.isFinite(v) && v > 0) extras.push([k, v]);
+      });
+      extras.sort(function (a, b) {
+        return b[1] - a[1];
+      });
+      const extraBudget = Math.min(
+        ALIYUN_LISTS_ENVELOPE_TOMBSTONE_LOCAL_EXTRA,
+        Math.max(0, ALIYUN_LISTS_ENVELOPE_TOMBSTONE_MAX - Object.keys(out).length)
+      );
+      for (let i = 0; i < extras.length && i < extraBudget; i++) {
+        out[extras[i][0]] = extras[i][1];
+      }
+      const keys = Object.keys(out);
+      if (keys.length > ALIYUN_LISTS_ENVELOPE_TOMBSTONE_MAX) {
+        keys.sort(function (a, b) {
+          return out[a] - out[b];
+        });
+        const drop = keys.length - ALIYUN_LISTS_ENVELOPE_TOMBSTONE_MAX;
+        for (let d = 0; d < drop; d++) delete out[keys[d]];
+      }
+      return out;
+    }
+
     function aliyunListsRealCloneTombstonesFromState() {
       const src =
         state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
+      const live = aliyunListsRealCollectSliceIds({
+        closedList: state.closedList,
+        memo: state.memo,
+        hatersDoubtersLog: state.hatersDoubtersLog,
+        trash: state.trash
+      });
       const out = {};
       Object.keys(src).forEach(function (k) {
+        if (!live[k]) return;
         const v = Number(src[k]);
         if (Number.isFinite(v) && v > 0) out[k] = v;
       });
       return out;
+    }
+
+    /** 合并进本机后强制裁剪全局 syncTombstones，防止 Lists 拉取把数万 key 灌进内存 */
+    function aliyunListsRealEnforceLocalTombstoneCap() {
+      if (!state.syncTombstones || typeof state.syncTombstones !== "object") return;
+      const keys = Object.keys(state.syncTombstones);
+      const maxKeys =
+        typeof SYNC_TOMBSTONE_MAX_KEYS === "number" && SYNC_TOMBSTONE_MAX_KEYS > 0
+          ? SYNC_TOMBSTONE_MAX_KEYS
+          : 4000;
+      if (keys.length <= maxKeys) return;
+      keys.sort(function (a, b) {
+        return (Number(state.syncTombstones[a]) || 0) - (Number(state.syncTombstones[b]) || 0);
+      });
+      const drop = keys.length - maxKeys;
+      for (let i = 0; i < drop; i++) delete state.syncTombstones[keys[i]];
     }
 
     /** trash 条目补 updatedAt（merge 按 updatedAt/deletedAt LWW；旧云端可能只有 deletedAt） */
@@ -120130,7 +120238,8 @@
       const rem = remoteSlice && typeof remoteSlice === "object" ? remoteSlice : {};
       const localTs =
         state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
-      const ts =
+      /* omit 仍可用完整并集（内存），写入信封前必须 scope，否则会把远端 6 万+ 再 POST 回去 */
+      const tsForOmit =
         typeof mergeSyncTombstoneMaps === "function"
           ? mergeSyncTombstoneMaps(
               mergeSyncTombstoneMaps(localTs, loc.tombstones),
@@ -120171,24 +120280,54 @@
               aliyunListsRealNormalizeTrashEntries(rem.trash)
             )
           : aliyunListsRealNormalizeTrashEntries(loc.trash);
+      const closedOut =
+        typeof omitTombstonedIdRecords === "function"
+          ? omitTombstonedIdRecords(closedMerged, tsForOmit)
+          : closedMerged;
+      const memoOut =
+        typeof omitTombstonedIdRecords === "function"
+          ? omitTombstonedIdRecords(memoMerged, tsForOmit)
+          : memoMerged;
+      const hatersOut =
+        typeof omitTombstonedIdRecords === "function"
+          ? omitTombstonedIdRecords(hatersMerged, tsForOmit)
+          : hatersMerged;
+      const trashOut =
+        typeof omitTombstonedIdRecords === "function"
+          ? omitTombstonedIdRecords(trashMerged, tsForOmit)
+          : trashMerged;
+      const mergedSliceForIds = {
+        closedList: closedOut,
+        memo: memoOut,
+        hatersDoubtersLog: hatersOut,
+        trash: trashOut
+      };
+      const tsScoped = aliyunListsRealScopeTombstonesForEnvelope(
+        tsForOmit,
+        localTs,
+        loc,
+        rem,
+        mergedSliceForIds
+      );
+      const remTsCount =
+        rem.tombstones && typeof rem.tombstones === "object"
+          ? Object.keys(rem.tombstones).length
+          : 0;
+      const scopedCount = Object.keys(tsScoped).length;
+      if (remTsCount > scopedCount + 100) {
+        try {
+          aliyunListsRealAppendLog(
+            "tombstone prune for envelope: remote=" + remTsCount + " → scoped=" + scopedCount
+          );
+        } catch (_logPrune) {}
+      }
       return {
-        closedList:
-          typeof omitTombstonedIdRecords === "function"
-            ? omitTombstonedIdRecords(closedMerged, ts)
-            : closedMerged,
-        memo:
-          typeof omitTombstonedIdRecords === "function"
-            ? omitTombstonedIdRecords(memoMerged, ts)
-            : memoMerged,
-        hatersDoubtersLog:
-          typeof omitTombstonedIdRecords === "function"
-            ? omitTombstonedIdRecords(hatersMerged, ts)
-            : hatersMerged,
-        trash:
-          typeof omitTombstonedIdRecords === "function"
-            ? omitTombstonedIdRecords(trashMerged, ts)
-            : trashMerged,
-        tombstones: ts
+        closedList: closedOut,
+        memo: memoOut,
+        hatersDoubtersLog: hatersOut,
+        trash: trashOut,
+        tombstones: tsScoped,
+        _listsTombstonePruned: remTsCount > scopedCount + 100
       };
     }
 
@@ -120208,6 +120347,7 @@
           typeof mergeSyncTombstoneMaps === "function"
             ? mergeSyncTombstoneMaps(state.syncTombstones, slice.tombstones)
             : Object.assign({}, state.syncTombstones || {}, slice.tombstones);
+        aliyunListsRealEnforceLocalTombstoneCap();
       }
       /* Lists 源合入后补齐 Closed/Memo → Done 镜像（他端仅拉 Lists 也能看到 Done） */
       try {
@@ -120620,7 +120760,11 @@
             localMiss = 0;
             tombPending = 0;
           }
-          if (!localMiss && !tombPending) {
+          const remTsBloated =
+            envEarly.tombstones &&
+            typeof envEarly.tombstones === "object" &&
+            Object.keys(envEarly.tombstones).length > ALIYUN_LISTS_ENVELOPE_TOMBSTONE_MAX + 100;
+          if (!localMiss && !tombPending && !remTsBloated) {
             ok = true;
             logSyncNoDataChangeSkipRender("lists");
             aliyunListsRealAppendLog("拉取无变化，跳过 merge/render");
@@ -120636,13 +120780,19 @@
             } catch (_listsRecUnch) {}
             return { ok: true, unchanged: true, docId: docId };
           }
-          aliyunListsRealAppendLog(
-            "拉取指纹未变但本机缺口：missing=" +
-              localMiss +
-              " tombPending=" +
-              tombPending +
-              " → 继续 merge"
-          );
+          if (remTsBloated) {
+            aliyunListsRealAppendLog(
+              "拉取指纹未变但 tombstone 膨胀 → 继续 merge 并回写裁剪信封"
+            );
+          } else {
+            aliyunListsRealAppendLog(
+              "拉取指纹未变但本机缺口：missing=" +
+                localMiss +
+                " tombPending=" +
+                tombPending +
+                " → 继续 merge"
+            );
+          }
         }
         const remoteEnv = envEarly;
         parseMs = Date.now() - tParse0;
@@ -120650,6 +120800,7 @@
         const tMerge0 = Date.now();
         const localSlice = aliyunListsRealCloneSliceFromState();
         const mergedSlice = aliyunListsRealBuildMergedSlice(localSlice, remoteEnv);
+        const needTombstoneHeal = !!mergedSlice._listsTombstonePruned;
         aliyunListsRealSuppressPush = true;
         const prevCloudSuppress = cloudSyncSuppressPush;
         cloudSyncSuppressPush = true;
@@ -120687,12 +120838,19 @@
             paintLists();
           }
         }
+        /* 远端 tombstone 膨胀：拉完后立刻回写裁剪信封，否则他端仍吃 2MB Lists */
+        if (needTombstoneHeal) {
+          try {
+            notifyAliyunListsRealAfterLocalChange("tombstone-prune-heal");
+            aliyunListsRealAppendLog("已调度 tombstone-prune-heal flush");
+          } catch (_heal) {}
+        }
         renderMs = Date.now() - tRen0;
           try {
             if (typeof flowDiagNoteCloudRender === "function" && renderMs > 0) flowDiagNoteCloudRender(renderMs);
           } catch (_flowRenNote) {}
         ok = true;
-        return { ok: true, docId: docId, changed: changed };
+        return { ok: true, docId: docId, changed: changed, tombstoneHealed: needTombstoneHeal };
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
         aliyunListsRealAppendLog("拉取失败: " + errMsg);
