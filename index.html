@@ -67760,8 +67760,11 @@
       transform: rotate(90deg);
     }
 
+    /*
+     * 勿对 __body 写常驻 display:flex：会盖掉 <details> 收起时的隐藏，
+     * 导致「My Whys / OKR / 周进度」在折叠态仍占位（用户截图双行同显）。
+     */
     #anniversaryModule .anniversary-tw-isg-metrics-fold__body {
-      display: flex;
       flex-direction: column;
       gap: 8px;
       padding: 0 10px 10px;
@@ -67769,21 +67772,26 @@
       box-sizing: border-box;
     }
 
+    #anniversaryModule .anniversary-tw-isg-metrics-fold[open] > .anniversary-tw-isg-metrics-fold__body {
+      display: flex;
+    }
+
+    #anniversaryModule .anniversary-tw-isg-metrics-fold:not([open]) > .anniversary-tw-isg-metrics-fold__body {
+      display: none !important;
+    }
+
     #anniversaryModule .anniversary-tw-isg-metrics-fold__body > .anniversary-tw-okr-metrics-panel {
       margin: 8px 0 0;
     }
 
-    /* 折叠内入口行：静态标签，不再自带折叠箭头 */
+    /* 折叠内入口行：保留点击收起正文，去掉右侧箭头与为箭头预留的右内边距 */
     #anniversaryModule .anniversary-tw-isg-metrics-fold .anniversary-tw-okr-metrics-panel__head {
-      cursor: default;
+      cursor: pointer;
+      padding-right: 12px;
     }
 
     #anniversaryModule .anniversary-tw-isg-metrics-fold .anniversary-tw-okr-metrics-panel__chevron {
       display: none !important;
-    }
-
-    #anniversaryModule .anniversary-tw-isg-metrics-fold .anniversary-tw-okr-metrics-panel.collapsed .anniversary-tw-okr-metrics-panel__body {
-      display: flex !important;
     }
 
     /* 手机端：Wormhole 公式整块消失（含 #22 胶囊折叠条红框区域；不留空白） */
@@ -81898,14 +81906,15 @@
                           </summary>
                           <div class="anniversary-tw-isg-metrics-fold__body">
                         <div class="anniversary-tw-okr-metrics-panel anniversary-tw-okr-metrics-panel--metrics-only">
-                          <div
+                          <button
+                            type="button"
                             class="anniversary-tw-okr-metrics-panel__head"
-                            role="group"
+                            aria-expanded="true"
                             aria-label="My Whys 与周进度统计"
                           >
                             <span class="anniversary-tw-okr-metrics-panel__head-label anniversary-tw-okr-metrics-panel__head-label--whys">My Whys</span>
                             <span class="anniversary-tw-okr-metrics-panel__head-label">周进度统计</span>
-                          </div>
+                          </button>
                           <div class="anniversary-tw-okr-metrics-panel__body">
                             <section class="anniversary-tw-okr-whys-card" aria-label="My Whys">
                               <div class="anniversary-tw-okr-whys-card__title">My Whys</div>
@@ -82318,15 +82327,16 @@
                           </summary>
                           <div class="anniversary-tw-isg-metrics-fold__body">
                         <div class="anniversary-tw-okr-metrics-panel">
-                          <div
+                          <button
+                            type="button"
                             class="anniversary-tw-okr-metrics-panel__head"
-                            role="group"
+                            aria-expanded="true"
                             aria-label="My Whys、OKR 与周进度统计"
                           >
                             <span class="anniversary-tw-okr-metrics-panel__head-label anniversary-tw-okr-metrics-panel__head-label--whys">My Whys</span>
                             <span class="anniversary-tw-okr-metrics-panel__head-label">OKR</span>
                             <span class="anniversary-tw-okr-metrics-panel__head-label">周进度统计</span>
-                          </div>
+                          </button>
                           <div class="anniversary-tw-okr-metrics-panel__body">
                             <section class="anniversary-tw-okr-whys-card" aria-label="My Whys">
                               <div class="anniversary-tw-okr-whys-card__title">My Whys</div>
@@ -82796,15 +82806,16 @@
                           </summary>
                           <div class="anniversary-tw-isg-metrics-fold__body">
                         <div class="anniversary-tw-okr-metrics-panel">
-                          <div
+                          <button
+                            type="button"
                             class="anniversary-tw-okr-metrics-panel__head"
-                            role="group"
+                            aria-expanded="true"
                             aria-label="My Whys、OKR 与周进度统计"
                           >
                             <span class="anniversary-tw-okr-metrics-panel__head-label anniversary-tw-okr-metrics-panel__head-label--whys">My Whys</span>
                             <span class="anniversary-tw-okr-metrics-panel__head-label">OKR</span>
                             <span class="anniversary-tw-okr-metrics-panel__head-label">周进度统计</span>
-                          </div>
+                          </button>
                           <div class="anniversary-tw-okr-metrics-panel__body">
                             <section class="anniversary-tw-okr-whys-card" aria-label="My Whys">
                               <div class="anniversary-tw-okr-whys-card__title">My Whys</div>
@@ -99155,7 +99166,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261005g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261005h";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -172488,9 +172499,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         });
       });
       document.querySelectorAll("#anniversaryModule .anniversary-tw-okr-metrics-panel__head").forEach((btn) => {
-        /* ISG 公式折叠内的入口行是静态标签，不再二次折叠 */
+        /* 入口行可点：折叠内去掉右侧箭头，但保留展开/收起正文；不得冒泡到外层 details */
         if (btn.tagName !== "BUTTON") return;
-        if (btn.closest(".anniversary-tw-isg-metrics-fold")) return;
         if (btn.dataset.bound) {
           return;
         }
@@ -172499,16 +172509,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (!block) {
           return;
         }
+        const inIsgFold = Boolean(btn.closest(".anniversary-tw-isg-metrics-fold"));
         const chevron = btn.querySelector(".anniversary-tw-okr-metrics-panel__chevron");
         const syncOkrMetricsToggle = () => {
           const collapsed = block.classList.contains("collapsed");
           btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
-          if (chevron) {
+          if (chevron && !inIsgFold) {
             chevron.textContent = collapsed ? "▸" : "▾";
           }
         };
         syncOkrMetricsToggle();
-        btn.addEventListener("click", () => {
+        btn.addEventListener("click", (ev) => {
+          if (inIsgFold && ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+          }
           block.classList.toggle("collapsed");
           syncOkrMetricsToggle();
         });
