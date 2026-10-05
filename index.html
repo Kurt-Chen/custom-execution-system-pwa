@@ -99412,7 +99412,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261005p";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261005s";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -116043,10 +116043,19 @@
       delete weeklyPlanShellLastValidFilter[weeklyPlanShellLastValidKey(shell, weekKey, viewDate)];
     }
 
-    /** 后台同步中或尚未完成有效 Sprint 加载：不得用空列表覆盖最近有效 UI */
+    /**
+     * 后台同步中或尚未完成有效 Sprint 加载：不得用空列表覆盖最近有效 UI。
+     * 注意：everLoadedOk 之后仍可能出现「同步中」角标（主路径 5s 拉取 / 其它域）；
+     * 若此时过滤结果短暂为空，仍须保留最近有效 DOM，避免与「本期暂无」同时出现。
+     */
     function shouldPreserveWeeklyPlanListDuringSync(shell) {
       if (!isWeeklyPlanTaskShell(shell)) return false;
       if (aliyunSprintRealPullInFlight) return true;
+      try {
+        if (typeof aliyunSyncPrimaryPullInFlight !== "undefined" && aliyunSyncPrimaryPullInFlight) {
+          return true;
+        }
+      } catch (_p) {}
       if (
         typeof isAliyunSprintRealSyncEnabled === "function" &&
         isAliyunSprintRealSyncEnabled() &&
@@ -116055,13 +116064,7 @@
         return true;
       }
       try {
-        if (
-          typeof cloudSyncMachineStatus === "string" &&
-          cloudSyncMachineStatus === "syncing" &&
-          typeof isAliyunSyncPrimaryEnabled === "function" &&
-          isAliyunSyncPrimaryEnabled() &&
-          !aliyunSprintRealEverLoadedOk
-        ) {
+        if (typeof cloudSyncMachineStatus === "string" && cloudSyncMachineStatus === "syncing") {
           return true;
         }
       } catch (_s) {}
@@ -116928,6 +116931,27 @@
         const remoteItems = env.items || {};
         const remoteTombs = env.tombstones || {};
         const remoteIds = Object.keys(remoteItems);
+        /* 合并前快照本期 Open：若合并后无 tombstone 却变空，回滚本机 Open（防异常空盖写回） */
+        const openSnapshotBeforeMerge = [];
+        try {
+          const snapArr = Array.isArray(state.weeklyPlan[viewWeekKey])
+            ? state.weeklyPlan[viewWeekKey]
+            : [];
+          for (let si = 0; si < snapArr.length; si++) {
+            const st = snapArr[si];
+            if (!st || !st.id) continue;
+            const lane =
+              typeof getWeeklyPlanTaskLane === "function"
+                ? getWeeklyPlanTaskLane(st)
+                : st.lane;
+            if (lane !== "open") continue;
+            try {
+              openSnapshotBeforeMerge.push(JSON.parse(JSON.stringify(st)));
+            } catch (_cloneSnap) {
+              openSnapshotBeforeMerge.push(st);
+            }
+          }
+        } catch (_snapOpen) {}
         let metaChanged = false;
         aliyunSprintRealSuppressPush = true;
         try {
@@ -117048,7 +117072,54 @@
           if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
         } catch (_flowMergeNote) {}
 
-        const localOpenAfter = countWeeklyPlanLaneTasksInPlan(state.weeklyPlan, viewWeekKey, "open");
+        let localOpenAfter = countWeeklyPlanLaneTasksInPlan(state.weeklyPlan, viewWeekKey, "open");
+        let restoredOpenAfterAnomaly = 0;
+        /*
+         * 异常空盖：合并前本机有 Open，合并后变 0，且本轮未应用任何 tombstone。
+         * upsert 路径本不应删本机独有任务；若仍变空则回滚快照，禁止写回空 Open。
+         */
+        if (
+          localOpenBefore > 0 &&
+          localOpenAfter === 0 &&
+          tombstoneApplied === 0 &&
+          openSnapshotBeforeMerge.length > 0
+        ) {
+          try {
+            if (!Array.isArray(state.weeklyPlan[viewWeekKey])) state.weeklyPlan[viewWeekKey] = [];
+            const arrRestore = state.weeklyPlan[viewWeekKey];
+            const have = new Set(
+              arrRestore.map(function (t) {
+                return t && t.id != null ? String(t.id) : "";
+              })
+            );
+            for (let ri = 0; ri < openSnapshotBeforeMerge.length; ri++) {
+              const ot = openSnapshotBeforeMerge[ri];
+              if (!ot || ot.id == null) continue;
+              const oid = String(ot.id);
+              if (have.has(oid)) continue;
+              arrRestore.push(ot);
+              have.add(oid);
+              restoredOpenAfterAnomaly += 1;
+            }
+            if (restoredOpenAfterAnomaly > 0) {
+              localOpenAfter = countWeeklyPlanLaneTasksInPlan(
+                state.weeklyPlan,
+                viewWeekKey,
+                "open"
+              );
+              saveState({ lists: ["weeklyPlan", "done", "closedList"] });
+            }
+          } catch (_restoreOpen) {}
+          logOpenListSyncDiag("pull-merge-anomaly-restore-open", {
+            pullSeq: pullSeq,
+            weekKey: viewWeekKey,
+            localOpenBefore: localOpenBefore,
+            localOpenAfter: localOpenAfter,
+            restored: restoredOpenAfterAnomaly,
+            cloudOpen: cloudCounts.open,
+            reason: "open-empty-without-tombstone"
+          });
+        }
         logOpenListSyncDiag("pull-merged", {
           pullSeq: pullSeq,
           weekKey: viewWeekKey,
@@ -117059,14 +117130,17 @@
           mergedCount: mergedCount,
           tombstoneApplied: tombstoneApplied,
           metaChanged: !!metaChanged,
+          restoredOpenAfterAnomaly: restoredOpenAfterAnomaly,
           reason:
             localOpenBefore > 0 && localOpenAfter === 0
               ? "open-became-empty-after-merge"
-              : "ok"
+              : restoredOpenAfterAnomaly > 0
+                ? "restored-open-after-anomaly"
+                : "ok"
         });
 
         const tRen0 = Date.now();
-        if (mergedCount || tombstoneApplied || metaChanged) {
+        if (mergedCount || tombstoneApplied || metaChanged || restoredOpenAfterAnomaly > 0) {
           try {
             /* 仅任务树变更时从 weeks 重建 Done 镜像；纯 meta 拉取勿覆盖刚合入的 doneRef */
             if (
@@ -188707,6 +188781,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               if (gate) gate.classList.add("hidden");
             }
           } catch (_u) {}
+        };
+        /** Open List 同步空态守卫：仅 agentSeed 自动化用 */
+        window.__agentSetCloudSyncStatus = function (text, statusClass) {
+          if (typeof setCloudSyncStatus === "function") return setCloudSyncStatus(text, statusClass);
+          return null;
+        };
+        window.__agentRenderWeeklyPlanList = function () {
+          if (typeof renderWeeklyPlanList === "function") return renderWeeklyPlanList();
+          return null;
+        };
+        window.__agentShouldPreserveWeeklyPlanList = function (shell) {
+          if (typeof shouldPreserveWeeklyPlanListDuringSync === "function") {
+            return shouldPreserveWeeklyPlanListDuringSync(shell);
+          }
+          return null;
         };
       }
     } catch (_agentSeedErr) {}
