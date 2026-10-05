@@ -99905,7 +99905,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261005w";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261005x";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -120069,16 +120069,26 @@
       };
     }
 
-    function aliyunListsRealParseEnvelope(rawPayload) {
+    /**
+     * Lists 信封严格解析：失败时 ok=false，禁止 flush 落到空信封再 POST
+     *（否则手机/平板 GET 超时或 JSON 坏包会把电脑端刚写入的封闭清单冲掉）。
+     */
+    function aliyunListsRealTryParseEnvelope(rawPayload) {
       let p = rawPayload;
       if (typeof p === "string") {
+        const trimmed = p.trim();
+        if (!trimmed) {
+          return { ok: false, reason: "empty-string", env: aliyunListsRealEmptyEnvelope() };
+        }
         try {
-          p = JSON.parse(p);
+          p = JSON.parse(trimmed);
         } catch (_e) {
-          return aliyunListsRealEmptyEnvelope();
+          return { ok: false, reason: "json-parse", env: aliyunListsRealEmptyEnvelope() };
         }
       }
-      if (!p || typeof p !== "object") return aliyunListsRealEmptyEnvelope();
+      if (!p || typeof p !== "object") {
+        return { ok: false, reason: "not-object", env: aliyunListsRealEmptyEnvelope() };
+      }
       const env = aliyunListsRealEmptyEnvelope();
       env.roomId = p.roomId != null ? String(p.roomId) : env.roomId;
       env.envelopeUpdatedAt = Number(p.envelopeUpdatedAt) || 0;
@@ -120088,7 +120098,13 @@
       if (Array.isArray(p.trash)) env.trash = aliyunListsRealNormalizeTrashEntries(p.trash);
       if (p.tombstones && typeof p.tombstones === "object") env.tombstones = p.tombstones;
       env.kind = ALIYUN_LISTS_REAL_KIND;
-      return env;
+      return { ok: true, reason: "ok", env: env };
+    }
+
+    /** 兼容旧调用：只返回 env；失败时空信封（flush/pull 须用 TryParse + 守卫） */
+    function aliyunListsRealParseEnvelope(rawPayload) {
+      const parsed = aliyunListsRealTryParseEnvelope(rawPayload);
+      return parsed && parsed.env ? parsed.env : aliyunListsRealEmptyEnvelope();
     }
 
     function aliyunListsRealSliceFingerprint(slice) {
@@ -120349,12 +120365,32 @@
 
         const tParse0 = Date.now();
         let remoteEnv = aliyunListsRealEmptyEnvelope();
+        const getNotFound =
+          getRes.status === 404 || (getRes.data && getRes.data.error === "not_found");
         if (getRes.ok && getRes.data && getRes.data.data) {
           const row = getRes.data.data;
           const attrs = row.attrs || row;
-          remoteEnv = aliyunListsRealParseEnvelope(attrs.payload != null ? attrs.payload : attrs);
-        } else if (getRes.status !== 404 && !(getRes.data && getRes.data.error === "not_found")) {
+          const rawPayload = attrs.payload != null ? attrs.payload : attrs;
+          /* 正文在但解析失败：禁止落到空信封再 POST（会冲掉电脑端封闭清单） */
+          const parsed = aliyunListsRealTryParseEnvelope(rawPayload);
+          if (!parsed.ok) {
+            throw new Error(
+              "Lists envelope parse failed (" +
+                (parsed.reason || "?") +
+                ") — abort flush to avoid empty Lists overwrite"
+            );
+          }
+          remoteEnv = parsed.env;
+        } else if (getNotFound) {
+          aliyunListsRealAppendLog("flush GET not_found：首次写入，使用空信封");
+        } else {
+          /* 非 404 的失败 GET：绝不能用空信封覆盖云端 Lists（封闭清单约 1MB+） */
           console.warn("[aliyun-lists-real] GET status", getRes.status, getRes.data);
+          throw new Error(
+            "GET HTTP " +
+              (getRes.status != null ? getRes.status : "?") +
+              " — abort flush to avoid empty Lists overwrite"
+          );
         }
         parseMs = Date.now() - tParse0;
 
@@ -120410,20 +120446,39 @@
           );
         }
         try {
+          /* 与 pull 路径一致：用 POST 正文 payload 指纹，避免 slice/payload 两套 fp 互不命中 */
+          const postedPayloadStr = JSON.stringify(env);
           aliyunSyncPrimaryMarkPullFingerprint(
             "lists",
-            aliyunListsRealSliceFingerprint(mergedSlice)
+            aliyunSyncPrimaryPayloadFingerprint(postedPayloadStr)
           );
         } catch (_fp) {}
         ok = true;
         try {
           if (typeof aliyunDomainsMetaBumpDomain === "function") {
-            await aliyunDomainsMetaBumpDomain("lists");
+            const bumpRes = await aliyunDomainsMetaBumpDomain("lists");
+            if (bumpRes && bumpRes.ok === false && !bumpRes.skipped) {
+              aliyunListsRealAppendLog(
+                "lists meta bump FAIL: " + (bumpRes.error || "unknown") + "（对端可能暂不拉 Lists 正文）"
+              );
+            }
           }
-        } catch (_domBump) {}
+        } catch (_domBump) {
+          aliyunListsRealAppendLog(
+            "lists meta bump throw: " +
+              (_domBump && _domBump.message ? _domBump.message : String(_domBump))
+          );
+        }
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
         ok = false;
+        /* 失败保留待推原因并延迟再刷，避免 GET 超时/坏包时紧循环；也不丢本地封闭清单改动 */
+        if (!aliyunListsRealPendingReason) {
+          aliyunListsRealPendingReason = reason || "retry-after-fail";
+        }
+        aliyunListsRealAppendLog(
+          "flush FAIL requeue reason=" + aliyunListsRealPendingReason + " err=" + errMsg
+        );
       } finally {
         lt.stop();
         aliyunListsRealFlushing = false;
@@ -120446,7 +120501,15 @@
           error: errMsg || undefined
         });
         if (aliyunListsRealPendingReason) {
-          Promise.resolve(flushAliyunListsRealQueue()).catch(function () {});
+          if (!ok) {
+            if (aliyunListsRealFlushTimer) clearTimeout(aliyunListsRealFlushTimer);
+            aliyunListsRealFlushTimer = setTimeout(function () {
+              aliyunListsRealFlushTimer = null;
+              Promise.resolve(flushAliyunListsRealQueue()).catch(function () {});
+            }, 1500);
+          } else {
+            Promise.resolve(flushAliyunListsRealQueue()).catch(function () {});
+          }
         }
       }
     }
@@ -120500,23 +120563,88 @@
         }
         payloadKB = Math.round((payloadStr.length / 1024) * 10) / 10;
         const pullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
-        if (aliyunSyncPrimaryIsUnchangedPull("lists", pullFp)) {
-          ok = true;
-          logSyncNoDataChangeSkipRender("lists");
-          aliyunListsRealAppendLog("拉取无变化，跳过 merge/render");
-          try {
-            if (
-              typeof reconcileListsDerivedDoneMirrorsFromState === "function" &&
-              reconcileListsDerivedDoneMirrorsFromState()
-            ) {
-              saveState({ lists: ["closedList", "memo", "done"] });
-              aliyunListsRealPaintLocalUiAfterMerge();
-              aliyunListsRealAppendLog("unchanged pull：已补齐 Lists→Done 镜像");
-            }
-          } catch (_listsRecUnch) {}
-          return { ok: true, unchanged: true, docId: docId };
+        const parsedEarly = aliyunListsRealTryParseEnvelope(payloadRaw);
+        if (!parsedEarly.ok) {
+          throw new Error(
+            "Lists envelope parse failed (" + (parsedEarly.reason || "?") + ")"
+          );
         }
-        const remoteEnv = aliyunListsRealParseEnvelope(payloadRaw);
+        const envEarly = parsedEarly.env;
+        if (aliyunSyncPrimaryIsUnchangedPull("lists", pullFp)) {
+          /*
+           * 指纹未变仍可能本机缺云端封闭清单/备忘录（上次 merge 被跳过或被空信封冲掉后未再合）：
+           * 已下载正文，做轻量缺 id / 未应用 tombstone 检查，有缺口则继续 merge。
+           */
+          let localMiss = 0;
+          let tombPending = 0;
+          try {
+            const locClosed = Object.create(null);
+            const locMemo = Object.create(null);
+            const locHaters = Object.create(null);
+            const locTrash = Object.create(null);
+            (Array.isArray(state.closedList) ? state.closedList : []).forEach(function (it) {
+              if (it && it.id != null) locClosed[String(it.id)] = true;
+            });
+            (Array.isArray(state.memo) ? state.memo : []).forEach(function (it) {
+              if (it && it.id != null) locMemo[String(it.id)] = true;
+            });
+            (Array.isArray(state.hatersDoubtersLog) ? state.hatersDoubtersLog : []).forEach(
+              function (it) {
+                if (it && it.id != null) locHaters[String(it.id)] = true;
+              }
+            );
+            (Array.isArray(state.trash) ? state.trash : []).forEach(function (it) {
+              if (it && it.id != null) locTrash[String(it.id)] = true;
+            });
+            const rTombs = (envEarly && envEarly.tombstones) || {};
+            function countMissing(arr, locMap) {
+              const src = Array.isArray(arr) ? arr : [];
+              for (let i = 0; i < src.length; i++) {
+                const it = src[i];
+                if (!it || it.id == null) continue;
+                const id = String(it.id);
+                if (rTombs[id]) continue;
+                if (!locMap[id]) localMiss += 1;
+              }
+            }
+            countMissing(envEarly.closedList, locClosed);
+            countMissing(envEarly.memo, locMemo);
+            countMissing(envEarly.hatersDoubtersLog, locHaters);
+            countMissing(envEarly.trash, locTrash);
+            Object.keys(rTombs).forEach(function (tid) {
+              if (locClosed[tid] || locMemo[tid] || locHaters[tid] || locTrash[tid]) {
+                tombPending += 1;
+              }
+            });
+          } catch (_gap) {
+            localMiss = 0;
+            tombPending = 0;
+          }
+          if (!localMiss && !tombPending) {
+            ok = true;
+            logSyncNoDataChangeSkipRender("lists");
+            aliyunListsRealAppendLog("拉取无变化，跳过 merge/render");
+            try {
+              if (
+                typeof reconcileListsDerivedDoneMirrorsFromState === "function" &&
+                reconcileListsDerivedDoneMirrorsFromState()
+              ) {
+                saveState({ lists: ["closedList", "memo", "done"] });
+                aliyunListsRealPaintLocalUiAfterMerge();
+                aliyunListsRealAppendLog("unchanged pull：已补齐 Lists→Done 镜像");
+              }
+            } catch (_listsRecUnch) {}
+            return { ok: true, unchanged: true, docId: docId };
+          }
+          aliyunListsRealAppendLog(
+            "拉取指纹未变但本机缺口：missing=" +
+              localMiss +
+              " tombPending=" +
+              tombPending +
+              " → 继续 merge"
+          );
+        }
+        const remoteEnv = envEarly;
         parseMs = Date.now() - tParse0;
 
         const tMerge0 = Date.now();
@@ -120596,6 +120724,7 @@
       window.runAliyunListsRealPullAndMerge = runAliyunListsRealPullAndMerge;
       window.isAliyunListsRealSyncEnabled = isAliyunListsRealSyncEnabled;
       window.notifyAliyunListsRealAfterLocalChange = notifyAliyunListsRealAfterLocalChange;
+      window.aliyunListsRealTryParseEnvelope = aliyunListsRealTryParseEnvelope;
     } catch (_listsWin) {}
 
     /**
