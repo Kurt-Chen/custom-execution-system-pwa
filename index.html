@@ -15994,6 +15994,73 @@
       }
     }
 
+    /* 默认隐藏；仅下方手机/平板竖屏 MQ + body.is-today-plan-float-open 时显示 */
+    .today-plan-panel-backdrop {
+      display: none;
+    }
+
+    /*
+     * 今日计划浮窗 · 背景遮罩（与 TODAY_PLAN_MOBILE_FLOAT_MQ / isTodayPlanMobileFloatLayout 对齐）
+     * 独立层 backdrop-filter，不对页面父容器使用 filter，浮窗内容保持清晰。
+     * 电脑端与平板横屏不命中本 MQ，保持现状。
+     * 底栏 z-index 1400，遮罩/浮窗须盖过整屏含底栏与安全区。
+     */
+    @media (max-width: 1023px) and (pointer: coarse),
+      (max-width: 767px),
+      (min-width: 1024px) and (max-width: 1366px) and (pointer: coarse) and (orientation: portrait) {
+      .today-plan-panel-backdrop {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        min-height: 100dvh;
+        min-height: 100svh;
+        z-index: 1500;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        box-sizing: border-box;
+        background: rgba(255, 255, 255, 0.55);
+        -webkit-backdrop-filter: blur(8px);
+        backdrop-filter: blur(8px);
+        touch-action: none;
+        cursor: pointer;
+        pointer-events: auto;
+      }
+
+      /* 不支持背景模糊时退化为更实的半透明白遮罩 */
+      @supports not ((-webkit-backdrop-filter: blur(8px)) or (backdrop-filter: blur(8px))) {
+        .today-plan-panel-backdrop {
+          -webkit-backdrop-filter: none;
+          backdrop-filter: none;
+          background: rgba(255, 255, 255, 0.72);
+        }
+      }
+
+      body.is-today-plan-float-open .today-plan-panel-backdrop {
+        display: block;
+      }
+
+      body.is-today-plan-float-open #todayPlanPanel:not(.is-collapsed) {
+        z-index: 1510;
+      }
+
+      /* 打开浮窗时锁背景滚动；浮窗内 #todayPlanPanelLists 仍可滚 */
+      html:has(body.is-today-plan-float-open),
+      body.is-today-plan-float-open {
+        overflow: hidden !important;
+        overscroll-behavior: none;
+      }
+
+      body.is-today-plan-float-open
+        .module-stack
+        > .card.module-focus-active
+        > .module-content {
+        overflow: hidden !important;
+        overscroll-behavior: none;
+      }
+    }
+
     /*
      * Tablet Landscape（≥1024 + landscape + coarse）：
      * 今日计划为全系统左侧栏（.container grid），切换 Habit/Forge/Goals/Purpose 仍可见。
@@ -81229,6 +81296,13 @@
       } catch (_e) {}
     })();
   </script>
+  <!-- 今日计划浮窗背景遮罩：仅手机/平板竖屏展开时由 JS 挂 is-today-plan-float-open 显示 -->
+  <div
+    id="todayPlanPanelBackdrop"
+    class="today-plan-panel-backdrop"
+    hidden
+    aria-hidden="true"
+  ></div>
   <div class="container">
     <!-- 今日计划：全系统常驻侧栏（不随主模块 display:none 消失） -->
     <aside id="todayPlanPanel" class="today-plan-panel is-collapsed" aria-label="今日计划">
@@ -99970,7 +100044,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006c";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -100613,6 +100687,7 @@
     const memoList = document.getElementById("memoList");
     const closedList = document.getElementById("closedList");
     const todayPlanPanel = document.getElementById("todayPlanPanel");
+    const todayPlanPanelBackdrop = document.getElementById("todayPlanPanelBackdrop");
     const todayPlanPanelLists = document.getElementById("todayPlanPanelLists");
     const todayPlanPanelClosedMount = document.getElementById("todayPlanPanelClosedMount");
     const todayPlanPanelOtherSection = document.getElementById("todayPlanPanelOtherSection");
@@ -100699,6 +100774,14 @@
     }
     if (todayPlanPanelCollapse) {
       todayPlanPanelCollapse.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        setTodayPlanPanelExpanded(false);
+      });
+    }
+    /* 点遮罩收起：走同一套 setTodayPlanPanelExpanded(false)，不新增关闭路径 */
+    if (todayPlanPanelBackdrop) {
+      todayPlanPanelBackdrop.addEventListener("click", function (ev) {
+        ev.preventDefault();
         ev.stopPropagation();
         setTodayPlanPanelExpanded(false);
       });
@@ -171031,6 +171114,20 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } catch (_closedIsgErr) {}
     }
 
+    /**
+     * 手机/平板竖屏浮窗遮罩：仅悬浮布局展开时显示。
+     * 用 body 类驱动静态 CSS（blur + 白遮罩 / 锁滚），不落盘、不 render、无定时器。
+     */
+    function syncTodayPlanPanelBackdrop() {
+      const show = !!(todayPlanPanelExpanded && isTodayPlanMobileFloatLayout());
+      try {
+        document.body.classList.toggle("is-today-plan-float-open", show);
+      } catch (_bodyClsErr) {}
+      if (!todayPlanPanelBackdrop) return;
+      todayPlanPanelBackdrop.hidden = !show;
+      todayPlanPanelBackdrop.setAttribute("aria-hidden", show ? "false" : "true");
+    }
+
     /** 展开/收起今日计划：只改本地 UI，不落盘、不 render */
     function setTodayPlanPanelExpanded(expanded) {
       todayPlanPanelExpanded = !!expanded;
@@ -171049,6 +171146,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         todayPlanPanelToggle.setAttribute("aria-expanded", todayPlanPanelExpanded ? "true" : "false");
         todayPlanPanelToggle.setAttribute("aria-label", todayPlanPanelExpanded ? "收起今日计划" : "展开今日计划");
       }
+      syncTodayPlanPanelBackdrop();
       if (todayPlanPanelExpanded) {
         updateTodayPlanPanelDateCard();
         paintTodayPlanPanel();
@@ -171196,9 +171294,29 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     })();
 
     window.addEventListener("resize", function () {
+      /* 横竖屏切换时同步遮罩（竖屏悬浮 ↔ 横屏侧栏） */
+      syncTodayPlanPanelBackdrop();
       if (!todayPlanPanelExpanded) return;
       syncTodayPlanPanelDockBottom();
     });
+    (function initTodayPlanMobileFloatBackdropSync() {
+      let mql = null;
+      try {
+        mql = window.matchMedia(TODAY_PLAN_MOBILE_FLOAT_MQ);
+      } catch (_mqInitErr) {
+        mql = null;
+      }
+      if (!mql) return;
+      const onChange = function () {
+        syncTodayPlanPanelBackdrop();
+      };
+      if (typeof mql.addEventListener === "function") {
+        mql.addEventListener("change", onChange);
+      } else if (typeof mql.addListener === "function") {
+        mql.addListener(onChange);
+      }
+      syncTodayPlanPanelBackdrop();
+    })();
     syncTodayPlanPanelDockBottom();
 
     function syncWeeklyPlanTodayPlanButton(btn, joined) {
