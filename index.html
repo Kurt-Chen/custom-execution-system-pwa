@@ -41,6 +41,8 @@
       --border: #e5e7eb;
       /* 移动端底栏占位：与 fixed 底栏 + 安全区一致（与原 72–76px 留白对齐） */
       --app-bottom-nav-space: calc(72px + env(safe-area-inset-bottom, 0px));
+      /* 与 html{zoom} 同步；供 Habit/100法则卡与今日计划 rail 壳 max-height 抵消 zoom（勿套用到 Kinetic） */
+      --app-ui-zoom: 1;
       /*
        * My Done 任务行密度（仅影响 ≤767px 内带 !important 的收紧规则；桌面仍用 ul.app-done-time-timeline 内 --done-time-block-row-pad-y）
        * 修改方式：① 改此处默认值 ② 控制台：setDoneListRowStyle({ padY: '6px', minHeight: '20px' }) ③ localStorage 键 todo-app-done-list-row-v1
@@ -16096,10 +16098,11 @@
         padding-right: max(0px, env(safe-area-inset-right, 0px)) !important;
         padding-bottom: var(--app-bottom-nav-space, calc(80px + env(safe-area-inset-bottom, 0px))) !important;
         box-sizing: border-box !important;
-        min-height: 100dvh;
-        min-height: 100svh;
-        max-height: 100dvh;
-        max-height: 100svh;
+        /* html{zoom} 时须用 100dvh/zoom，否则网格壳视觉高度溢出，被 overflow:hidden 裁切顶栏 */
+        min-height: calc(100dvh / var(--app-ui-zoom, 1));
+        min-height: calc(100svh / var(--app-ui-zoom, 1));
+        max-height: calc(100dvh / var(--app-ui-zoom, 1));
+        max-height: calc(100svh / var(--app-ui-zoom, 1));
         overflow: hidden;
       }
 
@@ -44619,7 +44622,8 @@
     body.primary-module-fullscreen .container {
       max-width: none;
       margin: 0;
-      padding: 0 0 var(--app-bottom-nav-space);
+      /* 底栏占位只留给 .module-content（内部滚动层），避免与卡片 max-height 重复预留导致底部大块空白 */
+      padding: 0;
     }
 
     body.primary-module-fullscreen .module-stack {
@@ -72900,6 +72904,7 @@
       flex-wrap: nowrap;
       align-items: center;
       gap: 6px;
+      flex: 0 1 auto;
       width: auto;
       max-width: 100%;
       min-width: 0;
@@ -73013,6 +73018,15 @@
         grid-column: auto;
         justify-self: auto;
         flex: 0 1 auto;
+        gap: 4px;
+      }
+
+      #habitRoutineModule #habitRule100Group .rule100-panel-toolbar {
+        gap: 4px;
+        margin-bottom: 8px;
+      }
+
+      #habitRoutineModule #habitRule100Group .rule100-status-tab-strip {
         gap: 4px;
       }
 
@@ -77051,6 +77065,10 @@
     /* 平板 / 小笔记本横屏（768–1365px，含约 1280px 平板）：主栏居中限宽；Kinetic/子 Tab 与底栏单行横滑（与手机一致） */
     @media (min-width: 768px) and (max-width: 1365px) {
       /* 平板：整页等比放大（含 px 字号、图标与固定角标），便于阅读与触控；不影响 ≥1366 桌面与 ≤767 手机 */
+      :root {
+        --app-ui-zoom: 1.2;
+      }
+
       html {
         zoom: 1.2;
       }
@@ -77126,7 +77144,8 @@
       }
 
       /* 平板全屏（768–1365）：与 ≥1366 一致，顶栏不参与整页滚动、仅 .module-content 内滚动；
-       * 避免「顶栏 + Kinetic Tab 双 sticky 挂在 window」压盖 Done 输入条、右侧观感裁切 */
+       * 避免「顶栏 + Kinetic Tab 双 sticky 挂在 window」压盖 Done 输入条、右侧观感裁切。
+       * Kinetic 等共享卡片保持原 max-height（勿除以 zoom）；zoom 补偿仅见下方 Habit/100法则。 */
       body.primary-module-fullscreen #dynamicModule.module-focus-active {
         display: flex;
         flex-direction: column;
@@ -77169,11 +77188,27 @@
         overflow-x: hidden;
       }
 
-      body.primary-module-fullscreen .module-stack > .card.module-focus-active:not(#dynamicModule) {
+      body.primary-module-fullscreen
+        .module-stack
+        > .card.module-focus-active:not(#dynamicModule):not(#habitRoutineModule) {
         display: flex;
         flex-direction: column;
         min-width: 0;
         max-height: calc(100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        min-height: 0;
+        overflow: hidden;
+        box-sizing: border-box;
+      }
+
+      /* 100法则所在 Habit 卡：仅此模块用 zoom 补偿 max-height，避免模式胶囊被父层裁切 */
+      body.primary-module-fullscreen .module-stack > #habitRoutineModule.module-focus-active {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        max-height: calc(
+          (100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) /
+            var(--app-ui-zoom, 1)
+        );
         min-height: 0;
         overflow: hidden;
         box-sizing: border-box;
@@ -77204,6 +77239,11 @@
         padding-right: max(8px, env(safe-area-inset-right, 0px));
         padding-bottom: var(--app-bottom-nav-space, calc(72px + env(safe-area-inset-bottom, 0px)));
         scroll-padding-bottom: var(--app-bottom-nav-space, calc(72px + env(safe-area-inset-bottom, 0px)));
+      }
+
+      /* 仅 Habit/100法则：吸顶子 Tab 下方留出 scroll-padding，避免模式胶囊被遮 */
+      body.primary-module-fullscreen .module-stack > #habitRoutineModule.module-focus-active > .module-content {
+        scroll-padding-top: 52px;
       }
 
       body.primary-module-fullscreen .module-stack > .card.module-focus-active > .module-content {
@@ -77404,6 +77444,10 @@
       }
 
       /* 宽屏电脑：略放大字号与界面（含 px）；不影响 ≤1365 的手机/平板 */
+      :root {
+        --app-ui-zoom: 1.07;
+      }
+
       html {
         zoom: 1.07;
       }
@@ -77426,7 +77470,8 @@
         margin-right: auto !important;
         margin-top: 14px;
         margin-bottom: 14px;
-        padding: 0 14px calc(88px + env(safe-area-inset-bottom, 0px));
+        /* 全屏：底栏占位改由 .module-content padding-bottom 承担，勿与容器 padding 叠加 */
+        padding: 0 14px 0;
         border-left: 1px solid #cbd5e1;
         border-right: 1px solid #cbd5e1;
         box-sizing: border-box;
@@ -77474,7 +77519,8 @@
         font-size: 13px;
       }
 
-      /* 电脑版：Kinetic 顶栏 + Tab 冻结，仅中间内容区滚动（底栏仍为 fixed） */
+      /* 电脑版：Kinetic 顶栏 + Tab 冻结，仅中间内容区滚动（底栏仍为 fixed）
+       * Kinetic 保持原 max-height；zoom 补偿仅 Habit/100法则（见下）。 */
       body.primary-module-fullscreen #dynamicModule.module-focus-active {
         display: flex;
         flex-direction: column;
@@ -77522,10 +77568,25 @@
       }
 
       /* 电脑版：非 Kinetic 主模块顶栏固定、仅 .module-content 滚动，子 Tab 在内容区内吸顶（与 Kinetic 一致） */
-      body.primary-module-fullscreen .module-stack > .card.module-focus-active:not(#dynamicModule) {
+      body.primary-module-fullscreen
+        .module-stack
+        > .card.module-focus-active:not(#dynamicModule):not(#habitRoutineModule) {
         display: flex;
         flex-direction: column;
         max-height: calc(100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        min-height: 0;
+        overflow: hidden;
+        box-sizing: border-box;
+      }
+
+      /* 仅 Habit/100法则：抵消 html{zoom:1.07}，避免模式胶囊顶部被裁切 */
+      body.primary-module-fullscreen .module-stack > #habitRoutineModule.module-focus-active {
+        display: flex;
+        flex-direction: column;
+        max-height: calc(
+          (100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) /
+            var(--app-ui-zoom, 1)
+        );
         min-height: 0;
         overflow: hidden;
         box-sizing: border-box;
@@ -77550,6 +77611,10 @@
         padding-bottom: var(--app-bottom-nav-space, calc(72px + env(safe-area-inset-bottom, 0px)));
         scroll-padding-bottom: var(--app-bottom-nav-space, calc(72px + env(safe-area-inset-bottom, 0px)));
         box-sizing: border-box;
+      }
+
+      body.primary-module-fullscreen .module-stack > #habitRoutineModule.module-focus-active > .module-content {
+        scroll-padding-top: 52px;
       }
 
       body.primary-module-fullscreen .module-stack > .card.module-focus-active:not(#dynamicModule) .module-content .module-sub-tabs {
@@ -77640,6 +77705,10 @@
 
     /* 平板横屏（触控）：主栏贴边全宽；zoom 与竖屏一致 1.2，避免横屏反而比竖屏字小 */
     @media (min-width: 768px) and (max-width: 1366px) and (orientation: landscape) and (pointer: coarse) {
+      :root {
+        --app-ui-zoom: 1.2;
+      }
+
       html {
         zoom: 1.2;
       }
@@ -77710,6 +77779,10 @@
 
     /* 768–1365 + 精细指针（多为笔记本键鼠）：主栏 max 1340px+1cm；触控 coarse 竖屏 900px / zoom1.2，横屏见上方全宽规则 */
     @media (min-width: 768px) and (max-width: 1365px) and (pointer: fine) {
+      :root {
+        --app-ui-zoom: 1.07;
+      }
+
       html {
         zoom: 1.07;
       }
@@ -139009,6 +139082,15 @@
       applyRule100StatusFilter();
     }
 
+    /** 用户切换 100法则模式/状态时，将 Habit 内容滚动层回到顶部（不影响后台 sync/render） */
+    function scrollHabitModuleContentToTop() {
+      const content = document.querySelector("#habitRoutineModule.module-focus-active > .module-content");
+      if (!content) return;
+      try {
+        content.scrollTop = 0;
+      } catch (_e) {}
+    }
+
     function setActiveRule100Mode(mode) {
       const next = mode === "unit" ? "unit" : "day";
       activeRule100Mode = next;
@@ -139047,6 +139129,7 @@
         const status = btn.getAttribute("data-rule100-status");
         if (!mode || !status) return;
         setActiveRule100Status(mode, status);
+        scrollHabitModuleContentToTop();
       });
       applyRule100StatusFilter();
     }
@@ -139061,6 +139144,7 @@
           const mode = btn.getAttribute("data-rule100-mode");
           if (!mode) return;
           setActiveRule100Mode(mode);
+          scrollHabitModuleContentToTop();
         });
       }
       setActiveRule100Mode(activeRule100Mode);
@@ -188208,7 +188292,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           clickEl &&
           clickEl.closest &&
           clickEl.closest(
-            ".rule100-name-input, .rule100-hours-input, .rule100-unit-input, .rule100-hours-btn, .rule100-check-btn, .rule100-name-menu-wrap, .rule100-name-edit-actions, .rule100-try-again-btn"
+            ".rule100-name-input, .rule100-hours-input, .rule100-unit-input, .rule100-hours-btn, .rule100-check-btn, .rule100-name-menu-wrap, .rule100-name-edit-actions, .rule100-try-again-btn, .rule100-experience-btn"
           )
         ) {
           ev.stopPropagation();
