@@ -19,13 +19,13 @@ assert.match(html, /checkin-direct/);
 assert.match(html, /for \(let n = existingRows\.length \+ 1; n <= expectTimes; n\+\+/);
 /* optional-remark 不得再「已有任一行就 return」后只 sync 一次 */
 assert.match(html, /optional-remark（Gemini Notebook \/ 听网课·有声书等）/);
-assert.match(html, /缺行时不删已有 Done，交给 rebuild 按 stamps\[N-1\] 增量补第 N 次/);
+assert.match(html, /缺行时不删已有 Done：交给 rebuild 按 stamps\[N-1\] 增量补第 N 次/);
 assert.doesNotMatch(
   html,
   /if \(isHabitOptionalRemarkKey\(habitKey\)\) \{\s*if \(getHabitDoneRowsForDay\(habitKey, dateStr\)\.length > 0\) return;/
 );
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261004j"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261004j"/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006n"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261006n"/);
 
 /** 纯逻辑：已有 0 行、times=2 → 应补 2 次 */
 function planSimpleHabitDoneFills(existingCount, expectTimes, stamps) {

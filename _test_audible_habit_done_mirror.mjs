@@ -11,8 +11,8 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 const sw = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");
 
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261003o"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261003o"/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006n"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261006n"/);
 assert.match(html, /function fillMissingNumericHabitDoneRowsFromBatches\(/);
 assert.match(html, /domains-meta skip Habit body; local Done mirror repair ok/);
 assert.match(html, /!\(packed && packed\.ok === false\)/);

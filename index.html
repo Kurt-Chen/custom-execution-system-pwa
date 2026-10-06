@@ -100455,7 +100455,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006m";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006n";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -124708,6 +124708,24 @@
     }
 
     /** 习惯打卡数值条目：从 batches 重算当日累计，过滤异常大单次量 */
+    /** 习惯 stamps：真实时刻、去重、升序（供 sanitize / 打卡 / repair 共用） */
+    function normalizeHabitCheckinStampsList(list) {
+      const seen = Object.create(null);
+      const out = [];
+      (Array.isArray(list) ? list : []).forEach(function (t) {
+        const n = Number(t);
+        if (!Number.isFinite(n) || n <= 0) return;
+        if (typeof isSyntheticHabitNoonAt === "function" && isSyntheticHabitNoonAt(n)) return;
+        if (seen[n]) return;
+        seen[n] = true;
+        out.push(n);
+      });
+      out.sort(function (a, b) {
+        return a - b;
+      });
+      return out;
+    }
+
     function sanitizeHabitNumericCheckinValue(val, opts) {
       if (val === true) return true;
       if (val === false || val == null) return false;
@@ -124765,6 +124783,17 @@
       if (Number.isFinite(stampAt) && stampAt > 0) out.stampAt = stampAt;
       const revisedAt = Number(val.revisedAt);
       if (Number.isFinite(revisedAt) && revisedAt > 0) out.revisedAt = revisedAt;
+      /*
+       * 必须保留 stamps[]：旧 sanitize 丢掉后，第二次打卡只能写下最新一刻，
+       * repair 删补会把上午那条也挤到 18:09（revisedAt / stamps 尾戳）。
+       */
+      const stampsNorm = normalizeHabitCheckinStampsList(val.stamps);
+      if (stampsNorm.length) {
+        out.stamps = stampsNorm;
+        if (!(Number(out.stampAt) > 0) || isSyntheticHabitNoonAt(out.stampAt)) {
+          out.stampAt = stampsNorm[0];
+        }
+      }
       return out;
     }
 
@@ -131772,6 +131801,114 @@
       return max;
     }
 
+    /**
+     * 从同日 Done 行提取可靠打卡时刻（按「第 N 次」优先，否则按 completedAt 升序）。
+     * 只认真实时分，不猜、不用 revisedAt。
+     */
+    function collectHabitDoneRowClockStamps(habitKey, dateStr) {
+      const rows =
+        typeof getHabitDoneRowsForDay === "function" ? getHabitDoneRowsForDay(habitKey, dateStr) : [];
+      if (!rows.length) return [];
+      const byN = Object.create(null);
+      const unordered = [];
+      rows.forEach(function (row, idx) {
+        const metaStamp = row && row.habitMeta ? Number(row.habitMeta.stampAt) : 0;
+        const completed = Number(row && row.completedAt) || 0;
+        let clock = 0;
+        if (metaStamp > 0 && !isSyntheticHabitNoonAt(metaStamp)) clock = metaStamp;
+        else if (completed > 0 && !isSyntheticHabitNoonAt(completed)) clock = completed;
+        if (!(clock > 0)) return;
+        const m = String((row && row.text) || "").match(/第\s*(\d+)\s*次/);
+        if (m) {
+          const nn = Number(m[1]);
+          if (Number.isFinite(nn) && nn >= 1 && !byN[nn]) byN[nn] = clock;
+        } else {
+          unordered.push({ at: completed || clock, clock: clock, idx: idx });
+        }
+      });
+      const keys = Object.keys(byN)
+        .map(Number)
+        .filter(function (n) {
+          return Number.isFinite(n) && n >= 1;
+        })
+        .sort(function (a, b) {
+          return a - b;
+        });
+      if (keys.length) {
+        return normalizeHabitCheckinStampsList(
+          keys.map(function (k) {
+            return byN[k];
+          })
+        );
+      }
+      unordered.sort(function (a, b) {
+        return a.at - b.at || a.idx - b.idx;
+      });
+      return normalizeHabitCheckinStampsList(
+        unordered.map(function (x) {
+          return x.clock;
+        })
+      );
+    }
+
+    /** 打卡前 prevStamps：槽内优先；sanitize 丢 stamps 后从已有 Done 回填，避免第二次打卡 stampAt 变成晚间 */
+    function getHabitNumericPrevStampsForPunch(current, habitKey, dateKey) {
+      const fromSlot =
+        current && typeof current === "object" && Array.isArray(current.stamps)
+          ? normalizeHabitCheckinStampsList(current.stamps)
+          : [];
+      if (fromSlot.length) return fromSlot;
+      return collectHabitDoneRowClockStamps(habitKey, dateKey);
+    }
+
+    /**
+     * 次数一致时：按 stamps[N-1] 校正各 Done 行；stamps 不足则只从 Done 回填槽，不改写已有真实时刻。
+     * @returns {boolean} 是否改动 state
+     */
+    function alignNumericHabitDoneRowsToStamps(habitKey, dateStr, v) {
+      if (!v || typeof v !== "object") return false;
+      const rows = getHabitDoneRowsForDay(habitKey, dateStr);
+      if (rows.length < 2) return false;
+      let changed = false;
+      let stampList = normalizeHabitCheckinStampsList(v.stamps);
+      const fromDone = collectHabitDoneRowClockStamps(habitKey, dateStr);
+      if (stampList.length < rows.length && fromDone.length > stampList.length) {
+        stampList = fromDone;
+        v.stamps = stampList.slice();
+        v.stampAt = stampList[0];
+        changed = true;
+      }
+      /* stamps 不足以覆盖每一行时：禁止用尾戳/revisedAt 把上午行拖到晚间 */
+      if (stampList.length < rows.length) return changed;
+      const rowByN = Object.create(null);
+      rows.forEach(function (row, idx) {
+        const m = String((row && row.text) || "").match(/第\s*(\d+)\s*次/);
+        if (m) {
+          const nn = Number(m[1]);
+          if (Number.isFinite(nn) && nn >= 1 && !rowByN[nn]) rowByN[nn] = row;
+        } else if (!rowByN[idx + 1]) {
+          /* getHabitDoneRowsForDay 新→旧；无「第 N 次」时按时间升序占位 */
+          rowByN[rows.length - idx] = row;
+        }
+      });
+      for (let n = 1; n <= rows.length; n++) {
+        const stampMs = stampList[n - 1];
+        if (!(stampMs > 0)) continue;
+        const row = rowByN[n];
+        if (!row) continue;
+        const wantAt = completedAtForHabitDoneRow(dateStr, stampMs);
+        const curAt = Number(row.completedAt) || 0;
+        if (!(wantAt > 0) || Math.abs(curAt - wantAt) <= 60000) continue;
+        row.completedAt = wantAt;
+        if (!row.habitMeta || typeof row.habitMeta !== "object") {
+          row.habitMeta = { key: habitKey, date: dateStr };
+        }
+        row.habitMeta.stampAt = wantAt;
+        changed = true;
+      }
+      return changed;
+    }
+
     /** 由同日 Done 行重建数值型 checkin（增量用「本次 +」，当日总量以最新「今日累计」为准） */
     function buildHabitNumericCheckinFromDoneRows(habitKey, dateStr) {
       const opts = getHabitNumericSanitizeOpts(habitKey);
@@ -131801,6 +131938,11 @@
       const times = Math.max(batches.length, rows.length);
       const out = { times: times, batches: batches.slice() };
       out[opts.valueKey] = total;
+      const stampsFromDone = collectHabitDoneRowClockStamps(habitKey, dateStr);
+      if (stampsFromDone.length) {
+        out.stamps = stampsFromDone;
+        out.stampAt = stampsFromDone[0];
+      }
       return out;
     }
 
@@ -133103,6 +133245,9 @@
       const tc = Number.isFinite(stampTimes) && stampTimes > 0 ? stampTimes : 0;
       const batch = Number.isFinite(batchMinutes) && batchMinutes > 0 ? batchMinutes : 0;
       const total = Number.isFinite(totalMinutes) && totalMinutes >= 0 ? totalMinutes : 0;
+      const completedAt = completedAtForHabitDoneRow(dateStr, atMs);
+      const meta = { key: habitKey, date: dateStr, batchAmount: batch };
+      if (completedAt > 0 && !isSyntheticHabitNoonAt(completedAt)) meta.stampAt = completedAt;
       state.done.unshift({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text:
@@ -133115,8 +133260,8 @@
           " 分钟 · 第 " +
           String(tc) +
           " 次打卡",
-        completedAt: completedAtForHabitDoneRow(dateStr, atMs),
-        habitMeta: { key: habitKey, date: dateStr, batchAmount: batch }
+        completedAt: completedAt,
+        habitMeta: meta
       });
     }
 
@@ -134801,15 +134946,11 @@
       /* stamps[]：跨端 repair 按批次还原每一行 completedAt（缺省只有 revisedAt 会全挤到最后一次） */
       const nowStamp = Date.now();
       const prevStamps =
-        current && typeof current === "object" && Array.isArray(current.stamps)
-          ? current.stamps
-              .map(function (t) {
-                return Number(t);
-              })
-              .filter(function (t) {
-                return Number.isFinite(t) && t > 0 && !isSyntheticHabitNoonAt(t);
-              })
-          : [];
+        typeof getHabitNumericPrevStampsForPunch === "function"
+          ? getHabitNumericPrevStampsForPunch(current, habitKey, dateKey)
+          : current && typeof current === "object" && Array.isArray(current.stamps)
+            ? normalizeHabitCheckinStampsList(current.stamps)
+            : [];
       const nextStamps = prevStamps.concat([nowStamp]);
       state.habitCheckins[dateKey][habitKey] = stampHabitCheckinRevision({
         minutes: newTotal,
@@ -135074,15 +135215,11 @@
       }
       /* 与简单习惯对齐：写入 stampAt/stamps，供云端 pull 后 Done 镜像还原时刻 */
       const prevStamps =
-        current && typeof current === "object" && Array.isArray(current.stamps)
-          ? current.stamps
-              .map(function (t) {
-                return Number(t);
-              })
-              .filter(function (t) {
-                return Number.isFinite(t) && t > 0 && !isSyntheticHabitNoonAt(t);
-              })
-          : [];
+        typeof getHabitNumericPrevStampsForPunch === "function"
+          ? getHabitNumericPrevStampsForPunch(current, habitKey, dateKey)
+          : current && typeof current === "object" && Array.isArray(current.stamps)
+            ? normalizeHabitCheckinStampsList(current.stamps)
+            : [];
       nextObj.stamps = prevStamps.concat([nowStamp]);
       nextObj.stampAt = nextObj.stamps[0];
       state.habitCheckins[dateKey][habitKey] = stampHabitCheckinRevision(nextObj);
@@ -135468,15 +135605,11 @@
       const nowStamp = Date.now();
       const next = { times: nextTimes };
       const prevStamps =
-        current && typeof current === "object" && Array.isArray(current.stamps)
-          ? current.stamps
-              .map(function (t) {
-                return Number(t);
-              })
-              .filter(function (t) {
-                return Number.isFinite(t) && t > 0 && !isSyntheticHabitNoonAt(t);
-              })
-          : [];
+        typeof getHabitNumericPrevStampsForPunch === "function"
+          ? getHabitNumericPrevStampsForPunch(current, habitKey, dateKey)
+          : current && typeof current === "object" && Array.isArray(current.stamps)
+            ? normalizeHabitCheckinStampsList(current.stamps)
+            : [];
       if (isHabitWeekClockKey(habitKey)) {
         const prevStamp = current && typeof current === "object" ? Number(current.stampAt) : NaN;
         next.stampAt =
@@ -186015,38 +186148,55 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           if (!(expect > 0)) expect = 1;
 
           if (rows.length === expect) {
-            const wantAt =
-              typeof habitDoneAtMsFromCheckin === "function"
-                ? habitDoneAtMsFromCheckin(v, dateStr)
-                : 0;
-            if (wantAt > 0 && rows.length === 1) {
-              const row = rows[0];
-              const curAt = Number(row && row.completedAt) || 0;
-              if (Math.abs(curAt - wantAt) > 60000) {
-                row.completedAt = wantAt;
-                if (!row.habitMeta || typeof row.habitMeta !== "object") {
-                  row.habitMeta = { key: habitKey, date: dateStr };
+            if (rows.length === 1) {
+              const wantAt =
+                typeof habitDoneAtMsFromCheckin === "function"
+                  ? habitDoneAtMsFromCheckin(v, dateStr)
+                  : 0;
+              if (wantAt > 0) {
+                const row = rows[0];
+                const curAt = Number(row && row.completedAt) || 0;
+                if (Math.abs(curAt - wantAt) > 60000) {
+                  row.completedAt = wantAt;
+                  if (!row.habitMeta || typeof row.habitMeta !== "object") {
+                    row.habitMeta = { key: habitKey, date: dateStr };
+                  }
+                  row.habitMeta.stampAt = wantAt;
+                  changed = true;
                 }
-                row.habitMeta.stampAt = wantAt;
-                changed = true;
               }
+            } else if (typeof alignNumericHabitDoneRowsToStamps === "function") {
+              /* 多批次：按 stamps[N-1] 对齐；stamps 不足则只回填槽，不把上午挤到晚间 */
+              if (alignNumericHabitDoneRowsToStamps(habitKey, dateStr, v)) changed = true;
             }
             return;
           }
 
           /*
-           * optional-remark：缺行时不删已有 Done，交给 rebuild 按 stamps[N-1] 增量补第 N 次。
-           * 多出来的行（rows > expect）仍走下方清空再补，避免重复镜像。
+           * 缺行时不删已有 Done：交给 rebuild 按 stamps[N-1] 增量补第 N 次。
+           * 旧逻辑「次数不一致就删光再补」会在 stamps 被 sanitize 丢掉后，
+           * 用 revisedAt/尾戳把上午那条也重建到 18:09。
+           * optional-remark / 数值 batches（Audible 等）同一契约。
            */
-          if (
-            typeof isHabitOptionalRemarkKey === "function" &&
-            isHabitOptionalRemarkKey(habitKey) &&
-            rows.length < expect
-          ) {
+          if (rows.length < expect) {
             return;
           }
 
-          /* 次数不一致：删掉该槽旧 Done，下面统一 rebuild 补回 */
+          /*
+           * 多出来的行：删前若槽 stamps 不足，先用现有 Done 真实时刻回填，
+           * 再清空重建，避免只剩晚间一刻。
+           */
+          if (v && typeof v === "object" && typeof collectHabitDoneRowClockStamps === "function") {
+            const seeded = collectHabitDoneRowClockStamps(habitKey, dateStr);
+            const curStamps = normalizeHabitCheckinStampsList(v.stamps);
+            if (seeded.length > curStamps.length) {
+              v.stamps = seeded.slice();
+              v.stampAt = seeded[0];
+              changed = true;
+            }
+          }
+
+          /* 次数偏多：删掉该槽旧 Done，下面统一 rebuild 补回 */
           for (let i = state.done.length - 1; i >= 0; i--) {
             const item = state.done[i];
             if (
