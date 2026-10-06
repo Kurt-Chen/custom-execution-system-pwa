@@ -31999,7 +31999,8 @@
     .done-manual-input-wrap--done-slogan .done-manual-input-slogan {
       position: absolute;
       inset: 0;
-      z-index: 0;
+      /* 须高于同行 input(z-index:1)，否则透明 input 截获全部命中；自身仍 pointer-events:none，仅子项可点 */
+      z-index: 2;
       display: none;
       box-sizing: border-box;
       align-items: center;
@@ -32738,6 +32739,20 @@
         letter-spacing: 0;
         line-height: 1;
         white-space: nowrap;
+        /* 仅 OBSESSION 组可点；父 slogan 仍为 pointer-events:none */
+        pointer-events: auto;
+        cursor: pointer;
+        transform: translateZ(0);
+        transition: filter 160ms ease-out, transform 120ms ease-out;
+      }
+
+      .done-manual-input-wrap--done-slogan .done-manual-input-slogan__obsession:hover {
+        filter: brightness(1.05);
+      }
+
+      .done-manual-input-wrap--done-slogan .done-manual-input-slogan__obsession:active {
+        transform: translateZ(0) scale(0.985);
+        filter: brightness(0.98);
       }
 
       .done-manual-input-wrap--done-slogan .done-manual-input-slogan__obsession-arrow {
@@ -100274,7 +100289,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006e";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006f";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -190963,32 +190978,52 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         openObsessionReminder({ fromAuto: true });
       }
 
+      function findObsessionTriggerFromEventTarget(target) {
+        if (!target || typeof target.closest !== "function") return null;
+        return target.closest(".done-manual-input-slogan__obsession");
+      }
+
       function onTriggerClick(ev) {
         if (ev) {
           ev.preventDefault();
           ev.stopPropagation();
         }
+        try {
+          console.log("[OBSESSION] click received");
+          console.log("[OBSESSION] open popup");
+        } catch (_logErr) {}
         openObsessionReminder({ fromAuto: false });
       }
 
       function bindListenersOnce() {
         if (listenersBound) return;
         listenersBound = true;
-        const trigger = document.getElementById("obsessionReminderTrigger");
-        if (trigger) {
-          trigger.addEventListener("click", onTriggerClick);
-          trigger.addEventListener("mousedown", function (ev) {
-            /* 避免点击入口时聚焦背后 Done 输入框 */
+        /* 单例委托：不绑易被 render 替换的节点；只注册一次 */
+        document.addEventListener(
+          "mousedown",
+          function (ev) {
+            const trigger = findObsessionTriggerFromEventTarget(ev.target);
+            if (!trigger) return;
+            /* 避免点入口时聚焦背后 Done 输入框 */
             ev.preventDefault();
-          });
-        }
+          },
+          true
+        );
+        document.addEventListener(
+          "click",
+          function (ev) {
+            const trigger = findObsessionTriggerFromEventTarget(ev.target);
+            if (!trigger) return;
+            onTriggerClick(ev);
+          },
+          true
+        );
         document.addEventListener(
           "pointerdown",
           function (ev) {
             if (!isOpen || isClosing) return;
             const t = ev.target;
-            const trigger = document.getElementById("obsessionReminderTrigger");
-            if (trigger && (t === trigger || trigger.contains(t))) {
+            if (findObsessionTriggerFromEventTarget(t)) {
               return;
             }
             if (cardEl && cardEl.contains(t)) {
