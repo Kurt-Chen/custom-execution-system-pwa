@@ -41,7 +41,7 @@
       --border: #e5e7eb;
       /* 移动端底栏占位：与 fixed 底栏 + 安全区一致（与原 72–76px 留白对齐） */
       --app-bottom-nav-space: calc(72px + env(safe-area-inset-bottom, 0px));
-      /* 与 html{zoom} 同步；全屏卡片 max-height 用 100dvh / zoom，避免视觉裁切 */
+      /* 与 html{zoom} 同步；供 Habit/100法则卡与今日计划 rail 壳 max-height 抵消 zoom（勿套用到 Kinetic） */
       --app-ui-zoom: 1;
       /*
        * My Done 任务行密度（仅影响 ≤767px 内带 !important 的收紧规则；桌面仍用 ul.app-done-time-timeline 内 --done-time-block-row-pad-y）
@@ -16098,10 +16098,11 @@
         padding-right: max(0px, env(safe-area-inset-right, 0px)) !important;
         padding-bottom: var(--app-bottom-nav-space, calc(80px + env(safe-area-inset-bottom, 0px))) !important;
         box-sizing: border-box !important;
-        min-height: 100dvh;
-        min-height: 100svh;
-        max-height: 100dvh;
-        max-height: 100svh;
+        /* html{zoom} 时须用 100dvh/zoom，否则网格壳视觉高度溢出，被 overflow:hidden 裁切顶栏 */
+        min-height: calc(100dvh / var(--app-ui-zoom, 1));
+        min-height: calc(100svh / var(--app-ui-zoom, 1));
+        max-height: calc(100dvh / var(--app-ui-zoom, 1));
+        max-height: calc(100svh / var(--app-ui-zoom, 1));
         overflow: hidden;
       }
 
@@ -76515,15 +76516,12 @@
 
       /* 平板全屏（768–1365）：与 ≥1366 一致，顶栏不参与整页滚动、仅 .module-content 内滚动；
        * 避免「顶栏 + Kinetic Tab 双 sticky 挂在 window」压盖 Done 输入条、右侧观感裁切。
-       * max-height 须除以 --app-ui-zoom：html{zoom:1.2} 时若仍按 100dvh 设高，视觉高度会溢出视口，
-       * 被 body/container overflow:hidden 裁切，表现为顶部胶囊截断、底部空白异常。 */
+       * Kinetic 等共享卡片保持原 max-height（勿除以 zoom）；zoom 补偿仅见下方 Habit/100法则。 */
       body.primary-module-fullscreen #dynamicModule.module-focus-active {
         display: flex;
         flex-direction: column;
         min-width: 0;
-        max-height: calc(
-          (100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) / var(--app-ui-zoom, 1)
-        );
+        max-height: calc(100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
         min-height: 0;
         overflow: hidden !important;
         box-sizing: border-box;
@@ -76561,12 +76559,26 @@
         overflow-x: hidden;
       }
 
-      body.primary-module-fullscreen .module-stack > .card.module-focus-active:not(#dynamicModule) {
+      body.primary-module-fullscreen
+        .module-stack
+        > .card.module-focus-active:not(#dynamicModule):not(#habitRoutineModule) {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        max-height: calc(100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        min-height: 0;
+        overflow: hidden;
+        box-sizing: border-box;
+      }
+
+      /* 100法则所在 Habit 卡：仅此模块用 zoom 补偿 max-height，避免模式胶囊被父层裁切 */
+      body.primary-module-fullscreen .module-stack > #habitRoutineModule.module-focus-active {
         display: flex;
         flex-direction: column;
         min-width: 0;
         max-height: calc(
-          (100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) / var(--app-ui-zoom, 1)
+          (100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) /
+            var(--app-ui-zoom, 1)
         );
         min-height: 0;
         overflow: hidden;
@@ -76598,7 +76610,10 @@
         padding-right: max(8px, env(safe-area-inset-right, 0px));
         padding-bottom: var(--app-bottom-nav-space, calc(72px + env(safe-area-inset-bottom, 0px)));
         scroll-padding-bottom: var(--app-bottom-nav-space, calc(72px + env(safe-area-inset-bottom, 0px)));
-        /* 吸顶子 Tab 高度：滚到顶部时模式胶囊不被裁进 sticky 下方不可见区 */
+      }
+
+      /* 仅 Habit/100法则：吸顶子 Tab 下方留出 scroll-padding，避免模式胶囊被遮 */
+      body.primary-module-fullscreen .module-stack > #habitRoutineModule.module-focus-active > .module-content {
         scroll-padding-top: 52px;
       }
 
@@ -76876,14 +76891,11 @@
       }
 
       /* 电脑版：Kinetic 顶栏 + Tab 冻结，仅中间内容区滚动（底栏仍为 fixed）
-       * max-height 除以 --app-ui-zoom(1.07)，抵消 html zoom，避免视觉裁切 */
+       * Kinetic 保持原 max-height；zoom 补偿仅 Habit/100法则（见下）。 */
       body.primary-module-fullscreen #dynamicModule.module-focus-active {
         display: flex;
         flex-direction: column;
-        max-height: calc(
-          (100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) /
-            var(--app-ui-zoom, 1)
-        );
+        max-height: calc(100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
         min-height: 0;
         overflow: hidden !important;
         box-sizing: border-box;
@@ -76927,7 +76939,19 @@
       }
 
       /* 电脑版：非 Kinetic 主模块顶栏固定、仅 .module-content 滚动，子 Tab 在内容区内吸顶（与 Kinetic 一致） */
-      body.primary-module-fullscreen .module-stack > .card.module-focus-active:not(#dynamicModule) {
+      body.primary-module-fullscreen
+        .module-stack
+        > .card.module-focus-active:not(#dynamicModule):not(#habitRoutineModule) {
+        display: flex;
+        flex-direction: column;
+        max-height: calc(100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        min-height: 0;
+        overflow: hidden;
+        box-sizing: border-box;
+      }
+
+      /* 仅 Habit/100法则：抵消 html{zoom:1.07}，避免模式胶囊顶部被裁切 */
+      body.primary-module-fullscreen .module-stack > #habitRoutineModule.module-focus-active {
         display: flex;
         flex-direction: column;
         max-height: calc(
@@ -76957,8 +76981,11 @@
         scrollbar-gutter: stable;
         padding-bottom: var(--app-bottom-nav-space, calc(72px + env(safe-area-inset-bottom, 0px)));
         scroll-padding-bottom: var(--app-bottom-nav-space, calc(72px + env(safe-area-inset-bottom, 0px)));
-        scroll-padding-top: 52px;
         box-sizing: border-box;
+      }
+
+      body.primary-module-fullscreen .module-stack > #habitRoutineModule.module-focus-active > .module-content {
+        scroll-padding-top: 52px;
       }
 
       body.primary-module-fullscreen .module-stack > .card.module-focus-active:not(#dynamicModule) .module-content .module-sub-tabs {
@@ -100747,7 +100774,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006s";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006u";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
