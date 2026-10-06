@@ -100323,7 +100323,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006l";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006m";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -187031,17 +187031,36 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * Habit·Routine 默认子 Tab：本地日历周二打开「人生进度表」(4000 周)，其余日打开「习惯」。
+     * Habit·Routine 默认子 Tab：
+     * - 本地日历周二 →「人生进度表」(4000 周)
+     * - 其余日 → 按日历日在四个真子页间轮流（始终向后衡量 / 习惯 / Rule of 100 / 阅读计划）
+     * 「Win the Shadow War」仅为装饰 chip，不参与轮流。
      */
     function getDefaultHabitRoutineSubTabKey() {
+      const rotateKeys = [
+        habitBasicGroup ? "habit-group-measure" : null,
+        habitHabitsBundle ? "habit-group-habits" : null,
+        habitRule100Group ? "habit-group-rule100" : null,
+        habitReadingPlanGroup ? "habit-group-reading" : null
+      ].filter(Boolean);
+      const fallback =
+        (rotateKeys[0] || null) ||
+        (habitLife4000WeeksPanel ? "habit-group-life4000" : null) ||
+        "habit-group-measure";
       try {
-        if (new Date().getDay() === 2) {
-          return habitLife4000WeeksPanel ? "habit-group-life4000" : "habit-group-habits";
+        const now = new Date();
+        if (now.getDay() === 2) {
+          return habitLife4000WeeksPanel ? "habit-group-life4000" : fallback;
         }
-      } catch (_dowErr) {}
-      if (habitHabitsBundle) return "habit-group-habits";
-      if (habitLife4000WeeksPanel) return "habit-group-life4000";
-      return "habit-group-measure";
+        if (!rotateKeys.length) return fallback;
+        const daySerial = Math.floor(
+          Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86400000
+        );
+        const idx = ((daySerial % rotateKeys.length) + rotateKeys.length) % rotateKeys.length;
+        return rotateKeys[idx] || fallback;
+      } catch (_dowErr) {
+        return fallback;
+      }
     }
 
     function initNonKineticModuleTabs() {
@@ -187090,7 +187109,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         ].filter(Boolean),
         "Habit·Routine 子模块标签",
         {
-          /* 周二默认人生进度表；其余默认「习惯」子模块 */
+          /* 周二默认人生进度表；其余日四子页按日轮流（不含 Shadow War） */
           initialTabKey: habitDefaultTab,
           trailingChip: {
             className: "habit-shadow-war-chip",
@@ -190207,7 +190226,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
       if (activePrimaryModuleKey === "habit" && typeof activateHabitRoutineSubTab === "function") {
         /*
-         * 冷进入：按星期默认子 Tab。
+         * 冷进入：按日默认子 Tab（周二人生进度表，其余四页轮流）。
          * 暖切换：保持当前子 Tab，避免每次切回都 afterActivate → 可能再刷 Habit DOM。
          */
         if (!primaryModulePaintedOnce.habit) {
