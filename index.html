@@ -41,6 +41,8 @@
       --border: #e5e7eb;
       /* 移动端底栏占位：与 fixed 底栏 + 安全区一致（与原 72–76px 留白对齐） */
       --app-bottom-nav-space: calc(72px + env(safe-area-inset-bottom, 0px));
+      /* 与 html{zoom} 同步；全屏卡片 max-height 用 100dvh / zoom，避免视觉裁切 */
+      --app-ui-zoom: 1;
       /*
        * My Done 任务行密度（仅影响 ≤767px 内带 !important 的收紧规则；桌面仍用 ul.app-done-time-timeline 内 --done-time-block-row-pad-y）
        * 修改方式：① 改此处默认值 ② 控制台：setDoneListRowStyle({ padY: '6px', minHeight: '20px' }) ③ localStorage 键 todo-app-done-list-row-v1
@@ -44619,7 +44621,8 @@
     body.primary-module-fullscreen .container {
       max-width: none;
       margin: 0;
-      padding: 0 0 var(--app-bottom-nav-space);
+      /* 底栏占位只留给 .module-content（内部滚动层），避免与卡片 max-height 重复预留导致底部大块空白 */
+      padding: 0;
     }
 
     body.primary-module-fullscreen .module-stack {
@@ -76432,6 +76435,10 @@
     /* 平板 / 小笔记本横屏（768–1365px，含约 1280px 平板）：主栏居中限宽；Kinetic/子 Tab 与底栏单行横滑（与手机一致） */
     @media (min-width: 768px) and (max-width: 1365px) {
       /* 平板：整页等比放大（含 px 字号、图标与固定角标），便于阅读与触控；不影响 ≥1366 桌面与 ≤767 手机 */
+      :root {
+        --app-ui-zoom: 1.2;
+      }
+
       html {
         zoom: 1.2;
       }
@@ -76507,12 +76514,16 @@
       }
 
       /* 平板全屏（768–1365）：与 ≥1366 一致，顶栏不参与整页滚动、仅 .module-content 内滚动；
-       * 避免「顶栏 + Kinetic Tab 双 sticky 挂在 window」压盖 Done 输入条、右侧观感裁切 */
+       * 避免「顶栏 + Kinetic Tab 双 sticky 挂在 window」压盖 Done 输入条、右侧观感裁切。
+       * max-height 须除以 --app-ui-zoom：html{zoom:1.2} 时若仍按 100dvh 设高，视觉高度会溢出视口，
+       * 被 body/container overflow:hidden 裁切，表现为顶部胶囊截断、底部空白异常。 */
       body.primary-module-fullscreen #dynamicModule.module-focus-active {
         display: flex;
         flex-direction: column;
         min-width: 0;
-        max-height: calc(100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        max-height: calc(
+          (100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) / var(--app-ui-zoom, 1)
+        );
         min-height: 0;
         overflow: hidden !important;
         box-sizing: border-box;
@@ -76554,7 +76565,9 @@
         display: flex;
         flex-direction: column;
         min-width: 0;
-        max-height: calc(100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        max-height: calc(
+          (100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) / var(--app-ui-zoom, 1)
+        );
         min-height: 0;
         overflow: hidden;
         box-sizing: border-box;
@@ -76585,6 +76598,8 @@
         padding-right: max(8px, env(safe-area-inset-right, 0px));
         padding-bottom: var(--app-bottom-nav-space, calc(72px + env(safe-area-inset-bottom, 0px)));
         scroll-padding-bottom: var(--app-bottom-nav-space, calc(72px + env(safe-area-inset-bottom, 0px)));
+        /* 吸顶子 Tab 高度：滚到顶部时模式胶囊不被裁进 sticky 下方不可见区 */
+        scroll-padding-top: 52px;
       }
 
       body.primary-module-fullscreen .module-stack > .card.module-focus-active > .module-content {
@@ -76785,6 +76800,10 @@
       }
 
       /* 宽屏电脑：略放大字号与界面（含 px）；不影响 ≤1365 的手机/平板 */
+      :root {
+        --app-ui-zoom: 1.07;
+      }
+
       html {
         zoom: 1.07;
       }
@@ -76807,7 +76826,8 @@
         margin-right: auto !important;
         margin-top: 14px;
         margin-bottom: 14px;
-        padding: 0 14px calc(88px + env(safe-area-inset-bottom, 0px));
+        /* 全屏：底栏占位改由 .module-content padding-bottom 承担，勿与容器 padding 叠加 */
+        padding: 0 14px 0;
         border-left: 1px solid #cbd5e1;
         border-right: 1px solid #cbd5e1;
         box-sizing: border-box;
@@ -76855,11 +76875,15 @@
         font-size: 13px;
       }
 
-      /* 电脑版：Kinetic 顶栏 + Tab 冻结，仅中间内容区滚动（底栏仍为 fixed） */
+      /* 电脑版：Kinetic 顶栏 + Tab 冻结，仅中间内容区滚动（底栏仍为 fixed）
+       * max-height 除以 --app-ui-zoom(1.07)，抵消 html zoom，避免视觉裁切 */
       body.primary-module-fullscreen #dynamicModule.module-focus-active {
         display: flex;
         flex-direction: column;
-        max-height: calc(100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        max-height: calc(
+          (100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) /
+            var(--app-ui-zoom, 1)
+        );
         min-height: 0;
         overflow: hidden !important;
         box-sizing: border-box;
@@ -76906,7 +76930,10 @@
       body.primary-module-fullscreen .module-stack > .card.module-focus-active:not(#dynamicModule) {
         display: flex;
         flex-direction: column;
-        max-height: calc(100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        max-height: calc(
+          (100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) /
+            var(--app-ui-zoom, 1)
+        );
         min-height: 0;
         overflow: hidden;
         box-sizing: border-box;
@@ -76930,6 +76957,7 @@
         scrollbar-gutter: stable;
         padding-bottom: var(--app-bottom-nav-space, calc(72px + env(safe-area-inset-bottom, 0px)));
         scroll-padding-bottom: var(--app-bottom-nav-space, calc(72px + env(safe-area-inset-bottom, 0px)));
+        scroll-padding-top: 52px;
         box-sizing: border-box;
       }
 
@@ -77021,6 +77049,10 @@
 
     /* 平板横屏（触控）：主栏贴边全宽；zoom 与竖屏一致 1.2，避免横屏反而比竖屏字小 */
     @media (min-width: 768px) and (max-width: 1366px) and (orientation: landscape) and (pointer: coarse) {
+      :root {
+        --app-ui-zoom: 1.2;
+      }
+
       html {
         zoom: 1.2;
       }
@@ -77091,6 +77123,10 @@
 
     /* 768–1365 + 精细指针（多为笔记本键鼠）：主栏 max 1340px+1cm；触控 coarse 竖屏 900px / zoom1.2，横屏见上方全宽规则 */
     @media (min-width: 768px) and (max-width: 1365px) and (pointer: fine) {
+      :root {
+        --app-ui-zoom: 1.07;
+      }
+
       html {
         zoom: 1.07;
       }
@@ -100711,7 +100747,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006r";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006s";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -137979,6 +138015,15 @@
       applyRule100StatusFilter();
     }
 
+    /** 用户切换 100法则模式/状态时，将 Habit 内容滚动层回到顶部（不影响后台 sync/render） */
+    function scrollHabitModuleContentToTop() {
+      const content = document.querySelector("#habitRoutineModule.module-focus-active > .module-content");
+      if (!content) return;
+      try {
+        content.scrollTop = 0;
+      } catch (_e) {}
+    }
+
     function setActiveRule100Mode(mode) {
       const next = mode === "unit" ? "unit" : "day";
       activeRule100Mode = next;
@@ -138017,6 +138062,7 @@
         const status = btn.getAttribute("data-rule100-status");
         if (!mode || !status) return;
         setActiveRule100Status(mode, status);
+        scrollHabitModuleContentToTop();
       });
       applyRule100StatusFilter();
     }
@@ -138031,6 +138077,7 @@
           const mode = btn.getAttribute("data-rule100-mode");
           if (!mode) return;
           setActiveRule100Mode(mode);
+          scrollHabitModuleContentToTop();
         });
       }
       setActiveRule100Mode(activeRule100Mode);
