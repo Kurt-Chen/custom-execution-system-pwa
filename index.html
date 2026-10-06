@@ -168125,7 +168125,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function applyReadingPlanChapterStatusRules(book) {
-      const chapters = Array.isArray(book.chapters) ? book.chapters : [];
+      const chapters = getReadingPlanContentChapters(book && book.chapters);
       if (!chapters.length) return null;
 
       const allDone = chapters.every((c) => c.done);
@@ -168239,17 +168239,34 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     const READING_PLAN_CHAPTER_COLLAPSE_AT = 6;
 
-    /** 章节分区标题行，如「第一部分」 */
-    function isReadingPlanChapterGroupLabel(text) {
+    /** 文本形如「第一部分」时可能是分区标题（也可能是用户当作章节名添加的可打卡项） */
+    function isReadingPlanChapterGroupLabelText(text) {
       return /^第[一二三四五六七八九十百千万0-9]+部分$/.test(String(text || "").trim());
+    }
+
+    /**
+     * 章节渲染/进度条目：仅当书中同时存在「非第×部分」章节时，才把「第×部分」当分区标题；
+     * 若全书都是「第一部分」「第二部分」…（用户当章节名添加），则全部按可打卡章节渲染。
+     */
+    function getReadingPlanChapterEntries(chapters) {
+      const list = Array.isArray(chapters) ? chapters : [];
+      const anyContent = list.some((c) => !isReadingPlanChapterGroupLabelText(c && c.text));
+      return list.map((chapter) => ({
+        chapter: chapter,
+        isGroup: anyContent && isReadingPlanChapterGroupLabelText(chapter && chapter.text)
+      }));
+    }
+
+    /** 参与进度与完成态的章节（排除真正的分区标题行） */
+    function getReadingPlanContentChapters(chapters) {
+      return getReadingPlanChapterEntries(chapters)
+        .filter((e) => !e.isGroup)
+        .map((e) => e.chapter);
     }
 
     /** 超过 6 章时默认折叠，仅渲染前 6 条章节（分区标题按需插入） */
     function buildReadingPlanChapterDisplayRows(chapters, expanded) {
-      const entries = (Array.isArray(chapters) ? chapters : []).map((chapter) => ({
-        chapter: chapter,
-        isGroup: isReadingPlanChapterGroupLabel(chapter.text)
-      }));
+      const entries = getReadingPlanChapterEntries(chapters);
       const totalChapters = entries.filter((e) => !e.isGroup).length;
       if (expanded || totalChapters <= READING_PLAN_CHAPTER_COLLAPSE_AT) {
         return { rows: entries, showExpandBtn: totalChapters > READING_PLAN_CHAPTER_COLLAPSE_AT && !expanded, totalChapters: totalChapters };
@@ -168631,7 +168648,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         lane === "reading" ? "reading" : lane === "completed" ? "completed" : "planned";
       books.forEach((book) => {
         const chapters = Array.isArray(book.chapters) ? book.chapters : [];
-        const contentChapters = chapters.filter((c) => !isReadingPlanChapterGroupLabel(c.text));
+        const contentChapters = getReadingPlanContentChapters(chapters);
         const doneChapters = contentChapters.filter((c) => c.done).length;
         const totalChapters = contentChapters.length;
         const pct = totalChapters > 0 ? Math.round((doneChapters / totalChapters) * 100) : 0;
