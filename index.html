@@ -74178,31 +74178,45 @@
       white-space: normal;
     }
 
-    .rule100-hours-legend--with-try-again {
-      justify-content: space-between;
-      flex-wrap: nowrap;
-      gap: 8px;
-    }
-
-    .rule100-hours-legend-start {
-      display: inline-flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 8px 12px;
-      min-width: 0;
-      flex: 1 1 auto;
-    }
-
     .rule100-hours-legend-item {
       display: inline-flex;
       align-items: center;
       gap: 5px;
     }
 
-    /* 仅 rule100D（大满贯报价）图例右侧：Try Again 小胶囊 */
+    /*
+     * 大满贯卡 · Try Again：挂在标题行（⋯ 左侧），首屏可见，不被 100 格图例窄宽裁切。
+     * 匹配：seed key rule100D，或名称含「大满贯」。
+     */
+    #habitRoutineModule #habitRule100Group .rule100-hours-name-row > .rule100-try-again-btn {
+      flex: 0 0 auto;
+      margin-left: 0;
+      margin-right: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 32px;
+      min-height: 32px;
+      max-height: 32px;
+      padding: 0 12px;
+      border: 1px solid rgba(126, 34, 206, 0.32);
+      border-radius: 999px;
+      background: #f3e8ff;
+      color: #6b21a8;
+      box-shadow: none;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1;
+      white-space: nowrap;
+      cursor: pointer;
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* 兼容旧图例位样式（ensure 会迁走；保留选择器避免闪一下无样式） */
     #habitRoutineModule #habitRule100Group .rule100-try-again-btn {
       flex: 0 0 auto;
-      margin-left: auto;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -74258,10 +74272,6 @@
         max-height: 30px;
         padding: 0 10px;
         font-size: 13px;
-      }
-
-      .rule100-hours-legend--with-try-again {
-        gap: 6px;
       }
     }
 
@@ -89366,6 +89376,15 @@
                   <button type="button" class="rule100-name-edit-btn rule100-name-edit-btn--save" data-rule100-menu-action="save">保存</button>
                   <button type="button" class="rule100-name-edit-btn rule100-name-edit-btn--cancel" data-rule100-menu-action="cancel">取消</button>
                 </div>
+                <button
+                  type="button"
+                  class="rule100-try-again-btn"
+                  aria-haspopup="dialog"
+                  aria-controls="rule100TryAgainOverlay"
+                  aria-expanded="false"
+                >
+                  Try Again
+                </button>
                 <div class="rule100-name-menu-wrap">
                   <button
                     type="button"
@@ -89454,20 +89473,9 @@
               <div class="rule100-hours-visual">
                 <div class="rule100-hours-visual-panel">
                   <div class="rule100-hours-grid" aria-label="100 格进度展示"></div>
-                  <div class="rule100-hours-legend rule100-hours-legend--with-try-again">
-                    <div class="rule100-hours-legend-start">
-                      <span class="rule100-hours-legend-item"><i class="rule100-hours-dot rule100-hours-dot--done" aria-hidden="true"></i>已完成</span>
-                      <span class="rule100-hours-legend-item"><i class="rule100-hours-dot rule100-hours-dot--milestone-zone" aria-hidden="true"></i>前20格：入门坎</span>
-                    </div>
-                    <button
-                      type="button"
-                      class="rule100-try-again-btn"
-                      aria-haspopup="dialog"
-                      aria-controls="rule100TryAgainOverlay"
-                      aria-expanded="false"
-                    >
-                      Try Again
-                    </button>
+                  <div class="rule100-hours-legend">
+                    <span class="rule100-hours-legend-item"><i class="rule100-hours-dot rule100-hours-dot--done" aria-hidden="true"></i>已完成</span>
+                    <span class="rule100-hours-legend-item"><i class="rule100-hours-dot rule100-hours-dot--milestone-zone" aria-hidden="true"></i>前20格：入门坎</span>
                   </div>
                 </div>
               </div>
@@ -101575,7 +101583,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261007g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261007h";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -138410,8 +138418,9 @@
       syncRule100NameEditingUi(card);
     }
 
-    /** 稳定项目 ID：仅「制作100个大满贯报价」种子卡 rule100D 显示 Try Again（不靠标题/排序） */
+    /** 种子卡 key；亦按名称含「大满贯」匹配（用户可见卡可能是 rule100Unit_*） */
     const RULE100_TRY_AGAIN_PROJECT_KEY = "rule100D";
+    const RULE100_TRY_AGAIN_NAME_HINT = "大满贯";
 
     let rule100TryAgainOpen = false;
     let rule100TryAgainOpenerBtn = null;
@@ -138479,42 +138488,63 @@
       return body;
     }
 
+    /**
+     * 是否显示 Try Again：按量卡且（seed rule100D，或名称含「大满贯」）。
+     * 名称优先读 state，DOM 输入作兜底（ensure 早于 name 回填时仍可用 state）。
+     */
+    function cardMatchesRule100TryAgain(card) {
+      if (!card || !card.classList || !card.classList.contains("rule100-card")) return false;
+      const key = card.dataset.rule100Key;
+      if (!key || !isRule100UnitKey(key)) return false;
+      if (key === RULE100_TRY_AGAIN_PROJECT_KEY) return true;
+      const hint = RULE100_TRY_AGAIN_NAME_HINT;
+      let entryName = "";
+      try {
+        const entry = getRule100HoursEntry(key);
+        entryName = entry && entry.name != null ? entry.name : "";
+      } catch (_e) {}
+      if (normalizeEntrepreneurRule100NameMatch(entryName).indexOf(hint) !== -1) return true;
+      const ni = card.querySelector(".rule100-name-input");
+      const domName = ni ? ni.value : "";
+      return normalizeEntrepreneurRule100NameMatch(domName).indexOf(hint) !== -1;
+    }
+
+    /** 清掉图例里的旧 Try Again 与 --with-try-again 布局壳 */
+    function stripRule100TryAgainFromLegend(card) {
+      const legend = card && card.querySelector(".rule100-hours-legend");
+      if (!legend) return;
+      legend.querySelectorAll(".rule100-try-again-btn").forEach(function (b) {
+        b.remove();
+      });
+      legend.classList.remove("rule100-hours-legend--with-try-again");
+      const orphanStart = legend.querySelector(":scope > .rule100-hours-legend-start");
+      if (orphanStart) {
+        while (orphanStart.firstChild) legend.insertBefore(orphanStart.firstChild, orphanStart);
+        orphanStart.remove();
+      }
+    }
+
+    /**
+     * 大满贯卡 · Try Again 挂到标题行（⋯ 左侧），首屏可见。
+     * 非匹配卡剥离；图例位一律清空，避免窄宽裁切。
+     */
     function ensureRule100TryAgainButton(card) {
       if (!card || !card.classList || !card.classList.contains("rule100-card")) return;
-      const key = card.dataset.rule100Key;
-      const legend = card.querySelector(".rule100-hours-legend");
-      const existing = card.querySelectorAll(".rule100-try-again-btn");
-      if (key !== RULE100_TRY_AGAIN_PROJECT_KEY || !isRule100UnitKey(key)) {
-        existing.forEach(function (b) {
+      stripRule100TryAgainFromLegend(card);
+      const nameRow = card.querySelector(":scope > .rule100-hours-name-row");
+      const match = cardMatchesRule100TryAgain(card);
+      if (!match) {
+        card.querySelectorAll(".rule100-try-again-btn").forEach(function (b) {
           b.remove();
         });
-        if (legend) legend.classList.remove("rule100-hours-legend--with-try-again");
-        const orphanStart = legend && legend.querySelector(":scope > .rule100-hours-legend-start");
-        if (orphanStart) {
-          while (orphanStart.firstChild) legend.insertBefore(orphanStart.firstChild, orphanStart);
-          orphanStart.remove();
-        }
         return;
       }
-      if (!legend) return;
-      let start = legend.querySelector(":scope > .rule100-hours-legend-start");
-      if (!start) {
-        start = document.createElement("div");
-        start.className = "rule100-hours-legend-start";
-        const move = [];
-        Array.from(legend.childNodes).forEach(function (node) {
-          if (node.nodeType === 1 && node.classList && node.classList.contains("rule100-try-again-btn")) {
-            return;
-          }
-          move.push(node);
-        });
-        move.forEach(function (node) {
-          start.appendChild(node);
-        });
-        legend.insertBefore(start, legend.firstChild);
-      }
-      legend.classList.add("rule100-hours-legend--with-try-again");
-      let btn = legend.querySelector(":scope > .rule100-try-again-btn");
+      if (!nameRow) return;
+      /* 其它残留位清掉，只留标题行一颗 */
+      card.querySelectorAll(".rule100-try-again-btn").forEach(function (b) {
+        if (!nameRow.contains(b)) b.remove();
+      });
+      let btn = nameRow.querySelector(":scope > .rule100-try-again-btn");
       if (!btn) {
         btn = document.createElement("button");
         btn.type = "button";
@@ -138523,7 +138553,12 @@
         btn.setAttribute("aria-haspopup", "dialog");
         btn.setAttribute("aria-controls", "rule100TryAgainOverlay");
         btn.setAttribute("aria-expanded", "false");
-        legend.appendChild(btn);
+      }
+      const menuWrap = nameRow.querySelector(":scope > .rule100-name-menu-wrap");
+      if (menuWrap) {
+        if (btn.nextElementSibling !== menuWrap) nameRow.insertBefore(btn, menuWrap);
+      } else if (btn.parentNode !== nameRow) {
+        nameRow.appendChild(btn);
       }
       /* 点击由 bindRule100TryAgainDialogListenersOnce 事件委托处理 */
       bindRule100TryAgainDialogListenersOnce();
@@ -138544,7 +138579,7 @@
           const btn = t && t.closest ? t.closest(".rule100-try-again-btn") : null;
           if (!btn) return;
           const card = btn.closest(".rule100-card");
-          if (!card || card.dataset.rule100Key !== RULE100_TRY_AGAIN_PROJECT_KEY) return;
+          if (!card || !cardMatchesRule100TryAgain(card)) return;
           ev.preventDefault();
           ev.stopPropagation();
           openRule100TryAgainDialog(btn);
@@ -139481,6 +139516,8 @@
               hoursInp.value = String(maxAdd);
             }
           }
+          /* 名称回填后再确保 Try Again（按 key /「大满贯」匹配挂卡头） */
+          ensureRule100TryAgainButton(card);
           card.classList.remove("checked-today");
           return;
         }
