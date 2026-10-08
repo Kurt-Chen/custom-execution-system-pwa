@@ -1,0 +1,69 @@
+---
+description: 小时冲刺条 hour-task 跑马灯 continuous 稳定基线（v20261002j）— 禁止改回 CSS iteration
+globs:
+  - index.html
+  - sw.js
+alwaysApply: true
+---
+
+# 小时冲刺条跑马灯 · continuous 稳定基线（v20261002j）
+
+**冻结节点**：正式站缓存版本 **`v20261002j`**（PR #160：单次连续双轨，消除 CSS `animation-iteration` 边界闪动）。  
+后续任何涉及 **小时冲刺条 / hour-task 跑马灯 / 相关动画 / 宿主 DOM** 的改动，必须以「**不破坏 continuous 单向连续滚动**」为前提。
+
+## 已确认成果（不得倒退）
+
+1. **根因已定案**：旧方案 `animation-iteration-count: 2`（或更多）在 iteration 边界把 `transform` 从约 `-100%` **瞬间跳回** `0%`，肉眼即「滚到一半突然闪一下」；playId / remount 可不变。
+2. **稳定方案（默认）**：**复制两遍（N 遍）内容 + 单次连续 `translate3d`**：
+   - 内容包进 `.done-sprint-finish-hour-task-marquee__seq` 并按遍数复制
+   - `armHourTaskMarqueeTrackAnimation` 默认 `getHourMarqueeIterMode() === "continuous"`
+   - track 带 `.is-continuous`，使用 `done-sprint-finish-hour-task-marquee-continuous-rtl`
+   - **`animation-iteration-count: 1`**；位移 `--marquee-shift = unit × passes`
+3. **视觉仍滚两遍（或 N 遍）**，但底层只有一次连续 animation，**无 iteration reset**。
+4. **B 组已排除**「hour-row 周期 DOM / 整表 rebuild」为当前闪动主因；勿再借「闪动」回头大改 row render / 阿里云同步 / 当前冲刺公式（除非另有独立证据）。
+
+## 硬性禁止
+
+- ❌ 把 hour-task **默认**改回多次 CSS `animation-iteration`（含 `var(--marquee-passes, 2)` 驱动多遍）。
+- ❌ 重新引入 iteration 边界的 **transform reset**（`-100% → 0%` 或等价跳变）。
+- ❌ 为「优化 / 重构 / 统一其它跑马灯写法」而拆掉 `.is-continuous` / `__seq` 复制 / `--marquee-shift` 单次平移。
+- ❌ 在播放中对 continuous track 做会触发动画重算的整轨 `replaceChildren` / 无必要的 `restartSprintMarqueeTrackRunning`（播放中守卫仍须保留）。
+
+## 允许的例外（仅诊断，不得当默认）
+
+控制台开关 `window.__HOUR_MARQUEE_ITER_MODE`：
+
+| 值 | 用途 |
+|----|------|
+| `continuous` | **生产默认**；唯一长期基线 |
+| `oneshot` | 实验：只滚 1 遍 |
+| `legacy` | **仅对照诊断**旧 iteration 闪动；禁止作为默认或「优化回退」 |
+
+## 再闪时的排查优先级
+
+若未来小时冲刺条跑马灯再次出现「中途闪一下 / 像从头开始」：
+
+1. **第一优先**：`animation-iteration` / iteration 边界 / `transform` 是否被 reset  
+2. 日志：`[hour-marquee] CSS_ITERATION t=...`  
+3. 再查 remount / `restartSprintMarqueeTrackRunning` / 整表 `renderDoneTimeBlockTimeline`  
+4. 最后才考虑 compositor / CSS 其它属性
+
+## 相关代码锚点（改前必读）
+
+- `getHourMarqueeIterMode` / `armHourTaskMarqueeTrackAnimation`
+- `mountSprintFinishHourTaskMarqueeOverlay`（装配后调用 arm）
+- CSS：`.done-sprint-finish-hour-task-marquee__track.is-running.is-continuous`
+- `@keyframes done-sprint-finish-hour-task-marquee-continuous-rtl`
+
+## 同类对齐（不得反噬 hour-task）
+
+其它横向多遍 / 原 infinite 跑马灯应对齐同一 continuous 标准时：
+
+- ✅ 使用旁路 `armSharedMarqueeContinuousTrack` + `.marquee-continuous-seq`（**禁止**改写 `armHourTaskMarqueeTrackAnimation`）
+- ✅ 共用已验证的 `done-sprint-finish-hour-task-marquee-continuous-rtl`
+- ❌ 不得为「统一抽象」合并/拆掉 hour-task 专用路径
+- ❌ 不得改变 hour-task 速度 / 触发 / 文案 / 布局
+
+## 影响端别
+
+Both（逻辑与动画；桌面/手机同一套 continuous 路径）。

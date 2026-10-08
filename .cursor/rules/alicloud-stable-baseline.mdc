@@ -1,0 +1,51 @@
+---
+description: 阿里云主同步路径稳定基线（v20260930m）— 后续改动不得倒退已验证成果
+globs:
+  - index.html
+  - sw.js
+alwaysApply: true
+---
+
+# 阿里云同步 · 稳定基线（v20260930m）
+
+**冻结节点**：正式站缓存版本 **`v20260930m`**（commit 含前台 5s 准实时轮询）。  
+后续任何改动必须**保护**下列成果；禁止为「更快 / 更实时」牺牲已验证的顺畅体验。
+
+## 已确认成果（不得倒退）
+
+1. **阿里云是正式网址默认主同步路径**（`isAliyunSyncPrimaryEnabled` 缺省开）。
+2. **Firebase 旧代码 / 旧配置 / 旧数据库全部保留**；不删除旧方案。
+3. **一键回退保留**：`window.setAliyunSyncPrimaryEnabled(false)`（建议刷新）。
+4. **同步导致全局卡顿 / 几近瘫痪** 的核心问题已基本解决；绝大部分操作顺畅。
+5. **双向同步约 5–10 秒**可接受；不追求 1 秒级、不追求真正实时。
+6. **当前策略**：
+   - 页面可见时约每 **5s** 后台串行拉取（`ALIYUN_SYNC_PRIMARY_POLL_MS`）
+   - 回到前台再拉一轮
+   - **Phase 1b（费用）**：先 GET 房间 `aliyun-meta-v1-domains-{room}`；某域 version 未变则**不下该域正文**；无变化时 `skippedFullPull=true`（零业务下载）
+   - payload 未变 → **跳过 merge/render**
+   - 上传 / 拉取进行中 → **跳过本轮**
+   - 回退费用优化：`window.setAliyunSyncMetaGateEnabled(false)`（恢复每 5s 十域正文 GET）
+   - Habit 另保留 Phase 1a 独立 meta（`aliyun-meta-v1-habit-{room}`）
+7. **local-first**；云端网络等待**不阻塞 UI**。
+8. 已纳入域：**Done / Habit / Forge（打卡 meta + settings）/ 十二周年（weeks + registry/archived/doneRef + 模块壳：anchor/OKR/vision/bands，含动态 tw023+）/ Sprint（任务 + doneRef/doneSuppress）/ 今日计划 marks**；批 1 **AMB**；批 3 **Rule100**；批 4 **Lists**（含 `trash`）；批 5 **Goals**。今日计划「其他任务」须 **Sprint 正文 + marks 挂牌** 双推；marks 拉取若 `skippedMissing` 不记指纹以便 Sprint 到后再合。Forge settings：`kbWeightKg` / `ccProgressStep` / `dailyMinimums` / `weeklyMinimums`。Lists trash：软删进 envelope；彻底删除/过期用 `syncTombstones` 防复活。
+9. **默认不允许** Firebase 与阿里云双路同时跑（双写默认关 + 软跳过 Firebase 启动）。
+10. **回退基线缓存名仍以 `v20260930m` 为行为锚点**；后续字母版本（如 `v20260930o`）只叠加已验收小步，不得倒退上述流畅性。
+
+## 优先级（始终）
+
+```text
+流畅可操作 > 同步稳定 > 同步速度 > 真正实时
+```
+
+## 后续工作方式（硬性）
+
+1. **以 v20260930m 为稳定基线**；大改同步架构前必须明确证明不会倒退流畅度。
+2. **一次只改一个小问题**（如 Forge 输入轻微卡顿等局部瑕疵）。
+3. **改完立即验证**；有任何明显退步（卡顿、丢失、覆盖、双路并发）→ **立即回退**。
+4. **绝不能重新引入明显卡顿**。
+5. 不改无关 UI、不扩功能、不做无关重构；端别规则仍遵守 `platform-desktop-mobile-separation.mdc`。
+6. 合并 / 少不覆盖多等仍遵守 `cloud-sync-merge.mdc`。
+
+## 可接受的小瑕疵（勿为此重构同步）
+
+- Forge 输入数字时轻微卡顿等：以后**逐个局部优化**，不要借机重做同步架构。
