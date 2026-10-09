@@ -16167,7 +16167,8 @@
         width: fit-content;
         max-width: 100%;
         box-sizing: border-box;
-        margin: 8px auto 2px;
+        gap: 4px;
+        margin: 4px auto 0;
         padding: 4px 12px 5px;
         border-radius: 999px;
         border: 1px solid #ead9b8;
@@ -84306,7 +84307,7 @@
             </p>
             <!-- 手机底卡第二层：标题下、公式上；桌面不显示 -->
             <p class="today-plan-panel__hourly-rate">
-              <span class="today-plan-panel__hourly-rate-label">My Hourly Rate:</span><span class="today-plan-panel__hourly-rate-value"> $1,000/hr</span>
+              <span class="today-plan-panel__hourly-rate-label">My Hourly Rate:</span><span class="today-plan-panel__hourly-rate-value">$1,000/hr</span>
             </p>
             <div class="today-plan-panel__urgency-watermark" aria-hidden="true">
               <span class="today-plan-panel__urgency-watermark-text">Maniacal Urgency!</span>
@@ -118146,12 +118147,38 @@
 
         const tParse0 = Date.now();
         let env = aliyunForgeRealEmptyEnvelope();
+        const getNotFound =
+          getRes.status === 404 || (getRes.data && getRes.data.error === "not_found");
         if (getRes.ok && getRes.data && getRes.data.data) {
           const row = getRes.data.data;
           const attrs = row.attrs || row;
-          env = aliyunForgeRealParseEnvelope(attrs.payload != null ? attrs.payload : attrs);
-        } else if (getRes.status !== 404 && !(getRes.data && getRes.data.error === "not_found")) {
-          console.warn("[aliyun-forge-real] GET status", getRes.status, getRes.data);
+          const rawPayload = attrs.payload != null ? attrs.payload : attrs;
+          /* 200 但正文缺失 / 类型异常：禁止落到空信封再 POST */
+          if (rawPayload == null) {
+            throw new Error("Forge envelope payload missing — abort flush");
+          }
+          if (typeof rawPayload === "string") {
+            if (!rawPayload.trim()) {
+              throw new Error("Forge envelope payload empty — abort flush");
+            }
+            try {
+              JSON.parse(rawPayload);
+            } catch (_badJson) {
+              throw new Error("Forge envelope JSON parse failed — abort flush");
+            }
+          } else if (typeof rawPayload !== "object") {
+            throw new Error("Forge envelope payload invalid type — abort flush");
+          }
+          env = aliyunForgeRealParseEnvelope(rawPayload);
+        } else if (getNotFound) {
+          aliyunForgeRealAppendLog("flush GET not_found：首次写入，使用空信封");
+        } else {
+          /* 非明确 not_found（含 5xx / 无 data）：绝不能用空信封覆盖云端；走 P0-1 requeue */
+          throw new Error(
+            "GET HTTP " +
+              (getRes.status != null ? getRes.status : "?") +
+              " — abort flush to avoid empty Forge overwrite"
+          );
         }
         parseMs = Date.now() - tParse0;
 
