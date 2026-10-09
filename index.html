@@ -38292,8 +38292,11 @@
       overflow: hidden;
       display: flex;
       align-items: center;
+      /* 时间列与 __rule 间距约 8px（替代原 justify center 留下的大块空白） */
+      gap: 8px;
       list-style: none;
       margin: 0;
+      /* 右 10px≈旗帜安全边距；左 0：时间列与时间轴任务行对齐 */
       padding: 1mm 10px 1mm 0;
       box-sizing: border-box;
       width: 100%;
@@ -38331,16 +38334,34 @@
       min-height: 14px;
     }
     ul.app-done-time-timeline .done-time-sprint-finish__rule {
-      position: relative;
+      /* static：让 __copy 的 absolute 以整条横幅 li 为定位上下文（勿相对 __rule） */
+      position: static;
       flex: 1 1 auto;
       min-width: 0;
       display: flex;
       align-items: center;
+      /* 勿用 center：会把整组内容居中，左右红框空白即由此产生 */
+      justify-content: flex-start;
       gap: 8px;
     }
-    ul.app-done-time-timeline .done-time-sprint-finish__rail {
+    /* 左右列等宽伸缩：内容分别贴左/贴右，中间 copy 自然落在视觉中心 */
+    ul.app-done-time-timeline .done-time-sprint-finish__side {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
       flex: 1 1 0;
-      min-width: 16px;
+      min-width: 0;
+    }
+    ul.app-done-time-timeline .done-time-sprint-finish__side--lead {
+      justify-content: flex-start;
+    }
+    ul.app-done-time-timeline .done-time-sprint-finish__side--trail {
+      justify-content: flex-end;
+    }
+    ul.app-done-time-timeline .done-time-sprint-finish__rail {
+      /* 轨道不再 flex-grow，避免在侧栏内再次拉开空白 */
+      flex: 0 0 auto;
+      min-width: 0;
       display: flex;
       flex-direction: row;
       align-items: center;
@@ -38370,6 +38391,12 @@
       border-radius: 1px;
     }
     ul.app-done-time-timeline .done-time-sprint-finish__copy {
+      /* 相对整条横幅（含时间列）居中，而不是只在 __rule 内居中 */
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 1;
       flex-shrink: 0;
       display: flex;
       flex-direction: column;
@@ -38378,6 +38405,7 @@
       gap: 0;
       padding: 0 4px;
       min-width: 0;
+      pointer-events: auto;
     }
     ul.app-done-time-timeline .done-time-sprint-finish__label {
       display: inline-flex;
@@ -38493,6 +38521,10 @@
     ul.app-done-time-timeline .done-time-sprint-finish.is-hour-last-five .done-time-sprint-finish__ms,
     ul.app-done-time-timeline .done-time-sprint-finish.is-hour-last-five .done-time-sprint-finish__copy {
       display: none;
+    }
+    /* side 解包：避免等宽侧栏在 last5 态仍占位；旗帜仍可见（与改前一致） */
+    ul.app-done-time-timeline .done-time-sprint-finish.is-hour-last-five .done-time-sprint-finish__side {
+      display: contents;
     }
     ul.app-done-time-timeline .done-time-sprint-finish.is-hour-last-five .done-time-sprint-finish__last5 {
       display: flex;
@@ -38676,10 +38708,13 @@
     ul.app-done-time-timeline .done-time-sprint-finish__rail--mid {
       display: none;
     }
-    /* 桌面竞技横幅：主标题居中；翻篇/重启为浅橙小标签；每侧只留一个箭头和短分隔线 */
+    /* 桌面竞技横幅：三列布局；翻篇/重启为浅橙小标签；每侧只留一个箭头和短分隔线 */
     @media (min-width: 768px) {
       ul.app-done-time-timeline .done-time-sprint-finish__rule {
-        justify-content: center;
+        justify-content: flex-start;
+        gap: 8px;
+      }
+      ul.app-done-time-timeline .done-time-sprint-finish__side {
         gap: 8px;
       }
       ul.app-done-time-timeline .done-time-sprint-finish__time {
@@ -38687,7 +38722,7 @@
       }
       ul.app-done-time-timeline .done-time-sprint-finish__rail,
       ul.app-done-time-timeline .done-time-sprint-finish__rail--lead {
-        flex: 0 1 auto;
+        flex: 0 0 auto;
         min-width: 0;
         margin-left: 0;
         gap: 6px;
@@ -149011,14 +149046,26 @@
       flag.setAttribute("aria-hidden", "true");
       flag.innerHTML = buildDoneTimeSprintFinishFlagSvg();
 
-      rule.appendChild(railL);
-      appendDoneTimeSprintFinishMilestone(rule, "letgo");
-      appendDoneTimeSprintFinishMidRail(rule);
+      /* 三列：左(箭头/翻篇) | 中(SPRINT N FINISH) | 右(重启/箭头/旗)
+         用等宽 side 吸收剩余空间，避免 __rule justify-content:center 在两侧挤出大空白 */
+      const sideLead = document.createElement("span");
+      sideLead.className =
+        "done-time-sprint-finish__side done-time-sprint-finish__side--lead";
+      sideLead.appendChild(railL);
+      appendDoneTimeSprintFinishMilestone(sideLead, "letgo");
+      appendDoneTimeSprintFinishMidRail(sideLead);
+
+      const sideTrail = document.createElement("span");
+      sideTrail.className =
+        "done-time-sprint-finish__side done-time-sprint-finish__side--trail";
+      appendDoneTimeSprintFinishMidRail(sideTrail);
+      appendDoneTimeSprintFinishMilestone(sideTrail, "restart");
+      sideTrail.appendChild(railR);
+      sideTrail.appendChild(flag);
+
+      rule.appendChild(sideLead);
       rule.appendChild(copy);
-      appendDoneTimeSprintFinishMidRail(rule);
-      appendDoneTimeSprintFinishMilestone(rule, "restart");
-      rule.appendChild(railR);
-      rule.appendChild(flag);
+      rule.appendChild(sideTrail);
       li.appendChild(timeEl);
       li.appendChild(axis);
       li.appendChild(rule);
