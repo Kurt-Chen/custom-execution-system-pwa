@@ -34675,8 +34675,27 @@
      * 战略提醒：与紧迫感共用同一遮罩层，浅色迷你卡。
      * 进度条用一次 CSS 动画抽干，不走逐帧改样式。
      */
+    /*
+     * 战略提醒贴在侧边栏可视盒子左下角（JS 写入 left/top/width/height）。
+     * 不铺满窗口，不挡右侧主页面；14px 落在 12–16px 安全边距内。
+     */
+    .maniacal-urgency-overlay.is-strategy {
+      inset: auto;
+      right: auto;
+      bottom: auto;
+      display: flex;
+      align-items: flex-end;
+      justify-content: flex-start;
+      /* 14px 落在 12–16 视觉边距内；html zoom 时用变量抵消，避免平板 1.2 倍后超出 */
+      padding: calc(14px / var(--app-ui-zoom, 1));
+      background: transparent;
+      overflow: hidden;
+      pointer-events: none;
+    }
+
     .maniacal-urgency-overlay.is-strategy.is-open:not(.is-closing) {
-      align-items: center;
+      align-items: flex-end;
+      justify-content: flex-start;
       opacity: 1;
       visibility: visible;
       transition: none;
@@ -34696,9 +34715,10 @@
       display: flex;
       flex-direction: column;
       box-sizing: border-box;
-      width: clamp(300px, 32vw, 340px);
-      max-width: calc(100vw - 24px);
-      margin: 0 auto;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      margin: 0;
       padding: 0 0 14px;
       border: 1px solid #d9e3f1;
       border-radius: 18px;
@@ -34807,15 +34827,17 @@
     }
 
     @media (min-width: 768px) and (max-width: 1366px) and (pointer: coarse) {
-      .strategy-reminder-card {
-        width: clamp(280px, 42vw, 340px);
+      .maniacal-urgency-overlay.is-strategy .strategy-reminder-card {
+        width: 100%;
+        max-width: 100%;
       }
     }
 
     @media (max-width: 767px) {
-      .strategy-reminder-card {
-        width: min(300px, calc(100vw - 32px));
-        max-width: min(300px, calc(100vw - 24px));
+      .maniacal-urgency-overlay.is-strategy .strategy-reminder-card {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
       }
 
       .strategy-reminder-message {
@@ -195566,6 +195588,39 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         strategyFillEl.classList.add("is-running");
       }
 
+      /** html{zoom} 放大后，getBoundingClientRect 已是视口像素，写回定位前要除掉 zoom。 */
+      function strategyDockZoom() {
+        try {
+          const z = parseFloat(getComputedStyle(document.documentElement).zoom);
+          if (z > 0 && isFinite(z)) return z;
+        } catch (_zoomErr) {}
+        return 1;
+      }
+
+      /** 战略提醒遮罩收缩到侧边栏可视盒子，卡片再靠 CSS 贴左下。 */
+      function syncStrategyDockBox() {
+        if (activeKind !== "strategy") return;
+        const root = overlayEl;
+        const panel = document.getElementById("todayPlanPanel");
+        if (!root || !panel) return;
+        const rect = panel.getBoundingClientRect();
+        if (!(rect.width > 0) || !(rect.height > 0)) return;
+        const zoom = strategyDockZoom();
+        root.style.left = rect.left / zoom + "px";
+        root.style.top = rect.top / zoom + "px";
+        root.style.width = rect.width / zoom + "px";
+        root.style.height = rect.height / zoom + "px";
+      }
+
+      function clearStrategyDockBox() {
+        const root = overlayEl || document.getElementById("maniacalUrgencyOverlay");
+        if (!root) return;
+        root.style.left = "";
+        root.style.top = "";
+        root.style.width = "";
+        root.style.height = "";
+      }
+
       /** 切到紧迫感或收起侧栏前，停掉战略提醒的 5 秒档，不碰 15 分钟自动提醒。 */
       function dismissStrategyLayer() {
         const showing =
@@ -195577,6 +195632,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (strategyFillEl) strategyFillEl.classList.remove("is-running");
         if (strategyMessageEl) strategyMessageEl.textContent = "";
         if (overlayEl) overlayEl.classList.remove("is-strategy", "is-closing");
+        clearStrategyDockBox();
         if (activeKind === "strategy") activeKind = "";
       }
 
@@ -195591,6 +195647,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           root.setAttribute("hidden", "");
           root.setAttribute("aria-hidden", "true");
         }
+        clearStrategyDockBox();
         isOpen = false;
         isClosing = false;
         activeKind = "";
@@ -195628,6 +195685,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         root.removeAttribute("hidden");
         root.setAttribute("aria-hidden", "false");
         restartStrategyBar();
+        syncStrategyDockBox();
+        try {
+          requestAnimationFrame(syncStrategyDockBox);
+        } catch (_dockRafErr) {}
         strategyFadeTimerId = setTimeout(function () {
           strategyFadeTimerId = null;
           beginStrategyFade(session);
@@ -195983,6 +196044,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           clearCountdownRaf();
           clearCloseAnimTimer();
           clearStrategyTimers();
+        });
+        window.addEventListener("resize", function () {
+          if (activeKind === "strategy") syncStrategyDockBox();
         });
       }
 
