@@ -37895,8 +37895,8 @@
         width: 30px;
         height: 21px;
       }
-      ul.app-done-time-timeline .done-time-sprint-finish__ms,
-      ul.app-done-time-timeline .done-time-sprint-finish__rail--mid {
+      /* 窄屏仍隐藏翻篇/重启；mid 连接线保持伸展，避免再出现空白 spacer */
+      ul.app-done-time-timeline .done-time-sprint-finish__ms {
         display: none;
       }
       ul.app-done-time-timeline .done-sprint-finish-close-loop-marquee__chip {
@@ -38069,32 +38069,37 @@
       background: transparent;
     }
     ul.app-done-time-timeline .done-time-sprint-finish__axis {
-      flex: 0 0 0;
+      /* 不参与 flex 流：零宽轴若仍在 flow 内会额外吃掉一格 gap，把「时间→箭头」撑成 16px */
+      position: absolute;
       width: 0;
-      min-width: 0;
-      max-width: 0;
+      height: 0;
+      margin: 0;
+      padding: 0;
       overflow: hidden;
-      align-self: stretch;
-      min-height: 14px;
+      pointer-events: none;
     }
     ul.app-done-time-timeline .done-time-sprint-finish__rule {
-      /* static：让 __copy 的 absolute 以整条横幅 li 为定位上下文（勿相对 __rule） */
-      position: static;
+      position: relative;
       flex: 1 1 auto;
       min-width: 0;
       display: flex;
       align-items: center;
-      /* 勿用 center：会把整组内容居中，左右红框空白即由此产生 */
+      /*
+       * 勿用 center：整组居中 → 时间后/旗前大空白。
+       * 勿给 __side 设 flex-grow：侧栏会变成无意义 spacer（曾测 lead/trail≈421、空段≈300px）。
+       * 正确分配：左右簇内容宽；两侧 __rail--mid 等分伸展为连接线，copy 自然落在中间。
+       */
       justify-content: flex-start;
       gap: 8px;
     }
-    /* 左右列等宽伸缩：内容分别贴左/贴右，中间 copy 自然落在视觉中心 */
     ul.app-done-time-timeline .done-time-sprint-finish__side {
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      flex: 1 1 0;
+      flex: 0 0 auto;
       min-width: 0;
+      width: auto;
+      max-width: none;
     }
     ul.app-done-time-timeline .done-time-sprint-finish__side--lead {
       justify-content: flex-start;
@@ -38135,13 +38140,13 @@
       border-radius: 1px;
     }
     ul.app-done-time-timeline .done-time-sprint-finish__copy {
-      /* 相对整条横幅（含时间列）居中，而不是只在 __rule 内居中 */
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
+      /* 参与 flex 流：夹在两条等宽伸展的 mid 连接线之间，标题即视觉中心 */
+      position: static;
+      left: auto;
+      top: auto;
+      transform: none;
       z-index: 1;
-      flex-shrink: 0;
+      flex: 0 0 auto;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -38471,12 +38476,29 @@
           inset 0 1px 0 rgba(255, 255, 255, 0.55);
       }
     }
-    /* 翻篇 / 重启：默认隐藏，桌面再打开 */
-    ul.app-done-time-timeline .done-time-sprint-finish__ms,
-    ul.app-done-time-timeline .done-time-sprint-finish__rail--mid {
+    /* 翻篇 / 重启：默认隐藏，桌面再打开；mid 连接线始终参与横向分配（避免空白 spacer） */
+    ul.app-done-time-timeline .done-time-sprint-finish__ms {
       display: none;
     }
-    /* 桌面竞技横幅：三列布局；翻篇/重启为浅橙小标签；每侧只留一个箭头和短分隔线 */
+    ul.app-done-time-timeline .done-time-sprint-finish__rail--mid {
+      display: flex;
+      flex: 1 1 0;
+      width: auto;
+      min-width: 8px;
+      max-width: none;
+      align-items: center;
+      gap: 0;
+    }
+    ul.app-done-time-timeline .done-time-sprint-finish__rail--mid .done-time-sprint-finish__line {
+      display: block;
+      flex: 1 1 auto;
+      width: 100%;
+      min-width: 8px;
+      max-width: none;
+      height: 1.5px;
+      opacity: 0.55;
+    }
+    /* 桌面竞技横幅：翻篇/重启为浅橙小标签；左右簇内容宽，mid 线吸收剩余空间 */
     @media (min-width: 768px) {
       ul.app-done-time-timeline .done-time-sprint-finish__rule {
         justify-content: flex-start;
@@ -38484,6 +38506,7 @@
       }
       ul.app-done-time-timeline .done-time-sprint-finish__side {
         gap: 8px;
+        flex: 0 0 auto;
       }
       ul.app-done-time-timeline .done-time-sprint-finish__time {
         font-size: 13px;
@@ -38613,10 +38636,10 @@
       }
       ul.app-done-time-timeline .done-time-sprint-finish__rail--mid {
         display: flex;
-        flex: 0 1 28px;
-        width: 28px;
+        flex: 1 1 0;
+        width: auto;
         min-width: 8px;
-        max-width: 28px;
+        max-width: none;
         align-items: center;
         gap: 0;
       }
@@ -103025,7 +103048,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261009n";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261009o";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -148529,14 +148552,13 @@
     }
 
     function appendDoneTimeSprintFinishMidRail(parent) {
-      if (!parent) return null;
       const rail = document.createElement("span");
       rail.className = "done-time-sprint-finish__rail done-time-sprint-finish__rail--mid";
       rail.setAttribute("aria-hidden", "true");
       const line = document.createElement("span");
       line.className = "done-time-sprint-finish__line";
       rail.appendChild(line);
-      parent.appendChild(rail);
+      if (parent) parent.appendChild(rail);
       return rail;
     }
 
@@ -148803,25 +148825,28 @@
       flag.setAttribute("aria-hidden", "true");
       flag.innerHTML = buildDoneTimeSprintFinishFlagSvg();
 
-      /* 三列：左(箭头/翻篇) | 中(SPRINT N FINISH) | 右(重启/箭头/旗)
-         用等宽 side 吸收剩余空间，避免 __rule justify-content:center 在两侧挤出大空白 */
+      /* 左簇(›/翻篇) | mid 连接线(伸展) | SPRINT N FINISH | mid 连接线(伸展) | 右簇(重启/›/旗)
+         禁止给 __side 设 flex-grow；剩余宽度只交给 __rail--mid 画线，消除空白 spacer */
       const sideLead = document.createElement("span");
       sideLead.className =
         "done-time-sprint-finish__side done-time-sprint-finish__side--lead";
       sideLead.appendChild(railL);
       appendDoneTimeSprintFinishMilestone(sideLead, "letgo");
-      appendDoneTimeSprintFinishMidRail(sideLead);
+
+      const midL = appendDoneTimeSprintFinishMidRail(null);
+      const midR = appendDoneTimeSprintFinishMidRail(null);
 
       const sideTrail = document.createElement("span");
       sideTrail.className =
         "done-time-sprint-finish__side done-time-sprint-finish__side--trail";
-      appendDoneTimeSprintFinishMidRail(sideTrail);
       appendDoneTimeSprintFinishMilestone(sideTrail, "restart");
       sideTrail.appendChild(railR);
       sideTrail.appendChild(flag);
 
       rule.appendChild(sideLead);
+      if (midL) rule.appendChild(midL);
       rule.appendChild(copy);
+      if (midR) rule.appendChild(midR);
       rule.appendChild(sideTrail);
       li.appendChild(timeEl);
       li.appendChild(axis);
