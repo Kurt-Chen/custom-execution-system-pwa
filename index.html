@@ -13646,6 +13646,20 @@
       line-height: 1;
       user-select: none;
       -webkit-user-select: none;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    /* 悬停只提亮，不改宽高；触控端不靠 hover */
+    @media (hover: hover) and (pointer: fine) {
+      .today-plan-panel__date-card:hover {
+        filter: brightness(1.12);
+      }
+    }
+
+    .today-plan-panel__date-card:focus-visible {
+      outline: 2px solid #93c5fd;
+      outline-offset: 2px;
     }
 
     .today-plan-panel__date-card-month {
@@ -34634,6 +34648,158 @@
       .maniacal-urgency-message {
         font-size: 13.5px;
         line-height: 1.25;
+      }
+    }
+
+    /*
+     * 战略提醒：与紧迫感共用同一遮罩层，浅色迷你卡。
+     * 进度条用一次 CSS 动画抽干，不走逐帧改样式。
+     */
+    .maniacal-urgency-overlay.is-strategy.is-open:not(.is-closing) {
+      align-items: center;
+      opacity: 1;
+      visibility: visible;
+      transition: none;
+    }
+
+    .maniacal-urgency-overlay.is-strategy .maniacal-urgency-card {
+      display: none;
+    }
+
+    .maniacal-urgency-overlay:not(.is-strategy) .strategy-reminder-card {
+      display: none;
+    }
+
+    .strategy-reminder-card {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
+      width: clamp(300px, 32vw, 340px);
+      max-width: calc(100vw - 24px);
+      margin: 0 auto;
+      padding: 0 0 14px;
+      border: 1px solid #d9e3f1;
+      border-radius: 18px;
+      background: #fbfcff;
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.12);
+      pointer-events: none;
+      color: #1e293b;
+    }
+
+    .strategy-reminder-card__head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 40px;
+      padding: 10px 8px 4px 14px;
+    }
+
+    .strategy-reminder-card__mark {
+      flex: 0 0 auto;
+      font-size: 15px;
+      line-height: 1;
+    }
+
+    .strategy-reminder-card__title {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      color: #1d4ed8;
+    }
+
+    .strategy-reminder-close {
+      flex: 0 0 auto;
+      width: 28px;
+      height: 28px;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: #64748b;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      pointer-events: auto;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+
+    .strategy-reminder-close:hover {
+      background: #eef4ff;
+      color: #1d4ed8;
+    }
+
+    .strategy-reminder-close:focus-visible {
+      outline: 2px solid #93c5fd;
+      outline-offset: 1px;
+    }
+
+    .strategy-reminder-message {
+      margin: 0;
+      padding: 8px 18px 14px;
+      text-align: center;
+      white-space: normal;
+      overflow: visible;
+      word-break: break-word;
+      font-size: 15px;
+      font-weight: 650;
+      line-height: 1.55;
+      color: #1e293b;
+    }
+
+    .strategy-reminder-progress {
+      padding: 0 16px;
+      pointer-events: none;
+    }
+
+    .strategy-reminder-progress-track {
+      height: 4px;
+      border-radius: 999px;
+      background: #e8eef6;
+      overflow: hidden;
+    }
+
+    .strategy-reminder-progress-fill {
+      width: 100%;
+      height: 100%;
+      border-radius: inherit;
+      background: #2563eb;
+      transform-origin: left center;
+      transform: scaleX(1);
+    }
+
+    .strategy-reminder-progress-fill.is-running {
+      animation: strategy-reminder-drain 5000ms linear forwards;
+    }
+
+    @keyframes strategy-reminder-drain {
+      from {
+        transform: scaleX(1);
+      }
+      to {
+        transform: scaleX(0);
+      }
+    }
+
+    @media (min-width: 768px) and (max-width: 1366px) and (pointer: coarse) {
+      .strategy-reminder-card {
+        width: clamp(280px, 42vw, 340px);
+      }
+    }
+
+    @media (max-width: 767px) {
+      .strategy-reminder-card {
+        width: min(300px, calc(100vw - 32px));
+        max-width: min(300px, calc(100vw - 24px));
+      }
+
+      .strategy-reminder-message {
+        font-size: 14px;
       }
     }
 
@@ -84157,10 +84323,13 @@
             2) 进度条（内部居中完成数 / 总数）
           -->
           <div class="today-plan-panel__title-row">
-            <!-- 迷你日期卡片：月份英文缩写 + 两位数日；由 JS 按系统当天写入 -->
+            <!-- 迷你日期卡片：月份英文缩写 + 两位数日；点击只开战略提醒，不扩大热区 -->
             <span
               class="today-plan-panel__date-card"
               id="todayPlanPanelDateCard"
+              role="button"
+              tabindex="0"
+              aria-haspopup="dialog"
               aria-label="今日日期"
             >
               <span class="today-plan-panel__date-card-month" id="todayPlanPanelDateMonth">—</span>
@@ -102921,7 +103090,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261009k";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261009l";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -103596,12 +103765,12 @@
       "DEC"
     ];
     /**
-     * 侧边栏两张静态提醒的原文。第一阶段只撤页面卡片，不渲染、不改日期点击。
-     * 后续随机浮窗直接引用这三条，勿改字面量。
+     * 侧边栏战略提醒文案库：仅这三条，供日期点击浮窗洗牌轮播。
+     * 与紧迫感 18 条分开；勿增删、改写或拆分。
      */
     const TODAY_PLAN_SIDEBAR_REMINDER_COPY = Object.freeze([
-      "让“下一步”足够近，“下一次兑现”足够快。",
-      "🏆 不断让自己感受到“赢”。",
+      "Problem 1+ ， Approach 1+",
+      "让“下一步”足够近，“下一次兑现”足够快。不断让自己感受到“赢”。",
       "如果接下来 90 天（或一年重复 90 次）都这样做，会怎样？"
     ]);
     let todayPlanPanelExpanded = false;
@@ -103656,6 +103825,21 @@
       todayPlanPanelToggle.addEventListener("click", function (ev) {
         ev.stopPropagation();
         setTodayPlanPanelExpanded(true);
+      });
+    }
+    if (todayPlanPanelDateCard) {
+      const openStrategyFromDateCard = function (ev) {
+        if (ev) ev.stopPropagation();
+        if (!todayPlanPanelExpanded) return;
+        if (typeof window.__openStrategyReminder === "function") {
+          window.__openStrategyReminder();
+        }
+      };
+      todayPlanPanelDateCard.addEventListener("click", openStrategyFromDateCard);
+      todayPlanPanelDateCard.addEventListener("keydown", function (ev) {
+        if (!ev || (ev.key !== "Enter" && ev.key !== " ")) return;
+        ev.preventDefault();
+        openStrategyFromDateCard(ev);
       });
     }
     if (todayPlanPanelCollapse) {
@@ -175342,6 +175526,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         closedListWinExpanded = false;
         /* 侧栏收起时关闭引文浮窗，避免残留 fixed 层 */
         setTodayPlanAttentionFateOpen(false);
+        /* 战略提醒只属于打开的侧栏；收起时立刻关掉，不动紧迫感 15 分钟档 */
+        if (typeof window.__closeStrategyReminder === "function") {
+          window.__closeStrategyReminder();
+        }
       }
       if (!todayPlanPanel) return;
       todayPlanPanel.classList.toggle("is-collapsed", !todayPlanPanelExpanded);
@@ -195090,6 +195278,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       let isClosing = false;
       let listenersBound = false;
       let lastMessageIndex = -1;
+      /** urgency：黑橙底图；strategy：侧边栏日期触发的浅色战略提醒。同一时刻只开一种。 */
+      let activeKind = "";
+      let strategyCardEl = null;
+      let strategyMessageEl = null;
+      let strategyFillEl = null;
+      let strategyCloseBtnEl = null;
+      let strategyFadeTimerId = null;
+      let strategyHideTimerId = null;
+      let strategySession = 0;
+      let strategyOrder = [];
+      let strategyCursor = 0;
+      let strategyLastIndex = -1;
+      const STRATEGY_COUNTDOWN_MS = 5000;
+      const STRATEGY_FADE_MS = 300;
+      const STRATEGY_REMINDER_MESSAGES = TODAY_PLAN_SIDEBAR_REMINDER_COPY;
 
       function clearAutoTimer() {
         if (autoTimerId != null) {
@@ -195168,8 +195371,189 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return list[idx];
       }
 
+      function clearStrategyTimers() {
+        if (strategyFadeTimerId != null) {
+          clearTimeout(strategyFadeTimerId);
+          strategyFadeTimerId = null;
+        }
+        if (strategyHideTimerId != null) {
+          clearTimeout(strategyHideTimerId);
+          strategyHideTimerId = null;
+        }
+      }
+
+      function isTodayPlanSidebarOpen() {
+        const panel = document.getElementById("todayPlanPanel");
+        if (!panel || panel.classList.contains("is-collapsed")) return false;
+        const body = panel.querySelector(".today-plan-panel__body");
+        return !!(body && !body.hidden);
+      }
+
+      /** 洗牌轮播：一轮内不重复；新一轮第一条避开上一轮最后一条。 */
+      function refillStrategyOrder() {
+        const n = STRATEGY_REMINDER_MESSAGES.length;
+        const order = [];
+        for (let i = 0; i < n; i++) order.push(i);
+        for (let i = n - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          const tmp = order[i];
+          order[i] = order[j];
+          order[j] = tmp;
+        }
+        if (n > 1 && order[0] === strategyLastIndex) {
+          const swapWith = 1 + Math.floor(Math.random() * (n - 1));
+          const tmp = order[0];
+          order[0] = order[swapWith];
+          order[swapWith] = tmp;
+        }
+        strategyOrder = order;
+        strategyCursor = 0;
+      }
+
+      function nextStrategyMessage() {
+        if (!STRATEGY_REMINDER_MESSAGES.length) return "";
+        if (strategyCursor >= strategyOrder.length) refillStrategyOrder();
+        const idx = strategyOrder[strategyCursor];
+        strategyCursor += 1;
+        strategyLastIndex = idx;
+        return STRATEGY_REMINDER_MESSAGES[idx];
+      }
+
+      function restartStrategyBar() {
+        if (!strategyFillEl) return;
+        strategyFillEl.classList.remove("is-running");
+        void strategyFillEl.offsetWidth;
+        strategyFillEl.classList.add("is-running");
+      }
+
+      /** 切到紧迫感或收起侧栏前，停掉战略提醒的 5 秒档，不碰 15 分钟自动提醒。 */
+      function dismissStrategyLayer() {
+        const showing =
+          activeKind === "strategy" ||
+          !!(overlayEl && overlayEl.classList.contains("is-strategy"));
+        if (!showing) return;
+        strategySession += 1;
+        clearStrategyTimers();
+        if (strategyFillEl) strategyFillEl.classList.remove("is-running");
+        if (strategyMessageEl) strategyMessageEl.textContent = "";
+        if (overlayEl) overlayEl.classList.remove("is-strategy", "is-closing");
+        if (activeKind === "strategy") activeKind = "";
+      }
+
+      function closeStrategyReminder() {
+        if (activeKind !== "strategy") return;
+        strategySession += 1;
+        clearStrategyTimers();
+        clearCountdownRaf();
+        const root = overlayEl || document.getElementById("maniacalUrgencyOverlay");
+        if (root) {
+          root.classList.remove("is-open", "is-closing", "is-strategy");
+          root.setAttribute("hidden", "");
+          root.setAttribute("aria-hidden", "true");
+        }
+        isOpen = false;
+        isClosing = false;
+        activeKind = "";
+        if (strategyFillEl) strategyFillEl.classList.remove("is-running");
+        if (strategyMessageEl) strategyMessageEl.textContent = "";
+      }
+
+      function beginStrategyFade(session) {
+        if (session !== strategySession || activeKind !== "strategy" || !isOpen || isClosing) return;
+        isClosing = true;
+        const root = ensureOverlay();
+        root.classList.add("is-closing");
+        strategyHideTimerId = setTimeout(function () {
+          strategyHideTimerId = null;
+          if (session !== strategySession || activeKind !== "strategy") return;
+          closeStrategyReminder();
+        }, STRATEGY_FADE_MS);
+      }
+
+      function openStrategyReminder() {
+        if (!isTodayPlanSidebarOpen()) return;
+        const root = ensureOverlay();
+        clearCountdownRaf();
+        clearCloseAnimTimer();
+        strategySession += 1;
+        const session = strategySession;
+        clearStrategyTimers();
+        const msg = nextStrategyMessage();
+        if (strategyMessageEl) strategyMessageEl.textContent = msg;
+        activeKind = "strategy";
+        isClosing = false;
+        isOpen = true;
+        root.classList.remove("is-closing");
+        root.classList.add("is-strategy", "is-open");
+        root.removeAttribute("hidden");
+        root.setAttribute("aria-hidden", "false");
+        restartStrategyBar();
+        strategyFadeTimerId = setTimeout(function () {
+          strategyFadeTimerId = null;
+          beginStrategyFade(session);
+        }, STRATEGY_COUNTDOWN_MS - STRATEGY_FADE_MS);
+      }
+
+      function mountStrategyCard(root) {
+        if (!root) return;
+        let card = root.querySelector(".strategy-reminder-card");
+        if (!card) {
+          card = document.createElement("div");
+          card.className = "strategy-reminder-card";
+          card.setAttribute("role", "dialog");
+          card.setAttribute("aria-modal", "false");
+          card.setAttribute("aria-label", "战略提醒");
+
+          const head = document.createElement("div");
+          head.className = "strategy-reminder-card__head";
+
+          const mark = document.createElement("span");
+          mark.className = "strategy-reminder-card__mark";
+          mark.setAttribute("aria-hidden", "true");
+          mark.textContent = "💡";
+
+          const title = document.createElement("span");
+          title.className = "strategy-reminder-card__title";
+          title.textContent = "战略提醒";
+
+          const closeBtn = document.createElement("button");
+          closeBtn.type = "button";
+          closeBtn.className = "strategy-reminder-close";
+          closeBtn.setAttribute("aria-label", "关闭战略提醒");
+          closeBtn.textContent = "×";
+
+          const message = document.createElement("p");
+          message.className = "strategy-reminder-message";
+
+          const progress = document.createElement("div");
+          progress.className = "strategy-reminder-progress";
+          progress.setAttribute("aria-hidden", "true");
+          const track = document.createElement("div");
+          track.className = "strategy-reminder-progress-track";
+          const fill = document.createElement("div");
+          fill.className = "strategy-reminder-progress-fill";
+          track.appendChild(fill);
+          progress.appendChild(track);
+
+          head.appendChild(mark);
+          head.appendChild(title);
+          head.appendChild(closeBtn);
+          card.appendChild(head);
+          card.appendChild(message);
+          card.appendChild(progress);
+          root.appendChild(card);
+        }
+        strategyCardEl = card;
+        strategyMessageEl = card.querySelector(".strategy-reminder-message");
+        strategyFillEl = card.querySelector(".strategy-reminder-progress-fill");
+        strategyCloseBtnEl = card.querySelector(".strategy-reminder-close");
+      }
+
       function ensureOverlay() {
-        if (overlayEl && overlayEl.isConnected) return overlayEl;
+        if (overlayEl && overlayEl.isConnected) {
+          mountStrategyCard(overlayEl);
+          return overlayEl;
+        }
         const existing = document.getElementById("maniacalUrgencyOverlay");
         if (existing) {
           overlayEl = existing;
@@ -195177,6 +195561,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           messageEl = existing.querySelector(".maniacal-urgency-message");
           fillEl = existing.querySelector(".maniacal-urgency-progress-fill");
           closeBtnEl = existing.querySelector(".maniacal-urgency-close-hotspot");
+          mountStrategyCard(existing);
           return existing;
         }
 
@@ -195232,6 +195617,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         messageEl = message;
         fillEl = fill;
         closeBtnEl = closeBtn;
+        mountStrategyCard(root);
         return root;
       }
 
@@ -195245,6 +195631,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
 
       function tickCountdown(now) {
+        if (activeKind !== "urgency") return;
         if (!isOpen || isClosing) return;
         const remaining = countdownEndAt - now;
         setCountdownVisual(remaining);
@@ -195267,12 +195654,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
 
       function finishCloseDom() {
+        if (activeKind === "strategy") return;
         const root = ensureOverlay();
-        root.classList.remove("is-open", "is-closing");
+        root.classList.remove("is-open", "is-closing", "is-strategy");
         root.setAttribute("hidden", "");
         root.setAttribute("aria-hidden", "true");
         isOpen = false;
         isClosing = false;
+        activeKind = "";
         clearCountdownRaf();
         if (fillEl) fillEl.style.transform = "scaleX(1)";
         if (messageEl) messageEl.textContent = "";
@@ -195283,6 +195672,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
 
       function beginCloseManiacalUrgency() {
+        if (activeKind === "strategy") return;
         if (!isOpen || isClosing) return;
         clearCountdownRaf();
         clearCloseAnimTimer();
@@ -195305,9 +195695,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
 
       function openManiacalUrgency(opts) {
+        dismissStrategyLayer();
+        activeKind = "urgency";
         const options = opts || {};
         const root = ensureOverlay();
         clearCloseAnimTimer();
+        root.classList.remove("is-strategy");
         const msg = pickRandomMessage();
         if (messageEl) messageEl.textContent = msg;
         isClosing = false;
@@ -195375,8 +195768,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               onTriggerActivate(ev);
               return;
             }
-            if (!isOpen || isClosing) return;
             if (ev.key === "Escape" || ev.key === "Esc") {
+              if (activeKind === "strategy") {
+                ev.preventDefault();
+                closeStrategyReminder();
+                return;
+              }
+              if (!isOpen || isClosing) return;
               ev.preventDefault();
               closeManiacalUrgency();
             }
@@ -195386,8 +195784,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         document.addEventListener(
           "pointerdown",
           function (ev) {
-            if (!isOpen || isClosing) return;
             const t = ev.target;
+            if (
+              activeKind === "strategy" &&
+              strategyCloseBtnEl &&
+              (t === strategyCloseBtnEl ||
+                (strategyCloseBtnEl.contains && strategyCloseBtnEl.contains(t)))
+            ) {
+              ev.preventDefault();
+              ev.stopPropagation();
+              closeStrategyReminder();
+              return;
+            }
+            if (!isOpen || isClosing) return;
             if (closeBtnEl && (t === closeBtnEl || (closeBtnEl.contains && closeBtnEl.contains(t)))) {
               ev.preventDefault();
               ev.stopPropagation();
@@ -195406,6 +195815,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           clearAutoTimer();
           clearCountdownRaf();
           clearCloseAnimTimer();
+          clearStrategyTimers();
         });
       }
 
@@ -195413,6 +195823,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         window.__openManiacalUrgency = function () {
           openManiacalUrgency({ fromAuto: false });
         };
+        window.__openStrategyReminder = openStrategyReminder;
+        window.__closeStrategyReminder = closeStrategyReminder;
       } catch (_exposeErr) {}
 
       ensureOverlay();
