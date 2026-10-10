@@ -103113,7 +103113,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261010a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261010b";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -109352,16 +109352,31 @@
           const isDirty = !!(dirty && dirty.has(id));
           if (!isDirty && !date) continue;
           if (!hasField && !isDirty) continue;
+          const markAt =
+            typeof getTodayPlanDateUpdatedAt === "function"
+              ? getTodayPlanDateUpdatedAt(task)
+              : Number(task.todayPlanDateUpdatedAt) || 0;
           out[id] = {
             date: date,
-            updatedAt: Number(task.updatedAt) || Date.now()
+            updatedAt: markAt
           };
         }
       });
       if (dirty) {
         dirty.forEach(function (id) {
           if (out[id]) return;
-          out[String(id)] = { date: "", updatedAt: Date.now() };
+          let markAt = 0;
+          try {
+            const raw =
+              typeof findWeeklyPlanTaskRaw === "function" ? findWeeklyPlanTaskRaw(id) : null;
+            if (raw) {
+              markAt =
+                typeof getTodayPlanDateUpdatedAt === "function"
+                  ? getTodayPlanDateUpdatedAt(raw)
+                  : Number(raw.todayPlanDateUpdatedAt) || 0;
+            }
+          } catch (_markFind) {}
+          out[String(id)] = { date: "", updatedAt: markAt };
         });
       }
       return Object.keys(out).length ? out : null;
@@ -109431,15 +109446,18 @@
         if (!raw) return;
         const locHas = Object.prototype.hasOwnProperty.call(raw, "todayPlanDate");
         const locDate = locHas ? normalizeWeeklyPlanTodayPlanDate(raw.todayPlanDate) : "";
-        const locU = Number(raw.updatedAt) || 0;
+        const locMark =
+          typeof getTodayPlanDateUpdatedAt === "function"
+            ? getTodayPlanDateUpdatedAt(raw)
+            : Number(raw.todayPlanDateUpdatedAt) || 0;
         const tombAt =
           typeof getTodayPlanMarkTombstoneAt === "function"
             ? getTodayPlanMarkTombstoneAt(taskId)
             : 0;
         /*
          * 本机已移出其他任务（syncTombstones todayPlanMark:*）：
-         * Firebase pulse 旧非空挂牌即使 updatedAt 较新也不得写回；
-         * 仅 tomb 之后的远端非空视为重新加入。
+         * 仅当远端挂牌时钟 joinTime > tomb 才视为重新加入；相等删除优先。
+         * 禁止用任务正文 updatedAt 解封。
          */
         if (tombAt > 0 && remDate && remU <= tombAt) return;
         if (tombAt > 0 && remDate && remU > tombAt) {
@@ -109449,11 +109467,11 @@
             clearSyncTombstone(todayPlanMarkTombstoneId(taskId));
           }
         }
-        /* 严格较新才采纳；持平保留本机（避免移出今日后被同刻旧挂牌写回） */
-        if (remU <= locU) return;
+        /* 严格较新才采纳（比挂牌时钟）；持平保留本机 */
+        if (remU <= locMark) return;
         if (remDate === locDate) return;
         raw.todayPlanDate = remDate;
-        if (remU > 0) raw.updatedAt = remU;
+        if (remU > 0) raw.todayPlanDateUpdatedAt = remU;
         changed = true;
       });
       return changed;
@@ -121076,6 +121094,7 @@
             const arr = state.weeklyPlan[wk];
             let localIdx = -1;
             let local = null;
+            let localWeekKey = wk;
             for (let i = 0; i < arr.length; i++) {
               if (arr[i] && String(arr[i].id) === rid) {
                 localIdx = i;
@@ -121083,13 +121102,36 @@
                 break;
               }
             }
+            /* 按 id 全局找 local，避免「人在新周、云在旧周」整项灌入绕过挂牌 tombstone */
+            if (!local) {
+              try {
+                const located =
+                  typeof findWeeklyPlanTaskInStorage === "function"
+                    ? findWeeklyPlanTaskInStorage(rid)
+                    : null;
+                if (located && located.task) {
+                  local = located.task;
+                  localWeekKey =
+                    aliyunSprintRealNormalizeWeekKey(located.weekKey) || String(located.weekKey || "");
+                  const homeArr = Array.isArray(state.weeklyPlan[localWeekKey])
+                    ? state.weeklyPlan[localWeekKey]
+                    : [];
+                  for (let hi = 0; hi < homeArr.length; hi++) {
+                    if (homeArr[hi] && String(homeArr[hi].id) === rid) {
+                      localIdx = hi;
+                      break;
+                    }
+                  }
+                }
+              } catch (_findLoc) {}
+            }
             const lTs = aliyunSprintRealItemTs(local);
             /*
              * 勿因 local.updatedAt 更新就整项跳过：完成态按 statusAt / completedAt 字段级 LWW。
              * 否则 weekUpsert 强刷时间戳后的未完成副本会挡住对端已勾选的 mainDone。
              */
             const preferRemote = !local || rTs >= lTs;
-            const mergedTask =
+            let mergedTask =
               typeof mergeWeeklyPlanOneTaskForSync === "function"
                 ? mergeWeeklyPlanOneTaskForSync(local || {}, remote, preferRemote)
                 : typeof normalizeWeeklyPlanTask === "function"
@@ -121097,10 +121139,21 @@
                   : remote;
             if (!mergedTask) continue;
             mergedTask.id = rid;
+            if (typeof applyTodayPlanMarkTombstoneOnImport === "function") {
+              mergedTask = applyTodayPlanMarkTombstoneOnImport(mergedTask);
+            }
             mergedTask.updatedAt =
               Math.max(rTs, lTs, Number(mergedTask.updatedAt) || 0) || Date.now();
-            if (localIdx >= 0) arr[localIdx] = mergedTask;
-            else arr.push(mergedTask);
+            if (local && localWeekKey && localWeekKey !== wk && localIdx >= 0) {
+              if (!Array.isArray(state.weeklyPlan[localWeekKey])) {
+                state.weeklyPlan[localWeekKey] = [];
+              }
+              state.weeklyPlan[localWeekKey][localIdx] = mergedTask;
+            } else if (localIdx >= 0) {
+              arr[localIdx] = mergedTask;
+            } else {
+              arr.push(mergedTask);
+            }
             mergedCount += 1;
           }
 
@@ -121500,11 +121553,16 @@
                 ? aliyunTodayPlanRealNormalizeDate(raw.todayPlanDate)
                 : "";
             }
-            if (!updatedAt) updatedAt = Number(raw.updatedAt) || 0;
+            /* 只用挂牌时钟；缺字段保持 0，禁止 Date.now()/任务 updatedAt 回填误判为新 join */
+            if (!updatedAt) {
+              updatedAt =
+                typeof getTodayPlanDateUpdatedAt === "function"
+                  ? getTodayPlanDateUpdatedAt(raw)
+                  : Number(raw.todayPlanDateUpdatedAt) || 0;
+            }
           }
         } catch (_rawErr) {}
       }
-      updatedAt = Math.max(updatedAt, Date.now());
       return {
         id: id,
         date: date,
@@ -121888,14 +121946,17 @@
             }
             const locHas = Object.prototype.hasOwnProperty.call(raw, "todayPlanDate");
             const locDate = locHas ? aliyunTodayPlanRealNormalizeDate(raw.todayPlanDate) : "";
-            const locU = Number(raw.updatedAt) || 0;
+            const locMark =
+              typeof getTodayPlanDateUpdatedAt === "function"
+                ? getTodayPlanDateUpdatedAt(raw)
+                : Number(raw.todayPlanDateUpdatedAt) || 0;
             const tombAt =
               typeof getTodayPlanMarkTombstoneAt === "function"
                 ? getTodayPlanMarkTombstoneAt(tid)
                 : 0;
             /*
              * 本机已移出「其他任务」：旧 marks 非空日期不得复活。
-             * 仅当远端 mark 明确新于 tombstone 时视为他端重新加入。
+             * 仅 joinTime > tomb 视为重新加入；相等删除优先。禁止用任务 updatedAt。
              */
             if (tombAt > 0 && remDate && remU <= tombAt) continue;
             if (tombAt > 0 && remDate && remU > tombAt) {
@@ -121903,11 +121964,11 @@
                 clearSyncTombstone(todayPlanMarkTombstoneId(tid));
               }
             }
-            /* 与 mergeCloudSyncTodayPlanMarksIntoState 对齐：持平保留本机（含主动清空） */
-            if (remU <= locU) continue;
+            /* 与 mergeCloudSyncTodayPlanMarksIntoState 对齐：比挂牌时钟；持平保留本机 */
+            if (remU <= locMark) continue;
             if (remDate === locDate) continue;
             raw.todayPlanDate = remDate;
-            if (remU > 0) raw.updatedAt = Math.max(locU, remU);
+            if (remU > 0) raw.todayPlanDateUpdatedAt = remU;
             mergedCount += 1;
           }
           if (mergedCount) {
@@ -128642,7 +128703,13 @@
     function mergeWeeklyPlanOneTaskForSync(locTask, remTask, preferRemote) {
       const l = locTask && locTask.id ? locTask : null;
       const r = remTask && remTask.id ? remTask : null;
-      if (!l) return r ? normalizeWeeklyPlanTask(r) : null;
+      if (!l) {
+        if (!r) return null;
+        const imported = normalizeWeeklyPlanTask(r);
+        return typeof applyTodayPlanMarkTombstoneOnImport === "function"
+          ? applyTodayPlanMarkTombstoneOnImport(imported)
+          : imported;
+      }
       if (!r) return normalizeWeeklyPlanTask(l);
       const lU = Number(l.updatedAt) || 0;
       const rU = Number(r.updatedAt) || 0;
@@ -128679,12 +128746,17 @@
       applyDeadlineMergeToItem(merged, dlPick);
       const u = Math.max(lU, rU, Number(dlPick.deadlineUpdatedAt) || 0);
       if (u > 0) merged.updatedAt = u;
-      /* 今日计划标记：缺字段的旧端不覆盖另一侧已有值；两侧都有则较新 updatedAt 获胜 */
+      /* 今日计划标记：只比挂牌时钟 todayPlanDateUpdatedAt，禁止用正文 updatedAt 解封 tombstone */
       if (
         (l && Object.prototype.hasOwnProperty.call(l, "todayPlanDate")) ||
         (r && Object.prototype.hasOwnProperty.call(r, "todayPlanDate"))
       ) {
         merged.todayPlanDate = pickWeeklyPlanTodayPlanDateForSync(l, r, preferRemote);
+        const markAt = pickWeeklyPlanTodayPlanMarkAtForSync(l, r);
+        if (markAt > 0) merged.todayPlanDateUpdatedAt = markAt;
+        else if (Object.prototype.hasOwnProperty.call(merged, "todayPlanDateUpdatedAt")) {
+          delete merged.todayPlanDateUpdatedAt;
+        }
       }
       /*
        * lane：远端缺字段或非法值时保留本机 open/work/life，避免 Open List 被默默归到 life 后「消失」。
@@ -128728,6 +128800,33 @@
       }
     }
 
+    /** 挂牌专用时钟：缺字段视为 0，禁止 sync 路径用 Date.now() 回填 */
+    function getTodayPlanDateUpdatedAt(task) {
+      return Number(task && task.todayPlanDateUpdatedAt) || 0;
+    }
+
+    /** 仅 join / leave / 结转挂牌日期时调用；改字与打卡不得调用 */
+    function stampTodayPlanDateRevision(task) {
+      if (!task || typeof task !== "object") return;
+      task.todayPlanDateUpdatedAt = Date.now();
+    }
+
+    /**
+     * Sprint 导入守卫：本机有 todayPlanMark tombstone 时，
+     * 仅当远端挂牌时钟严格大于 tomb 才保留非空 todayPlanDate（相等删除优先）。
+     */
+    function applyTodayPlanMarkTombstoneOnImport(task) {
+      if (!task || task.id == null) return task;
+      const tombAt = getTodayPlanMarkTombstoneAt(task.id);
+      if (tombAt <= 0) return task;
+      const date = normalizeWeeklyPlanTodayPlanDate(task.todayPlanDate);
+      if (!date) return task;
+      const markAt = getTodayPlanDateUpdatedAt(task);
+      if (markAt > tombAt) return task;
+      task.todayPlanDate = "";
+      return task;
+    }
+
     /** 移出今日 / 其他任务：记 syncTombstones，供 merge/pull 挡住旧挂牌 */
     function recordTodayPlanMarkRemoved(taskId) {
       if (taskId == null || taskId === "") return;
@@ -128756,14 +128855,15 @@
             ? String(remTask.id)
             : "";
       const tombAt = tid ? getTodayPlanMarkTombstoneAt(tid) : 0;
-      const lU = Number(locTask && locTask.updatedAt) || 0;
-      const rU = Number(remTask && remTask.updatedAt) || 0;
+      const lMark = getTodayPlanDateUpdatedAt(locTask);
+      const rMark = getTodayPlanDateUpdatedAt(remTask);
+      void preferRemote;
       /*
-       * 本机已移出其他任务：旧 Sprint 正文里的非空 todayPlanDate 即使 updatedAt 较新也不得写回。
-       * 仅 tomb 之后的远端非空视为重新加入。
+       * 解封仅看挂牌时钟 todayPlanDateUpdatedAt（joinTime），禁止用任务 updatedAt。
+       * joinTime > tombstoneTime 才解封；相等时删除优先。
        */
       if (tombAt > 0) {
-        if (rVal && rU > tombAt) {
+        if (rVal && rMark > tombAt) {
           if (typeof clearSyncTombstone === "function") {
             clearSyncTombstone(todayPlanMarkTombstoneId(tid));
           }
@@ -128776,13 +128876,36 @@
       if (lHas && !rHas) return lVal;
       if (rHas && !lHas) return rVal;
       if (!lHas && !rHas) return "";
-      /*
-       * 两侧都有字段时以 updatedAt 为准（含主动移出今日的空串）。
-       * 持平保留本机，禁止「非空保底」把已清空的其他任务挂牌写回。
-       */
-      if (rU > lU) return rVal;
-      if (lU > rU) return lVal;
+      /* 两侧都有字段：只比挂牌时钟；持平保留本机（禁止非空保底 / 禁止用正文 updatedAt） */
+      if (rMark > lMark) return rVal;
+      if (lMark > rMark) return lVal;
       return lVal;
+    }
+
+    function pickWeeklyPlanTodayPlanMarkAtForSync(locTask, remTask) {
+      const lHas = !!(locTask && Object.prototype.hasOwnProperty.call(locTask, "todayPlanDate"));
+      const rHas = !!(remTask && Object.prototype.hasOwnProperty.call(remTask, "todayPlanDate"));
+      const lVal = lHas ? normalizeWeeklyPlanTodayPlanDate(locTask.todayPlanDate) : "";
+      const rVal = rHas ? normalizeWeeklyPlanTodayPlanDate(remTask.todayPlanDate) : "";
+      const tid =
+        locTask && locTask.id != null
+          ? String(locTask.id)
+          : remTask && remTask.id != null
+            ? String(remTask.id)
+            : "";
+      const tombAt = tid ? getTodayPlanMarkTombstoneAt(tid) : 0;
+      const lMark = getTodayPlanDateUpdatedAt(locTask);
+      const rMark = getTodayPlanDateUpdatedAt(remTask);
+      if (tombAt > 0) {
+        if (rVal && rMark > tombAt) return rMark;
+        return lHas ? lMark : 0;
+      }
+      if (lHas && !rHas) return lMark;
+      if (rHas && !lHas) return rMark;
+      if (!lHas && !rHas) return 0;
+      if (rMark > lMark) return rMark;
+      if (lMark > rMark) return lMark;
+      return lMark;
     }
 
     function mergeWeeklyPlanMainDoneForSync(locTask, remTask, preferRemote) {
@@ -167423,8 +167546,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           const date = normalizeWeeklyPlanTodayPlanDate(task.todayPlanDate);
           if (!date || date >= todayKey) continue;
           if (isWeeklyPlanMainComplete(task)) continue;
+          if (
+            typeof getTodayPlanMarkTombstoneAt === "function" &&
+            getTodayPlanMarkTombstoneAt(task.id) > 0
+          ) {
+            continue;
+          }
           task.todayPlanDate = todayKey;
           touchWeeklyPlanTaskRevision(task);
+          stampTodayPlanDateRevision(task);
           noteCloudSyncTodayPlanPulseTaskId(task.id);
           try {
             noteCloudSyncWeeklyPlanPulseWeekKey(wk);
@@ -167472,6 +167602,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           const retireId = task.id;
           task.todayPlanDate = "";
           touchWeeklyPlanTaskRevision(task);
+          stampTodayPlanDateRevision(task);
           /* 摘牌（非跨日结转）：记 todayPlanMark tombstone，防云端旧挂牌复活 */
           if (typeof recordTodayPlanMarkRemoved === "function") {
             recordTodayPlanMarkRemoved(retireId);
@@ -168778,6 +168909,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (task && Object.prototype.hasOwnProperty.call(task, "todayPlanDate")) {
         base.todayPlanDate = normalizeWeeklyPlanTodayPlanDate(task.todayPlanDate);
       }
+      const markAt = Number(task && task.todayPlanDateUpdatedAt);
+      if (Number.isFinite(markAt) && markAt > 0) base.todayPlanDateUpdatedAt = markAt;
       return base;
     }
 
@@ -175808,6 +175941,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const joined = raw.todayPlanDate === todayKey;
       raw.todayPlanDate = joined ? "" : todayKey;
       touchWeeklyPlanTaskRevision(raw);
+      stampTodayPlanDateRevision(raw);
       if (joined) {
         if (typeof recordTodayPlanMarkRemoved === "function") {
           recordTodayPlanMarkRemoved(raw.id);
@@ -175919,6 +176053,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           todayPlanDate: todayKey
         };
         touchWeeklyPlanTaskRevision(targetTask);
+        stampTodayPlanDateRevision(targetTask);
         if (typeof clearTodayPlanMarkRemoved === "function") {
           clearTodayPlanMarkRemoved(targetTask.id);
         }
@@ -176357,6 +176492,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!raw) return;
       raw.todayPlanDate = "";
       touchWeeklyPlanTaskRevision(raw);
+      stampTodayPlanDateRevision(raw);
       if (typeof recordTodayPlanMarkRemoved === "function") {
         recordTodayPlanMarkRemoved(raw.id);
       }
