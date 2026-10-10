@@ -12,7 +12,8 @@ const APP_SHELL = [
   "./icons/psycho-cybernetics-core-practices.png",
   "./icons/psycho-cybernetics-core-practices-full.png",
   "./icons/done-focus-badge.png",
-  "./assets/obsession-reminder-card.png"
+  "./assets/obsession-reminder-card.png",
+  "./assets/maniacal-urgency-card.png"
 ];
 
 self.addEventListener("install", (event) => {

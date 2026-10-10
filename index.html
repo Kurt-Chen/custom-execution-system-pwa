@@ -150217,6 +150217,44 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
+     * Plan A：终点线跑马灯收尾后补渲 Done（仅本机）。
+     * 进入：done 切片仍脏，且当前无其它终点线跑马灯在播。
+     * 退出：不脏 / 仍有播放 / 已排队 / render 不可用 → 直接 return，不触网、不 mark dirty。
+     */
+    let doneListCatchUpAfterFinishLineTimer = null;
+    function scheduleDoneListCatchUpAfterFinishLineMarquee(reason) {
+      try {
+        if (typeof isUiPaintSliceDirty !== "function" || !isUiPaintSliceDirty("done")) {
+          return;
+        }
+        if (typeof isFinishLineMarqueePlayingNow === "function" && isFinishLineMarqueePlayingNow()) {
+          return;
+        }
+        if (typeof render !== "function") return;
+        if (doneListCatchUpAfterFinishLineTimer != null) return;
+        doneListCatchUpAfterFinishLineTimer = window.setTimeout(function () {
+          doneListCatchUpAfterFinishLineTimer = null;
+          try {
+            if (
+              typeof isFinishLineMarqueePlayingNow === "function" &&
+              isFinishLineMarqueePlayingNow()
+            ) {
+              return;
+            }
+            if (typeof isUiPaintSliceDirty !== "function" || !isUiPaintSliceDirty("done")) {
+              return;
+            }
+            render();
+          } catch (_catchUpRenderErr) {
+            /* ignore */
+          }
+        }, 0);
+      } catch (_scheduleCatchUpErr) {
+        /* ignore */
+      }
+    }
+
+    /**
      * 闭环闪动生命周期日志。
      * 默认开启（与 hour-row 一致）；控制台设 window.__DEBUG_CLOSE_LOOP_FLASH = false 可关。
      * 历史：window.__CLOSE_LOOP_FLASH_LOG（最多 200 条）。
