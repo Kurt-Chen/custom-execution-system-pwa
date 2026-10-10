@@ -103344,7 +103344,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261010f";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261010g";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -113996,6 +113996,58 @@
       return on;
     }
 
+    /**
+     * P0-B：domains meta 跳过 Habit 时，用 Habit 独立 meta 决定是否仍须拉 Habit 正文。
+     * - 仅 Habit；不改其它域策略；不成全量。
+     * - fetchBody=true 时 stash 决定，供本轮 runAliyunHabitRealPullAndMerge 复用（避免双 GET meta）。
+     */
+    let aliyunHabitMetaGatePrefetchDecision = null;
+
+    function aliyunHabitMetaGateTakePrefetchDecision() {
+      const d = aliyunHabitMetaGatePrefetchDecision;
+      aliyunHabitMetaGatePrefetchDecision = null;
+      return d;
+    }
+
+    async function aliyunSyncPrimaryEnsureHabitPullIfIndepMetaSaysSo(pullIdSet, changedDomains) {
+      if (!pullIdSet || pullIdSet.habit) {
+        return { overridden: false, reason: "already-scheduled" };
+      }
+      if (typeof isAliyunSyncMetaGateEnabled !== "function" || !isAliyunSyncMetaGateEnabled()) {
+        return { overridden: false, reason: "gate-off" };
+      }
+      if (typeof aliyunHabitMetaGateDecidePull !== "function") {
+        return { overridden: false, reason: "no-fn" };
+      }
+      let dec = null;
+      try {
+        dec = await aliyunHabitMetaGateDecidePull();
+      } catch (_decErr) {
+        return { overridden: false, reason: "decide-error" };
+      }
+      if (!(dec && dec.fetchBody)) {
+        return {
+          overridden: false,
+          reason: (dec && dec.reason) || "meta-unchanged",
+          decision: dec
+        };
+      }
+      pullIdSet.habit = true;
+      if (Array.isArray(changedDomains) && changedDomains.indexOf("habit") < 0) {
+        changedDomains.push("habit");
+      }
+      aliyunHabitMetaGatePrefetchDecision = dec;
+      try {
+        console.log(
+          "[aliyun-sync-primary] P0-B habit-meta override → pull habit reason=" +
+            (dec.reason || "") +
+            " remoteV=" +
+            (dec.remoteV != null ? dec.remoteV : "?")
+        );
+      } catch (_c) {}
+      return { overridden: true, reason: dec.reason || "meta-changed", decision: dec };
+    }
+
     async function runAliyunSyncPrimaryBootPull(opts) {
       const pullOpts = opts && typeof opts === "object" ? opts : {};
       const pullReason = String(pullOpts.reason || "boot");
@@ -114091,36 +114143,85 @@
           domainsGate = await aliyunDomainsMetaGateDecide(domainIds, pullReason);
           metaKB = Number(domainsGate && domainsGate.metaKB) || 0;
           if (domainsGate && domainsGate.skipAll) {
-            skippedFullPull = true;
-            savedEstimatedKB =
-              typeof aliyunDomainsMetaEstimateSavedKB === "function"
-                ? aliyunDomainsMetaEstimateSavedKB(domainIds)
-                : 0;
-            if (typeof aliyunDomainsMetaLogSyncCheck === "function") {
-              aliyunDomainsMetaLogSyncCheck({
-                metaKB: metaKB,
-                changedDomains: [],
-                bodyDownloadKB: 0,
+            /*
+             * P0-B：domains 全未变时仍问 Habit 独立 meta。
+             * domains.habit 滞后（如 347 vs habitMeta 369）时不得零正文早退。
+             */
+            const skipAllPullIds = Object.create(null);
+            const skipAllChanged = [];
+            const habitOv =
+              typeof aliyunSyncPrimaryEnsureHabitPullIfIndepMetaSaysSo === "function"
+                ? await aliyunSyncPrimaryEnsureHabitPullIfIndepMetaSaysSo(
+                    skipAllPullIds,
+                    skipAllChanged
+                  )
+                : { overridden: false };
+            if (!(habitOv && habitOv.overridden)) {
+              skippedFullPull = true;
+              savedEstimatedKB =
+                typeof aliyunDomainsMetaEstimateSavedKB === "function"
+                  ? aliyunDomainsMetaEstimateSavedKB(domainIds)
+                  : 0;
+              if (typeof aliyunDomainsMetaLogSyncCheck === "function") {
+                aliyunDomainsMetaLogSyncCheck({
+                  metaKB: metaKB,
+                  changedDomains: [],
+                  bodyDownloadKB: 0,
+                  skippedFullPull: true,
+                  savedEstimatedKB: savedEstimatedKB,
+                  reason: pullReason
+                });
+              }
+              /* domains+habit meta 均未变：仍做本机 Habit→Done 轻量补镜像（无额外正文 GET） */
+              try {
+                if (typeof repairHabitDoneMirrorsAfterAliyunHabitPull === "function") {
+                  const localRepaired = !!repairHabitDoneMirrorsAfterAliyunHabitPull();
+                  results.habit = {
+                    ok: true,
+                    skippedMeta: true,
+                    reason: "domains-meta-unchanged",
+                    habitMetaReason: (habitOv && habitOv.reason) || "meta-unchanged",
+                    doneRepaired: localRepaired
+                  };
+                  if (localRepaired) {
+                    if (typeof markUiPaintSlicesDirty === "function") {
+                      markUiPaintSlicesDirty(["habit", "done"]);
+                    }
+                    saveState({ lists: ["habit", "done"] });
+                    if (typeof paintHabitUiAfterCloudMerge === "function") {
+                      paintHabitUiAfterCloudMerge();
+                    }
+                  }
+                }
+              } catch (_habitSkipAllRepair) {}
+              if (typeof aliyunSyncCheckEndRound === "function") aliyunSyncCheckEndRound();
+              const reportSkip = {
+                ok: true,
+                results: results,
+                skippedAll: true,
                 skippedFullPull: true,
-                savedEstimatedKB: savedEstimatedKB,
+                metaKB: metaKB,
+                bodyDownloadKB: 0,
+                changedDomains: [],
                 reason: pullReason
-              });
+              };
+              try {
+                window.__aliyunSyncPrimaryBootPullReport = reportSkip;
+              } catch (_w0) {}
+              return reportSkip;
             }
-            if (typeof aliyunSyncCheckEndRound === "function") aliyunSyncCheckEndRound();
-            const reportSkip = {
-              ok: true,
-              results: results,
-              skippedAll: true,
-              skippedFullPull: true,
-              metaKB: metaKB,
-              bodyDownloadKB: 0,
-              changedDomains: [],
-              reason: pullReason
-            };
-            try {
-              window.__aliyunSyncPrimaryBootPullReport = reportSkip;
-            } catch (_w0) {}
-            return reportSkip;
+            /* Habit 独立 meta 要求拉正文：仅开放 habit，其它域仍跳过 */
+            skippedFullPull = false;
+            changedDomains = ["habit"];
+            domainsGate = Object.assign({}, domainsGate, {
+              skipAll: false,
+              pullIds: ["habit"],
+              skipIds: domainIds.filter(function (id) {
+                return id !== "habit";
+              }),
+              reason: "habit-meta-override-domains-lag",
+              habitMetaOverride: habitOv.decision || null
+            });
           }
           if (domainsGate && Array.isArray(domainsGate.pullIds)) {
             changedDomains = domainsGate.pullIds.slice();
@@ -114147,10 +114248,22 @@
       for (let pi = 0; pi < idsToPull.length; pi++) {
         pullIdSet[idsToPull[pi]] = true;
       }
+      /*
+       * P0-B：domains 只跳过 Habit（其它域仍拉）时，同样用 Habit 独立 meta 纠偏。
+       * skipAll 路径已在上方处理；此处覆盖「habit ∈ skipIds」的部分跳过。
+       */
+      if (!forceAllBodies && !pullIdSet.habit) {
+        try {
+          await aliyunSyncPrimaryEnsureHabitPullIfIndepMetaSaysSo(pullIdSet, changedDomains);
+        } catch (_habitOvPartial) {}
+      }
       if (!forceAllBodies && domainsGate && Array.isArray(domainsGate.skipIds)) {
+        const effectiveSkipIds = domainsGate.skipIds.filter(function (id) {
+          return !pullIdSet[id];
+        });
         savedEstimatedKB =
           typeof aliyunDomainsMetaEstimateSavedKB === "function"
-            ? aliyunDomainsMetaEstimateSavedKB(domainsGate.skipIds)
+            ? aliyunDomainsMetaEstimateSavedKB(effectiveSkipIds)
             : 0;
       }
 
@@ -114635,6 +114748,89 @@
     }
 
     let aliyunSyncPrimaryLastPullReason = "";
+    /** P0-A：flush-busy 旁路 Habit 只读拉取节流（与前台 poll 同档，不另开更高频） */
+    let aliyunSyncPrimaryHabitReadonlyDuringFlushLastAt = 0;
+    const ALIYUN_SYNC_PRIMARY_HABIT_READONLY_DURING_FLUSH_MIN_MS = 5000;
+
+    /**
+     * P0-A：其它域上传队列忙时，仍允许 Habit 只读拉取（merge 走既有 LWW，不覆盖更新的本地未上传槽）。
+     * Habit 自身 flush 忙则仍跳过，避免同域 GET/POST 并发；占用 pullInFlight，不另开循环。
+     */
+    async function runAliyunSyncPrimaryHabitReadonlyPullDuringFlushBusy(reason) {
+      try {
+        if (aliyunHabitRealFlushing || (aliyunHabitRealQueue && aliyunHabitRealQueue.length)) {
+          return {
+            ok: false,
+            skipped: true,
+            reason: "flush-busy",
+            habitFlushBusy: true
+          };
+        }
+      } catch (_habitBusy) {
+        return { ok: false, skipped: true, reason: "flush-busy" };
+      }
+      if (typeof runAliyunHabitRealPullAndMerge !== "function") {
+        return { ok: false, skipped: true, reason: "flush-busy" };
+      }
+      const now = Date.now();
+      if (
+        aliyunSyncPrimaryHabitReadonlyDuringFlushLastAt > 0 &&
+        now - aliyunSyncPrimaryHabitReadonlyDuringFlushLastAt <
+          ALIYUN_SYNC_PRIMARY_HABIT_READONLY_DURING_FLUSH_MIN_MS
+      ) {
+        return { ok: false, skipped: true, reason: "flush-busy-habit-throttle" };
+      }
+      if (aliyunSyncPrimaryPullInFlight) {
+        return { ok: false, skipped: true, reason: "in-flight" };
+      }
+      aliyunSyncPrimaryPullInFlight = true;
+      aliyunSyncPrimaryHabitReadonlyDuringFlushLastAt = now;
+      aliyunSyncPrimaryLastPullReason = "habit-readonly-during-flush:" + String(reason || "poll");
+      try {
+        try {
+          console.log(
+            "[aliyun-sync-primary] P0-A habit readonly pull during flush-busy reason=" +
+              String(reason || "poll")
+          );
+        } catch (_c) {}
+        const r = await runAliyunHabitRealPullAndMerge();
+        const packed = r && typeof r === "object" ? r : { ok: true, raw: r };
+        /*
+         * 队列仍忙：保持「同步中」，勿刷成「已同步」误导。
+         * Habit 拉取成功也不宣称全域已对齐。
+         */
+        if (typeof aliyunSyncPrimaryAnyDomainFlushBusy === "function" && aliyunSyncPrimaryAnyDomainFlushBusy()) {
+          if (typeof paintAliyunSyncPrimaryBadgeSyncing === "function") {
+            paintAliyunSyncPrimaryBadgeSyncing();
+          }
+        } else if (packed.ok !== false && typeof paintAliyunSyncPrimaryBadgeOk === "function") {
+          paintAliyunSyncPrimaryBadgeOk();
+        }
+        return {
+          ok: packed.ok !== false,
+          skipped: false,
+          habitReadonlyDuringFlush: true,
+          reason: reason || "poll",
+          results: { habit: packed }
+        };
+      } catch (err) {
+        try {
+          console.warn(
+            "[aliyun-sync-primary] P0-A habit readonly during flush failed",
+            err && err.message ? err.message : err
+          );
+        } catch (_c2) {}
+        return {
+          ok: false,
+          skipped: false,
+          habitReadonlyDuringFlush: true,
+          reason: reason || "poll",
+          error: err && err.message ? err.message : String(err)
+        };
+      } finally {
+        aliyunSyncPrimaryPullInFlight = false;
+      }
+    }
 
     async function runAliyunSyncPrimaryNearRealtimePull(reason) {
       if (!isAliyunSyncPrimaryEnabled()) {
@@ -114652,7 +114848,7 @@
         }
       } catch (_vis) {}
       if (aliyunSyncPrimaryAnyDomainFlushBusy()) {
-        return { ok: false, skipped: true, reason: "flush-busy" };
+        return await runAliyunSyncPrimaryHabitReadonlyPullDuringFlushBusy(reason || "poll");
       }
       aliyunSyncPrimaryPullInFlight = true;
       /*
@@ -117565,7 +117761,13 @@
         /* Phase 1a：先决 Habit 独立 meta；未变则不下正文（visibility/5s 共用此路径） */
         if (isAliyunSyncMetaGateEnabled()) {
           const tMeta0 = Date.now();
-          metaGateDecision = await aliyunHabitMetaGateDecidePull();
+          /* P0-B：编排层若已问过独立 meta，复用决定，避免同一轮双 GET */
+          const prefetched =
+            typeof aliyunHabitMetaGateTakePrefetchDecision === "function"
+              ? aliyunHabitMetaGateTakePrefetchDecision()
+              : null;
+          metaGateDecision =
+            prefetched || (await aliyunHabitMetaGateDecidePull());
           networkWaitMs += Date.now() - tMeta0;
           aliyunHabitRealAppendLog(
             "meta-gate decide: reason=" +
@@ -117575,7 +117777,8 @@
               " remoteV=" +
               (metaGateDecision.remoteV != null ? metaGateDecision.remoteV : "null") +
               " lastSeen=" +
-              (aliyunHabitMetaLastSeenV != null ? aliyunHabitMetaLastSeenV : "null")
+              (aliyunHabitMetaLastSeenV != null ? aliyunHabitMetaLastSeenV : "null") +
+              (prefetched ? " via=prefetch" : "")
           );
           if (!metaGateDecision.fetchBody) {
             skippedBodyByMeta = true;
