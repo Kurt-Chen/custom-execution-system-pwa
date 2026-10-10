@@ -13561,7 +13561,7 @@
 
     /*
      * 底部聚焦/紧迫感区外框：方向原则 + Urgency + 倒计时 + SMG 收拢为一区。
-     * 与顶区同一视觉语言；手机端 footer 仍可隐藏，外框只包可见内容。
+     * 与顶区同一视觉语言。手机（≤767px）整卡默认不显示，外框不留空壳。
      */
     .today-plan-panel__focus-zone {
       flex: 0 0 auto;
@@ -16035,9 +16035,13 @@
       }
 
       /*
-       * 手机底卡第三层：公式胶囊留在标题与时薪之下。
-       * 不展开长说明，避免底卡被正文撑开。
+       * 手机：红框底卡（方向原则 + 时薪 + SMG 公式）默认不显示。
+       * 紧迫感与两侧「仅剩」已移到清单中部，不在此卡内。
        */
+      #todayPlanPanel:not(.is-collapsed) .today-plan-panel__focus-zone {
+        display: none;
+      }
+
       #todayPlanPanel:not(.is-collapsed) .today-plan-panel__footer {
         display: block !important;
         padding: 12px 0 2px;
@@ -41028,31 +41032,50 @@
       }
     }
 
-    /* 手机端：三键同一行，均分宽度并可截断英文标签以防挤出换行 */
+    /*
+     * 手机端改分类：三层分行，禁止挤成一行。
+     * ① 性质三键同一行均分；② 分值整行；③ 90 天提示整行。
+     * （桌面保持原横向排布，不改。）
+     */
     @media (max-width: 767px) {
       ul.app-done-time-timeline .done-compact-outcome-row {
-        flex-wrap: nowrap;
-      }
-      ul.app-done-time-timeline .done-outcome-segment {
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
         width: 100%;
         min-width: 0;
-        gap: 3px;
       }
-      ul.app-done-time-timeline .done-outcome-segment--pending {
+      ul.app-done-time-timeline .done-outcome-segment,
+      ul.app-done-time-timeline .done-outcome-segment--pending,
+      ul.app-done-time-timeline .done-outcome-segment--expand-row {
+        display: flex;
         flex-wrap: wrap;
+        flex-direction: row;
+        align-items: stretch;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        gap: 4px 3px;
+        box-sizing: border-box;
       }
-      ul.app-done-time-timeline .done-outcome-btn {
+      ul.app-done-time-timeline .done-outcome-expand-panel {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+      }
+      ul.app-done-time-timeline .done-outcome-segment > .done-outcome-btn,
+      ul.app-done-time-timeline .done-outcome-segment--pending > .done-outcome-btn,
+      ul.app-done-time-timeline .done-outcome-segment--expand-row > .done-outcome-btn {
         flex: 1 1 0%;
         min-width: 0;
-        max-width: 100%;
-        padding: 1px 4px;
-        font-size: 8px;
-        gap: 1px;
+        max-width: none;
+        padding: 3px 4px;
+        min-height: 28px;
+        font-size: 9px;
+        gap: 2px;
       }
       ul.app-done-time-timeline .done-outcome-btn__icon {
         flex-shrink: 0;
-        font-size: 9px;
+        font-size: 11px;
       }
       ul.app-done-time-timeline .done-outcome-btn__label {
         min-width: 0;
@@ -41060,15 +41083,32 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      ul.app-done-time-timeline .done-outcome-score-row {
+      ul.app-done-time-timeline .done-outcome-segment > .done-outcome-score-row,
+      ul.app-done-time-timeline .done-outcome-segment--pending > .done-outcome-score-row,
+      ul.app-done-time-timeline .done-outcome-segment--expand-row > .done-outcome-score-row {
+        flex: 1 1 100%;
         flex-wrap: nowrap;
         width: 100%;
+        max-width: 100%;
+        margin-top: 0;
+        gap: 4px;
       }
       ul.app-done-time-timeline .done-outcome-score-btn {
         flex: 1 1 0%;
         min-width: 0;
-        font-size: 9px;
-        padding: 1px 4px;
+        min-height: 28px;
+        font-size: 11px;
+        padding: 2px 4px;
+      }
+      ul.app-done-time-timeline .done-outcome-segment > .done-outcome-90day-hint,
+      ul.app-done-time-timeline .done-outcome-segment--pending > .done-outcome-90day-hint,
+      ul.app-done-time-timeline .done-outcome-segment--expand-row > .done-outcome-90day-hint {
+        flex: 1 1 100%;
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        margin-top: 0;
+        box-sizing: border-box;
       }
 
       /* 手机：性质徽章独占第一行，来源 pill + 任务第二行全宽（平板 ≥768 仍用上方与任务同一行布局） */
@@ -103073,7 +103113,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261009h";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261010a";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -161731,10 +161771,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const keepScorePickOpen = doneOutcomeScorePickOpenIds.has(tid);
       const fxScore = consumeDoneOutcomeScoreFx(tid);
       const playFx = fxScore != null;
+      /* 手机改分类三键用短词，避免与分值/提示挤成一团；收起态芯片仍用全称 */
+      const useShortPickLabel =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(max-width: 767px)").matches;
+      const pickLabels = useShortPickLabel
+        ? { power: "Power", neutral: "Neutral", treason: "Treason" }
+        : DONE_OUTCOME_LABEL_EN;
       const specs = [
-        { kind: "power", label: DONE_OUTCOME_LABEL_EN.power, icon: "\u26a1" },
-        { kind: "neutral", label: DONE_OUTCOME_LABEL_EN.neutral, icon: "\u25cb" },
-        { kind: "treason", label: DONE_OUTCOME_LABEL_EN.treason, icon: "\u2715" }
+        { kind: "power", label: pickLabels.power, icon: "\u26a1" },
+        { kind: "neutral", label: pickLabels.neutral, icon: "\u25cb" },
+        { kind: "treason", label: pickLabels.treason, icon: "\u2715" }
       ];
 
       function appendOutcomeButtons(container, showSelection) {
@@ -161745,12 +161792,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           btn.className =
             "done-outcome-btn done-outcome-btn--" + s.kind + (isSel ? " is-selected" : "");
           btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+          /* 短标签时仍用全称给无障碍，避免只读到 Power / Treason */
+          btn.setAttribute("aria-label", DONE_OUTCOME_LABEL_EN[s.kind] || s.label);
           const ic = document.createElement("span");
           ic.className = "done-outcome-btn__icon";
           ic.setAttribute("aria-hidden", "true");
           ic.textContent = s.icon;
           const tx = document.createElement("span");
           tx.className = "done-outcome-btn__label";
+          tx.setAttribute("aria-hidden", "true");
           tx.textContent = s.label;
           btn.appendChild(ic);
           btn.appendChild(tx);
