@@ -16629,7 +16629,8 @@
     /*
      * 电脑版（≥1366）：宽度锁在 340px，不再随标语伸缩。
      * 底边用 --today-plan-dock-bottom（底栏实际高度）贴住主底栏上沿。
-     * 战略底卡用 margin-top:auto 贴栏底；列表区继续 flex 吃满中间空白。
+     * 战略底卡 hug 内容并 margin-top:auto 贴栏底；禁止底卡下方再留空带。
+     * 列表区 flex 吃满中间空白。高度按 zoom 显式算满，避免 height:auto 只随内容收缩。
      */
     @media (min-width: 1366px) {
       #todayPlanPanel:not(.is-collapsed) {
@@ -16642,8 +16643,14 @@
         width: 340px;
         min-width: 340px;
         max-width: 340px;
-        height: auto;
-        max-height: none;
+        /* zoom 下 top+bottom 不一定拉满；显式高度保证侧栏贴底 */
+        height: calc(
+          100dvh / var(--app-ui-zoom, 1) - 14px - var(--today-plan-dock-bottom, 62px)
+        );
+        max-height: calc(
+          100dvh / var(--app-ui-zoom, 1) - 14px - var(--today-plan-dock-bottom, 62px)
+        );
+        min-height: 0;
         display: flex;
         flex-direction: column;
       }
@@ -16664,8 +16671,25 @@
 
       #todayPlanPanel:not(.is-collapsed) .today-plan-panel__focus-zone {
         flex: 0 0 auto;
+        flex-grow: 0;
+        flex-shrink: 0;
+        align-self: stretch;
+        width: auto;
+        min-height: 0;
+        height: auto;
+        max-height: none;
         margin-top: auto;
-        margin-bottom: 10px;
+        /* 与左右 12px 外框间距对齐，底边贴面板内缘，不再留空带 */
+        margin-left: 12px;
+        margin-right: 12px;
+        margin-bottom: 12px;
+        justify-content: flex-start;
+      }
+
+      #todayPlanPanel:not(.is-collapsed) .today-plan-panel__blank-decor {
+        flex: 0 0 auto;
+        min-height: 0 !important;
+        height: auto;
       }
     }
 
@@ -103251,7 +103275,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261010j";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261010k";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -176193,9 +176217,34 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       const nav = document.getElementById("morePageSkeleton");
       if (!nav) return;
-      const h = nav.offsetHeight;
+      /*
+       * zoom 下 offsetHeight 与视觉底栏可能不一致；用布局视口剩余高度倒推，
+       * 保证侧栏 bottom 贴住底栏上沿、红框空带消失。
+       */
+      let h = 0;
+      try {
+        const nr = nav.getBoundingClientRect();
+        const zoomRaw = Number.parseFloat(
+          String(
+            getComputedStyle(document.documentElement).getPropertyValue("--app-ui-zoom") ||
+              getComputedStyle(document.documentElement).zoom ||
+              "1"
+          ),
+          10
+        );
+        const zoom = Number.isFinite(zoomRaw) && zoomRaw > 0 ? zoomRaw : 1;
+        /* getBoundingClientRect 多为视觉像素；CSS bottom 用布局 px，需 / zoom */
+        h = nr.height / zoom;
+        if (!(h > 0)) h = nav.offsetHeight;
+        /* 兜底：视口底到导航顶 */
+        if (!(h > 0)) {
+          h = Math.max(0, (window.innerHeight - nr.top) / zoom);
+        }
+      } catch (_dockMeasureErr) {
+        h = nav.offsetHeight;
+      }
       if (!(h > 0)) return;
-      document.documentElement.style.setProperty("--today-plan-dock-bottom", h + "px");
+      document.documentElement.style.setProperty("--today-plan-dock-bottom", Math.round(h * 100) / 100 + "px");
     }
 
     /** 按标语实测宽度加宽整栏，保证单行不换行（完成数已在标题行，不占标语宽） */
