@@ -104094,7 +104094,7 @@
       "DEC"
     ];
     /**
-     * 侧边栏战略提醒文案库：共四条，供日期点击浮窗洗牌轮播。
+     * 侧边栏战略提醒文案库：共四条，供日期点击与每 5 分钟自动浮窗洗牌轮播。
      * 与紧迫感 18 条分开。第 1 条为 Problem / Approach 完整句；
      * 第 2–3 条原文勿改写/拆分/合并；第 4 条为封闭清单公式迁移。
      */
@@ -176577,6 +176577,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         paintTodayPlanPanel();
         syncTodayPlanPanelWidthToTagline();
         syncTodayPlanPanelDockBottom();
+        /* 5 分钟已到点则立刻补弹；未到点直接返回，不重置紧迫感 15 分钟档 */
+        if (typeof window.__maybeOpenDueStrategyReminder === "function") {
+          window.__maybeOpenDueStrategyReminder();
+        }
       } else {
         clearTodayPlanPanelWidthOverride();
       }
@@ -196309,8 +196313,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       let strategyOrder = [];
       let strategyCursor = 0;
       let strategyLastIndex = -1;
+      let strategyAutoTimerId = null;
+      /** 下次允许自动弹出的时刻；到点后若侧栏关着或正忙，短重试，不把间隔再拉长。 */
+      let strategyNextShowAt = 0;
       const STRATEGY_COUNTDOWN_MS = 5000;
       const STRATEGY_FADE_MS = 300;
+      /** 侧栏打开时每 5 分钟自动弹一次；与紧迫感 15 分钟档各用各的 timer。 */
+      const STRATEGY_AUTO_INTERVAL_MS = 5 * 60 * 1000;
+      const STRATEGY_AUTO_RETRY_MS = 60 * 1000;
       const STRATEGY_REMINDER_MESSAGES = TODAY_PLAN_SIDEBAR_REMINDER_COPY;
 
       function clearAutoTimer() {
@@ -196406,6 +196416,66 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (!panel || panel.classList.contains("is-collapsed")) return false;
         const body = panel.querySelector(".today-plan-panel__body");
         return !!(body && !body.hidden);
+      }
+
+      function clearStrategyAutoTimer() {
+        if (strategyAutoTimerId != null) {
+          clearTimeout(strategyAutoTimerId);
+          strategyAutoTimerId = null;
+        }
+      }
+
+      /**
+       * 战略提醒自己的 5 分钟档。
+       * 只清 strategyAutoTimerId，不碰紧迫感的 autoTimerId。
+       */
+      function scheduleNextStrategyAutoReminder(delayMs) {
+        clearStrategyAutoTimer();
+        const wait = Math.max(1000, Number(delayMs) || STRATEGY_AUTO_INTERVAL_MS);
+        strategyAutoTimerId = setTimeout(function onStrategyAutoReminder() {
+          strategyAutoTimerId = null;
+          tryAutoOpenStrategyReminder();
+        }, wait);
+      }
+
+      function noteStrategyReminderShown() {
+        strategyNextShowAt = Date.now() + STRATEGY_AUTO_INTERVAL_MS;
+        scheduleNextStrategyAutoReminder(STRATEGY_AUTO_INTERVAL_MS);
+      }
+
+      function isStrategyAutoPopupBlocked() {
+        if (typeof document !== "undefined" && document.visibilityState && document.visibilityState !== "visible") {
+          return true;
+        }
+        if (typeof isAppUiBusyForBackgroundRefresh === "function" && isAppUiBusyForBackgroundRefresh()) {
+          return true;
+        }
+        if (isOverlayChromeOpen()) return true;
+        if (!isTodayPlanSidebarOpen()) return true;
+        if (isOpen || isClosing) return true;
+        return false;
+      }
+
+      function tryAutoOpenStrategyReminder() {
+        const remaining = strategyNextShowAt - Date.now();
+        if (remaining > 1000) {
+          scheduleNextStrategyAutoReminder(remaining);
+          return;
+        }
+        if (isStrategyAutoPopupBlocked()) {
+          scheduleNextStrategyAutoReminder(STRATEGY_AUTO_RETRY_MS);
+          return;
+        }
+        const opened = openStrategyReminder();
+        if (!opened) scheduleNextStrategyAutoReminder(STRATEGY_AUTO_RETRY_MS);
+      }
+
+      /** 侧栏刚展开且已经到点：马上补弹，不必再干等 60 秒重试。 */
+      function maybeOpenDueStrategyReminder() {
+        if (Date.now() + 250 < strategyNextShowAt) return;
+        if (activeKind === "strategy" && (isOpen || isClosing)) return;
+        clearStrategyAutoTimer();
+        tryAutoOpenStrategyReminder();
       }
 
       /** 洗牌轮播：一轮内不重复；新一轮第一条避开上一轮最后一条。 */
@@ -196525,7 +196595,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
 
       function openStrategyReminder() {
-        if (!isTodayPlanSidebarOpen()) return;
+        if (!isTodayPlanSidebarOpen()) return false;
         const root = ensureOverlay();
         clearCountdownRaf();
         clearCloseAnimTimer();
@@ -196550,6 +196620,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           strategyFadeTimerId = null;
           beginStrategyFade(session);
         }, STRATEGY_COUNTDOWN_MS - STRATEGY_FADE_MS);
+        noteStrategyReminderShown();
+        return true;
       }
 
       function mountStrategyCard(root) {
@@ -196895,12 +196967,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           if (autoTimerId == null && !isOpen) {
             scheduleNextAutoReminder(MANIACAL_AUTO_INTERVAL_MS);
           }
+          if (strategyAutoTimerId == null && !(activeKind === "strategy" && (isOpen || isClosing))) {
+            const remaining = strategyNextShowAt - Date.now();
+            scheduleNextStrategyAutoReminder(remaining > 1000 ? remaining : STRATEGY_AUTO_RETRY_MS);
+          }
         });
         window.addEventListener("pagehide", function () {
           clearAutoTimer();
           clearCountdownRaf();
           clearCloseAnimTimer();
           clearStrategyTimers();
+          clearStrategyAutoTimer();
         });
         window.addEventListener("resize", function () {
           if (activeKind === "strategy") syncStrategyDockBox();
@@ -196913,11 +196990,25 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         };
         window.__openStrategyReminder = openStrategyReminder;
         window.__closeStrategyReminder = closeStrategyReminder;
+        window.__maybeOpenDueStrategyReminder = maybeOpenDueStrategyReminder;
+        window.__strategyReminderAutoIntervalMs = STRATEGY_AUTO_INTERVAL_MS;
+        if (
+          typeof location !== "undefined" &&
+          /(?:^|[?&])agentSeed=1(?:&|$)/.test(String(location.search || ""))
+        ) {
+          window.__debugArmStrategyReminderDue = function () {
+            strategyNextShowAt = Date.now() - 1;
+            clearStrategyAutoTimer();
+            tryAutoOpenStrategyReminder();
+          };
+        }
       } catch (_exposeErr) {}
 
       ensureOverlay();
       bindListenersOnce();
       scheduleNextAutoReminder(MANIACAL_AUTO_INTERVAL_MS);
+      strategyNextShowAt = Date.now() + STRATEGY_AUTO_INTERVAL_MS;
+      scheduleNextStrategyAutoReminder(STRATEGY_AUTO_INTERVAL_MS);
     })();
 
     bindGoalNestedSubBlocks();
