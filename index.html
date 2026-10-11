@@ -16628,31 +16628,30 @@
 
     /*
      * 电脑版（≥1366）：宽度锁在 340px，不再随标语伸缩。
-     * 底边用 --today-plan-dock-bottom（底栏实际高度）贴住主底栏上沿。
-     * 战略底卡 hug 内容并 margin-top:auto 贴栏底；禁止底卡下方再留空带。
-     * 列表区 flex 吃满中间空白。高度按 zoom 显式算满，避免 height:auto 只随内容收缩。
+     * 主底栏只居中盖主栏（max-width=主栏），并不盖住左栏下方；
+     * 因此侧栏必须贴视口底（仅留 safe-area），不能再按 --today-plan-dock-bottom 上收，
+     * 否则左栏底下会露出一大块页面底色空带（用户红框所指）。
+     * 战略底卡 hug 内容 + margin-top:auto；列表 flex 吃满中间。
      */
     @media (min-width: 1366px) {
       #todayPlanPanel:not(.is-collapsed) {
         position: fixed;
         top: 14px;
         right: auto;
-        bottom: var(--today-plan-dock-bottom, 62px);
+        /* 贴视口底：勿为居中底栏预留下方空带 */
+        bottom: env(safe-area-inset-bottom, 0px);
         left: calc(50% - (var(--desktop-main-col) / 2) - 12px - 340px);
         margin-right: 0;
         width: 340px;
         min-width: 340px;
         max-width: 340px;
-        /* zoom 下 top+bottom 不一定拉满；显式高度保证侧栏贴底 */
-        height: calc(
-          100dvh / var(--app-ui-zoom, 1) - 14px - var(--today-plan-dock-bottom, 62px)
-        );
-        max-height: calc(
-          100dvh / var(--app-ui-zoom, 1) - 14px - var(--today-plan-dock-bottom, 62px)
-        );
+        height: calc(100dvh / var(--app-ui-zoom, 1) - 14px - env(safe-area-inset-bottom, 0px));
+        max-height: calc(100dvh / var(--app-ui-zoom, 1) - 14px - env(safe-area-inset-bottom, 0px));
         min-height: 0;
         display: flex;
         flex-direction: column;
+        /* 底边贴视口，取消下圆角避免悬空感 */
+        border-radius: 16px 16px 0 0;
       }
 
       #todayPlanPanel:not(.is-collapsed) > .today-plan-panel__body {
@@ -16679,7 +16678,6 @@
         height: auto;
         max-height: none;
         margin-top: auto;
-        /* 与左右 12px 外框间距对齐，底边贴面板内缘，不再留空带 */
         margin-left: 12px;
         margin-right: 12px;
         margin-bottom: 12px;
@@ -103306,7 +103304,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261010k";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261010l";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -176237,46 +176235,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
-    /** 电脑版：侧栏底边贴主底栏上沿（红框），只写高度变量，不改宽度 */
+    /**
+     * 电脑版侧栏已改为 CSS 贴视口底（主底栏只居中盖主栏，不挡左栏）。
+     * 保留函数名供旧调用点；仅清理历史 --today-plan-dock-bottom，避免残留上收。
+     */
     function syncTodayPlanPanelDockBottom() {
       try {
-        if (!window.matchMedia(TODAY_PLAN_DESKTOP_FIXED_MQ).matches) {
-          document.documentElement.style.removeProperty("--today-plan-dock-bottom");
-          return;
-        }
-      } catch (_mqErr) {
-        return;
-      }
-      const nav = document.getElementById("morePageSkeleton");
-      if (!nav) return;
-      /*
-       * zoom 下 offsetHeight 与视觉底栏可能不一致；用布局视口剩余高度倒推，
-       * 保证侧栏 bottom 贴住底栏上沿、红框空带消失。
-       */
-      let h = 0;
-      try {
-        const nr = nav.getBoundingClientRect();
-        const zoomRaw = Number.parseFloat(
-          String(
-            getComputedStyle(document.documentElement).getPropertyValue("--app-ui-zoom") ||
-              getComputedStyle(document.documentElement).zoom ||
-              "1"
-          ),
-          10
-        );
-        const zoom = Number.isFinite(zoomRaw) && zoomRaw > 0 ? zoomRaw : 1;
-        /* getBoundingClientRect 多为视觉像素；CSS bottom 用布局 px，需 / zoom */
-        h = nr.height / zoom;
-        if (!(h > 0)) h = nav.offsetHeight;
-        /* 兜底：视口底到导航顶 */
-        if (!(h > 0)) {
-          h = Math.max(0, (window.innerHeight - nr.top) / zoom);
-        }
-      } catch (_dockMeasureErr) {
-        h = nav.offsetHeight;
-      }
-      if (!(h > 0)) return;
-      document.documentElement.style.setProperty("--today-plan-dock-bottom", Math.round(h * 100) / 100 + "px");
+        document.documentElement.style.removeProperty("--today-plan-dock-bottom");
+      } catch (_dockClearErr) {}
     }
 
     /** 按标语实测宽度加宽整栏，保证单行不换行（完成数已在标题行，不占标语宽） */
