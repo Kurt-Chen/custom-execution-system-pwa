@@ -193049,8 +193049,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * Desktop：把日期 + 显示提醒迁到 .kinetic-tabs-aux（12 Week Year 与垃圾桶之间）；
-     * Mobile：迁回顶栏原位。只搬 DOM，不改事件/状态。
+     * Desktop/平板：日期留在顶栏「已同步」左侧；仅「显示提醒」迁到 .kinetic-tabs-aux；
+     * Mobile：日期 + 提醒均在顶栏原位。只搬 DOM，不改事件/状态。
      * 注意：须在 .kinetic-tabs 已插入 document 后调用（依赖 getElementById）。
      */
     function syncKineticNavAuxToolsPlacement() {
@@ -193072,21 +193072,33 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         typeof window.matchMedia === "function" &&
         window.matchMedia("(max-width: 767px)").matches;
 
+      /* 日期始终回到顶栏同步胶囊左侧（电脑/平板/手机一致） */
+      const syncBadge = headerRow.querySelector(".module-header-cloud-sync");
+      if (dateText && dateText.parentElement !== headerRow) {
+        headerRow.insertBefore(dateText, syncBadge || headerRow.firstChild);
+      } else if (dateText && syncBadge && dateText.nextElementSibling !== syncBadge) {
+        headerRow.insertBefore(dateText, syncBadge);
+      }
+      if (dateInput && dateInput.parentElement !== headerRow) {
+        const afterDate =
+          dateText && dateText.parentElement === headerRow
+            ? dateText.nextSibling
+            : syncBadge || headerRow.firstChild;
+        headerRow.insertBefore(dateInput, afterDate);
+      } else if (dateInput && dateText && dateText.parentElement === headerRow) {
+        if (dateText.nextSibling !== dateInput) {
+          headerRow.insertBefore(dateInput, dateText.nextSibling);
+        }
+      }
+
       if (isMobile) {
-        if (dateText && dateText.parentElement !== headerRow) {
-          headerRow.insertBefore(dateText, headerRow.firstChild);
-        }
-        if (dateInput && dateInput.parentElement !== headerRow) {
-          const afterDate = dateText && dateText.parentElement === headerRow ? dateText.nextSibling : headerRow.firstChild;
-          headerRow.insertBefore(dateInput, afterDate);
-        }
         if (remindBtn && remindBtn.parentElement !== versionRow) {
           versionRow.insertBefore(remindBtn, versionRow.firstChild);
         }
         return;
       }
 
-      /* Desktop：保证辅助区在垃圾桶之前，垃圾桶始终为本行最右 */
+      /* Desktop/平板：辅助区在垃圾桶之前；仅迁「显示提醒」 */
       if (tabs && trashBtn && trashBtn.parentElement === tabs) {
         if (aux.parentElement !== tabs || aux.nextElementSibling !== trashBtn) {
           tabs.insertBefore(aux, trashBtn);
@@ -193096,23 +193108,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
       }
 
-      const divider = aux.querySelector(".kinetic-tabs-aux-divider");
-      if (dateText && dateText.parentElement !== aux) {
-        if (divider && divider.nextSibling) {
-          aux.insertBefore(dateText, divider.nextSibling);
-        } else {
-          aux.appendChild(dateText);
-        }
-      }
-      if (dateInput && dateInput.parentElement !== aux) {
-        if (dateText && dateText.parentElement === aux) {
-          aux.insertBefore(dateInput, dateText.nextSibling);
-        } else if (divider && divider.nextSibling) {
-          aux.insertBefore(dateInput, divider.nextSibling);
-        } else {
-          aux.appendChild(dateInput);
-        }
-      }
       if (remindBtn && remindBtn.parentElement !== aux) {
         aux.appendChild(remindBtn);
       }
