@@ -89405,11 +89405,24 @@
                     <p class="submodule-note"><span class="habit-title-lang--desktop">Observing the Breath</span></p>
                   </div>
                   <div class="habit-en-actions">
+                    <div class="habit-en-minutes-row">
+                      <input
+                        id="habitBreathObservationMinutesInput"
+                        class="habit-en-minutes-input"
+                        type="number"
+                        min="1"
+                        max="999"
+                        step="1"
+                        inputmode="numeric"
+                        placeholder="分钟"
+                        aria-label="静坐·观呼吸本轮分钟数"
+                      />
+                    </div>
                     <div class="habit-en-punch-meta">
                     <span class="habit-en-today-note" aria-live="polite"></span>
                     <button type="button" class="habit-en-clear-today-btn" hidden>减一次</button>
                     </div>
-                    <button class="habit-check-btn habit-en-check-btn" type="button" aria-label="今日打卡"></button>
+                    <button class="habit-check-btn habit-en-check-btn" type="button" aria-label="打卡"></button>
                   </div>
                   <div class="habit-en-week-bar" aria-label="本周打卡"></div>
                 </section>
@@ -104479,7 +104492,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261013n";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261013p";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -136179,7 +136192,8 @@
         habitKey === "miraaShadowing" ||
         habitKey === "audibleMeditation" ||
         habitKey === "zhanZhuang" ||
-        habitKey === "aiChat"
+        habitKey === "aiChat" ||
+        habitKey === "breathObservation"
       );
     }
 
@@ -136421,6 +136435,7 @@
       miraaShadowing: 60,
       audibleMeditation: 30,
       aiChat: 30,
+      breathObservation: 5,
       drinkWater: 3000
     };
 
@@ -136779,7 +136794,7 @@
       return sum;
     }
 
-    const HABIT_NUMERIC_LIFETIME_KEYS = ["exmindVocab", "miraaShadowing", "audibleMeditation", "zhanZhuang", "aiChat", DRINK_WATER_HABIT_KEY, ENTREPRENEUR_DAILY_THREE_QUESTIONS_KEY, CITIC_DEBIT_SAVE_FIRST_100K_KEY];
+    const HABIT_NUMERIC_LIFETIME_KEYS = ["exmindVocab", "miraaShadowing", "audibleMeditation", "zhanZhuang", "aiChat", "breathObservation", DRINK_WATER_HABIT_KEY, ENTREPRENEUR_DAILY_THREE_QUESTIONS_KEY, CITIC_DEBIT_SAVE_FIRST_100K_KEY];
     const ENGLISH_HABIT_LIFETIME_KEYS = ["exmindVocab", "miraaShadowing", "audibleMeditation"];
     const HABIT_NUMERIC_MAX_STAMPS_PER_DAY = 80;
 
@@ -139233,7 +139248,7 @@
       Object.keys(hc).forEach(function (dateStr) {
         const day = hc[dateStr];
         if (!day || typeof day !== "object") return;
-        ["exmindVocab", "miraaShadowing", "audibleMeditation", "zhanZhuang", "aiChat", DRINK_WATER_HABIT_KEY, ENTREPRENEUR_DAILY_THREE_QUESTIONS_KEY, CITIC_DEBIT_SAVE_FIRST_100K_KEY].forEach(function (habitKey) {
+        ["exmindVocab", "miraaShadowing", "audibleMeditation", "zhanZhuang", "aiChat", "breathObservation", DRINK_WATER_HABIT_KEY, ENTREPRENEUR_DAILY_THREE_QUESTIONS_KEY, CITIC_DEBIT_SAVE_FIRST_100K_KEY].forEach(function (habitKey) {
           if (!Object.prototype.hasOwnProperty.call(day, habitKey)) return;
           const fromDoneRows = computeHabitNumericDayTotalFromDoneRows(habitKey, dateStr);
           if (fromDoneRows > 0 && getHabitDoneRowsForDay(habitKey, dateStr).length > 0) {
@@ -191339,7 +191354,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       updateMeasureSegmentDesktopTabsLayout();
     }
 
-    const HABIT_NUMERIC_LIFETIME_REPAIR_VER = 8;
+    const HABIT_NUMERIC_LIFETIME_REPAIR_VER = 9;
     const HABIT_WEIGHT_LIFETIME_REPAIR_VER = 1;
     let habitNumericLifetimeRepairAppliedVer = 0;
     let habitWeightLifetimeRepairAppliedVer = 0;
@@ -195342,8 +195357,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       ) {
         return "次";
       }
-      /* Habit 桥接：静坐按打卡「次」计入周最低（勿被观呼吸/冥想启发式改成 min） */
-      if (/^静坐$|^静坐[·・]/.test(s)) return "次";
       if (/^Edging\s*$/i.test(s) || /^边缘控制$/.test(s)) return "min";
       if (/心灵|正念|预演|冥想|观呼吸|NSDR|晨间|冷水|时空|视觉|控制|预想|俯瞰|终局|爱命运|晚间|分钟|剧场/.test(s)) return "min";
       return "min";
@@ -195368,7 +195381,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       ) {
         return "mind";
       }
-      /* Habit 桥接静坐：单位为「次」，但仍属 Mind */
+      /* Habit 桥接静坐：按分钟计，属 Mind */
       if (/^静坐$|^静坐[·・]/.test(s)) return "mind";
       return inferForgeWpGoalUnit(nameRaw) === "min" ? "mind" : "body";
     }
@@ -196041,15 +196054,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     /**
      * Habit → Forge 周最低桥接：静坐(mind) / 站桩(body)。
-     * 进度取自 habitCheckins；固定置顶；weeklyMin 仅首次写入，之后可手改。
+     * 进度取自 habitCheckins 实际分钟；固定置顶；weeklyMin 仅首次写入，之后可手改。
      */
     const FORGE_HABIT_WEEKLY_MIN_BRIDGES = [
       {
         habitKey: "breathObservation",
         realm: "mind",
         label: "静坐",
-        weeklyMin: 7,
-        unit: "次",
+        weeklyMin: 35,
+        unit: "min",
         pinFirst: true
       },
       {
@@ -196073,18 +196086,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return null;
     }
 
-    /** 某日习惯量：静坐=打卡次数；站桩=累计分钟 */
+    /** 某日习惯量（分钟）：静坐 / 站桩均取打卡填写的累计分钟 */
     function forgeHabitBridgeAmountForDate(habitKey, dateKey) {
       const k = String(habitKey || "").trim();
       const dk = String(dateKey || "").trim();
       if (!k || !dk) return 0;
-      if (k === "zhanZhuang") {
+      if (k === "zhanZhuang" || k === "breathObservation") {
         const mins = Number(getHabitNumericDayTotal(k, dk));
         return Number.isFinite(mins) && mins > 0 ? Math.floor(mins) : 0;
-      }
-      if (k === "breathObservation") {
-        const times = Number(getHabitCheckinTimesForDate(k, dk));
-        return Number.isFinite(times) && times > 0 ? Math.floor(times) : 0;
       }
       return 0;
     }
@@ -196172,6 +196181,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (String(row.label || "").trim() !== spec.label) {
           row.label = spec.label;
           changed = true;
+        }
+        /* 静坐：旧版按「次」种子 → 改为分钟默认目标；单位始终对齐桥接表 */
+        if (spec.habitKey === "breathObservation") {
+          const prevUnit = String(row.unit || "").trim();
+          if (prevUnit === "次") {
+            row.weeklyMin = String(spec.weeklyMin);
+            changed = true;
+          }
         }
         if (spec.unit && String(row.unit || "").trim() !== spec.unit) {
           row.unit = spec.unit;
@@ -196736,7 +196753,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         const nameForUnit = String(r.label || "").trim();
         if (!nameForUnit) return;
-        /* Habit 桥接行：单位以桥接表为准（静坐=次、站桩=min） */
+        /* Habit 桥接行：单位以桥接表为准（静坐/站桩均为 min） */
         const bridge =
           r.habitKey && typeof forgeHabitWeeklyMinBridgeByHabitKey === "function"
             ? forgeHabitWeeklyMinBridgeByHabitKey(r.habitKey)
