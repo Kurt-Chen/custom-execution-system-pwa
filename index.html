@@ -104637,7 +104637,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014j";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014k";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -120609,7 +120609,13 @@
         const tRen0 = Date.now();
         if (mergedCount || tombstoneApplied || settingsChanged) {
           try {
-            if (typeof refreshAllForgeTodayTaskRowsFromDone === "function") {
+            /*
+             * 合并后刷卡曾同步占满主线程十余秒，期间 Forge 标签/周最低展开无法响应。
+             * 协作式让出帧间隙；Save 路径仍禁止全量刷卡（见周/日最低 Save 处理器）。
+             */
+            if (typeof refreshAllForgeTodayTaskRowsFromDoneCooperative === "function") {
+              await refreshAllForgeTodayTaskRowsFromDoneCooperative();
+            } else if (typeof refreshAllForgeTodayTaskRowsFromDone === "function") {
               refreshAllForgeTodayTaskRowsFromDone();
             }
           } catch (_rf) {}
@@ -148656,7 +148662,12 @@
       }
 
       const dateKey = selectedDoneDate || formatDateInputValue(new Date());
-      const dayAgg = aggregateForgeCheckinsByNormalizedLabel(dateKey, realm);
+      const dayAgg =
+        forgeDayAggCache &&
+        forgeDayAggCache.dateKey === dateKey &&
+        forgeDayAggCache[realm]
+          ? forgeDayAggCache[realm]
+          : aggregateForgeCheckinsByNormalizedLabel(dateKey, realm);
       const dayCur = nKey ? forgeLifetimeMapSumForPrimaryKey(dayAgg, nKey) : 0;
       const dm = nKey ? forgeGetDailyMinTargetForNormalizedKey(nKey, realm) : null;
       let dayVisible = false;
@@ -148687,7 +148698,12 @@
       }
 
       const weekKey = forgeGetThisWeekSundayKeyFromSelectedOrToday();
-      const weekAgg = aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, realm);
+      const weekAgg =
+        forgeWeekMinAggCache &&
+        forgeWeekMinAggCache.weekSundayKey === weekKey &&
+        forgeWeekMinAggCache[realm]
+          ? forgeWeekMinAggCache[realm]
+          : aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, realm);
       const agg = nKey ? weekAgg[nKey] : null;
       const cur = agg && typeof agg.sum === "number" && !Number.isNaN(agg.sum) ? agg.sum : 0;
       const wm = nKey ? forgeGetWeeklyMinTargetForNormalizedKey(nKey, realm) : null;
@@ -148940,7 +148956,10 @@
         );
         cntEl.classList.toggle("forge-task-checkin-count--zero", cnt === 0);
       }
-      const aggMap = aggregateForgeCheckinsByNormalizedLabel(dateKey);
+      const aggMap =
+        forgeDayAggCache && forgeDayAggCache.dateKey === dateKey && forgeDayAggCache.all
+          ? forgeDayAggCache.all
+          : aggregateForgeCheckinsByNormalizedLabel(dateKey);
       const daySum = forgeLifetimeMapSumForPrimaryKey(aggMap, key);
       const aggExact = key ? aggMap[key] : null;
       const aggUnit =
@@ -149118,6 +149137,12 @@
     let forgeLifetimeAggCache = null;
     /** 当前刷新周期内：本周一～周日 dateKey → 动作键 → { sum, unit, count }；refresh 结束清空 */
     let forgeWeekCheckinIndex = null;
+    /**
+     * refresh 批处理缓存：避免 157 卡 ×（日聚合 + 周日～周六周聚合）重复扫 done。
+     * 仅 refreshAllForgeTodayTaskRowsFromDone* 持有；单卡路径仍走原聚合。
+     */
+    let forgeDayAggCache = null;
+    let forgeWeekMinAggCache = null;
 
     /** Silva：旧练习名 → 图片七项（主干三链 + 四项进阶），迁移 Mind 打卡键与周/日最低标签 */
     function migrateForgeSilvaPracticeKeysIfNeeded() {
@@ -149403,6 +149428,36 @@
       return true;
     }
 
+    /** 装配 refresh 批处理聚合缓存（日 / 周日～周六周 / 终身）；调用方须 finally 清空 */
+    function beginForgeTodayTaskRowsRefreshCaches(dateKey) {
+      forgeLifetimeAggCache = {
+        mind: aggregateForgeCheckinsLifetimeForNormalizedLabel("mind"),
+        body: aggregateForgeCheckinsLifetimeForNormalizedLabel("body"),
+        spt: aggregateForgeCheckinsLifetimeForNormalizedLabel("spt")
+      };
+      forgeWeekCheckinIndex = buildForgeWeekCheckinIndex(getForgeWeekMondayForView());
+      const weekKey = forgeGetThisWeekSundayKeyFromSelectedOrToday();
+      forgeDayAggCache = {
+        dateKey: dateKey,
+        all: aggregateForgeCheckinsByNormalizedLabel(dateKey),
+        mind: aggregateForgeCheckinsByNormalizedLabel(dateKey, "mind"),
+        body: aggregateForgeCheckinsByNormalizedLabel(dateKey, "body"),
+        spt: aggregateForgeCheckinsByNormalizedLabel(dateKey, "spt")
+      };
+      forgeWeekMinAggCache = {
+        weekSundayKey: weekKey,
+        mind: aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "mind"),
+        body: aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "body"),
+        spt: aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "spt")
+      };
+    }
+
+    function endForgeTodayTaskRowsRefreshCaches() {
+      forgeLifetimeAggCache = null;
+      forgeDayAggCache = null;
+      forgeWeekMinAggCache = null;
+    }
+
     function refreshAllForgeTodayTaskRowsFromDone() {
       /* 纯 UI 刷新：不在此落盘。日/周最低整理见 persistForgeMinsAndRelatedHygieneIfNeeded / 保存入口 */
       /* Mind rowKey 依赖 DOM 卡片，首屏有面板时整理一次并单独落盘（会话内 _done，不放大连点） */
@@ -149414,20 +149469,49 @@
       if (!mod) return;
       const dateKey = selectedDoneDate || formatDateInputValue(new Date());
       try {
-        forgeLifetimeAggCache = {
-          mind: aggregateForgeCheckinsLifetimeForNormalizedLabel("mind"),
-          body: aggregateForgeCheckinsLifetimeForNormalizedLabel("body"),
-          spt: aggregateForgeCheckinsLifetimeForNormalizedLabel("spt")
-        };
-        forgeWeekCheckinIndex = buildForgeWeekCheckinIndex(getForgeWeekMondayForView());
+        beginForgeTodayTaskRowsRefreshCaches(dateKey);
+        /*
+         * syncForgeTaskRowValFromDoneAggregates 末尾已调 syncForgeTaskWeekMinProgressUi。
+         * 再扫一遍卡片会重复整周聚合（同数据 A/B 约 +5.8s），UI 无差异；禁止第二遍。
+         */
         mod.querySelectorAll(".forge-task-row").forEach(function (row) {
           syncForgeTaskRowValFromDoneAggregates(row, dateKey);
         });
-        mod.querySelectorAll(".forge-task-row.forge-task-card").forEach(function (row) {
-          syncForgeTaskWeekMinProgressUi(row);
-        });
       } finally {
-        forgeLifetimeAggCache = null;
+        endForgeTodayTaskRowsRefreshCaches();
+      }
+      syncAllForgeOuterTitleDailyMinShortfall();
+    }
+
+    /**
+     * 协作式全量刷卡：每批让出一帧，供 Forge 标签切换 / 周最低展开折叠插队。
+     * 仅 Forge pull 合并后使用；打卡/切日仍走同步 refresh（即时一致）。
+     * 聚合缓存与同步路径相同；不落盘、不推云。
+     */
+    async function refreshAllForgeTodayTaskRowsFromDoneCooperative() {
+      if (migrateForgeMindMetaRowKeysIfNeeded()) {
+        saveState({ lists: ["forge", "done"] });
+      }
+      applyForgeTaskIdlePlaceholdersNoDailyGoal();
+      const mod = document.getElementById("forgeModule");
+      if (!mod) return;
+      const dateKey = selectedDoneDate || formatDateInputValue(new Date());
+      const rows = Array.prototype.slice.call(mod.querySelectorAll(".forge-task-row"));
+      const YIELD_EVERY = 8;
+      try {
+        beginForgeTodayTaskRowsRefreshCaches(dateKey);
+        for (let i = 0; i < rows.length; i++) {
+          syncForgeTaskRowValFromDoneAggregates(rows[i], dateKey);
+          if (i % YIELD_EVERY === YIELD_EVERY - 1 && i + 1 < rows.length) {
+            await new Promise(function (resolve) {
+              requestAnimationFrame(function () {
+                resolve();
+              });
+            });
+          }
+        }
+      } finally {
+        endForgeTodayTaskRowsRefreshCaches();
       }
       syncAllForgeOuterTitleDailyMinShortfall();
     }
@@ -195985,6 +196069,35 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         switchPerfMarkActivateStart();
         const t0 = isSwitchDiagEnabled() && switchPerfState.active ? switchPerfNow() : null;
         const focus = Boolean(opts.focus);
+        /*
+         * 已激活同标签：只做 focus（若需要），不重扫全部面板 class、不重跑 afterActivate。
+         * Forge 连续点同一胶囊时避免无谓样式失效；展开状态不经此路径。
+         */
+        let alreadyActive = false;
+        for (let ai = 0; ai < validPanels.length; ai++) {
+          const p = validPanels[ai];
+          if (
+            p &&
+            p.key === tabKey &&
+            p.panelEl &&
+            p.panelEl.classList.contains("module-tab-active") &&
+            !p.panelEl.classList.contains("module-tab-hidden")
+          ) {
+            alreadyActive = true;
+            break;
+          }
+        }
+        if (alreadyActive) {
+          if (focus) {
+            const tabBtn = tabButtonMap.get(tabKey);
+            if (tabBtn) tabBtn.focus();
+          }
+          if (t0 != null) {
+            switchPerfNotePhase("activateSubTabMs", switchPerfNow() - t0);
+          }
+          switchPerfMarkActivateEnd();
+          return;
+        }
         validPanels.forEach((item) => {
           const active = item.key === tabKey;
           const panelEl = item.panelEl;
