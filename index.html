@@ -104477,7 +104477,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261013k";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261013m";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -113928,12 +113928,31 @@
       });
     }
 
-    /** 用户主动点击后才清 SW / Cache 并硬刷新 */
-    async function forceClearServiceWorkerAndCachesThenReload(remoteCacheName) {
-      const reloadKey = "exec-sw-nuclear-reload:" + String(remoteCacheName || "");
+    /** 清除「核刷新」会话锁（仅 sessionStorage 刷新守卫，不碰业务数据） */
+    function clearAppUpdateNuclearReloadGuards() {
       try {
-        if (sessionStorage.getItem(reloadKey) === "1") return false;
-        sessionStorage.setItem(reloadKey, "1");
+        const keys = [];
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const k = sessionStorage.key(i);
+          if (k && String(k).indexOf("exec-sw-nuclear-reload:") === 0) keys.push(k);
+        }
+        keys.forEach(function (k) {
+          sessionStorage.removeItem(k);
+        });
+      } catch (_ssClr) {}
+    }
+
+    /**
+     * 用户主动点击后：仅注销 SW + 删除 PWA 壳 Cache Storage，再硬刷新。
+     * 硬性禁止：不 clear IndexedDB / localStorage 业务键、不重置同步状态。
+     */
+    async function forceClearServiceWorkerAndCachesThenReload(remoteCacheName) {
+      const reloadKey = "exec-sw-nuclear-reload:" + String(remoteCacheName || "pending");
+      try {
+        /* 仅防连点约 3s；超时自动失效，失败后可重试 */
+        const prev = Number(sessionStorage.getItem(reloadKey) || 0);
+        if (prev && Date.now() - prev < 3000) return false;
+        sessionStorage.setItem(reloadKey, String(Date.now()));
       } catch (_ssErr) {}
       try {
         if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
@@ -113952,6 +113971,8 @@
           const keys = await caches.keys();
           await Promise.all(
             keys.map(function (k) {
+              /* 只删本应用壳缓存名，避免误伤其它 Cache Storage */
+              if (!/^exec-system-pwa-/i.test(String(k || ""))) return Promise.resolve(false);
               return caches.delete(k).catch(function () {
                 return false;
               });
@@ -113962,15 +113983,22 @@
       try {
         const u = new URL(location.href);
         u.searchParams.set("_swbust", String(Date.now()));
-        location.replace(u.toString());
+        location.replace(u.pathname + u.search + u.hash);
       } catch (_locErr) {
-        location.reload();
+        try {
+          location.href = String(location.pathname || "/") + "?_swbust=" + Date.now();
+        } catch (_hrefErr) {
+          location.reload();
+        }
       }
       return true;
     }
 
+    let appUpdateReloadInFlight = false;
+
     async function applyPendingAppUpdateReload() {
-      if (appUpdateUserRequestedReload) return;
+      if (appUpdateReloadInFlight) return;
+      appUpdateReloadInFlight = true;
       appUpdateUserRequestedReload = true;
       try {
         window.__APP_UPDATE_USER_REQUESTED = true;
@@ -113978,20 +114006,45 @@
       try {
         const reg = appUpdatePendingRegistration;
         if (reg && reg.waiting) {
-          reg.waiting.postMessage({ type: "SKIP_WAITING" });
+          try {
+            reg.waiting.postMessage({ type: "SKIP_WAITING" });
+          } catch (_skip) {}
         }
-      } catch (_skip) {}
+      } catch (_regErr) {}
       const remote =
         appUpdatePendingRemoteCacheName ||
         String(APP_CACHE_NAME_FOR_BADGE || "") ||
         "pending";
-      await forceClearServiceWorkerAndCachesThenReload(remote);
+      try {
+        await forceClearServiceWorkerAndCachesThenReload(remote);
+      } finally {
+        /* 导航未完成时 4s 后允许再点（锁自动失效） */
+        window.setTimeout(function () {
+          appUpdateReloadInFlight = false;
+          appUpdateUserRequestedReload = false;
+        }, 4000);
+      }
     }
 
     function bindAppUpdateBadgeClickOnce() {
       if (appUpdateClickBound) return;
       appUpdateClickBound = true;
+      function isUpdateBadgeEl(el) {
+        return !!(
+          el &&
+          el.classList &&
+          el.classList.contains("app-version-badge--update-available")
+        );
+      }
       function onActivate(ev) {
+        const t = ev && ev.target;
+        const el =
+          t && t.closest
+            ? t.closest(".app-version-badge--update-available")
+            : isUpdateBadgeEl(t)
+              ? t
+              : null;
+        if (!el) return;
         if (ev) {
           try {
             ev.preventDefault();
@@ -114000,19 +114053,20 @@
         }
         void applyPendingAppUpdateReload();
       }
-      const targets = [];
-      if (appVersionBadgeNav) targets.push(appVersionBadgeNav);
-      document.querySelectorAll(".module-header-version-line").forEach(function (el) {
-        targets.push(el);
-      });
-      targets.forEach(function (el) {
-        if (!el) return;
-        el.addEventListener("click", onActivate);
-        el.addEventListener("keydown", function (ev) {
+      document.addEventListener("click", onActivate, true);
+      document.addEventListener(
+        "keydown",
+        function (ev) {
           if (!ev) return;
-          if (ev.key === "Enter" || ev.key === " ") onActivate(ev);
-        });
-      });
+          if (ev.key !== "Enter" && ev.key !== " ") return;
+          const t = ev.target;
+          if (!isUpdateBadgeEl(t) && !(t && t.closest && t.closest(".app-version-badge--update-available"))) {
+            return;
+          }
+          onActivate(ev);
+        },
+        true
+      );
     }
 
     /** 仅提示，不强制刷新；业务同步不得调用此入口 */
@@ -114022,6 +114076,9 @@
       if (opts.registration) appUpdatePendingRegistration = opts.registration;
       if (remoteCacheName) appUpdatePendingRemoteCacheName = remoteCacheName;
       logVersionNewBuildDetected(remoteCacheName || appUpdatePendingRemoteCacheName);
+      clearAppUpdateNuclearReloadGuards();
+      appUpdateUserRequestedReload = false;
+      appUpdateReloadInFlight = false;
       appUpdatePromptShown = true;
       paintAppUpdateAvailableBadge();
       bindAppUpdateBadgeClickOnce();
@@ -114030,13 +114087,13 @@
         window.__APP_UPDATE_REMOTE_CACHE = appUpdatePendingRemoteCacheName || remoteCacheName;
       } catch (_w) {}
     }
-
     try {
       window.showAppUpdateAvailable = showAppUpdateAvailable;
       window.applyPendingAppUpdateReload = applyPendingAppUpdateReload;
     } catch (_updWin) {}
 
     async function initAppVersionBadge() {
+      clearAppUpdateNuclearReloadGuards();
       function applyCacheNameLabel(cacheName) {
         if (appUpdatePromptShown) {
           paintAppUpdateAvailableBadge();
