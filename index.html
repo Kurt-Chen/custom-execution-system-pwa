@@ -84590,6 +84590,58 @@
       box-shadow: 0 1px 3px rgba(220, 38, 38, 0.06) !important;
     }
 
+    /*
+     * 三天冲刺 / 十二周年：有子任务的父卡片整卡作为进度容器。
+     * 用背景渐变从左填充，不新增层、不改定位，避免挡住点击或挪动截止日期弹层。
+     * 比例只读现有子任务完成数，不落库。
+     * 进行中整卡浅绿（status-active）让位给按比例填充；左色条与截止紧急/逾期底色保留。
+     */
+    @property --lane-sub-fill {
+      syntax: "<percentage>";
+      inherits: true;
+      initial-value: 0%;
+    }
+
+    :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2)
+      .weekly-plan-item.lane-task-card--sub-fill,
+    #anniversaryModule .anniversary-tw-task-card.lane-task-card--sub-fill {
+      background-image: linear-gradient(
+        90deg,
+        #dcfce7 0,
+        #dcfce7 var(--lane-sub-fill, 0%),
+        transparent var(--lane-sub-fill, 0%)
+      ) !important;
+      background-repeat: no-repeat !important;
+      background-size: 100% 100% !important;
+      transition: --lane-sub-fill 200ms ease;
+    }
+
+    :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2)
+      .weekly-plan-item.lane-task-card--sub-fill-done,
+    #anniversaryModule .anniversary-tw-task-card.lane-task-card--sub-fill-done {
+      background-image: linear-gradient(90deg, #bbf7d0, #bbf7d0) !important;
+    }
+
+    /* 父任务已完成的玫瑰底留在未填充区；子任务全部完成时整卡改为完成绿 */
+    #anniversaryModule .anniversary-tw-task-card.tw020-task-block-done.lane-task-card--sub-fill:not(.lane-task-card--sub-fill-done) {
+      background-image:
+        linear-gradient(
+          90deg,
+          #dcfce7 0,
+          #dcfce7 var(--lane-sub-fill, 0%),
+          transparent var(--lane-sub-fill, 0%)
+        ),
+        linear-gradient(180deg, #f5a3c4 0%, #fce4ee 100%) !important;
+      background-color: transparent !important;
+    }
+
+    :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2)
+      .weekly-plan-item.lane-task-card--sub-fill.weekly-plan-item--status-active:not(.weekly-plan-item--deadline-urgent):not(.weekly-plan-item--deadline-overdue),
+    :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2)
+      .weekly-plan-item.lane-task-card--sub-fill.weekly-plan-item-main-done {
+      background-color: #fafafa !important;
+    }
+
     /* Life/Work 周计划 · 仅手机端：紧凑卡片（两行标题、x/y 进度、单 … 按钮、紧急加粗色条） */
     @media (max-width: 767px) {
       :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2)
@@ -169288,11 +169340,71 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
     }
 
-    /** 局部同步：进度数字 + 有/无子任务显隐 */
+    /** 仅 UI 记忆上次填充宽度，便于重建卡片时做 200ms 过渡；不写入 state / 云端 */
+    const laneTaskSubFillPrevByKey = new Map();
+
+    function laneTaskSubFillMemoryKey(cardEl, task, kind) {
+      const id = task && task.id != null ? String(task.id) : "";
+      if (kind === "anniversaryTw") {
+        const moduleKey = cardEl && cardEl.dataset ? cardEl.dataset.module || "" : "";
+        const weekNum = cardEl && cardEl.dataset ? cardEl.dataset.weekNum || "" : "";
+        return "ann:" + moduleKey + ":" + weekNum + ":" + id;
+      }
+      return "wp:" + id;
+    }
+
+    /**
+     * 有真实子任务的父卡片：按已完成/总数设置背景填充宽度。
+     * 无子任务则清掉填充 class，完成态样式保持原样。
+     */
+    function applyLaneTaskCardSubProgressFill(cardEl, task, kind) {
+      if (!cardEl || !task) return;
+      if (kind !== "weeklyPlan" && kind !== "anniversaryTw") return;
+      const key = laneTaskSubFillMemoryKey(cardEl, task, kind);
+      const has = laneTaskCardHasRealSubtasks(task, kind);
+      if (!has) {
+        cardEl.classList.remove("lane-task-card--sub-fill", "lane-task-card--sub-fill-done");
+        cardEl.style.removeProperty("--lane-sub-fill");
+        laneTaskSubFillPrevByKey.delete(key);
+        return;
+      }
+      const stats = getLaneTaskCardProgress(task, kind);
+      const total = Math.max(0, Number(stats.total) || 0);
+      const done = Math.max(0, Number(stats.done) || 0);
+      const pct = total > 0 ? (done / total) * 100 : 0;
+      const next = String(Math.round(pct * 1000) / 1000) + "%";
+      const allDone = total > 0 && done >= total;
+      cardEl.classList.add("lane-task-card--sub-fill");
+      cardEl.classList.toggle("lane-task-card--sub-fill-done", allDone);
+      const painted = String(cardEl.style.getPropertyValue("--lane-sub-fill") || "").trim();
+      if (painted === next) {
+        laneTaskSubFillPrevByKey.set(key, next);
+        return;
+      }
+      const prev = laneTaskSubFillPrevByKey.get(key);
+      laneTaskSubFillPrevByKey.set(key, next);
+      if (!painted && prev && prev !== next) {
+        cardEl.style.setProperty("--lane-sub-fill", prev);
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            if (!cardEl.isConnected) return;
+            const latest = laneTaskSubFillPrevByKey.get(key);
+            if (latest) cardEl.style.setProperty("--lane-sub-fill", latest);
+          });
+        });
+        return;
+      }
+      cardEl.style.setProperty("--lane-sub-fill", next);
+    }
+
+    /** 局部同步：进度数字 + 有/无子任务显隐 + 父卡片背景填充 */
     function syncLaneTaskCardProgressFromTask(cardEl, task, kind) {
       if (!cardEl || !task) return false;
       const has = laneTaskCardHasRealSubtasks(task, kind);
       applyLaneTaskCardSubsPresence(cardEl, has);
+      if (kind === "weeklyPlan" || kind === "anniversaryTw") {
+        applyLaneTaskCardSubProgressFill(cardEl, task, kind);
+      }
       /* 三天冲刺 / 十二周年 / 封闭清单：进度条改为右侧胶囊，不再挂载/更新进度行 */
       if (kind === "weeklyPlan" || kind === "anniversaryTw" || kind === "closedList") {
         return syncLaneTaskSubProgressCapsuleFromTask(cardEl, task, kind);
@@ -174268,6 +174380,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
       block.appendChild(cardBody);
       tasksWrap.appendChild(block);
+      applyLaneTaskCardSubProgressFill(block, task, "anniversaryTw");
     }
 
     function updateWeeklyPlanTaskText(taskId, newText) {
@@ -175559,6 +175672,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         li.appendChild(head);
 
         parentUl.appendChild(li);
+        applyLaneTaskCardSubProgressFill(li, task, "weeklyPlan");
       });
       };
       appendRows(weeklyPlanList, tasksSorted);
