@@ -104479,7 +104479,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261013o";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261013p";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -115037,8 +115037,14 @@
       aliyunSyncPrimaryKickDeferredFlushesAfterGateOpen();
     }
 
-    function aliyunSyncPrimaryDeferFlushUntilBootPull(domainId) {
+    /**
+     * @param {string} domainId
+     * @param {{ allowTombstone?: boolean }} [opts]
+     * allowTombstone：删除墓碑必须尽快上云，可绕过首拉门闩（仍禁止未核对的 upsert 正文回写）。
+     */
+    function aliyunSyncPrimaryDeferFlushUntilBootPull(domainId, opts) {
       if (isAliyunSyncPrimaryUploadGateOpen()) return false;
+      if (opts && opts.allowTombstone) return false;
       /* 首拉调度尚未跑到时也武装超时，避免门闩永久关死 */
       if (!aliyunSyncPrimaryUploadGateTimer && !aliyunSyncPrimaryInitialPullSettled) {
         aliyunSyncPrimaryUploadGateTimer = setTimeout(function () {
@@ -122506,18 +122512,41 @@
         aliyunSprintRealQueue = [];
         return;
       }
-      /* 首拉未完成：保留队列，勿把旧 Sprint/挂牌整包回写云端 */
+      /*
+       * 首拉未完成：禁止 upsert 正文回写；tombstone 可单独冲刷，
+       * 否则本机删除在门闩期间无法上云，会被云端偏高 updatedAt 立刻复活。
+       */
+      let batch;
       if (
-        typeof aliyunSyncPrimaryDeferFlushUntilBootPull === "function" &&
-        aliyunSyncPrimaryDeferFlushUntilBootPull("sprint")
+        typeof isAliyunSyncPrimaryUploadGateOpen === "function" &&
+        !isAliyunSyncPrimaryUploadGateOpen()
       ) {
-        return;
+        const tombs = [];
+        const rest = [];
+        for (let qi = 0; qi < aliyunSprintRealQueue.length; qi++) {
+          const q = aliyunSprintRealQueue[qi];
+          if (q && q.mutation && q.mutation.op === "tombstone") tombs.push(q);
+          else rest.push(q);
+        }
+        if (!tombs.length) {
+          if (
+            typeof aliyunSyncPrimaryDeferFlushUntilBootPull === "function" &&
+            aliyunSyncPrimaryDeferFlushUntilBootPull("sprint")
+          ) {
+            return;
+          }
+          batch = aliyunSprintRealQueue.splice(0, aliyunSprintRealQueue.length);
+        } else {
+          batch = tombs;
+          aliyunSprintRealQueue = rest;
+        }
+      } else {
+        batch = aliyunSprintRealQueue.splice(0, aliyunSprintRealQueue.length);
       }
       aliyunSprintRealFlushing = true;
       if (typeof paintAliyunSyncPrimaryBadgeSyncing === "function") {
         paintAliyunSyncPrimaryBadgeSyncing();
       }
-      const batch = aliyunSprintRealQueue.splice(0, aliyunSprintRealQueue.length);
       const reason = batch.length ? batch[batch.length - 1].reason : "flush";
       try { cloudDiagNoteFlushStart("sprint", reason); } catch (_cdFlush) {}
       const base = aliyunSprintRealBaseUrl();
@@ -122940,9 +122969,13 @@
             const rTs = aliyunSprintRealItemTs(remote);
             const tTs = aliyunSprintRealItemTs(tomb);
             if (tTs > rTs) continue;
-            /* 本机已删（syncTombstones）优先：避免阿里云 tombstone 未落盘时旧快照复活 */
+            /*
+             * 本机已删（syncTombstones）绝对优先：不得因云端偏高 updatedAt
+             *（旧设备结转/weekUpsert 抬时钟）把已删 Sprint 任务并回。
+             * 与 Open List 异常恢复守卫一致；重新创建须用新 id。
+             */
             const localTombAt = Number(localSyncTombs[rid]) || 0;
-            if (localTombAt > 0 && localTombAt >= rTs) continue;
+            if (localTombAt > 0) continue;
 
             if (!Array.isArray(state.weeklyPlan[wk])) state.weeklyPlan[wk] = [];
             const arr = state.weeklyPlan[wk];
@@ -123687,18 +123720,41 @@
         aliyunTodayPlanRealQueue = [];
         return;
       }
-      /* 首拉未完成：保留挂牌 mutation，勿用未核对本机快照盖掉对端摘牌 */
+      /*
+       * 首拉未完成：非空/upsert 挂牌推迟；tombstone（摘牌删除标记）可单独上云，
+       * 避免门闩期间删除无法生效。
+       */
+      let batch;
       if (
-        typeof aliyunSyncPrimaryDeferFlushUntilBootPull === "function" &&
-        aliyunSyncPrimaryDeferFlushUntilBootPull("todayPlan")
+        typeof isAliyunSyncPrimaryUploadGateOpen === "function" &&
+        !isAliyunSyncPrimaryUploadGateOpen()
       ) {
-        return;
+        const tombs = [];
+        const rest = [];
+        for (let qi = 0; qi < aliyunTodayPlanRealQueue.length; qi++) {
+          const q = aliyunTodayPlanRealQueue[qi];
+          if (q && q.mutation && q.mutation.op === "tombstone") tombs.push(q);
+          else rest.push(q);
+        }
+        if (!tombs.length) {
+          if (
+            typeof aliyunSyncPrimaryDeferFlushUntilBootPull === "function" &&
+            aliyunSyncPrimaryDeferFlushUntilBootPull("todayPlan")
+          ) {
+            return;
+          }
+          batch = aliyunTodayPlanRealQueue.splice(0, aliyunTodayPlanRealQueue.length);
+        } else {
+          batch = tombs;
+          aliyunTodayPlanRealQueue = rest;
+        }
+      } else {
+        batch = aliyunTodayPlanRealQueue.splice(0, aliyunTodayPlanRealQueue.length);
       }
       aliyunTodayPlanRealFlushing = true;
       if (typeof paintAliyunSyncPrimaryBadgeSyncing === "function") {
         paintAliyunSyncPrimaryBadgeSyncing();
       }
-      const batch = aliyunTodayPlanRealQueue.splice(0, aliyunTodayPlanRealQueue.length);
       const reason = batch.length ? batch[batch.length - 1].reason : "flush";
       try { cloudDiagNoteFlushStart("todayPlan", reason); } catch (_cdFlush) {}
       const base = aliyunTodayPlanRealBaseUrl();
@@ -169137,9 +169193,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const keys = Object.keys(state.weeklyPlan).sort();
       for (let ki = 0; ki < keys.length; ki++) {
         const weekKey = keys[ki];
-        const tasks = readWeeklyPlanBucketNormalized(weekKey);
-        const task = tasks.find((t) => t.id === tid);
-        if (task) return { weekKey, task };
+        /* 直接扫 state 桶，避免 normalize 拷贝导致后续删改打到副本 */
+        const raw = state.weeklyPlan[weekKey];
+        if (!Array.isArray(raw)) continue;
+        for (let i = 0; i < raw.length; i++) {
+          const task = raw[i];
+          if (task && String(task.id) === tid) return { weekKey: weekKey, task: task };
+        }
       }
       return null;
     }
@@ -173514,9 +173574,26 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             if (m && m.id != null) recordSyncTombstone(weeklyPlanMicroTombstoneId(m.id));
           });
         }
+        /* 挂牌一并记 tomb，防今日计划 marks 把已删实体又挂回其他任务 */
+        try {
+          if (typeof recordTodayPlanMarkRemoved === "function") {
+            recordTodayPlanMarkRemoved(hit.id);
+          }
+        } catch (_markTomb) {}
 
-        state.weeklyPlan[weekKey] = tasksAll.filter(function (t) {
-          return !(t && String(t.id) === tid);
+        /* 全周桶剔除同 id（防跨周重复副本删一留一） */
+        Object.keys(state.weeklyPlan).forEach(function (wk) {
+          const arr = state.weeklyPlan[wk];
+          if (!Array.isArray(arr)) return;
+          const next = arr.filter(function (t) {
+            return !(t && String(t.id) === tid);
+          });
+          if (next.length !== arr.length) {
+            state.weeklyPlan[wk] = next;
+            try {
+              noteCloudSyncWeeklyPlanPulseWeekKey(wk);
+            } catch (_wkNote) {}
+          }
         });
         noteCloudSyncWeeklyPlanPulseWeekKey(weekKey);
 
@@ -173556,6 +173633,20 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               ? performance.now()
               : Date.now();
         if (!patchWeeklyPlanAfterTaskDeleted(tid)) {
+          /* 看板等未走 DOM patch：仍须从 lastValid 去掉 id，否则同步中 preserve 会把卡片「留住」 */
+          try {
+            const viewLaneDrop = getWeeklyPlanShell();
+            const viewWeekDrop = getWeeklyPlanViewSprintStartKey();
+            const viewDateDrop = formatDateInputValue(new Date());
+            if (typeof dropWeeklyPlanShellLastValidFilterId === "function") {
+              dropWeeklyPlanShellLastValidFilterId(
+                isWeeklyPlanTaskShell(viewLaneDrop) ? viewLaneDrop : getWeeklyPlanAddLane(),
+                viewWeekDrop,
+                viewDateDrop,
+                tid
+              );
+            }
+          } catch (_dropLv) {}
           refreshWeeklyPlanListAfterStructureChange();
         } else if (hadTodayPlan && typeof todayPlanPanelExpanded !== "undefined" && todayPlanPanelExpanded) {
           try {
@@ -173587,6 +173678,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             notifyAliyunSprintRealMetaAfterLocalChange("sprint-task-delete-meta");
           }
         } catch (_sprintMeta) {}
+        /* 删除墓碑尽快上云（门闩下仅 tomb 可冲），降低「删了又被拉回」窗口 */
+        try {
+          if (typeof flushAliyunSprintRealQueue === "function") {
+            Promise.resolve(flushAliyunSprintRealQueue()).catch(function () {});
+          }
+        } catch (_sprintFlush) {}
         split.cloudEnqueueMs =
           (typeof perfNow === "function"
             ? perfNow()
