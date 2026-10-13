@@ -104637,7 +104637,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014f";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -124424,146 +124424,16 @@
       }
     }
 
-    /**
-     * AMB tombstone 作用域（保守）：
-     * - 仅剥离「确定属于其他模块」的前缀键
-     * - 未知归属（裸 id 等）一律保留，防止已删任务复活
-     * - 不在此路径删除/裁掉全局 syncTombstones 原始条目
-     * - fuelScore: 属 AMB，始终保留
-     */
-    const ALIYUN_AMB_TOMBSTONE_YIELD_EVERY = 8000;
-
-    function aliyunAmbRealIsOtherDomainTombstoneKey(key) {
-      const k = String(key || "");
-      if (!k) return true;
-      /* AMB 本域 */
-      if (k.indexOf("fuelScore:") === 0) return false;
-      /* 确定他域前缀（可安全不进 AMB 信封） */
-      if (k.indexOf("timeReflection:") === 0) return true;
-      if (k.indexOf("todayPlanMark:") === 0) return true;
-      if (k.indexOf("weeklyPlanMicro:") === 0) return true;
-      if (k.indexOf("rule100:") === 0) return true;
-      if (k.indexOf("anniv:") === 0) return true;
-      if (k.indexOf("anniversary:") === 0) return true;
-      /* 未知归属：保守视为可能与 AMB/跨域防复活相关，不得丢弃 */
-      return false;
-    }
-
-    /** 键数探测：超过 stopAt 即停，避免 Object.keys(6万) 分配 */
-    function aliyunAmbRealCountKeysAtMost(obj, stopAt) {
-      if (!obj || typeof obj !== "object") return 0;
-      const limit = Number(stopAt) > 0 ? Number(stopAt) : 1;
-      let n = 0;
-      for (const k in obj) {
-        if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
-        n += 1;
-        if (n >= limit) return n;
-      }
-      return n;
-    }
-
-    /** 廉价 tombstone 指纹：避免 JSON.stringify(6万键) 阻塞 */
-    function aliyunAmbRealTombstoneSig(ts) {
-      if (!ts || typeof ts !== "object") return "0";
-      let n = 0;
-      let max = 0;
-      let mix = 0;
-      for (const k in ts) {
-        if (!Object.prototype.hasOwnProperty.call(ts, k)) continue;
-        if (aliyunAmbRealIsOtherDomainTombstoneKey(k)) continue;
-        const v = Number(ts[k]) || 0;
-        if (!(v > 0)) continue;
-        n += 1;
-        if (v > max) max = v;
-        mix = (mix + (k.length * 131 + (v % 10007))) % 1000000007;
-      }
-      return String(n) + ":" + String(max) + ":" + String(mix);
-    }
-
-    /**
-     * 合并多源 tombstones：只去掉确定他域键；未知裸 id / fuelScore 全保留。
-     * 不修改入参对象，不碰全局 state.syncTombstones。
-     */
-    function aliyunAmbRealScopeTombstonesForEnvelope(localTs, locSlice, remSlice, _mergedSlice) {
-      const out = {};
-      function addFrom(src) {
-        if (!src || typeof src !== "object") return;
-        for (const k in src) {
-          if (!Object.prototype.hasOwnProperty.call(src, k)) continue;
-          if (aliyunAmbRealIsOtherDomainTombstoneKey(k)) continue;
-          const v = Number(src[k]);
-          if (!Number.isFinite(v) || v <= 0) continue;
-          const prev = Number(out[k]) || 0;
-          if (v > prev) out[k] = v;
-        }
-      }
-      addFrom(localTs);
-      addFrom(locSlice && locSlice.tombstones);
-      addFrom(remSlice && remSlice.tombstones);
-      return out;
-    }
-
-    /** 大包分片合并：每 N 键让出主线程，供 pull/flush 热路径使用 */
-    async function aliyunAmbRealScopeTombstonesForEnvelopeAsync(
-      localTs,
-      locSlice,
-      remSlice,
-      _mergedSlice
-    ) {
-      const out = {};
-      async function addFrom(src) {
-        if (!src || typeof src !== "object") return;
-        let n = 0;
-        for (const k in src) {
-          if (!Object.prototype.hasOwnProperty.call(src, k)) continue;
-          if (aliyunAmbRealIsOtherDomainTombstoneKey(k)) continue;
-          const v = Number(src[k]);
-          if (!Number.isFinite(v) || v <= 0) continue;
-          const prev = Number(out[k]) || 0;
-          if (v > prev) out[k] = v;
-          n += 1;
-          if (n % ALIYUN_AMB_TOMBSTONE_YIELD_EVERY === 0) {
-            if (typeof yieldToMainThread === "function") await yieldToMainThread();
-            else await new Promise(function (r) { setTimeout(r, 0); });
-          }
-        }
-      }
-      await addFrom(localTs);
-      await addFrom(locSlice && locSlice.tombstones);
-      await addFrom(remSlice && remSlice.tombstones);
-      return out;
-    }
-
-    /** 打包 AMB 信封 tombstones：浅拷贝并剔除确定他域键；未知归属全保留 */
+    /** 打包 AMB 相关 tombstones（id 列表删除 + fuelScore:日期） */
     function aliyunAmbRealCloneTombstonesFromState() {
       const src =
         state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
-      return aliyunAmbRealScopeTombstonesForEnvelope(src, { tombstones: {} }, { tombstones: {} }, null);
-    }
-
-    /**
-     * 将 AMB 切片 tombstones 并入本机：只增不删。
-     * - 跳过确定他域键（不由 AMB 回灌）
-     * - 不调用上限裁剪，避免误删未知归属的防复活标记
-     */
-    function aliyunAmbRealMergeTombstonesIntoState(sliceTs) {
-      if (!sliceTs || typeof sliceTs !== "object") return false;
-      if (!state.syncTombstones || typeof state.syncTombstones !== "object") {
-        state.syncTombstones = {};
-      }
-      let changed = false;
-      for (const k in sliceTs) {
-        if (!Object.prototype.hasOwnProperty.call(sliceTs, k)) continue;
-        if (aliyunAmbRealIsOtherDomainTombstoneKey(k)) continue;
-        const v = Number(sliceTs[k]);
-        if (!Number.isFinite(v) || v <= 0) continue;
-        const prev = Number(state.syncTombstones[k]) || 0;
-        if (v > prev) {
-          state.syncTombstones[k] = v;
-          changed = true;
-        }
-      }
-      return changed;
+      const out = {};
+      Object.keys(src).forEach(function (k) {
+        const v = Number(src[k]);
+        if (Number.isFinite(v) && v > 0) out[k] = v;
+      });
+      return out;
     }
 
     function omitFuelScoresByTombstones(arr, tombstones) {
@@ -124645,7 +124515,6 @@
     function aliyunAmbRealSliceFingerprint(slice) {
       let s = "";
       try {
-        /* tombstones 用廉价签名，避免 JSON.stringify(6万键) 主线程长阻塞 */
         s = JSON.stringify({
           backwardMeasure: slice.backwardMeasure || {},
           backwardMeasurePeriod: slice.backwardMeasurePeriod || {},
@@ -124655,7 +124524,7 @@
           successCriteria: slice.successCriteria || [],
           stopDoing: slice.stopDoing || [],
           notToDo: slice.notToDo || [],
-          tombstoneSig: aliyunAmbRealTombstoneSig(slice.tombstones)
+          tombstones: slice.tombstones || {}
         });
       } catch (_e) {
         s = "";
@@ -124665,12 +124534,19 @@
         : String(s.length);
     }
 
-    /** 复用 Firebase 已验证的 AMB 合并函数；tombstones 仅剥离确定他域键，未知归属保守保留 */
-    function aliyunAmbRealBuildMergedSlice(localSlice, remoteSlice, preScopedTsOpt) {
+    /** 复用 Firebase 已验证的 AMB 合并函数，并合入远端 tombstones */
+    function aliyunAmbRealBuildMergedSlice(localSlice, remoteSlice) {
       const loc = localSlice && typeof localSlice === "object" ? localSlice : {};
       const rem = remoteSlice && typeof remoteSlice === "object" ? remoteSlice : {};
       const localTs =
         state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
+      const ts =
+        typeof mergeSyncTombstoneMaps === "function"
+          ? mergeSyncTombstoneMaps(
+              mergeSyncTombstoneMaps(localTs, loc.tombstones),
+              rem.tombstones
+            )
+          : Object.assign({}, localTs, loc.tombstones || {}, rem.tombstones || {});
       const dailyWinMerged =
         typeof mergeIdRecordArraysPreferLocalOnTie === "function"
           ? mergeIdRecordArraysPreferLocalOnTie(
@@ -124713,38 +124589,6 @@
           : Array.isArray(loc.fuelScores)
             ? loc.fuelScores.slice()
             : [];
-      const tomorrowMerged =
-        typeof mergeDailyWinTomorrowRefForSync === "function"
-          ? mergeDailyWinTomorrowRefForSync(loc.dailyWinTomorrowRef, rem.dailyWinTomorrowRef)
-          : loc.dailyWinTomorrowRef || {};
-      const mergedForIds = {
-        dailyWin: dailyWinMerged,
-        dailyWinTomorrowRef: tomorrowMerged,
-        fuelScores: fuelMerged,
-        successCriteria: successMerged,
-        stopDoing: stopMerged,
-        notToDo: notToDoMerged
-      };
-      const ts =
-        preScopedTsOpt && typeof preScopedTsOpt === "object"
-          ? preScopedTsOpt
-          : aliyunAmbRealScopeTombstonesForEnvelope(localTs, loc, rem, mergedForIds);
-      const remTsCount = aliyunAmbRealCountKeysAtMost(rem.tombstones, 70000);
-      const scopedCount = aliyunAmbRealCountKeysAtMost(ts, 70000);
-      const remOtherDropped = Math.max(0, remTsCount - scopedCount);
-      if (remOtherDropped > 50) {
-        try {
-          aliyunAmbRealAppendLog(
-            "tombstone strip other-domain only: remote>=" +
-              remTsCount +
-              " → kept>=" +
-              scopedCount +
-              " (dropped definite other-domain≈" +
-              remOtherDropped +
-              ")"
-          );
-        } catch (_logPrune) {}
-      }
       return {
         backwardMeasure:
           typeof mergeBackwardMeasureForSync === "function"
@@ -124759,9 +124603,13 @@
             ? omitTombstonedIdRecords(dailyWinMerged, ts)
             : dailyWinMerged,
         dailyWinTomorrowRef:
-          typeof filterDailyWinTomorrowRefByTombstones === "function"
-            ? filterDailyWinTomorrowRefByTombstones(tomorrowMerged, ts)
-            : tomorrowMerged,
+          typeof filterDailyWinTomorrowRefByTombstones === "function" &&
+          typeof mergeDailyWinTomorrowRefForSync === "function"
+            ? filterDailyWinTomorrowRefByTombstones(
+                mergeDailyWinTomorrowRefForSync(loc.dailyWinTomorrowRef, rem.dailyWinTomorrowRef),
+                ts
+              )
+            : loc.dailyWinTomorrowRef || {},
         fuelScores: omitFuelScoresByTombstones(fuelMerged, ts),
         successCriteria:
           typeof omitTombstonedIdRecords === "function"
@@ -124775,8 +124623,7 @@
           typeof omitTombstonedIdRecords === "function"
             ? omitTombstonedIdRecords(notToDoMerged, ts)
             : notToDoMerged,
-        tombstones: ts,
-        _ambTombstoneOtherDomainStripped: remOtherDropped > 50
+        tombstones: ts
       };
     }
 
@@ -124806,8 +124653,10 @@
         return repairedOnly;
       }
       if (slice.tombstones && typeof slice.tombstones === "object") {
-        /* 只增不删；跳过确定他域键；不裁全局原始 tombstones */
-        aliyunAmbRealMergeTombstonesIntoState(slice.tombstones);
+        state.syncTombstones =
+          typeof mergeSyncTombstoneMaps === "function"
+            ? mergeSyncTombstoneMaps(state.syncTombstones, slice.tombstones)
+            : Object.assign({}, state.syncTombstones || {}, slice.tombstones);
       }
       state.backwardMeasure = slice.backwardMeasure;
       state.backwardMeasurePeriod = slice.backwardMeasurePeriod;
@@ -124952,23 +124801,6 @@
       aliyunAmbRealLastReport = report;
       try {
         window.__aliyunAmbRealLastReport = report;
-        /* 短时低开销：只保留最近一次阶段拆分，不刷屏 */
-        window.__aliyunSyncPhaseLast = {
-          domain: "amb",
-          at: Date.now(),
-          networkWaitMs: report && report.networkWaitMs,
-          parseMs: report && report.parseMs,
-          mergeMs: report && report.mergeMs,
-          persistHint: report && report.persistHint,
-          renderMs: report && report.renderMs,
-          stringifyMs: report && report.stringifyMs,
-          mainThreadWorkMs: report && report.mainThreadWorkMs,
-          payloadKB: report && report.payloadKB,
-          tombstoneRemote: report && report.tombstoneRemote,
-          tombstoneScoped: report && report.tombstoneScoped,
-          ok: report && report.ok,
-          reason: report && report.reason
-        };
       } catch (_w) {}
       aliyunAmbRealAppendLog(
         "report ok=" +
@@ -124977,30 +124809,6 @@
           ((report && report.reason) || "") +
           (report && report.error ? " err=" + report.error : "")
       );
-      /* 仅主线程工作偏长时 warn 一条（区分 networkWait） */
-      try {
-        const mt = Number(report && report.mainThreadWorkMs) || 0;
-        if (mt >= 400) {
-          console.warn(
-            "[aliyun-sync-phase] amb mainThread=" +
-              mt +
-              "ms network=" +
-              (Number(report.networkWaitMs) || 0) +
-              " parse=" +
-              (Number(report.parseMs) || 0) +
-              " merge=" +
-              (Number(report.mergeMs) || 0) +
-              " render=" +
-              (Number(report.renderMs) || 0) +
-              " payloadKB=" +
-              (Number(report.payloadKB) || 0) +
-              " ts=" +
-              (report.tombstoneRemote != null
-                ? report.tombstoneRemote + "→" + report.tombstoneScoped
-                : "-")
-          );
-        }
-      } catch (_w2) {}
     }
 
     function scheduleAliyunAmbRealSync(reason) {
@@ -125062,36 +124870,18 @@
 
         const tParse0 = Date.now();
         let remoteEnv = aliyunAmbRealEmptyEnvelope();
-        let remoteTsProbe = 0;
         if (getRes.ok && getRes.data && getRes.data.data) {
           const row = getRes.data.data;
           const attrs = row.attrs || row;
           remoteEnv = aliyunAmbRealParseEnvelope(attrs.payload != null ? attrs.payload : attrs);
-          remoteTsProbe = aliyunAmbRealCountKeysAtMost(remoteEnv.tombstones, 70000);
         } else if (getRes.status !== 404 && !(getRes.data && getRes.data.error === "not_found")) {
           console.warn("[aliyun-amb-real] GET status", getRes.status, getRes.data);
         }
         parseMs = Date.now() - tParse0;
-        /* 大包解析后让出主线程，避免与输入/滚动连成一次长任务 */
-        if (remoteTsProbe > 5000 || parseMs >= 80) {
-          if (typeof yieldToMainThread === "function") await yieldToMainThread();
-          else await new Promise(function (r) { setTimeout(r, 0); });
-        }
 
         const tMerge0 = Date.now();
         const localSlice = aliyunAmbRealCloneSliceFromState();
-        const localTsForScope =
-          state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
-        const preScopedTs =
-          remoteTsProbe > 5000
-            ? await aliyunAmbRealScopeTombstonesForEnvelopeAsync(
-                localTsForScope,
-                localSlice,
-                remoteEnv,
-                null
-              )
-            : null;
-        let mergedSlice = aliyunAmbRealBuildMergedSlice(localSlice, remoteEnv, preScopedTs);
+        let mergedSlice = aliyunAmbRealBuildMergedSlice(localSlice, remoteEnv);
         if (typeof protectDailyWinEditorsInMergedSlice === "function") {
           mergedSlice = protectDailyWinEditorsInMergedSlice(mergedSlice) || mergedSlice;
         }
@@ -125107,7 +124897,6 @@
         env.stopDoing = mergedSlice.stopDoing;
         env.notToDo = mergedSlice.notToDo;
         env.tombstones = mergedSlice.tombstones || {};
-        const scopedTsCount = aliyunAmbRealCountKeysAtMost(env.tombstones, 70000);
         /* 上传前若远端更新了本机未有字段，写回本机（抑制再推） */
         aliyunAmbRealSuppressPush = true;
         const prevCloudSuppress = cloudSyncSuppressPush;
@@ -125125,33 +124914,24 @@
           cloudSyncSuppressPush = prevCloudSuppress;
           aliyunAmbRealSuppressPush = false;
         }
-        mergeMs = Date.now() - tMerge0;
-        if (typeof yieldToMainThread === "function") await yieldToMainThread();
-        else await new Promise(function (r) { setTimeout(r, 0); });
-        let renderMsFlush = 0;
         if (appliedDuringFlush) {
-          const tRen0 = Date.now();
           aliyunAmbRealPaintLocalUiAfterMerge();
-          renderMsFlush = Date.now() - tRen0;
         }
+        mergeMs = Date.now() - tMerge0;
         try {
           if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
         } catch (_flowMergeNote) {}
 
-        const putBody = { id: docId, payload: env };
-        const tStr0 = Date.now();
-        let bodyLen = 0;
+        let bodyJson = "";
         try {
-          bodyLen = JSON.stringify(putBody).length;
+          bodyJson = JSON.stringify({ id: docId, payload: env });
         } catch (_ser) {
           throw new Error("envelope serialize failed");
         }
-        const stringifyMs = Date.now() - tStr0;
-        payloadKB = Math.round((bodyLen / 1024) * 10) / 10;
+        payloadKB = Math.round((bodyJson.length / 1024) * 10) / 10;
 
         const tUp0 = Date.now();
-        /* 直接传对象；禁止 JSON.parse(bodyJson) 再 stringify 双倍主线程成本 */
-        const putRes = await aliyunExpFetchJson("POST", base + "/smoke", putBody);
+        const putRes = await aliyunExpFetchJson("POST", base + "/smoke", JSON.parse(bodyJson));
         uploadMs = Date.now() - tUp0;
         networkWaitMs += uploadMs;
         httpStatus = putRes.status;
@@ -125174,8 +124954,15 @@
             await aliyunDomainsMetaBumpDomain("amb");
           }
         } catch (_domBump) {}
+      } catch (err) {
+        errMsg = err && err.message ? err.message : String(err);
+        ok = false;
+      } finally {
+        lt.stop();
+        aliyunAmbRealFlushing = false;
+        try { cloudDiagNoteFlushEnd("amb"); } catch (_cdFlushEnd) {}
         aliyunAmbRealLogReport({
-          ok: true,
+          ok: ok,
           reason: reason,
           docId: docId,
           httpStatus: httpStatus,
@@ -125184,45 +124971,14 @@
           downloadMs: downloadMs,
           parseMs: parseMs,
           mergeMs: mergeMs,
-          stringifyMs: stringifyMs,
-          renderMs: renderMsFlush,
+          renderMs: 0,
           longTaskOver50: lt.bucket.over50,
           longTaskMaxMs: lt.bucket.maxMs,
           longTaskCount: lt.bucket.count,
           networkWaitMs: networkWaitMs,
           mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
-          tombstoneRemote: remoteTsProbe,
-          tombstoneScoped: scopedTsCount
+          error: errMsg || undefined
         });
-        ok = true;
-        return;
-      } catch (err) {
-        errMsg = err && err.message ? err.message : String(err);
-        ok = false;
-      } finally {
-        lt.stop();
-        aliyunAmbRealFlushing = false;
-        try { cloudDiagNoteFlushEnd("amb"); } catch (_cdFlushEnd) {}
-        if (!ok) {
-          aliyunAmbRealLogReport({
-            ok: false,
-            reason: reason,
-            docId: docId,
-            httpStatus: httpStatus,
-            payloadKB: payloadKB,
-            uploadMs: uploadMs,
-            downloadMs: downloadMs,
-            parseMs: parseMs,
-            mergeMs: mergeMs,
-            renderMs: 0,
-            longTaskOver50: lt.bucket.over50,
-            longTaskMaxMs: lt.bucket.maxMs,
-            longTaskCount: lt.bucket.count,
-            networkWaitMs: networkWaitMs,
-            mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
-            error: errMsg || undefined
-          });
-        }
         if (aliyunAmbRealPendingReason) {
           Promise.resolve(flushAliyunAmbRealQueue()).catch(function () {});
         }
@@ -125250,8 +125006,6 @@
       let ok = false;
       let errMsg = "";
       let changed = false;
-      let remoteTsProbe = 0;
-      let scopedTsCount = 0;
       try {
         aliyunAmbRealAppendLog("拉取 AMB docId=" + docId);
         const tDl0 = Date.now();
@@ -125304,31 +125058,14 @@
           return { ok: true, unchanged: true, docId: docId };
         }
         const remoteEnv = aliyunAmbRealParseEnvelope(payloadRaw);
-        remoteTsProbe = aliyunAmbRealCountKeysAtMost(remoteEnv.tombstones, 70000);
         parseMs = Date.now() - tParse0;
-        if (payloadKB >= 200 || remoteTsProbe > 5000 || parseMs >= 80) {
-          if (typeof yieldToMainThread === "function") await yieldToMainThread();
-          else await new Promise(function (r) { setTimeout(r, 0); });
-        }
 
         const tMerge0 = Date.now();
         const localSlice = aliyunAmbRealCloneSliceFromState();
-        const localTsForScope =
-          state.syncTombstones && typeof state.syncTombstones === "object" ? state.syncTombstones : {};
-        const preScopedTs =
-          remoteTsProbe > 5000 || payloadKB >= 200
-            ? await aliyunAmbRealScopeTombstonesForEnvelopeAsync(
-                localTsForScope,
-                localSlice,
-                remoteEnv,
-                null
-              )
-            : null;
-        let mergedSlice = aliyunAmbRealBuildMergedSlice(localSlice, remoteEnv, preScopedTs);
+        let mergedSlice = aliyunAmbRealBuildMergedSlice(localSlice, remoteEnv);
         if (typeof protectDailyWinEditorsInMergedSlice === "function") {
           mergedSlice = protectDailyWinEditorsInMergedSlice(mergedSlice) || mergedSlice;
         }
-        scopedTsCount = aliyunAmbRealCountKeysAtMost(mergedSlice.tombstones || {}, 70000);
         aliyunAmbRealSuppressPush = true;
         const prevCloudSuppress = cloudSyncSuppressPush;
         cloudSyncSuppressPush = true;
@@ -125348,9 +125085,6 @@
         try {
           if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
         } catch (_flowMergeNote) {}
-
-        if (typeof yieldToMainThread === "function") await yieldToMainThread();
-        else await new Promise(function (r) { setTimeout(r, 0); });
 
         const tRen0 = Date.now();
         aliyunSyncPrimaryMarkPullFingerprint("amb", ambPullFp);
@@ -125374,14 +125108,7 @@
             if (typeof flowDiagNoteCloudRender === "function" && renderMs > 0) flowDiagNoteCloudRender(renderMs);
           } catch (_flowRenNote) {}
         ok = true;
-        return {
-          ok: true,
-          docId: docId,
-          changed: changed,
-          payloadKB: payloadKB,
-          tombstoneRemote: remoteTsProbe,
-          tombstoneScoped: scopedTsCount
-        };
+        return { ok: true, docId: docId, changed: changed };
       } catch (err) {
         errMsg = err && err.message ? err.message : String(err);
         aliyunAmbRealAppendLog("拉取失败: " + errMsg);
@@ -125404,8 +125131,6 @@
           networkWaitMs: networkWaitMs,
           mainThreadWorkMs: Math.max(0, Date.now() - tAll - networkWaitMs),
           changed: changed,
-          tombstoneRemote: remoteTsProbe,
-          tombstoneScoped: scopedTsCount,
           error: errMsg || undefined
         });
       }
@@ -125415,308 +125140,6 @@
       window.runAliyunAmbRealPullAndMerge = runAliyunAmbRealPullAndMerge;
       window.isAliyunAmbRealSyncEnabled = isAliyunAmbRealSyncEnabled;
       window.notifyAliyunAmbRealAfterLocalChange = notifyAliyunAmbRealAfterLocalChange;
-      window.aliyunAmbRealBuildMergedSlice = aliyunAmbRealBuildMergedSlice;
-      window.aliyunAmbRealScopeTombstonesForEnvelope = aliyunAmbRealScopeTombstonesForEnvelope;
-      window.aliyunAmbRealScopeTombstonesForEnvelopeAsync = aliyunAmbRealScopeTombstonesForEnvelopeAsync;
-      window.aliyunAmbRealParseEnvelope = aliyunAmbRealParseEnvelope;
-      window.aliyunAmbRealApplySliceToState = aliyunAmbRealApplySliceToState;
-      window.aliyunAmbRealSliceFingerprint = aliyunAmbRealSliceFingerprint;
-      window.aliyunAmbRealIsOtherDomainTombstoneKey = aliyunAmbRealIsOtherDomainTombstoneKey;
-      /**
-       * 隔离探针：修复前后耗时 + 防复活 / fuelScore / 未知保守 / 全局不删。
-       * 仅诊断用；不写真实云端（由外层 request 拦截保证）。
-       */
-      window.__probeAmbSyncStall = async function __probeAmbSyncStall(fixturePayloadStr) {
-        const out = {
-          version: APP_CACHE_NAME_FOR_BADGE,
-          before: {},
-          after: {},
-          correctness: {},
-          pull: {},
-          interaction: {},
-          safety: {},
-          pass: {}
-        };
-        const remoteEnv = aliyunAmbRealParseEnvelope(fixturePayloadStr);
-        const delId = "amb-deleted-should-not-revive";
-        const fuelKey = fuelScoreTombstoneId("2099-01-02");
-        const otherKey = "timeReflection:2026-09-23:probe";
-        const unknownKeep = "unknown-bare-id-keep-me";
-        if (!state.syncTombstones || typeof state.syncTombstones !== "object") state.syncTombstones = {};
-        state.syncTombstones[delId] = Date.now();
-        state.syncTombstones[fuelKey] = Date.now();
-        state.syncTombstones[otherKey] = Date.now();
-        state.syncTombstones[unknownKeep] = Date.now();
-        remoteEnv.dailyWin = Array.isArray(remoteEnv.dailyWin) ? remoteEnv.dailyWin.slice() : [];
-        remoteEnv.dailyWin.push({
-          id: delId,
-          text: "REVIVE_ME",
-          date: "2026-10-13",
-          updatedAt: Date.now()
-        });
-        remoteEnv.tombstones = remoteEnv.tombstones || {};
-        remoteEnv.tombstones[delId] = Date.now() - 1000;
-        remoteEnv.tombstones[fuelKey] = Date.now() - 1000;
-        remoteEnv.fuelScores = Array.isArray(remoteEnv.fuelScores) ? remoteEnv.fuelScores.slice() : [];
-        remoteEnv.fuelScores.push({
-          date: "2099-01-02",
-          score: 9,
-          updatedAt: Date.now(),
-          note: "should-omit"
-        });
-        const localSlice = {
-          dailyWin: (Array.isArray(state.dailyWin) ? state.dailyWin : []).filter(function (x) {
-            return x && x.id !== delId;
-          }),
-          dailyWinTomorrowRef: state.dailyWinTomorrowRef || {},
-          fuelScores: (Array.isArray(state.fuelScores) ? state.fuelScores : []).filter(function (x) {
-            return x && x.date !== "2099-01-02";
-          }),
-          successCriteria: state.successCriteria || [],
-          stopDoing: state.stopDoing || [],
-          notToDo: state.notToDo || [],
-          backwardMeasure: state.backwardMeasure || {},
-          backwardMeasurePeriod: state.backwardMeasurePeriod || {},
-          tombstones: aliyunAmbRealCloneTombstonesFromState()
-        };
-        function observeLongTasks(msWindowFn) {
-          const bucket = [];
-          let obs = null;
-          try {
-            obs = new PerformanceObserver(function (list) {
-              (list.getEntries() || []).forEach(function (e) {
-                bucket.push(Math.round((Number(e.duration) || 0) * 10) / 10);
-              });
-            });
-            obs.observe({ entryTypes: ["longtask"] });
-          } catch (_lt) {}
-          const t0 = performance.now();
-          const ret = msWindowFn();
-          const wallMs = performance.now() - t0;
-          if (obs) obs.disconnect();
-          return {
-            wallMs: Math.round(wallMs * 100) / 100,
-            longTaskCount: bucket.length,
-            longTaskMaxMs: bucket.length ? Math.max.apply(null, bucket) : 0,
-            longTasks: bucket.slice(0, 12),
-            ret: ret
-          };
-        }
-        const oldBundle = observeLongTasks(function () {
-          const tOldMerge0 = performance.now();
-          const oldTs = Object.assign(
-            {},
-            state.syncTombstones || {},
-            localSlice.tombstones || {},
-            remoteEnv.tombstones || {}
-          );
-          const oldMergeMs = performance.now() - tOldMerge0;
-          const tOldFp0 = performance.now();
-          let oldFpLen = 0;
-          try {
-            oldFpLen = JSON.stringify({
-              dailyWin: remoteEnv.dailyWin,
-              fuelScores: remoteEnv.fuelScores,
-              tombstones: oldTs
-            }).length;
-          } catch (_e) {
-            oldFpLen = -1;
-          }
-          const oldFpMs = performance.now() - tOldFp0;
-          const tOldSer0 = performance.now();
-          let oldBody = "";
-          try {
-            oldBody = JSON.stringify({
-              id: "aliyun-amb-real-v1-probe",
-              payload: {
-                tombstones: oldTs,
-                dailyWin: remoteEnv.dailyWin,
-                fuelScores: remoteEnv.fuelScores
-              }
-            });
-            JSON.parse(oldBody);
-          } catch (_e2) {}
-          const oldSerParseMs = performance.now() - tOldSer0;
-          return {
-            mergeMs: Math.round(oldMergeMs * 100) / 100,
-            fingerprintStringifyMs: Math.round(oldFpMs * 100) / 100,
-            fingerprintChars: oldFpLen,
-            serializeThenParseMs: Math.round(oldSerParseMs * 100) / 100,
-            mergedTsCount: Object.keys(oldTs).length,
-            uploadPayloadKB: Math.round((oldBody.length / 1024) * 10) / 10
-          };
-        });
-        out.before = Object.assign({}, oldBundle.ret, {
-          wallMs: oldBundle.wallMs,
-          longTaskCount: oldBundle.longTaskCount,
-          longTaskMaxMs: oldBundle.longTaskMaxMs,
-          longTasks: oldBundle.longTasks
-        });
-        const newLt = [];
-        let newObs = null;
-        try {
-          newObs = new PerformanceObserver(function (list) {
-            (list.getEntries() || []).forEach(function (e) {
-              newLt.push(Math.round((Number(e.duration) || 0) * 10) / 10);
-            });
-          });
-          newObs.observe({ entryTypes: ["longtask"] });
-        } catch (_nlt) {}
-        const tNewAll0 = performance.now();
-        const tNewScope0 = performance.now();
-        const scoped = await aliyunAmbRealScopeTombstonesForEnvelopeAsync(
-          state.syncTombstones,
-          localSlice,
-          remoteEnv,
-          null
-        );
-        const newScopeMs = performance.now() - tNewScope0;
-        const tNewMerge0 = performance.now();
-        const merged = aliyunAmbRealBuildMergedSlice(localSlice, remoteEnv, scoped);
-        const newMergeMs = performance.now() - tNewMerge0;
-        const tNewFp0 = performance.now();
-        aliyunAmbRealSliceFingerprint(merged);
-        const newFpMs = performance.now() - tNewFp0;
-        const tNewSer0 = performance.now();
-        let newBody = "";
-        try {
-          newBody = JSON.stringify({
-            id: "aliyun-amb-real-v1-probe",
-            payload: {
-              dailyWin: merged.dailyWin,
-              fuelScores: merged.fuelScores,
-              tombstones: merged.tombstones
-            }
-          });
-        } catch (_e3) {}
-        const newSerMs = performance.now() - tNewSer0;
-        const newWallMs = performance.now() - tNewAll0;
-        if (newObs) newObs.disconnect();
-        out.after = {
-          scopeAsyncMs: Math.round(newScopeMs * 100) / 100,
-          mergeMs: Math.round(newMergeMs * 100) / 100,
-          cheapFingerprintMs: Math.round(newFpMs * 100) / 100,
-          serializeOnlyMs: Math.round(newSerMs * 100) / 100,
-          wallMs: Math.round(newWallMs * 100) / 100,
-          longTaskCount: newLt.length,
-          longTaskMaxMs: newLt.length ? Math.max.apply(null, newLt) : 0,
-          longTasks: newLt.slice(0, 12),
-          mergedTsCount: aliyunAmbRealCountKeysAtMost(merged.tombstones || {}, 70000),
-          uploadPayloadKB: Math.round((newBody.length / 1024) * 10) / 10,
-          otherDomainInEnvelope: (function () {
-            const ts = merged.tombstones || {};
-            for (const k in ts) {
-              if (!Object.prototype.hasOwnProperty.call(ts, k)) continue;
-              if (String(k).indexOf("timeReflection:") === 0) return true;
-            }
-            return false;
-          })(),
-          unknownKept: !!(merged.tombstones && merged.tombstones[unknownKeep]),
-          delTombstoneKept: !!(merged.tombstones && merged.tombstones[delId]),
-          fuelTombstoneKept: !!(merged.tombstones && merged.tombstones[fuelKey])
-        };
-        out.correctness = {
-          deletedNotInMergedDailyWin: !(merged.dailyWin || []).some(function (x) {
-            return x && x.id === delId;
-          }),
-          fuelScoreOmitted: !(merged.fuelScores || []).some(function (x) {
-            return x && x.date === "2099-01-02";
-          }),
-          otherDomainStrippedFromEnvelope: out.after.otherDomainInEnvelope === false,
-          unknownBareIdKeptInEnvelope: out.after.unknownKept === true
-        };
-        const tsCountBeforeApply = Object.keys(state.syncTombstones).length;
-        const hadOtherBefore = !!state.syncTombstones[otherKey];
-        const hadUnknownBefore = !!state.syncTombstones[unknownKeep];
-        aliyunAmbRealApplySliceToState(merged);
-        out.safety = {
-          globalTsCountBeforeApply: tsCountBeforeApply,
-          globalTsCountAfter: Object.keys(state.syncTombstones).length,
-          otherDomainStillInGlobal: !!state.syncTombstones[otherKey] && hadOtherBefore,
-          unknownStillInGlobal: !!state.syncTombstones[unknownKeep] && hadUnknownBefore,
-          delStillInGlobal: !!state.syncTombstones[delId],
-          fuelStillInGlobal: !!state.syncTombstones[fuelKey],
-          deletedStillAbsentInStateDailyWin: !(state.dailyWin || []).some(function (x) {
-            return x && x.id === delId;
-          })
-        };
-        const longTasks = [];
-        let obs = null;
-        try {
-          obs = new PerformanceObserver(function (list) {
-            (list.getEntries() || []).forEach(function (e) {
-              longTasks.push({ duration: Math.round(e.duration * 10) / 10 });
-            });
-          });
-          obs.observe({ entryTypes: ["longtask"] });
-        } catch (_lt) {}
-        const midEditId = "mid-sync-edit-" + Date.now().toString(36);
-        if (!Array.isArray(state.dailyWin)) state.dailyWin = [];
-        state.dailyWin.push({
-          id: midEditId,
-          text: "mid-sync-new",
-          date: "2026-10-13",
-          updatedAt: Date.now()
-        });
-        const clickTimes = [];
-        const clickP = (async function () {
-          for (let i = 0; i < 10; i++) {
-            const t0 = performance.now();
-            document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-            window.scrollBy(0, 20);
-            await new Promise(function (r) {
-              setTimeout(r, 16);
-            });
-            clickTimes.push(Math.round((performance.now() - t0) * 100) / 100);
-          }
-        })();
-        const pullRes = await runAliyunAmbRealPullAndMerge();
-        await clickP;
-        if (obs) obs.disconnect();
-        const midAfter = (state.dailyWin || []).find(function (x) {
-          return x && x.id === midEditId;
-        });
-        out.pull = {
-          report: aliyunAmbRealLastReport || null,
-          phaseLast: window.__aliyunSyncPhaseLast || null,
-          pullRes: pullRes || null,
-          longTaskCount: longTasks.length,
-          longTaskMaxMs: longTasks.length
-            ? Math.max.apply(
-                null,
-                longTasks.map(function (x) {
-                  return x.duration;
-                })
-              )
-            : 0,
-          longTasks: longTasks.slice(0, 15)
-        };
-        out.interaction = {
-          clickSamples: clickTimes,
-          clickMaxMs: clickTimes.length ? Math.max.apply(null, clickTimes) : null,
-          clickAvgMs: clickTimes.length
-            ? Math.round((clickTimes.reduce(function (a, b) { return a + b; }, 0) / clickTimes.length) * 100) /
-              100
-            : null,
-          midSyncItemPresent: !!midAfter
-        };
-        out.delta = {
-          mergeMsSaved: Math.round((out.before.mergeMs - out.after.mergeMs) * 100) / 100,
-          fpMsSaved: Math.round((out.before.fingerprintStringifyMs - out.after.cheapFingerprintMs) * 100) / 100,
-          serMsSaved: Math.round((out.before.serializeThenParseMs - out.after.serializeOnlyMs) * 100) / 100,
-          wallMsSaved: Math.round((out.before.wallMs - out.after.wallMs) * 100) / 100,
-          longTaskMaxDelta: Math.round((out.before.longTaskMaxMs - out.after.longTaskMaxMs) * 100) / 100,
-          tsCountDelta: out.before.mergedTsCount - out.after.mergedTsCount
-        };
-        out.pass = {
-          noResurrect: out.correctness.deletedNotInMergedDailyWin && out.safety.deletedStillAbsentInStateDailyWin,
-          fuelOk: out.correctness.fuelScoreOmitted && out.safety.fuelStillInGlobal,
-          unknownConservative: out.correctness.unknownBareIdKeptInEnvelope && out.safety.unknownStillInGlobal,
-          otherDomainNotInEnvelope: out.correctness.otherDomainStrippedFromEnvelope,
-          globalNotWiped: out.safety.otherDomainStillInGlobal && out.safety.unknownStillInGlobal
-        };
-        return out;
-      };
     } catch (_ambWin) {}
 
 
