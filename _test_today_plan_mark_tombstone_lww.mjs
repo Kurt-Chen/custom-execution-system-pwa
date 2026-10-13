@@ -105,14 +105,21 @@ function pickDateFixed(locTask, remTask, tombAt) {
   return { date: lVal, markAt: lMark, tombCleared: false };
 }
 
+/** 对齐 index.html applyTodayPlanMarkTombstoneOnImport：剥牌 + 收敛删除时钟 */
 function stripHangIfTombstoned(task, tombAt) {
   if (!task || tombAt <= 0) return { task, stripped: false };
   const date = normalizeWeeklyPlanTodayPlanDate(task.todayPlanDate);
-  if (!date) return { task, stripped: false };
   const markAt = getTodayPlanDateUpdatedAt(task);
-  if (markAt > tombAt) return { task, stripped: false };
-  const next = Object.assign({}, task, { todayPlanDate: "" });
-  return { task: next, stripped: true };
+  if (date && markAt > tombAt) return { task, stripped: false };
+  const next = Object.assign({}, task);
+  let stripped = false;
+  if (date) {
+    next.todayPlanDate = "";
+    stripped = true;
+  }
+  if (markAt > 0 && markAt <= tombAt) next.todayPlanDateUpdatedAt = markAt;
+  else next.todayPlanDateUpdatedAt = tombAt;
+  return { task: next, stripped };
 }
 
 function mergeSprintImportFixed(local, remote, tombAt) {
@@ -134,11 +141,30 @@ function mergeSprintImportFixed(local, remote, tombAt) {
   else if (Object.prototype.hasOwnProperty.call(local, "todayPlanDateUpdatedAt")) {
     merged.todayPlanDateUpdatedAt = local.todayPlanDateUpdatedAt;
   }
+  /* 出口硬挡：对齐 mergeWeeklyPlanOneTaskForSync → applyTodayPlanMarkTombstoneOnImport */
+  const guarded = stripHangIfTombstoned(merged, tombAt);
   return {
-    task: merged,
-    tombCleared: picked.tombCleared,
+    task: guarded.task,
+    tombCleared: picked.tombCleared && !guarded.stripped,
     bypassedPick: false,
-    stripped: false
+    stripped: guarded.stripped
+  };
+}
+
+/** 等价 collectRawWeeklyPlanTasksForTodayPlan：非空 todayPlanDate 才进其他任务 */
+function wouldAppearInOtherTasks(task, todayKey) {
+  return normalizeWeeklyPlanTodayPlanDate(task && task.todayPlanDate) === todayKey;
+}
+
+/** 模拟 removeTodayPlanOtherTask 解绑态（空挂牌 + leave 时钟 + tomb） */
+function simulateRemoveTodayPlanOther(task, leaveAt) {
+  return {
+    id: task.id,
+    text: task.text,
+    todayPlanDate: "",
+    todayPlanDateUpdatedAt: leaveAt,
+    updatedAt: leaveAt,
+    microTasks: Array.isArray(task.microTasks) ? task.microTasks : []
   };
 }
 
@@ -432,6 +458,105 @@ test("MARKS 摘牌空 date 使用挂牌时钟且不强制 Date.now", function ()
   }
 });
 
+/* —— 验收 A/B/C/F：删除 → 刷新/旧云 → 不复活；主动重新加入可恢复 —— */
+
+test("A/F DEL-REFRESH 删除后合并旧 Sprint 挂牌不得进其他任务", function () {
+  const leaveAt = t0 + 10000;
+  const tombAt = leaveAt + 1;
+  const local = simulateRemoveTodayPlanOther(
+    { id: "del-rf", text: "用GPT制作报价制作流程表" },
+    leaveAt
+  );
+  const staleCloud = {
+    id: "del-rf",
+    text: "用GPT制作报价制作流程表",
+    todayPlanDate: TODAY,
+    todayPlanDateUpdatedAt: t0 + 50,
+    updatedAt: leaveAt + 99999
+  };
+  const out = mergeSprint(local, staleCloud, tombAt);
+  assert.equal(normalizeWeeklyPlanTodayPlanDate(out.task.todayPlanDate), "");
+  assert.ok(getTodayPlanDateUpdatedAt(out.task) <= tombAt);
+  assert.equal(wouldAppearInOtherTasks(out.task, TODAY), false);
+});
+
+test("B DEL-CLOUD-STALE 缺挂牌时钟的旧云端非空不得复活", function () {
+  const tombAt = t0 + 11000;
+  const local = {
+    id: "del-stale",
+    todayPlanDate: "",
+    todayPlanDateUpdatedAt: tombAt,
+    updatedAt: tombAt
+  };
+  const staleNoMarkClock = {
+    id: "del-stale",
+    todayPlanDate: TODAY,
+    updatedAt: tombAt + 88888
+  };
+  const out = mergeSprint(local, staleNoMarkClock, tombAt);
+  assert.equal(normalizeWeeklyPlanTodayPlanDate(out.task.todayPlanDate), "");
+  assert.equal(wouldAppearInOtherTasks(out.task, TODAY), false);
+  /* 剥牌后不得继承远端正文 updatedAt 当挂牌时钟 */
+  assert.ok(getTodayPlanDateUpdatedAt(out.task) <= tombAt);
+});
+
+test("B2 Object.assign 误带远端大挂牌时钟时出口仍剥牌并收敛", function () {
+  const tombAt = t0 + 12000;
+  const poisoned = {
+    id: "poison",
+    todayPlanDate: TODAY,
+    todayPlanDateUpdatedAt: tombAt - 100,
+    updatedAt: tombAt + 50000
+  };
+  const guarded = stripHangIfTombstoned(poisoned, tombAt);
+  assert.equal(guarded.stripped, true);
+  assert.equal(normalizeWeeklyPlanTodayPlanDate(guarded.task.todayPlanDate), "");
+  assert.equal(getTodayPlanDateUpdatedAt(guarded.task), tombAt - 100);
+});
+
+test("C REJOIN 删除后主动重新加入（joinTime>tomb）可恢复", function () {
+  const leaveAt = t0 + 13000;
+  const tombAt = leaveAt + 1;
+  const local = simulateRemoveTodayPlanOther({ id: "rejoin2", text: "拿移动硬盘去公司" }, leaveAt);
+  const rejoin = {
+    id: "rejoin2",
+    text: "拿移动硬盘去公司",
+    todayPlanDate: TODAY,
+    todayPlanDateUpdatedAt: tombAt + 5,
+    updatedAt: tombAt + 5
+  };
+  const out = mergeSprint(local, rejoin, tombAt);
+  assert.equal(normalizeWeeklyPlanTodayPlanDate(out.task.todayPlanDate), TODAY);
+  assert.equal(wouldAppearInOtherTasks(out.task, TODAY), true);
+});
+
+test("D 删除挂靠不破坏实体字段与 microTasks 引用结构", function () {
+  const leaveAt = t0 + 14000;
+  const tombAt = leaveAt + 2;
+  const local = simulateRemoveTodayPlanOther(
+    {
+      id: "keep-entity",
+      text: "实体应保留",
+      microTasks: [{ id: "m1", text: "子", done: false }]
+    },
+    leaveAt
+  );
+  const remote = {
+    id: "keep-entity",
+    text: "实体应保留",
+    todayPlanDate: TODAY,
+    todayPlanDateUpdatedAt: leaveAt - 100,
+    updatedAt: leaveAt + 1000,
+    microTasks: [{ id: "m1", text: "子", done: false }]
+  };
+  const out = mergeSprint(local, remote, tombAt);
+  assert.equal(out.task.id, "keep-entity");
+  assert.equal(out.task.text, "实体应保留");
+  assert.equal(normalizeWeeklyPlanTodayPlanDate(out.task.todayPlanDate), "");
+  assert.ok(Array.isArray(out.task.microTasks));
+  assert.equal(out.task.microTasks[0].id, "m1");
+});
+
 if (CHECK_HTML && !USE_LEGACY) {
   test("HTML 含 todayPlanDateUpdatedAt 与挂牌时钟解封", function () {
     const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
@@ -442,6 +567,28 @@ if (CHECK_HTML && !USE_LEGACY) {
       html,
       /aliyunTodayPlanRealCloneMarkForCloud[\s\S]{0,400}Math\.max\(updatedAt,\s*Date\.now\(\)\)/
     );
+  });
+
+  test("HTML merge 出口与 remove 先落盘再推云", function () {
+    const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
+    assert.match(
+      html,
+      /normalizeWeeklyPlanTask\(merged\);\s*\n\s*return typeof applyTodayPlanMarkTombstoneOnImport/
+    );
+    assert.match(
+      html,
+      /function applyTodayPlanMarkTombstoneOnImport[\s\S]{0,800}todayPlanDateUpdatedAt = tombAt/
+    );
+    const rmIdx = html.indexOf("function removeTodayPlanOtherTask");
+    assert.ok(rmIdx > 0);
+    const rmSlice = html.slice(rmIdx, rmIdx + 2800);
+    const saveIdx = rmSlice.indexOf("saveState({ skipUiPaintDirty: true })");
+    const notifyIdx = rmSlice.indexOf("notifyAliyunSprintRealForTaskId");
+    const noteIdx = rmSlice.indexOf("noteCloudSyncTodayPlanPulseTaskId");
+    assert.ok(saveIdx > 0 && notifyIdx > 0 && noteIdx > 0);
+    assert.ok(saveIdx < notifyIdx, "saveState 须在 Sprint notify 之前");
+    assert.ok(saveIdx < noteIdx, "saveState 须在 todayPlan pulse note 之前");
+    assert.match(rmSlice, /recordTodayPlanMarkRemoved/);
   });
 }
 
