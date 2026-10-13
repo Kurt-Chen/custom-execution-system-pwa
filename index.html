@@ -32625,6 +32625,17 @@
       }
     }
 
+    /* 壶铃来源中的公斤数加黑加粗（桌面 / 平板可见来源时） */
+    #forgeModule .forge-wm-source-label .forge-wm-source-kg {
+      font-weight: 700;
+      color: #0f172a;
+    }
+
+    #forgeModule .forge-weekly-min-row--complete .forge-wm-source-label .forge-wm-source-kg {
+      color: #475569;
+      font-weight: 700;
+    }
+
     #forgeModule .forge-weekly-min-row--complete .forge-wm-name-display {
       color: #94a3b8;
     }
@@ -147679,6 +147690,27 @@
       return "Forge · 壶铃 · " + w + "kg";
     }
 
+    /** 来源行填充：壶铃公斤数（16kg/24kg）单独加粗；无 HTML 注入用户原文 */
+    function forgeWmSetSourceLabelContent(el, sourceText, fallbackSub) {
+      if (!el) return;
+      while (el.firstChild) el.removeChild(el.firstChild);
+      const src = String(sourceText || "").trim();
+      if (!src) {
+        el.textContent = String(fallbackSub || "");
+        return;
+      }
+      const m = src.match(/^(.*?)(\d+\s*kg)\s*$/i);
+      if (!m) {
+        el.textContent = src;
+        return;
+      }
+      if (m[1]) el.appendChild(document.createTextNode(m[1]));
+      const kgEl = document.createElement("strong");
+      kgEl.className = "forge-wm-source-kg";
+      kgEl.textContent = m[2].replace(/\s+/g, "");
+      el.appendChild(kgEl);
+    }
+
     /** 解析周最低壶铃动作：必须落到具体 ·16 / ·24，与来源打卡卡对应 */
     function forgeResolveKbWeeklyMinFromLabel(labelRaw) {
       let raw = String(labelRaw || "").trim();
@@ -198181,15 +198213,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           el.querySelectorAll(".forge-wm-t-name-primary").forEach(function (d) {
             d.textContent = parts.primary || nm || "\u2014";
           });
-          /* 手机端不标来源；平板/桌面用 source-label 更小字号与动作名区分 */
+          /* 手机端不标来源；平板/桌面用 source-label；壶铃 kg 加黑 */
           el.querySelectorAll(".forge-wm-t-name-sub").forEach(function (d) {
-            const show = sourceText || parts.sub || "";
-            d.textContent = show;
+            if (typeof forgeWmSetSourceLabelContent === "function") {
+              forgeWmSetSourceLabelContent(d, sourceText, parts.sub || "");
+            } else {
+              d.textContent = sourceText || parts.sub || "";
+            }
             d.classList.toggle("forge-wm-source-label", !!sourceText);
           });
           el.querySelectorAll(".forge-wm-name-remark").forEach(function (d) {
-            const show = sourceText || parts.sub || "";
-            d.textContent = show;
+            if (typeof forgeWmSetSourceLabelContent === "function") {
+              forgeWmSetSourceLabelContent(d, sourceText, parts.sub || "");
+            } else {
+              d.textContent = sourceText || parts.sub || "";
+            }
             d.classList.toggle("forge-wm-source-label", !!sourceText);
           });
           el.querySelectorAll(".forge-wm-subtitle").forEach(function (d) {
