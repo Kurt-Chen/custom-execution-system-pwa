@@ -111878,6 +111878,26 @@
       }
     }
 
+    /**
+     * 十二周年纯标题文案：落盘 + 云同步队列（与 week-change 同路径），
+     * 不标 UI 脏、不挂 deferred render（DOM 已由 patchAnniversaryTwTitleDom 更新）。
+     */
+    function saveStateAfterAnniversaryWeekTextChange(moduleKey, weekNum) {
+      noteCloudSyncAnniversaryPulseWeek(moduleKey, weekNum);
+      /* skipUiPaintDirty：避免解锁后 render(true) 连刷 Done/封闭清单 */
+      saveState({ lists: ["closedList"], skipUiPaintDirty: true });
+      cloudSyncLastFullPushAt = 0;
+      if (typeof scheduleCloudSyncFullPushDeferred === "function") {
+        scheduleCloudSyncFullPushDeferred();
+      }
+      /* 阿里云十二周年：与 week-change 相同通知，不改同步语义 */
+      try {
+        if (typeof notifyAliyunAnnivRealWeekUpsert === "function") {
+          notifyAliyunAnnivRealWeekUpsert(moduleKey, weekNum, "anniversary-week-change");
+        }
+      } catch (_annivTextPush) {}
+    }
+
     /** 截止期限修改后：记入 pulse 范围并立即上传 */
     function saveStateAfterDeadlineChange(opts) {
       const o = opts && typeof opts === "object" ? opts : {};
@@ -172734,8 +172754,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return getWeeklyPlanTasksForWeekKey(getWeeklyPlanViewSprintStartKey());
     }
 
-    function saveWeeklyPlanTasksForWeek(tasks, weekKeyOverride) {
+    /**
+     * @param {object} [opts]
+     * @param {boolean} [opts.textOnly] 纯标题文案：落盘+同步，不脏 Done/封闭清单、不标 UI paint
+     */
+    function saveWeeklyPlanTasksForWeek(tasks, weekKeyOverride, opts) {
       const k = weekKeyOverride != null ? weekKeyOverride : getWeeklyPlanViewSprintStartKey();
+      const o = opts && typeof opts === "object" ? opts : {};
       if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
         state.weeklyPlan = {};
       }
@@ -172770,7 +172795,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         });
       }
       noteCloudSyncWeeklyPlanPulseWeekKey(k);
-      saveState({ lists: ["weeklyPlan", "done", "closedList"] });
+      if (o.textOnly) {
+        /* 纯文案：保留 saveState 落盘/云入队；勿脏 Done/Closed，勿触发整表 paint */
+        saveState({ lists: ["weeklyPlan"], skipUiPaintDirty: true });
+      } else {
+        saveState({ lists: ["weeklyPlan", "done", "closedList"] });
+      }
       /* 阿里云 3-Day Sprint：默认随主路径；不阻塞 UI */
       try {
         if (typeof notifyAliyunSprintRealWeekUpsert === "function") {
@@ -174237,8 +174267,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!task) return;
       task.text = text;
       touchWeeklyPlanTaskRevision(task);
-      saveWeeklyPlanTasksForWeek(tasks);
-      refreshWeeklyPlanListAfterStructureChange();
+      saveWeeklyPlanTasksForWeek(tasks, null, { textOnly: true });
+      /* 仅 patch 当前标题 DOM；勿整表 renderWeeklyPlanList / 勿刷 Done·Closed */
+      if (!patchWeeklyPlanTaskTitleDom(taskId, text)) {
+        /* DOM 找不到时才回退整表（罕见：壳未挂载） */
+        refreshWeeklyPlanListAfterStructureChange();
+      }
     }
 
     function updateWeeklyPlanDeadline(taskId, msOrNull) {
@@ -174434,8 +174468,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       m.text = String(newText || "").trim();
       m.updatedAt = Date.now();
       touchWeeklyPlanTaskRevision(task);
-      saveWeeklyPlanTasksForWeek(tasks);
-      refreshWeeklyPlanListAfterStructureChange();
+      saveWeeklyPlanTasksForWeek(tasks, null, { textOnly: true });
+      if (!patchWeeklyPlanMicroTitleDom(taskId, microId, m.text)) {
+        refreshWeeklyPlanListAfterStructureChange();
+      }
     }
 
     function deleteWeeklyPlanMicroTask(taskId, microId) {
@@ -178514,6 +178550,44 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
       });
       return mLi;
+    }
+
+    /** 三天冲刺主任务标题：只改当前卡片 display/input，不重建列表 */
+    function patchWeeklyPlanTaskTitleDom(taskId, text) {
+      const li = document.getElementById("weeklyPlanTask-" + String(taskId));
+      if (!li) return false;
+      const t = String(text || "");
+      const trimmed = t.trim();
+      const display = li.querySelector(".weekly-plan-main-title-display");
+      const input = li.querySelector("input.weekly-plan-main-title-input");
+      if (!display && !input) return false;
+      if (display) {
+        display.textContent = t;
+        display.title = trimmed;
+      }
+      if (input) input.value = t;
+      return true;
+    }
+
+    /** 三天冲刺子任务标题：只改当前 micro 行 */
+    function patchWeeklyPlanMicroTitleDom(taskId, microId, text) {
+      const li = document.getElementById("weeklyPlanTask-" + String(taskId));
+      if (!li) return false;
+      const mid = String(microId || "");
+      if (!mid) return false;
+      const mLi = li.querySelector('.weekly-plan-micro-item[data-micro-id="' + mid + '"]');
+      if (!mLi) return false;
+      const t = String(text || "");
+      const trimmed = t.trim();
+      const display = mLi.querySelector(".weekly-plan-main-title-display");
+      const input = mLi.querySelector("input.weekly-plan-main-title-input");
+      if (!display && !input) return false;
+      if (display) {
+        display.textContent = t;
+        display.title = trimmed;
+      }
+      if (input) input.value = t;
+      return true;
     }
 
     function patchWeeklyPlanAfterMicroAdded(taskId, micro) {
