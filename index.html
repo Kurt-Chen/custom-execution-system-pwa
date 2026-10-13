@@ -21081,22 +21081,24 @@
       background: #faf5ff;
       color: #7e22ce;
     }
+    /* 「···」操作菜单：紧凑列表（非胶囊），fixed 浮层紧贴触发钮 */
     .weekly-plan-task-ops-menu-panel {
       position: fixed;
       left: -9999px;
       top: -9999px;
-      z-index: 10050;
-      min-width: 120px;
-      max-width: calc(100vw - 16px);
-      padding: 6px;
-      border-radius: 12px;
+      z-index: 10060;
+      width: 112px;
+      min-width: 100px;
+      max-width: 120px;
+      padding: 4px;
+      border-radius: 10px;
       border: 1px solid #e2e8f0;
       background: #fff;
-      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.10);
       box-sizing: border-box;
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 0;
     }
     .weekly-plan-task-ops-menu-panel[hidden] {
       display: none !important;
@@ -21105,12 +21107,17 @@
       display: flex;
       align-items: center;
       justify-content: flex-start;
+      gap: 8px;
       width: 100%;
       margin: 0;
-      font-size: 10px;
+      min-height: 36px;
+      height: 38px;
+      font-size: 13px;
       font-weight: 600;
-      padding: 6px 10px;
-      border-radius: 999px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
       cursor: pointer;
       line-height: 1.2;
       white-space: nowrap;
@@ -21119,15 +21126,38 @@
       -webkit-tap-highlight-color: transparent;
       touch-action: manipulation;
     }
+    .weekly-plan-task-ops-menu-panel .weekly-plan-task-ops-menu-item__icon {
+      flex: 0 0 auto;
+      width: 16px;
+      height: 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .weekly-plan-task-ops-menu-panel .weekly-plan-task-ops-menu-item__icon svg {
+      width: 14px;
+      height: 14px;
+      display: block;
+    }
     .weekly-plan-task-ops-menu-panel .weekly-plan-task-ops-menu-item--edit {
-      border: 1px solid #93c5fd;
-      background: #eff6ff;
       color: #1d4ed8;
     }
+    .weekly-plan-task-ops-menu-panel .weekly-plan-task-ops-menu-item--edit .weekly-plan-task-ops-menu-item__icon {
+      color: #2563eb;
+    }
     .weekly-plan-task-ops-menu-panel .weekly-plan-task-ops-menu-item--delete {
-      border: 1px solid #fca5a5;
-      background: #fef2f2;
       color: #b91c1c;
+    }
+    .weekly-plan-task-ops-menu-panel .weekly-plan-task-ops-menu-item--delete .weekly-plan-task-ops-menu-item__icon {
+      color: #dc2626;
+    }
+    .weekly-plan-task-ops-menu-panel .weekly-plan-task-ops-menu-item:hover,
+    .weekly-plan-task-ops-menu-panel .weekly-plan-task-ops-menu-item:active {
+      background: #f8fafc;
+    }
+    .weekly-plan-task-ops-menu-panel .weekly-plan-task-ops-menu-item--delete:hover,
+    .weekly-plan-task-ops-menu-panel .weekly-plan-task-ops-menu-item--delete:active {
+      background: #fef2f2;
     }
 
     #weeklyPlanSection .weekly-plan-add-lane-btn {
@@ -103993,7 +104023,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261013b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261013c";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -163866,6 +163896,58 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       panel.style.visibility = "";
     }
 
+    /**
+     * 任务「···」菜单定位：右缘对齐触发钮，间隙 6px，底部不足则上翻。
+     * 不改 Done 行菜单逻辑；宽度锁在 100–120。
+     */
+    function syncTaskOpsMenuPanelPosition(panel, trigger) {
+      if (!panel || !trigger) return;
+      const r = trigger.getBoundingClientRect();
+      const gap = 6;
+      const vv = window.visualViewport;
+      const viewW = vv && Number.isFinite(vv.width) ? vv.width : window.innerWidth;
+      const viewH = vv && Number.isFinite(vv.height) ? vv.height : window.innerHeight;
+      const viewLeft = vv && Number.isFinite(vv.offsetLeft) ? vv.offsetLeft : 0;
+      const viewTop = vv && Number.isFinite(vv.offsetTop) ? vv.offsetTop : 0;
+      const edge = 8;
+      const targetW = 112;
+      panel.style.position = "fixed";
+      panel.style.width = targetW + "px";
+      panel.style.minWidth = "100px";
+      panel.style.maxWidth = "120px";
+      panel.style.right = "auto";
+      panel.style.margin = "0";
+      panel.style.visibility = "hidden";
+      panel.style.left = viewLeft + edge + "px";
+      panel.style.top = viewTop + edge + "px";
+      panel.style.zIndex = "10060";
+      const w = Math.min(
+        Math.max(panel.offsetWidth || targetW, 100),
+        120,
+        Math.max(80, viewW - edge * 2)
+      );
+      const h = Math.max(panel.offsetHeight || 0, panel.getBoundingClientRect().height || 0, 1);
+      let left = r.right - w;
+      if (left < viewLeft + edge) left = viewLeft + edge;
+      if (left + w > viewLeft + viewW - edge) {
+        left = Math.max(viewLeft + edge, viewLeft + viewW - w - edge);
+      }
+      let top = r.bottom + gap;
+      const spaceBelow = viewTop + viewH - edge - (r.bottom + gap);
+      const spaceAbove = r.top - gap - (viewTop + edge);
+      if (spaceBelow < h && spaceAbove >= h) {
+        top = r.top - h - gap;
+      } else if (spaceBelow < h && spaceAbove < h) {
+        top =
+          spaceAbove > spaceBelow
+            ? Math.max(viewTop + edge, r.top - h - gap)
+            : Math.min(r.bottom + gap, viewTop + viewH - edge - h);
+      }
+      panel.style.left = left + "px";
+      panel.style.top = top + "px";
+      panel.style.visibility = "";
+    }
+
     function doneRowMenuEventTargetElement(ev) {
       const t = ev && ev.target;
       if (!t) return null;
@@ -170932,12 +171014,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const panel = ensureWeeklyPlanTaskOpsMenuPanel();
       panel.replaceChildren();
 
-      function mkItem(cls, label, action) {
+      function mkItem(cls, label, action, svgHtml) {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "weekly-plan-task-ops-menu-item " + cls;
         btn.setAttribute("role", "menuitem");
-        btn.textContent = label;
+        if (svgHtml) {
+          const icon = document.createElement("span");
+          icon.className = "weekly-plan-task-ops-menu-item__icon";
+          icon.setAttribute("aria-hidden", "true");
+          icon.innerHTML = svgHtml;
+          btn.appendChild(icon);
+        }
+        const text = document.createElement("span");
+        text.textContent = label;
+        btn.appendChild(text);
         btn.addEventListener("click", function (ev) {
           ev.preventDefault();
           ev.stopPropagation();
@@ -170961,9 +171052,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         panel.appendChild(btn);
       }
 
-      mkItem("weekly-plan-task-ops-menu-item--edit", "\u270E 编辑", "edit");
+      mkItem(
+        "weekly-plan-task-ops-menu-item--edit",
+        "编辑",
+        "edit",
+        typeof ICON_BTN_EDIT_SVG !== "undefined" ? ICON_BTN_EDIT_SVG : ""
+      );
       if (canDelete) {
-        mkItem("weekly-plan-task-ops-menu-item--delete", "删除", "delete");
+        mkItem(
+          "weekly-plan-task-ops-menu-item--delete",
+          "删除",
+          "delete",
+          typeof ICON_BTN_DELETE_SVG !== "undefined" ? ICON_BTN_DELETE_SVG : ""
+        );
       }
 
       if (weeklyPlanTaskOpsMenuTriggerEl && weeklyPlanTaskOpsMenuTriggerEl !== trigger) {
@@ -170975,7 +171076,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       trigger.setAttribute("aria-expanded", "true");
       trigger.classList.add("is-open");
       panel.hidden = false;
-      if (typeof syncDoneRowMenuPanelPosition === "function") {
+      if (typeof syncTaskOpsMenuPanelPosition === "function") {
+        syncTaskOpsMenuPanelPosition(panel, trigger);
+      } else if (typeof syncDoneRowMenuPanelPosition === "function") {
         syncDoneRowMenuPanelPosition(panel, trigger);
       }
     }
