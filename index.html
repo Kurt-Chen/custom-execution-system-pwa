@@ -143996,6 +143996,17 @@
       return changed;
     }
 
+    /**
+     * 人生进度表 → Done：业务默认分类 Neutral（中立流 · 0 分）。
+     * 写入 outcomeKind/outcomeScore，避免每周二卡停在「待选手动选 Neutral」。
+     */
+    function applyLife4000DoneDefaultOutcomeFields(item) {
+      if (!item || typeof item !== "object") return item;
+      item.outcomeKind = "neutral";
+      item.outcomeScore = 0;
+      return item;
+    }
+
     /** 人生进度表：仅每周二写入 My Done（每周期一条；定时器周二 5:55 触发） */
     function syncLife4000WeeklyToDone() {
       ensureLife4000WeeksState();
@@ -144016,18 +144027,20 @@
       }
       removeLife4000DoneCopy(tuesdayKey);
       const dateStr = formatDateInputValue(new Date());
-      state.done.unshift({
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
-        text: formatLife4000WeeklyDoneText(metrics),
-        completedAt: habitDateToCompletedAt(dateStr),
-        life4000Meta: {
-          tuesdayKey: tuesdayKey,
-          passed: metrics.passed,
-          remaining: metrics.remaining,
-          pct: metrics.pct,
-          endDateIso: metrics.endDate ? formatDateInputValue(metrics.endDate) : ""
-        }
-      });
+      state.done.unshift(
+        applyLife4000DoneDefaultOutcomeFields({
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+          text: formatLife4000WeeklyDoneText(metrics),
+          completedAt: habitDateToCompletedAt(dateStr),
+          life4000Meta: {
+            tuesdayKey: tuesdayKey,
+            passed: metrics.passed,
+            remaining: metrics.remaining,
+            pct: metrics.pct,
+            endDateIso: metrics.endDate ? formatDateInputValue(metrics.endDate) : ""
+          }
+        })
+      );
       state.life4000Weeks.lastDoneTuesdayKey = tuesdayKey;
       return true;
     }
@@ -164428,6 +164441,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         ) {
           item.outcomeKind = "power";
           if (item.outcomeScore == null) item.outcomeScore = 1;
+        }
+        /* 人生进度表周二周报：缺省 Neutral（显式选过的 power/treason 不覆盖） */
+        if (
+          item.life4000Meta &&
+          typeof item.life4000Meta === "object" &&
+          !hasExplicitDoneOutcomeKind(item)
+        ) {
+          item.outcomeKind = "neutral";
+          if (item.outcomeScore == null) item.outcomeScore = 0;
         }
         const k = item.outcomeKind;
         if (k && k !== "power" && k !== "neutral" && k !== "treason") {
