@@ -104637,7 +104637,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014h";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014i";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -120573,14 +120573,12 @@
             } catch (_setMerge) {
               settingsChanged = false;
             }
-            /* settings 合并后若紧急备份仍有更多日/周最低，立即并回（不整包 render） */
-            try {
-              const bakRaw = localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY);
-              if (bakRaw && typeof mergeForgeMinimumsFromParsedBackup === "function") {
-                const bakParsed = JSON.parse(bakRaw);
-                if (mergeForgeMinimumsFromParsedBackup(bakParsed)) settingsChanged = true;
-              }
-            } catch (_emergWm) {}
+            /*
+             * #297 曾在 Forge settings 拉取后自动从紧急备份并回日/周最低。
+             * 隔离复现：备份更富时会额外 saveState(done,forge) + 局部重渲，与连点路径叠加放大主线程阻塞。
+             * 现关闭该自动入口；紧急备份键与 window.restoreForgeWeeklyMinsFromEmergencyBackup 仍保留，需时手动恢复。
+             * 不裁剪 tombstone、不覆盖本机已恢复数据。
+             */
           }
           if (mergedCount || tombstoneApplied || settingsChanged) {
             if (uiPaintDirty == null) {
@@ -120593,6 +120591,10 @@
             }
             if (typeof markUiPaintSlicesDirty === "function") {
               markUiPaintSlicesDirty(["done", "forge"]);
+            }
+            /* 合并后再做一次整理，纳入同一次落盘，避免随后局部重渲裸 save */
+            if (typeof runForgeMinsAndRelatedHygienePass === "function") {
+              runForgeMinsAndRelatedHygienePass();
             }
             saveState({ lists: ["done", "forge"] });
           }
@@ -149110,7 +149112,7 @@
         });
       }
       migrateForgeMindMetaRowKeysIfNeeded._done = true;
-      if (changed) saveState();
+      return changed;
     }
 
     let forgeLifetimeAggCache = null;
@@ -149368,20 +149370,45 @@
       return changed;
     }
 
-    function refreshAllForgeTodayTaskRowsFromDone() {
-      if (migrateForgeSilvaPracticeKeysIfNeeded()) saveState();
-      migrateForgeMindMetaRowKeysIfNeeded();
+    /**
+     * Forge 日/周最低与相关 Done meta 整理：只改内存，返回是否有变更。
+     * 供明确数据变更入口 / 启动落盘；禁止在纯渲染路径里再 saveState。
+     */
+    function runForgeMinsAndRelatedHygienePass() {
+      let changed = false;
+      if (migrateForgeSilvaPracticeKeysIfNeeded()) changed = true;
       if (typeof repairForgeDoneMetaFromTextIfNeeded === "function" && repairForgeDoneMetaFromTextIfNeeded()) {
-        saveState();
+        changed = true;
       }
-      if (migrateForgeZhanZhuangToClubbellIfNeeded()) saveState();
-      if (migrateForgeArmDipToParallelBarDipIfNeeded()) saveState();
-      if (migrateForgeKbHaloHeadToNeckIfNeeded()) saveState();
+      if (migrateForgeZhanZhuangToClubbellIfNeeded()) changed = true;
+      if (migrateForgeArmDipToParallelBarDipIfNeeded()) changed = true;
+      if (migrateForgeKbHaloHeadToNeckIfNeeded()) changed = true;
       if (typeof migrateForgeCcCanonicalLabelsIfNeeded === "function" && migrateForgeCcCanonicalLabelsIfNeeded()) {
-        saveState();
+        changed = true;
       }
-      if (migrateForgeBodyMetaRowKeysIfNeeded()) saveState();
-      if (migrateForgeDailyMinimumsHygiene()) saveState();
+      if (migrateForgeBodyMetaRowKeysIfNeeded()) changed = true;
+      if (typeof migrateForgeDailyMinimumsHygiene === "function" && migrateForgeDailyMinimumsHygiene()) {
+        changed = true;
+      }
+      if (typeof migrateForgeWeeklyMinimumsHygiene === "function" && migrateForgeWeeklyMinimumsHygiene()) {
+        changed = true;
+      }
+      return changed;
+    }
+
+    /** 数据入口：整理后至多一次 saveState（forge+done），避免渲染路径连点放大 */
+    function persistForgeMinsAndRelatedHygieneIfNeeded() {
+      if (!runForgeMinsAndRelatedHygienePass()) return false;
+      saveState({ lists: ["forge", "done"] });
+      return true;
+    }
+
+    function refreshAllForgeTodayTaskRowsFromDone() {
+      /* 纯 UI 刷新：不在此落盘。日/周最低整理见 persistForgeMinsAndRelatedHygieneIfNeeded / 保存入口 */
+      /* Mind rowKey 依赖 DOM 卡片，首屏有面板时整理一次并单独落盘（会话内 _done，不放大连点） */
+      if (migrateForgeMindMetaRowKeysIfNeeded()) {
+        saveState({ lists: ["forge", "done"] });
+      }
       applyForgeTaskIdlePlaceholdersNoDailyGoal();
       const mod = document.getElementById("forgeModule");
       if (!mod) return;
@@ -193779,6 +193806,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           persistStateToLocalStorage();
         } catch (_bootRepairErr) {}
       }
+      /* Forge 日/周最低整理改到启动落盘，避免首屏 render 路径裸 saveState */
+      try {
+        if (typeof persistForgeMinsAndRelatedHygieneIfNeeded === "function") {
+          persistForgeMinsAndRelatedHygieneIfNeeded();
+        }
+      } catch (_bootForgeMinsHygiene) {}
       /* 清掉上一版 reconcile 误造的 AMB→Done 假打卡（升到 af 后仍残留的那条）；并补齐油箱/预设明天三赢 */
       try {
         if (
@@ -198239,9 +198272,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function renderForgeWeeklyMinRows() {
       ensureManualItemActionsGlobalDismiss();
-      if (migrateForgeWeeklyMinimumsHygiene()) {
-        saveState();
-      }
+      /* 纯渲染：不在此 migrate+saveState；整理见 persistForgeMinsAndRelatedHygieneIfNeeded */
+      ensureForgeWeeklyMinimumsState();
       const mindWrap = document.getElementById("forgeWeeklyMinRowsMind");
       const bodyWrap = document.getElementById("forgeWeeklyMinRowsBody");
       const sptWrap = document.getElementById("forgeWeeklyMinRowsSpt");
@@ -198509,6 +198541,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           }
           row.unit = inferForgeWpGoalUnit(row.label);
           row.weeklyMin = tgtInp ? tgtInp.value.trim() : "";
+          /* 单次落盘；日/周整理已在启动/拉取入口完成，勿在每次保存重跑 */
           saveState({ lists: ["forge"] });
         }
         function revertWeeklyMinInputsFromRow() {
@@ -198611,9 +198644,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function renderForgeDailyMinRows() {
       ensureManualItemActionsGlobalDismiss();
-      if (migrateForgeDailyMinimumsHygiene()) {
-        saveState();
-      }
+      /* 纯渲染：不在此 migrate+saveState；整理见 persistForgeMinsAndRelatedHygieneIfNeeded */
+      ensureForgeDailyMinimumsState();
       const mindWrap = document.getElementById("forgeDailyMinRowsMind");
       const bodyWrap = document.getElementById("forgeDailyMinRowsBody");
       const sptWrap = document.getElementById("forgeDailyMinRowsSpt");
