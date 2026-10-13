@@ -32657,14 +32657,14 @@
       }
     }
 
-    /* 壶铃来源中的公斤数加黑加粗（桌面 / 平板可见来源时） */
-    #forgeModule .forge-wm-source-label .forge-wm-source-kg {
+    /* 壶铃动作名中的公斤数：蓝色加粗（壶铃绕颈·24kg） */
+    #forgeModule .forge-wm-name-kg {
       font-weight: 700;
-      color: #0f172a;
+      color: #2563eb;
     }
 
-    #forgeModule .forge-weekly-min-row--complete .forge-wm-source-label .forge-wm-source-kg {
-      color: #475569;
+    #forgeModule .forge-weekly-min-row--complete .forge-wm-name-kg {
+      color: #60a5fa;
       font-weight: 700;
     }
 
@@ -147734,29 +147734,38 @@
     }
 
     function forgeKbSourceText(kg) {
-      const w = kg === "24" ? "24" : "16";
-      return "Forge · 壶铃 · " + w + "kg";
+      /* 公斤数改挂动作名（壶铃绕颈·24kg）；来源只标模块 */
+      return "Forge · 壶铃";
     }
 
-    /** 来源行填充：壶铃公斤数（16kg/24kg）单独加粗；无 HTML 注入用户原文 */
+    /** 来源行填充（纯文本；公斤已挪到动作名） */
     function forgeWmSetSourceLabelContent(el, sourceText, fallbackSub) {
       if (!el) return;
       while (el.firstChild) el.removeChild(el.firstChild);
-      const src = String(sourceText || "").trim();
-      if (!src) {
-        el.textContent = String(fallbackSub || "");
-        return;
+      el.textContent = String(sourceText || fallbackSub || "");
+    }
+
+    /** 动作名显示：壶铃绕颈·24kg（公斤蓝色加粗） */
+    function forgeWmSetKbNameDisplay(el, kb) {
+      if (!el || !kb || !kb.label) return false;
+      let w = kb.kg === "24" ? "24" : kb.kg === "16" ? "16" : "";
+      let base = String(kb.label || "").trim();
+      const mLabel = base.match(/^(.*?)[·・](16|24)\s*$/);
+      if (mLabel) {
+        base = mLabel[1].trim();
+        if (!w) w = mLabel[2];
       }
-      const m = src.match(/^(.*?)(\d+\s*kg)\s*$/i);
-      if (!m) {
-        el.textContent = src;
-        return;
+      if (!base || (w !== "16" && w !== "24")) {
+        el.textContent = base || String(kb.label || "");
+        return !!base;
       }
-      if (m[1]) el.appendChild(document.createTextNode(m[1]));
+      while (el.firstChild) el.removeChild(el.firstChild);
+      el.appendChild(document.createTextNode(base + "·"));
       const kgEl = document.createElement("strong");
-      kgEl.className = "forge-wm-source-kg";
-      kgEl.textContent = m[2].replace(/\s+/g, "");
+      kgEl.className = "forge-wm-name-kg";
+      kgEl.textContent = w + "kg";
       el.appendChild(kgEl);
+      return true;
     }
 
     /** 解析周最低壶铃动作：必须落到具体 ·16 / ·24，与来源打卡卡对应 */
@@ -147770,6 +147779,11 @@
       let working = raw.replace(/\s+/g, " ").trim();
       let kg = "";
       let m = working.match(/^(.*?)[（(]\s*(16|24)\s*kg\s*[）)]\s*$/i);
+      if (m) {
+        working = m[1].trim();
+        kg = m[2];
+      }
+      m = working.match(/^(.*?)[·・](16|24)\s*kg\s*$/i);
       if (m) {
         working = m[1].trim();
         kg = m[2];
@@ -198259,37 +198273,52 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           const tgN = !Number.isNaN(tg) && tg > 0 ? tg : 0;
           const liveUnit = (nm ? inferForgeWpGoalUnit(nm) : unitDisp) || "min";
           const goalText = tgN > 0 ? forgeWpFormatProgressNum(tgN) + " " + liveUnit : "\u2014";
+          const kbLive =
+            liveSrc && liveSrc.kind === "kb"
+              ? liveSrc
+              : typeof forgeResolveKbWeeklyMinFromLabel === "function"
+                ? forgeResolveKbWeeklyMinFromLabel(nm)
+                : null;
+          const sourceForUi = kbLive ? "Forge · 壶铃" : sourceText;
           el.querySelectorAll(".forge-wm-name-display").forEach(function (d) {
+            if (kbLive && typeof forgeWmSetKbNameDisplay === "function" && forgeWmSetKbNameDisplay(d, kbLive)) {
+              return;
+            }
             d.textContent = parts.primary || nm || "\u2014";
           });
           el.querySelectorAll(".forge-wm-t-name-primary").forEach(function (d) {
+            if (kbLive && typeof forgeWmSetKbNameDisplay === "function" && forgeWmSetKbNameDisplay(d, kbLive)) {
+              return;
+            }
             d.textContent = parts.primary || nm || "\u2014";
           });
-          /* 手机端不标来源；平板/桌面用 source-label；壶铃 kg 加黑 */
+          /* 手机端不标来源；平板/桌面来源不含 kg（kg 已在动作名） */
           el.querySelectorAll(".forge-wm-t-name-sub").forEach(function (d) {
+            const fallbackSub = kbLive ? "" : parts.sub || "";
             if (typeof forgeWmSetSourceLabelContent === "function") {
-              forgeWmSetSourceLabelContent(d, sourceText, parts.sub || "");
+              forgeWmSetSourceLabelContent(d, sourceForUi, fallbackSub);
             } else {
-              d.textContent = sourceText || parts.sub || "";
+              d.textContent = sourceForUi || fallbackSub;
             }
-            d.classList.toggle("forge-wm-source-label", !!sourceText);
+            d.classList.toggle("forge-wm-source-label", !!sourceForUi);
           });
           el.querySelectorAll(".forge-wm-name-remark").forEach(function (d) {
+            const fallbackSub = kbLive ? "" : parts.sub || "";
             if (typeof forgeWmSetSourceLabelContent === "function") {
-              forgeWmSetSourceLabelContent(d, sourceText, parts.sub || "");
+              forgeWmSetSourceLabelContent(d, sourceForUi, fallbackSub);
             } else {
-              d.textContent = sourceText || parts.sub || "";
+              d.textContent = sourceForUi || fallbackSub;
             }
-            d.classList.toggle("forge-wm-source-label", !!sourceText);
+            d.classList.toggle("forge-wm-source-label", !!sourceForUi);
           });
           el.querySelectorAll(".forge-wm-subtitle").forEach(function (d) {
-            d.textContent = parts.sub || "";
+            d.textContent = kbLive ? "" : parts.sub || "";
             d.classList.remove("forge-wm-source-label");
           });
           el.querySelectorAll(".forge-wm-goal-display").forEach(function (d) {
             d.textContent = goalText;
           });
-          if (sourceText) el.setAttribute("data-forge-wm-source", sourceText);
+          if (sourceForUi) el.setAttribute("data-forge-wm-source", sourceForUi);
           else el.removeAttribute("data-forge-wm-source");
           const liveTarget = tgN > 0 ? tgN : target;
           applyForgeWeeklyMinProgressUI(
