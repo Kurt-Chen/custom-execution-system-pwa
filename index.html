@@ -104637,7 +104637,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014e";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -120001,7 +120001,7 @@
     }
 
     /**
-     * 阿里云 settings 整片 LWW（按 updatedAt）。
+     * 阿里云 settings：kb/cc 整片 LWW（按 updatedAt）；日/周最低遵守「少不覆盖多」id 并集。
      * 不用 mergeForgeShallowMapsForSync：该函数对数字取 max，不适合作重量/阶梯选择。
      */
     function aliyunForgeRealApplyRemoteSettings(remoteSettings) {
@@ -120029,16 +120029,27 @@
           changed = true;
         }
       }
-      function assignArr(key) {
+      /** 日/周最低：禁止远端更少条数整片盖掉本机；一律 id 并集（与 Firebase pulse 合并一致） */
+      function assignMinListArr(key) {
         if (!Array.isArray(remoteSettings[key])) return;
-        let next;
+        let rem;
         try {
-          next = JSON.parse(JSON.stringify(remoteSettings[key]));
+          rem = JSON.parse(JSON.stringify(remoteSettings[key]));
         } catch (_c) {
-          next = remoteSettings[key].slice();
+          rem = remoteSettings[key].slice();
+        }
+        const loc = Array.isArray(state.forge[key]) ? state.forge[key] : [];
+        let next = rem;
+        if (typeof mergeIdRecordArraysPreferLocalOnTie === "function") {
+          if (rem.length < loc.length) {
+            next = mergeIdRecordArraysPreferLocalOnTie(loc, rem);
+          } else if (loc.length) {
+            /* 远端不少也不整片替换：并集避免他端缺行时冲掉本机独有动作 */
+            next = mergeIdRecordArraysPreferLocalOnTie(loc, rem);
+          }
         }
         try {
-          if (JSON.stringify(state.forge[key] || []) !== JSON.stringify(next)) {
+          if (JSON.stringify(loc) !== JSON.stringify(next)) {
             state.forge[key] = next;
             changed = true;
           }
@@ -120049,8 +120060,8 @@
       }
       assignObj("kbWeightKg");
       assignObj("ccProgressStep");
-      assignArr("dailyMinimums");
-      assignArr("weeklyMinimums");
+      assignMinListArr("dailyMinimums");
+      assignMinListArr("weeklyMinimums");
       if (remTs > locTs || changed) {
         state.forge.settingsUpdatedAt = remTs;
         if (remTs > locTs) changed = true;
@@ -120560,6 +120571,14 @@
             } catch (_setMerge) {
               settingsChanged = false;
             }
+            /* settings 合并后若紧急备份仍有更多日/周最低，立即并回（不整包 render） */
+            try {
+              const bakRaw = localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY);
+              if (bakRaw && typeof mergeForgeMinimumsFromParsedBackup === "function") {
+                const bakParsed = JSON.parse(bakRaw);
+                if (mergeForgeMinimumsFromParsedBackup(bakParsed)) settingsChanged = true;
+              }
+            } catch (_emergWm) {}
           }
           if (mergedCount || tombstoneApplied || settingsChanged) {
             if (uiPaintDirty == null) {
@@ -133737,6 +133756,106 @@
       } catch (_e) {}
     }
 
+    /**
+     * 从已解析的备份对象并回 Forge 日/周最低（备份条数更多时）。
+     * 供紧急备份恢复 / Forge settings 拉取后自愈共用。
+     */
+    function mergeForgeMinimumsFromParsedBackup(parsed) {
+      if (!parsed || typeof parsed !== "object" || !parsed.forge || typeof parsed.forge !== "object") {
+        return false;
+      }
+      if (!state.forge || typeof state.forge !== "object") state.forge = {};
+      let changed = false;
+      ["weeklyMinimums", "dailyMinimums"].forEach(function (key) {
+        const bakList = Array.isArray(parsed.forge[key]) ? parsed.forge[key] : [];
+        const locList = Array.isArray(state.forge[key]) ? state.forge[key] : [];
+        if (!bakList.length) return;
+        if (bakList.length <= locList.length && locList.length) return;
+        let next = bakList;
+        if (typeof mergeIdRecordArraysPreferLocalOnTie === "function" && locList.length) {
+          next = mergeIdRecordArraysPreferLocalOnTie(locList, bakList);
+        } else {
+          try {
+            next = JSON.parse(JSON.stringify(bakList));
+          } catch (_c) {
+            next = bakList.slice();
+          }
+        }
+        try {
+          if (JSON.stringify(locList) !== JSON.stringify(next)) {
+            state.forge[key] = next;
+            changed = true;
+          }
+        } catch (_cmp) {
+          state.forge[key] = next;
+          changed = true;
+        }
+      });
+      return changed;
+    }
+
+    /** 控制台：查看紧急备份里的周最低条数；可恢复时 restoreForgeWeeklyMinsFromEmergencyBackup() */
+    window.inspectForgeWeeklyMinsEmergencyBackup = function () {
+      try {
+        const bak = localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY);
+        if (!bak) return { ok: false, reason: "no-backup" };
+        const p = JSON.parse(bak);
+        const wm = p && p.forge && Array.isArray(p.forge.weeklyMinimums) ? p.forge.weeklyMinimums : [];
+        const live =
+          state.forge && Array.isArray(state.forge.weeklyMinimums) ? state.forge.weeklyMinimums : [];
+        const rows = wm.map(function (r) {
+          return {
+            realm: r && r.realm,
+            label: r && r.label,
+            weeklyMin: r && r.weeklyMin,
+            id: r && r.id
+          };
+        });
+        console.table(rows);
+        return {
+          ok: true,
+          backupCount: wm.length,
+          liveCount: live.length,
+          canRestore: wm.length > live.length,
+          rows: rows
+        };
+      } catch (e) {
+        return { ok: false, error: String(e && e.message ? e.message : e) };
+      }
+    };
+
+    window.restoreForgeWeeklyMinsFromEmergencyBackup = function () {
+      try {
+        const bak = localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY);
+        if (!bak) return { ok: false, reason: "no-backup" };
+        const p = JSON.parse(bak);
+        const before =
+          state.forge && Array.isArray(state.forge.weeklyMinimums)
+            ? state.forge.weeklyMinimums.length
+            : 0;
+        const changed = mergeForgeMinimumsFromParsedBackup(p);
+        if (!changed) {
+          return {
+            ok: false,
+            reason: "backup-not-richer",
+            backupCount:
+              p.forge && Array.isArray(p.forge.weeklyMinimums) ? p.forge.weeklyMinimums.length : 0,
+            liveCount: before
+          };
+        }
+        if (typeof saveState === "function") saveState({ lists: ["forge"] });
+        if (typeof render === "function") render();
+        const after =
+          state.forge && Array.isArray(state.forge.weeklyMinimums)
+            ? state.forge.weeklyMinimums.length
+            : 0;
+        console.warn("[forge] 已从紧急备份并回周最低：" + before + " → " + after);
+        return { ok: true, before: before, after: after };
+      } catch (e) {
+        return { ok: false, error: String(e && e.message ? e.message : e) };
+      }
+    };
+
     /** 从紧急备份并回本机缺失的 Done / 习惯打卡 / 十二周年周任务（不整包回滚） */
     function mergeMissingRecordsFromEmergencyBackup() {
       let bak = null;
@@ -133825,6 +133944,9 @@
             state.weeklyPlan = mergedWp;
             changed = true;
           }
+        }
+        if (mergeForgeMinimumsFromParsedBackup(parsed)) {
+          changed = true;
         }
         if (changed) {
           repairDoneListCompletedAtFromHabitMeta();
@@ -201439,11 +201561,28 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         typeof location !== "undefined" &&
         /(?:^|[?&])agentSeed=1(?:&|$)/.test(String(location.search || ""))
       ) {
+        /* 硬性：自动化不得推云 / 不得写阿里云 Forge settings，避免污染正式房间 */
+        try {
+          cloudSyncSuppressPush = true;
+        } catch (_sup) {}
+        try {
+          window.__ALIYUN_SYNC_PRIMARY_ENABLED = false;
+        } catch (_aliOff) {}
+        try {
+          if (typeof setAliyunSyncPrimaryEnabled === "function") {
+            setAliyunSyncPrimaryEnabled(false);
+          }
+        } catch (_aliSet) {}
         window.__agentGetState = function () {
           return state;
         };
         window.__agentSaveState = function () {
-          return saveState();
+          cloudSyncSuppressPush = true;
+          try {
+            return saveState({ skipUiPaintDirty: true });
+          } finally {
+            cloudSyncSuppressPush = true;
+          }
         };
         window.__agentRender = function () {
           return render();
@@ -201461,6 +201600,31 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               if (gate) gate.classList.add("hidden");
             }
           } catch (_u) {}
+        };
+        /** 控制台：从紧急备份并回 Forge 日/周最低（条数更多时） */
+        window.__agentRestoreForgeMinsFromEmergencyBackup = function () {
+          try {
+            if (typeof mergeMissingRecordsFromEmergencyBackup === "function") {
+              const ok = mergeMissingRecordsFromEmergencyBackup();
+              if (ok && typeof saveState === "function") {
+                const prev = cloudSyncSuppressPush;
+                cloudSyncSuppressPush = false;
+                try {
+                  saveState({ lists: ["forge"] });
+                } finally {
+                  cloudSyncSuppressPush = prev;
+                }
+              }
+              const n =
+                state.forge && Array.isArray(state.forge.weeklyMinimums)
+                  ? state.forge.weeklyMinimums.length
+                  : 0;
+              return { ok: ok, weeklyCount: n };
+            }
+          } catch (_e) {
+            return { ok: false, error: String(_e && _e.message ? _e.message : _e) };
+          }
+          return { ok: false };
         };
         /** Open List 同步空态守卫：仅 agentSeed 自动化用 */
         window.__agentSetCloudSyncStatus = function (text, statusClass) {
