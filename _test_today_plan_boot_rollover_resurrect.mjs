@@ -336,19 +336,35 @@ if (CHECK_HTML) {
     );
     assert.match(
       html,
-      /async function flushAliyunTodayPlanRealQueue[\s\S]{0,500}aliyunSyncPrimaryDeferFlushUntilBootPull/
+      /async function flushAliyunTodayPlanRealQueue[\s\S]{0,1600}aliyunSyncPrimaryDeferFlushUntilBootPull/
     );
     assert.match(
       html,
-      /async function flushAliyunSprintRealQueue[\s\S]{0,500}aliyunSyncPrimaryDeferFlushUntilBootPull/
+      /async function flushAliyunSprintRealQueue[\s\S]{0,1600}aliyunSyncPrimaryDeferFlushUntilBootPull/
+    );
+    assert.match(
+      html,
+      /async function flushAliyunTodayPlanRealQueue[\s\S]{0,1200}mutation\.op === "tombstone"/
     );
   });
 
   test("HTML：缓存版本已 bump", function () {
     const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
     const sw = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");
-    assert.match(html, /exec-system-pwa-v20261013o/);
-    assert.match(sw, /exec-system-pwa-v20261013o/);
+    assert.match(html, /exec-system-pwa-v20261013r/);
+    assert.match(sw, /exec-system-pwa-v20261013r/);
+  });
+
+  test("HTML：Sprint 本机 tomb 绝对挡云端高 updatedAt 复活", function () {
+    const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
+    assert.match(
+      html,
+      /本机已删（syncTombstones）绝对优先[\s\S]{0,280}if \(localTombAt > 0\) continue;/
+    );
+    assert.match(
+      html,
+      /flushAliyunSprintRealQueue[\s\S]{0,900}mutation\.op === "tombstone"/
+    );
   });
 }
 
