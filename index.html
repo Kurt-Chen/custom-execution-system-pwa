@@ -32617,6 +32617,64 @@
       word-break: break-word;
     }
 
+    /* 周最低动作名跳转：仅名称可点；目标/进度/⋯ 不受影响 */
+    #forgeModule .forge-wm-name-jump {
+      cursor: pointer;
+      text-decoration: none;
+      border-radius: 4px;
+    }
+
+    #forgeModule .forge-wm-name-jump:hover {
+      color: var(--primary, #2563eb);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    #forgeModule .forge-wm-name-jump:focus-visible {
+      outline: 2px solid rgba(37, 99, 235, 0.45);
+      outline-offset: 2px;
+    }
+
+    #forgeModule .forge-wm-jump-flash,
+    #habitRoutineModule .forge-wm-jump-flash {
+      animation: forge-wm-jump-flash-pulse 1.1s ease-out 1;
+      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35);
+      border-radius: 8px;
+    }
+
+    @keyframes forge-wm-jump-flash-pulse {
+      0% {
+        background-color: rgba(37, 99, 235, 0.16);
+      }
+      100% {
+        background-color: transparent;
+      }
+    }
+
+    .forge-wm-jump-hint {
+      position: fixed;
+      left: 50%;
+      bottom: 1.5rem;
+      transform: translateX(-50%) translateY(120%);
+      z-index: 12000;
+      max-width: min(92vw, 22rem);
+      padding: 0.55rem 0.9rem;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.92);
+      color: #f8fafc;
+      font-size: 13px;
+      line-height: 1.35;
+      text-align: center;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.18s ease, transform 0.18s ease;
+    }
+
+    .forge-wm-jump-hint.is-visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
     #forgeModule .forge-wm-name-remark {
       display: block;
       margin-top: 1px;
@@ -104637,7 +104695,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014l";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014m";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -105660,6 +105718,8 @@
     let activateKineticTab = null;
     /** Habit & Routine 顶栏子 Tab：切入模块时按星期默认页（周二→人生进度表，其余→习惯） */
     let activateHabitRoutineSubTab = null;
+    /** Forge 主胶囊 Tab 激活（initForgeModule 赋值；跳转复用，不落盘） */
+    let activateForgeMainSubTab = null;
     /** Purpose & Values 顶栏子 Tab：用于快捷跳转到 Extreme Agency 等面板 */
     let activatePurposeSubTab = null;
     let activePrimaryModuleKey = "dynamic";
@@ -147182,53 +147242,62 @@
 
     const FORGE_BODY_TAB_KEYS = ["kb", "bw", "cc", "bf"];
 
+    /**
+     * Body 子 Tab 显隐。persist=false 时仅导航（周最低名称跳转），不 saveState。
+     * 用户点击 Tab 仍 persist=true 保留原行为。
+     */
+    function selectForgeBodyTab(key, opts) {
+      const persist = !!(opts && opts.persist);
+      const list = document.querySelector('#forgeModule .forge-body-tabs[role="tablist"]');
+      if (!list) return;
+      const tabs = Array.from(list.querySelectorAll('.forge-body-tab[role="tab"]'));
+      const panels = document.querySelectorAll("#forgeModule .forge-body-tab-panel[data-forge-body-tab]");
+      let k = key;
+      if (k === "run") k = "bw";
+      if (k === "minStd") k = "kb";
+      if (FORGE_BODY_TAB_KEYS.indexOf(k) === -1) k = "kb";
+      tabs.forEach(function (btn) {
+        const id = btn.getAttribute("data-forge-body-tab");
+        const on = id === k;
+        btn.setAttribute("aria-selected", on ? "true" : "false");
+        btn.tabIndex = on ? 0 : -1;
+      });
+      panels.forEach(function (panel) {
+        const id = panel.getAttribute("data-forge-body-tab");
+        const on = id === k;
+        panel.toggleAttribute("hidden", !on);
+        panel.setAttribute("aria-hidden", on ? "false" : "true");
+      });
+      if (k === "cc") {
+        syncForgeCcProgressUi();
+      }
+      if (k === "kb") {
+        syncForgeKbWeightUi();
+      }
+      if (persist) {
+        if (!state.forge || typeof state.forge !== "object") state.forge = {};
+        state.forge.bodyTodayTab = k;
+        saveState();
+      }
+    }
+
     function bindForgeBodyCategoryTabs() {
       const list = document.querySelector("#forgeModule .forge-body-tabs[role=\"tablist\"]");
       if (!list || list.dataset.forgeBodyTabsBound === "1") return;
       list.dataset.forgeBodyTabsBound = "1";
       const tabs = Array.from(list.querySelectorAll(".forge-body-tab[role=\"tab\"]"));
-      const panels = document.querySelectorAll("#forgeModule .forge-body-tab-panel[data-forge-body-tab]");
-      function applyForgeBodyTab(key, persist) {
-        let k = key;
-        if (k === "run") k = "bw";
-        if (k === "minStd") k = "kb";
-        if (FORGE_BODY_TAB_KEYS.indexOf(k) === -1) k = "kb";
-        tabs.forEach((btn) => {
-          const id = btn.getAttribute("data-forge-body-tab");
-          const on = id === k;
-          btn.setAttribute("aria-selected", on ? "true" : "false");
-          btn.tabIndex = on ? 0 : -1;
-        });
-        panels.forEach((panel) => {
-          const id = panel.getAttribute("data-forge-body-tab");
-          const on = id === k;
-          panel.toggleAttribute("hidden", !on);
-          panel.setAttribute("aria-hidden", on ? "false" : "true");
-        });
-        if (k === "cc") {
-          syncForgeCcProgressUi();
-        }
-        if (k === "kb") {
-          syncForgeKbWeightUi();
-        }
-        if (persist) {
-          if (!state.forge || typeof state.forge !== "object") state.forge = {};
-          state.forge.bodyTodayTab = k;
-          saveState();
-        }
-      }
       let initial = "kb";
       if (state.forge && typeof state.forge === "object") {
         const saved = state.forge.bodyTodayTab;
         if (saved === "run") initial = "bw";
         else if (FORGE_BODY_TAB_KEYS.indexOf(saved) !== -1) initial = saved;
       }
-      applyForgeBodyTab(initial, false);
+      selectForgeBodyTab(initial, { persist: false });
       tabs.forEach((btn) => {
         btn.addEventListener("click", () => {
           const key = btn.getAttribute("data-forge-body-tab");
           if (!key) return;
-          applyForgeBodyTab(key, true);
+          selectForgeBodyTab(key, { persist: true });
         });
       });
       list.addEventListener("keydown", (e) => {
@@ -147249,39 +147318,45 @@
         e.preventDefault();
         const nextBtn = tabs[next];
         nextBtn.focus();
-        applyForgeBodyTab(nextBtn.getAttribute("data-forge-body-tab"), true);
+        selectForgeBodyTab(nextBtn.getAttribute("data-forge-body-tab"), { persist: true });
       });
     }
 
     const FORGE_MIND_TAB_KEYS = ["pc", "silva", "sto"];
+
+    /** Mind 子 Tab；persist=false 供周最低名称跳转，不落盘 */
+    function selectForgeMindTab(key, opts) {
+      const persist = !!(opts && opts.persist);
+      const list = document.querySelector('#forgeModule .forge-mind-tabs[role="tablist"]');
+      if (!list) return;
+      const tabs = Array.from(list.querySelectorAll('.forge-mind-tab[role="tab"]'));
+      const panels = document.querySelectorAll("#forgeModule .forge-mind-tab-panel[data-forge-mind-tab]");
+      let k = key;
+      if (FORGE_MIND_TAB_KEYS.indexOf(k) === -1) k = "pc";
+      tabs.forEach(function (btn) {
+        const id = btn.getAttribute("data-forge-mind-tab");
+        const on = id === k;
+        btn.setAttribute("aria-selected", on ? "true" : "false");
+        btn.tabIndex = on ? 0 : -1;
+      });
+      panels.forEach(function (panel) {
+        const id = panel.getAttribute("data-forge-mind-tab");
+        const on = id === k;
+        panel.toggleAttribute("hidden", !on);
+        panel.setAttribute("aria-hidden", on ? "false" : "true");
+      });
+      if (persist) {
+        if (!state.forge || typeof state.forge !== "object") state.forge = {};
+        state.forge.mindTodayTab = k;
+        saveState();
+      }
+    }
 
     function bindForgeMindCategoryTabs() {
       const list = document.querySelector("#forgeModule .forge-mind-tabs[role=\"tablist\"]");
       if (!list || list.dataset.forgeMindTabsBound === "1") return;
       list.dataset.forgeMindTabsBound = "1";
       const tabs = Array.from(list.querySelectorAll(".forge-mind-tab[role=\"tab\"]"));
-      const panels = document.querySelectorAll("#forgeModule .forge-mind-tab-panel[data-forge-mind-tab]");
-      function applyForgeMindTab(key, persist) {
-        let k = key;
-        if (FORGE_MIND_TAB_KEYS.indexOf(k) === -1) k = "pc";
-        tabs.forEach((btn) => {
-          const id = btn.getAttribute("data-forge-mind-tab");
-          const on = id === k;
-          btn.setAttribute("aria-selected", on ? "true" : "false");
-          btn.tabIndex = on ? 0 : -1;
-        });
-        panels.forEach((panel) => {
-          const id = panel.getAttribute("data-forge-mind-tab");
-          const on = id === k;
-          panel.toggleAttribute("hidden", !on);
-          panel.setAttribute("aria-hidden", on ? "false" : "true");
-        });
-        if (persist) {
-          if (!state.forge || typeof state.forge !== "object") state.forge = {};
-          state.forge.mindTodayTab = k;
-          saveState();
-        }
-      }
       let initial = "pc";
       if (state.forge && typeof state.forge === "object") {
         if (state.forge.mindTodayTab === "hub" || state.forge.mindTodayTab === "med") {
@@ -147291,12 +147366,12 @@
           initial = state.forge.mindTodayTab;
         }
       }
-      applyForgeMindTab(initial, false);
+      selectForgeMindTab(initial, { persist: false });
       tabs.forEach((btn) => {
         btn.addEventListener("click", () => {
           const key = btn.getAttribute("data-forge-mind-tab");
           if (!key) return;
-          applyForgeMindTab(key, true);
+          selectForgeMindTab(key, { persist: true });
         });
       });
       list.addEventListener("keydown", (e) => {
@@ -147317,7 +147392,7 @@
         e.preventDefault();
         const nextBtn = tabs[next];
         nextBtn.focus();
-        applyForgeMindTab(nextBtn.getAttribute("data-forge-mind-tab"), true);
+        selectForgeMindTab(nextBtn.getAttribute("data-forge-mind-tab"), { persist: true });
       });
     }
 
@@ -197424,6 +197499,317 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
     }
 
+    /** 周最低名称跳转：短提示（不落盘、不推云） */
+    function hideForgeWmJumpHint() {
+      const el = document.getElementById("forgeWmJumpHint");
+      if (!el) return;
+      el.classList.remove("is-visible");
+      if (showForgeWmJumpHint._timer) {
+        clearTimeout(showForgeWmJumpHint._timer);
+        showForgeWmJumpHint._timer = 0;
+      }
+    }
+
+    function showForgeWmJumpHint(msg) {
+      const text = String(msg || "").trim();
+      if (!text) return;
+      let el = document.getElementById("forgeWmJumpHint");
+      if (!el) {
+        el = document.createElement("div");
+        el.id = "forgeWmJumpHint";
+        el.className = "forge-wm-jump-hint";
+        el.setAttribute("role", "status");
+        el.setAttribute("aria-live", "polite");
+        document.body.appendChild(el);
+      }
+      el.textContent = text;
+      el.classList.add("is-visible");
+      if (showForgeWmJumpHint._timer) clearTimeout(showForgeWmJumpHint._timer);
+      showForgeWmJumpHint._timer = window.setTimeout(function () {
+        el.classList.remove("is-visible");
+        showForgeWmJumpHint._timer = 0;
+      }, 1800);
+    }
+
+    function flashForgeWmJumpTarget(el) {
+      if (!el || !el.classList) return;
+      el.classList.add("forge-wm-jump-flash");
+      if (el._forgeWmJumpFlashT) clearTimeout(el._forgeWmJumpFlashT);
+      el._forgeWmJumpFlashT = window.setTimeout(function () {
+        el.classList.remove("forge-wm-jump-flash");
+        el._forgeWmJumpFlashT = 0;
+      }, 1100);
+    }
+
+    function scrollForgeWmJumpTargetIntoView(el) {
+      if (!el || typeof el.scrollIntoView !== "function") return;
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          flashForgeWmJumpTarget(el);
+        });
+      });
+    }
+
+    /**
+     * 按稳定绑定解析跳转目标（habitKey / source.art|step|kg；结构化 cc/kb 解析）。
+     * 不靠模糊名称猜测；custom 或无法定位时返回 null。
+     */
+    function resolveForgeWmJumpTarget(wmRow) {
+      if (!wmRow || typeof wmRow !== "object") return null;
+      const habitKey = String(wmRow.habitKey || "").trim();
+      if (habitKey && typeof forgeHabitWeeklyMinBridgeByHabitKey === "function") {
+        if (forgeHabitWeeklyMinBridgeByHabitKey(habitKey)) {
+          return { kind: "habit", habitKey: habitKey };
+        }
+      }
+      const stored = wmRow.source && typeof wmRow.source === "object" ? wmRow.source : null;
+      if (stored && stored.kind === "custom") return null;
+      if (stored && stored.kind === "kb" && stored.art) {
+        return {
+          kind: "kb",
+          art: String(stored.art),
+          kg: stored.kg === "24" ? "24" : "16"
+        };
+      }
+      if (stored && stored.kind === "cc" && stored.art) {
+        return {
+          kind: "cc",
+          art: String(stored.art),
+          step: Number(stored.step) > 0 ? Number(stored.step) : 1
+        };
+      }
+      if (stored && stored.kind === "forge") {
+        const realm =
+          wmRow.realm === "mind" ? "mind" : wmRow.realm === "spt" ? "spt" : "body";
+        const rowKey = String((stored.label || wmRow.label || "").trim());
+        if (!rowKey || !findForgeTaskRowByWpKey(rowKey)) return null;
+        return { kind: "forge", realm: realm, rowKey: rowKey };
+      }
+      const live =
+        typeof forgeResolveWeeklyMinSource === "function" ? forgeResolveWeeklyMinSource(wmRow) : null;
+      if (!live || !live.kind || live.kind === "custom") return null;
+      if (live.kind === "habit") {
+        /* forgeResolveWeeklyMinSource 仅在 row.habitKey 存在时返回 habit */
+        if (!habitKey) return null;
+        return { kind: "habit", habitKey: habitKey };
+      }
+      if (live.kind === "kb" && live.art) {
+        return { kind: "kb", art: String(live.art), kg: live.kg === "24" ? "24" : "16" };
+      }
+      if (live.kind === "cc" && live.art) {
+        return {
+          kind: "cc",
+          art: String(live.art),
+          step: Number(live.step) > 0 ? Number(live.step) : 1
+        };
+      }
+      if (live.kind === "forge") {
+        /* 无 source 绑定时：仅当 DOM 上确有对应 data-forge-wp-row-key 才跳转 */
+        const realm =
+          wmRow.realm === "mind" ? "mind" : wmRow.realm === "spt" ? "spt" : "body";
+        const rowKey = String(live.label || wmRow.label || "").trim();
+        if (!rowKey || !findForgeTaskRowByWpKey(rowKey)) return null;
+        return { kind: "forge", realm: realm, rowKey: rowKey };
+      }
+      return null;
+    }
+
+    function findForgeTaskRowByWpKey(rowKey) {
+      const key = String(rowKey || "").trim();
+      if (!key) return null;
+      const mod = document.getElementById("forgeModule");
+      if (!mod) return null;
+      const rows = mod.querySelectorAll(".forge-task-row[data-forge-wp-row-key]");
+      for (let i = 0; i < rows.length; i++) {
+        if (String(rows[i].getAttribute("data-forge-wp-row-key") || "").trim() === key) {
+          return rows[i];
+        }
+      }
+      return null;
+    }
+
+    /** 打开祖先 details（壶铃/囚徒分类折叠），不改业务数据 */
+    function ensureForgeJumpAncestorsOpen(el) {
+      let node = el;
+      while (node && node !== document.body) {
+        if (node.tagName === "DETAILS" && !node.open) {
+          node.open = true;
+        }
+        node = node.parentElement;
+      }
+    }
+
+    /**
+     * 周最低名称 → Habit / Forge 打卡入口。
+     * 仅导航与滚动高亮；不 saveState、不推云、不整理、不全量刷卡、不自动打卡。
+     */
+    function jumpFromForgeWeeklyMinRow(wmRow) {
+      const target = resolveForgeWmJumpTarget(wmRow);
+      if (!target) {
+        showForgeWmJumpHint("未绑定打卡入口");
+        return false;
+      }
+      hideForgeWmJumpHint();
+      if (target.kind === "habit") {
+        const card = document.querySelector(
+          '#habitHabitsBundle .habit-en-row[data-habit-key="' + target.habitKey + '"]'
+        );
+        if (!card) {
+          showForgeWmJumpHint("找不到对应习惯");
+          return false;
+        }
+        const panel = card.closest(".habit-category-panel");
+        const cat = panel ? panel.getAttribute("data-habit-category") : "";
+        if (typeof jumpToHabitRoutineCategory === "function" && cat) {
+          jumpToHabitRoutineCategory(cat, target.habitKey);
+        } else if (typeof setPrimaryModuleFocus === "function") {
+          setPrimaryModuleFocus("habit");
+          scrollForgeWmJumpTargetIntoView(card);
+        } else {
+          scrollForgeWmJumpTargetIntoView(card);
+        }
+        flashForgeWmJumpTarget(card);
+        return true;
+      }
+
+      if (typeof setPrimaryModuleFocus === "function") {
+        setPrimaryModuleFocus("forge");
+      }
+      const realmTab =
+        target.kind === "forge"
+          ? target.realm === "mind"
+            ? "forge-mind"
+            : target.realm === "spt"
+              ? "forge-spt"
+              : "forge-body"
+          : "forge-body";
+      if (typeof activateForgeMainSubTab === "function") {
+        activateForgeMainSubTab(realmTab);
+      }
+
+      if (target.kind === "kb") {
+        if (typeof selectForgeBodyTab === "function") {
+          selectForgeBodyTab("kb", { persist: false });
+        }
+        const details = document.querySelector(
+          '#forgeModule details.forge-kb-art-details[data-forge-kb-art="' + target.art + '"]'
+        );
+        const kbKey = String(target.art) + String(target.kg);
+        let row =
+          document.querySelector('#forgeModule .forge-task-row[data-forge-kb="' + kbKey + '"]') ||
+          (details && details.querySelector(".forge-task-row"));
+        if (!row && details) row = details;
+        if (!row) {
+          showForgeWmJumpHint("找不到对应壶铃动作");
+          return false;
+        }
+        ensureForgeJumpAncestorsOpen(row);
+        if (row.hasAttribute && row.hasAttribute("hidden")) row.removeAttribute("hidden");
+        scrollForgeWmJumpTargetIntoView(row);
+        return true;
+      }
+
+      if (target.kind === "cc") {
+        if (typeof selectForgeBodyTab === "function") {
+          selectForgeBodyTab("cc", { persist: false });
+        }
+        const details = document.querySelector(
+          '#forgeModule details.forge-cc-art-details[data-forge-cc-art="' + target.art + '"]'
+        );
+        let row = null;
+        if (details && target.step > 0) {
+          row = details.querySelector(
+            '.forge-task-row[data-forge-cc-step="' + String(target.step) + '"]'
+          );
+        }
+        if (!row && details) row = details;
+        if (!row) {
+          showForgeWmJumpHint("找不到对应囚徒动作");
+          return false;
+        }
+        ensureForgeJumpAncestorsOpen(row);
+        /* 仅临时露出目标式以便滚动定位；不改 ccProgressStep、不 save */
+        if (row.hasAttribute("hidden")) row.removeAttribute("hidden");
+        scrollForgeWmJumpTargetIntoView(row);
+        return true;
+      }
+
+      if (target.kind === "forge") {
+        if (target.realm === "mind" && typeof selectForgeMindTab === "function") {
+          const rowProbe = findForgeTaskRowByWpKey(target.rowKey);
+          if (rowProbe) {
+            const mindPanel = rowProbe.closest(".forge-mind-tab-panel[data-forge-mind-tab]");
+            const mindKey = mindPanel && mindPanel.getAttribute("data-forge-mind-tab");
+            if (mindKey) selectForgeMindTab(mindKey, { persist: false });
+          }
+        } else if (target.realm === "body" && typeof selectForgeBodyTab === "function") {
+          const rowProbe = findForgeTaskRowByWpKey(target.rowKey);
+          if (rowProbe) {
+            const bodyPanel = rowProbe.closest(".forge-body-tab-panel[data-forge-body-tab]");
+            const bodyKey = bodyPanel && bodyPanel.getAttribute("data-forge-body-tab");
+            if (bodyKey) selectForgeBodyTab(bodyKey, { persist: false });
+          }
+        }
+        const row = findForgeTaskRowByWpKey(target.rowKey);
+        if (!row) {
+          showForgeWmJumpHint("找不到对应 Forge 动作");
+          return false;
+        }
+        ensureForgeJumpAncestorsOpen(row);
+        scrollForgeWmJumpTargetIntoView(row);
+        return true;
+      }
+
+      showForgeWmJumpHint("未绑定打卡入口");
+      return false;
+    }
+
+    /** 单个事件委托：周最低动作名点击跳转（避免每次 render 重复绑监听） */
+    function bindForgeWmNameJump() {
+      const root = document.getElementById("forgeModule");
+      if (!root || root.dataset.forgeWmNameJumpBound === "1") return;
+      root.dataset.forgeWmNameJumpBound = "1";
+      function onWmNameActivate(ev) {
+        const nameEl = ev.target.closest(".forge-wm-name-jump");
+        if (!nameEl || !root.contains(nameEl)) return;
+        if (
+          ev.target.closest(
+            ".manual-item-actions-wrap, .forge-weekly-min-save, .forge-weekly-min-edit, .forge-weekly-min-remove, .forge-weekly-min-target, .forge-wm-m-progress, .forge-wm-t-progress, .forge-wm-d-progress"
+          )
+        ) {
+          return;
+        }
+        const rowEl = nameEl.closest(".forge-weekly-min-row");
+        if (!rowEl || rowEl.classList.contains("forge-weekly-min-row--editing")) return;
+        const id = rowEl.getAttribute("data-forge-wm-id");
+        if (!id || !state.forge || !Array.isArray(state.forge.weeklyMinimums)) return;
+        let wmRow = null;
+        for (let i = 0; i < state.forge.weeklyMinimums.length; i++) {
+          const r = state.forge.weeklyMinimums[i];
+          if (r && String(r.id) === id) {
+            wmRow = r;
+            break;
+          }
+        }
+        if (!wmRow) {
+          showForgeWmJumpHint("未绑定打卡入口");
+          return;
+        }
+        ev.preventDefault();
+        ev.stopPropagation();
+        jumpFromForgeWeeklyMinRow(wmRow);
+      }
+      root.addEventListener("click", onWmNameActivate);
+      root.addEventListener("keydown", function (ev) {
+        if (ev.key !== "Enter" && ev.key !== " ") return;
+        const nameEl = ev.target.closest(".forge-wm-name-jump");
+        if (!nameEl || !root.contains(nameEl)) return;
+        ev.preventDefault();
+        onWmNameActivate(ev);
+      });
+    }
+
     /** 与 Sexual Performance 固定项一致：周最低标准中仅允许 realm=spt（腹肌轮 / 凯格尔 / 边缘控制） */
     function forgeWpIsSptExclusiveWeeklyMinName(nameRaw) {
       const key = forgeWpNormalizeTaskKey(String(nameRaw || "").split("/")[0].trim());
@@ -198631,17 +199017,44 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
                 ? forgeResolveKbWeeklyMinFromLabel(nm)
                 : null;
           const sourceForUi = kbLive ? "Forge · 壶铃" : sourceText;
+          const jumpTarget =
+            typeof resolveForgeWmJumpTarget === "function"
+              ? resolveForgeWmJumpTarget(Object.assign({}, row, { label: nm }))
+              : null;
+          const canJump = !!jumpTarget;
           el.querySelectorAll(".forge-wm-name-display").forEach(function (d) {
             if (kbLive && typeof forgeWmSetKbNameDisplay === "function" && forgeWmSetKbNameDisplay(d, kbLive)) {
-              return;
+              /* keep */
+            } else {
+              d.textContent = parts.primary || nm || "\u2014";
             }
-            d.textContent = parts.primary || nm || "\u2014";
+            d.classList.toggle("forge-wm-name-jump", canJump);
+            if (canJump) {
+              d.setAttribute("role", "link");
+              d.setAttribute("tabindex", "0");
+              d.setAttribute("title", "跳转到打卡入口");
+            } else {
+              d.removeAttribute("role");
+              d.removeAttribute("tabindex");
+              d.removeAttribute("title");
+            }
           });
           el.querySelectorAll(".forge-wm-t-name-primary").forEach(function (d) {
             if (kbLive && typeof forgeWmSetKbNameDisplay === "function" && forgeWmSetKbNameDisplay(d, kbLive)) {
-              return;
+              /* keep */
+            } else {
+              d.textContent = parts.primary || nm || "\u2014";
             }
-            d.textContent = parts.primary || nm || "\u2014";
+            d.classList.toggle("forge-wm-name-jump", canJump);
+            if (canJump) {
+              d.setAttribute("role", "link");
+              d.setAttribute("tabindex", "0");
+              d.setAttribute("title", "跳转到打卡入口");
+            } else {
+              d.removeAttribute("role");
+              d.removeAttribute("tabindex");
+              d.removeAttribute("title");
+            }
           });
           /* 手机端不标来源；平板/桌面来源不含 kg（kg 已在动作名） */
           el.querySelectorAll(".forge-wm-t-name-sub").forEach(function (d) {
@@ -199581,7 +199994,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const forgePanelRedPill = document.getElementById("forgePanelRedPill");
       const forgePanelSpt = document.getElementById("forgePanelSpt");
       /** 先挂 Tab，避免训练卡初始化抛错时 section.collapsed 把今日训练挖成空白 */
-      initModuleSubTabs(
+      activateForgeMainSubTab = initModuleSubTabs(
         forgeModule,
         [
           { key: "forge-today", label: "今日训练", iconKey: "flame", panelEl: forgePanelToday, toggleBtn: null },
@@ -199630,6 +200043,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       ensureForgeDailyMinimumsState();
       bindForgeWeeklyMinTabs();
       bindForgeWmModuleBars();
+      bindForgeWmNameJump();
       bindForgeDailyMinTabs();
       bindForgeWeeklyMinAddButton();
       renderForgeDailyMinRows();
