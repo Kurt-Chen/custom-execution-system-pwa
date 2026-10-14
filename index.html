@@ -89865,7 +89865,7 @@
                 <section class="submodule-card submodule-card-nested habit-en-row" data-habit-key="coldShower">
                   <div class="habit-en-icon habit-en-icon--shower" aria-hidden="true">🚿</div>
                   <div class="habit-en-body">
-                    <h3 class="submodule-title">洗冷水澡<span class="habit-en-title-capsule habit-en-title-capsule--dopamine-boost" aria-label="多巴胺水平长效提升2.5倍">多巴胺水平长效提升2.5倍</span></h3>
+                    <h3 class="submodule-title">洗冷水澡（早晚各一次）<span class="habit-en-title-capsule habit-en-title-capsule--dopamine-boost" aria-label="多巴胺水平长效提升2.5倍">多巴胺水平长效提升2.5倍</span></h3>
                   </div>
                   <div class="habit-en-actions">
                     <div class="habit-en-punch-meta">
@@ -104695,7 +104695,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014o";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014p";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -138379,7 +138379,7 @@
       silvaCodebreaker: "The Silva Codebreaker",
       lucidDream: "Lucid Dreaming【清醒梦】",
       imaginaryCounselors: "想象顾问（Counselors）",
-      coldShower: "洗冷水澡",
+      coldShower: "洗冷水澡（早晚各一次）",
       zhanZhuang: "站桩即自修",
       standingPantyhoseOneLegBrush: "站式穿裤袜 · 单腿站立刷牙",
       intermittentFasting: "间歇性断食",
@@ -172947,6 +172947,20 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       const markAt = Number(task && task.todayPlanDateUpdatedAt);
       if (Number.isFinite(markAt) && markAt > 0) base.todayPlanDateUpdatedAt = markAt;
+      /* 十二周年 → 其他任务：保留 mirrorOf，供归入去重与同步 */
+      const mo = task && task.mirrorOf;
+      if (mo && mo.kind === "anniversaryTw" && mo.module && mo.taskId != null) {
+        const mirrorOf = {
+          kind: "anniversaryTw",
+          module: String(mo.module),
+          weekNum: Number(mo.weekNum) || 0,
+          taskId: mo.taskId
+        };
+        if (mo.subId != null && String(mo.subId) !== "") {
+          mirrorOf.subId = mo.subId;
+        }
+        base.mirrorOf = mirrorOf;
+      }
       return base;
     }
 
@@ -173356,7 +173370,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return trigger;
     }
 
-    /** 十二周年「归入 ▾」：＋其他任务 / →封闭清单（复用原 toggle / promote，不改业务） */
+    /** 十二周年「归入 ▾」：＋其他任务（Open/todayPlanDate）/ →封闭清单（closedList mirror） */
     let anniversaryAssignMenuPanelEl = null;
     let anniversaryAssignMenuTriggerEl = null;
     let anniversaryAssignMenuCtx = null;
@@ -175403,17 +175417,169 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       render();
     }
 
-    /** 十二周年子/主任务是否已挂入今日封闭清单（按 mirror + 今日视图日） */
-    function isAnniversaryJoinedTodayPlan(module, weekNum, taskId, subIdOpt) {
-      const todayKey = formatDateInputValue(new Date());
-      const items = getClosedListItemsVisibleForViewDate(todayKey);
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (anniversaryMirrorMatchesTarget(item.mirrorOf, module, taskId, subIdOpt || null)) {
-          return true;
+    /**
+     * 查找十二周年主/子任务在 Open「其他任务」侧的镜像（weeklyPlan.mirrorOf）。
+     * 用于归入去重：同一来源只挂一条，不新建重复实体。
+     */
+    function findWeeklyPlanAnniversaryOtherMirror(module, taskId, subIdOpt) {
+      const plan = state.weeklyPlan;
+      if (!plan || typeof plan !== "object") return null;
+      const keys = Object.keys(plan);
+      for (let i = 0; i < keys.length; i++) {
+        const wk = keys[i];
+        const arr = plan[wk];
+        if (!Array.isArray(arr)) continue;
+        for (let j = 0; j < arr.length; j++) {
+          const task = arr[j];
+          if (!task) continue;
+          if (
+            anniversaryMirrorMatchesTarget(
+              task.mirrorOf,
+              module,
+              taskId,
+              subIdOpt || null
+            )
+          ) {
+            return { task: task, weekKey: wk };
+          }
         }
       }
-      return false;
+      return null;
+    }
+
+    /** 十二周年子/主任务是否已挂入今日「其他任务」（Open + todayPlanDate） */
+    function isAnniversaryJoinedTodayPlan(module, weekNum, taskId, subIdOpt) {
+      const todayKey = formatDateInputValue(new Date());
+      const hit = findWeeklyPlanAnniversaryOtherMirror(module, taskId, subIdOpt);
+      if (!hit || !hit.task) return false;
+      return normalizeWeeklyPlanTodayPlanDate(hit.task.todayPlanDate) === todayKey;
+    }
+
+    function buildAnniversaryOtherTaskLineText(taskText, subText) {
+      const mainT = String(taskText || "").trim() || "（任务）";
+      if (subText !== undefined && subText !== null) {
+        const subT = String(subText || "").trim() || "（子任务）";
+        return mainT + " › " + subT;
+      }
+      return mainT;
+    }
+
+    /** 十二周年 → 今日计划「其他任务」（Open List + todayPlanDate；复用已有 mirror，不重复建） */
+    function promoteAnniversaryTaskToOtherTasks(module, weekNum, taskId, subIdOpt) {
+      const located = findAnniversaryTaskInStorage(module, taskId, weekNum);
+      if (!located) return;
+      const task = located.task;
+      const w = located.weekNum;
+      const subId = subIdOpt ? String(subIdOpt) : "";
+      let lineText;
+      let wantDone;
+      if (subId) {
+        const sub = (task.subs || []).find(function (s) {
+          return s && s.id === subId;
+        });
+        if (!sub) return;
+        lineText = buildAnniversaryOtherTaskLineText(task.text, sub.text);
+        wantDone = Boolean(sub.done);
+      } else {
+        lineText = buildAnniversaryOtherTaskLineText(task.text);
+        wantDone = Boolean(task.done);
+      }
+      const todayKey = formatDateInputValue(new Date());
+      const existing = findWeeklyPlanAnniversaryOtherMirror(module, task.id, subId || null);
+      if (existing && existing.task) {
+        const raw = existing.task;
+        const joined = normalizeWeeklyPlanTodayPlanDate(raw.todayPlanDate) === todayKey;
+        if (!joined) {
+          raw.todayPlanDate = todayKey;
+          touchWeeklyPlanTaskRevision(raw);
+          stampTodayPlanDateRevision(raw);
+          if (typeof clearTodayPlanMarkRemoved === "function") {
+            clearTodayPlanMarkRemoved(raw.id);
+          }
+          noteCloudSyncTodayPlanPulseTaskId(raw.id);
+          try {
+            if (existing.weekKey) noteCloudSyncWeeklyPlanPulseWeekKey(existing.weekKey);
+          } catch (_wkNoteErr) {}
+          try {
+            if (typeof notifyAliyunSprintRealForTaskId === "function") {
+              notifyAliyunSprintRealForTaskId(raw.id, "today-plan-join");
+            }
+          } catch (_sprintToday) {}
+        }
+        if (typeof paintTodayPlanPanel === "function") paintTodayPlanPanel();
+        return;
+      }
+      const weekKey = getCurrentWeeklyPlanSprintStartKey();
+      if (!weekKey) {
+        console.warn("[十二周年] 无法解析当前冲刺 weekKey，其他任务未归入");
+        return;
+      }
+      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
+        state.weeklyPlan = {};
+      }
+      const rawBucket = Array.isArray(state.weeklyPlan[weekKey])
+        ? state.weeklyPlan[weekKey]
+        : [];
+      const mirrorOf = {
+        kind: "anniversaryTw",
+        module: module,
+        weekNum: w,
+        taskId: task.id
+      };
+      if (subId) mirrorOf.subId = subId;
+      const targetTask = {
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        text: lineText,
+        lane: "open",
+        mainDone: Boolean(wantDone),
+        microTasks: [],
+        todayPlanDate: todayKey,
+        mirrorOf: mirrorOf
+      };
+      if (wantDone && typeof stampWeeklyPlanMainDone === "function") {
+        stampWeeklyPlanMainDone(targetTask, true);
+      }
+      touchWeeklyPlanTaskRevision(targetTask);
+      stampTodayPlanDateRevision(targetTask);
+      if (typeof clearTodayPlanMarkRemoved === "function") {
+        clearTodayPlanMarkRemoved(targetTask.id);
+      }
+      state.weeklyPlan[weekKey] = insertWeeklyPlanTaskForLane(
+        rawBucket.slice(),
+        targetTask,
+        "open"
+      );
+      noteCloudSyncWeeklyPlanPulseWeekKey(weekKey);
+      noteCloudSyncTodayPlanPulseTaskId(targetTask.id);
+      try {
+        if (typeof notifyAliyunSprintRealUpsert === "function") {
+          notifyAliyunSprintRealUpsert("anniversary-other-join", weekKey, targetTask);
+        }
+      } catch (_sprintAdd) {}
+      if (typeof paintTodayPlanPanel === "function") paintTodayPlanPanel();
+    }
+
+    /** 移出十二周年在「其他任务」的今日挂牌（清 todayPlanDate，保留 Open 实体以便再挂） */
+    function leaveAnniversaryTaskOtherTasks(module, weekNum, taskId, subIdOpt) {
+      const hit = findWeeklyPlanAnniversaryOtherMirror(module, taskId, subIdOpt);
+      if (!hit || !hit.task) return;
+      const raw = hit.task;
+      raw.todayPlanDate = "";
+      touchWeeklyPlanTaskRevision(raw);
+      stampTodayPlanDateRevision(raw);
+      if (typeof recordTodayPlanMarkRemoved === "function") {
+        recordTodayPlanMarkRemoved(raw.id);
+      }
+      noteCloudSyncTodayPlanPulseTaskId(raw.id);
+      try {
+        if (hit.weekKey) noteCloudSyncWeeklyPlanPulseWeekKey(hit.weekKey);
+      } catch (_wkNoteErr) {}
+      try {
+        if (typeof notifyAliyunSprintRealForTaskId === "function") {
+          notifyAliyunSprintRealForTaskId(raw.id, "today-plan-leave");
+        }
+      } catch (_sprintToday) {}
+      if (typeof paintTodayPlanPanel === "function") paintTodayPlanPanel();
     }
 
     function removeAnniversaryClosedListMirrorForDate(module, weekNum, taskId, subIdOpt, dateKey) {
@@ -175445,21 +175611,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       persistCriticalLocalState(["closedList"]);
     }
 
+    /** 十二周年归入「其他任务」开关（不得走封闭清单） */
     function toggleAnniversaryTaskTodayPlan(module, weekNum, taskId, subIdOpt, btn) {
-      const todayKey = formatDateInputValue(new Date());
       if (isAnniversaryJoinedTodayPlan(module, weekNum, taskId, subIdOpt)) {
-        removeAnniversaryClosedListMirrorForDate(module, weekNum, taskId, subIdOpt, todayKey);
+        leaveAnniversaryTaskOtherTasks(module, weekNum, taskId, subIdOpt);
       } else {
-        promoteAnniversaryTaskToClosedList(module, weekNum, taskId, subIdOpt, todayKey);
+        promoteAnniversaryTaskToOtherTasks(module, weekNum, taskId, subIdOpt);
       }
       syncWeeklyPlanTodayPlanButton(
         btn,
         isAnniversaryJoinedTodayPlan(module, weekNum, taskId, subIdOpt)
       );
-      if (todayPlanPanelExpanded && typeof paintTodayPlanPanel === "function") {
-        paintTodayPlanPanel();
-      }
+      if (typeof paintTodayPlanPanel === "function") paintTodayPlanPanel();
       saveState({ skipUiPaintDirty: true });
+      try {
+        flushCloudSyncPulseImmediate();
+      } catch (_pulseErr) {}
     }
 
     /** 十二周年任务/子任务/周目标：仅「… → 编辑」进入标题编辑；点名称不进入；点外不自动保存 */
@@ -175568,7 +175735,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (dlAddMenuBtn) {
         iconGroup.appendChild(dlAddMenuBtn);
       }
-      /* 归入 ▾：＋其他任务 / →封闭清单（原 todayBtn / closedBtn 逻辑） */
+      /* 归入 ▾：＋其他任务（Open）/ →封闭清单（closedList）；子任务复用同一菜单 */
       if (!omitClosedPromote && module && taskId != null) {
         appendAnniversaryAssignDropdown(iconGroup, {
           module: module,
