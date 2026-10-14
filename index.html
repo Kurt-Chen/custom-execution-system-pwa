@@ -153653,57 +153653,57 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         });
 
       if (mode === "continuous" && passesN >= 2) {
-        /* 复制前测量 = 旧 translateX(-100%) 的单遍位移 */
-        let unit = 0;
-        try {
-          unit = track.getBoundingClientRect().width;
-        } catch (errRect) {
-          unit = track.offsetWidth || 0;
-        }
-        if (!(unit > 1)) unit = track.scrollWidth || 1;
+        /* 复制前测量 = 旧 translateX(-100%) 的单遍位移；宽无效则回退 legacy，避免空遮罩 */
+        const unit = measureMarqueeContinuousUnitPx(track);
+        if (unit > 8) {
+          let seq = track.querySelector(":scope > .done-sprint-finish-hour-task-marquee__seq");
+          if (!seq) {
+            seq = document.createElement("span");
+            seq.className = "done-sprint-finish-hour-task-marquee__seq";
+            while (track.firstChild) seq.appendChild(track.firstChild);
+            track.appendChild(seq);
+          }
+          Array.prototype.slice
+            .call(track.querySelectorAll(":scope > .done-sprint-finish-hour-task-marquee__seq"))
+            .forEach(function (el, idx) {
+              if (idx === 0) el.removeAttribute("aria-hidden");
+              else el.remove();
+            });
+          const gapPx = marqueeCycleGapPx();
+          track.style.setProperty("--marquee-cycle-gap", String(gapPx) + "px");
+          for (let i = 1; i < passesN; i++) {
+            track.appendChild(createMarqueeCycleSpacer(gapPx));
+            const clone = seq.cloneNode(true);
+            clone.setAttribute("aria-hidden", "true");
+            track.appendChild(clone);
+          }
 
-        let seq = track.querySelector(":scope > .done-sprint-finish-hour-task-marquee__seq");
-        if (!seq) {
-          seq = document.createElement("span");
-          seq.className = "done-sprint-finish-hour-task-marquee__seq";
-          while (track.firstChild) seq.appendChild(track.firstChild);
-          track.appendChild(seq);
-        }
-        Array.prototype.slice
-          .call(track.querySelectorAll(":scope > .done-sprint-finish-hour-task-marquee__seq"))
-          .forEach(function (el, idx) {
-            if (idx === 0) el.removeAttribute("aria-hidden");
-            else el.remove();
+          const metrics = marqueeContinuousShiftAndDuration(unit, passSec, passesN, gapPx);
+          track.style.setProperty("--marquee-duration", String(metrics.totalDur) + "s");
+          track.style.setProperty("--marquee-shift", String(metrics.totalShift) + "px");
+          track.style.setProperty("--marquee-passes", "1");
+          track.classList.add("is-continuous");
+          if (elapsedSec > 0.05) {
+            track.style.animationDelay =
+              String(-Math.min(elapsedSec, metrics.totalDur - 0.05)) + "s";
+          } else {
+            track.style.removeProperty("animation-delay");
+          }
+          logHourMarqueeEvent("arm-continuous", {
+            passSec: passSec,
+            passes: passesN,
+            unit: Math.round(unit),
+            gapPx: gapPx,
+            totalShift: Math.round(metrics.totalShift),
+            totalDur: metrics.totalDur
           });
-        const gapPx = marqueeCycleGapPx();
-        track.style.setProperty("--marquee-cycle-gap", String(gapPx) + "px");
-        for (let i = 1; i < passesN; i++) {
-          track.appendChild(createMarqueeCycleSpacer(gapPx));
-          const clone = seq.cloneNode(true);
-          clone.setAttribute("aria-hidden", "true");
-          track.appendChild(clone);
+          return;
         }
-
-        const metrics = marqueeContinuousShiftAndDuration(unit, passSec, passesN, gapPx);
-        track.style.setProperty("--marquee-duration", String(metrics.totalDur) + "s");
-        track.style.setProperty("--marquee-shift", String(metrics.totalShift) + "px");
-        track.style.setProperty("--marquee-passes", "1");
-        track.classList.add("is-continuous");
-        if (elapsedSec > 0.05) {
-          track.style.animationDelay =
-            String(-Math.min(elapsedSec, metrics.totalDur - 0.05)) + "s";
-        } else {
-          track.style.removeProperty("animation-delay");
-        }
-        logHourMarqueeEvent("arm-continuous", {
+        logHourMarqueeEvent("arm-continuous-fallback-legacy", {
           passSec: passSec,
           passes: passesN,
-          unit: Math.round(unit),
-          gapPx: gapPx,
-          totalShift: Math.round(metrics.totalShift),
-          totalDur: metrics.totalDur
+          reason: "viewport-unit-unavailable"
         });
-        return;
       }
 
       track.style.setProperty("--marquee-duration", String(passSec) + "s");
@@ -153751,13 +153751,31 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return;
       }
 
-      let unit = 0;
-      try {
-        unit = track.getBoundingClientRect().width;
-      } catch (errRect) {
-        unit = track.offsetWidth || 0;
+      const unit = measureMarqueeContinuousUnitPx(track);
+      if (!(unit > 8)) {
+        /* 与 hour-task 相同：宽无效时勿 continuous+unit=1，改 legacy 可见滚动 */
+        track.style.setProperty("--marquee-duration", String(Math.max(0.2, Number(passSec) || 1)) + "s");
+        track.style.setProperty("--marquee-passes", String(passesN));
+        if (elapsedSec > 0.05) {
+          track.style.animationDelay =
+            String(-Math.min(elapsedSec, Math.max(Number(passSec) || 1, 1) * passesN - 0.05)) + "s";
+        } else {
+          track.style.removeProperty("animation-delay");
+        }
+        try {
+          if (typeof logHourMarqueeEvent === "function") {
+            logHourMarqueeEvent("arm-shared-continuous-fallback-legacy", {
+              lane: lane,
+              passSec: passSec,
+              passes: passesN,
+              reason: "viewport-unit-unavailable"
+            });
+          }
+        } catch (_errFb) {
+          /* ignore */
+        }
+        return;
       }
-      if (!(unit > 1)) unit = track.scrollWidth || 1;
 
       let seq = track.querySelector(":scope > .marquee-continuous-seq");
       if (!seq) {
@@ -153841,6 +153859,63 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return sp;
     }
 
+    /**
+     * continuous 单遍位移基准 = 裁剪视口宽（非内容 scrollWidth）。
+     * 禁止 unit=1 / 内容宽冒充视口：padding-left:100% 下 shift 不对会整段在屏外，
+     * 而底稿已被 is-*-marquee-playing / cover 设为 visibility:hidden → 只剩遮罩底色
+     *（睡眠倒计时条 / 小时冲刺终点线空白）。
+     */
+    function measureMarqueeContinuousUnitPx(track) {
+      if (!track) return 0;
+      const vp = track.parentElement;
+      let vpW = 0;
+      let hostW = 0;
+      let trackW = 0;
+      try {
+        vpW = (vp && vp.clientWidth) || 0;
+      } catch (_vp) {
+        vpW = 0;
+      }
+      const host =
+        track.closest &&
+        (track.closest(".done-time-sprint-finish") ||
+          track.closest(".done-sleep-countdown") ||
+          track.closest(".done-time-block-sprint-insert--top") ||
+          track.closest("#doneInputRow"));
+      try {
+        hostW = (host && host.clientWidth) || 0;
+      } catch (_host) {
+        hostW = 0;
+      }
+      try {
+        trackW = track.getBoundingClientRect().width || track.offsetWidth || 0;
+      } catch (_tr) {
+        trackW = 0;
+      }
+      if (vpW > 8) return vpW;
+      if (hostW > 8) return hostW;
+      /* 宿主/视口已挂上但宽为 0：折叠或 display:none，禁止 continuous */
+      if (host && !(hostW > 8)) return 0;
+      if (vp && !(vpW > 8)) return 0;
+      return trackW > 8 ? trackW : 0;
+    }
+
+    /** continuous 动画是否已 forwards 停住（内容在屏外）。无 animation 对象时不判定为结束（避免刚 start 误收）。 */
+    function marqueeTrackAnimationFinishedOffscreen(track) {
+      if (!track) return false;
+      try {
+        if (typeof track.getAnimations !== "function") return false;
+        const anims = track.getAnimations();
+        if (!anims || !anims.length) return false;
+        for (let i = 0; i < anims.length; i++) {
+          if (anims[i] && anims[i].playState !== "finished") return false;
+        }
+        return true;
+      } catch (_fin) {
+        return false;
+      }
+    }
+
     /** 保持单遍速度：distance = unit×N + gap×(N-1)；duration = distance / (unit/passSec) */
     function marqueeContinuousShiftAndDuration(unit, passSec, passes, gapPx) {
       const p = Math.max(1, Math.floor(Number(passes) || 1));
@@ -153873,12 +153948,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return Math.round(sec * 1000 * p + gap * Math.max(0, p - 1));
     }
 
-    /** 读取 track 上 continuous 装配后的真实时长（已含物理 gap） */
+    /** 读取 track 真实播放时长：continuous 用总 duration；legacy 为单遍 × 遍数 */
     function readMarqueeTrackPlayMs(track, fallbackMs) {
       if (!track) return Math.max(0, Number(fallbackMs) || 0);
       const dur = parseFloat(track.style.getPropertyValue("--marquee-duration"));
-      if (dur > 0.05) return Math.round(dur * 1000);
-      return Math.max(0, Number(fallbackMs) || 0);
+      if (!(dur > 0.05)) return Math.max(0, Number(fallbackMs) || 0);
+      if (track.classList.contains("is-continuous")) {
+        return Math.round(dur * 1000);
+      }
+      const passes = parseFloat(track.style.getPropertyValue("--marquee-passes"));
+      const p = passes > 0.5 ? passes : 1;
+      return Math.round(dur * p * 1000);
     }
 
     function clearMarqueeCycleTimers(stateObj) {
@@ -155802,23 +155882,29 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         seen.add(host);
         const overlay = host.querySelector(".done-sprint-finish-hour-task-marquee-overlay");
         if (handoff) {
-          /* A→B：摘 playing，但 cover + overlay 保持可见，绝不露出 SPRINT·FINISH */
-          host.classList.add("is-sprint-finish-marquee-cover");
-          host.classList.remove.apply(
-            host.classList,
-            ["is-hour-task-marquee-playing"].concat(SPRINT_FINISH_HOUR_TASK_MARQUEE_HOST_CLASS_LIST)
-          );
-          if (overlay) {
+          const track =
+            overlay && overlay.querySelector(".done-sprint-finish-hour-task-marquee__track");
+          const hasContent = !!(track && track.childNodes && track.childNodes.length);
+          /* continuous forwards 已停在屏外 / 无内容：空遮罩不如露出 FINISH，紧接的 start 会再盖 */
+          const endedOff =
+            !hasContent ||
+            (typeof marqueeTrackAnimationFinishedOffscreen === "function" &&
+              marqueeTrackAnimationFinishedOffscreen(track));
+          if (!endedOff) {
+            /* A→B：摘 playing，但 cover + overlay 保持可见，绝不露出 SPRINT·FINISH */
+            host.classList.add("is-sprint-finish-marquee-cover");
+            host.classList.remove.apply(
+              host.classList,
+              ["is-hour-task-marquee-playing"].concat(SPRINT_FINISH_HOUR_TASK_MARQUEE_HOST_CLASS_LIST)
+            );
             overlay.classList.add("is-handoff-cover");
-            const track = overlay.querySelector(".done-sprint-finish-hour-task-marquee__track");
-            if (track) {
-              track.classList.remove("is-running");
-              track.style.removeProperty("animation");
-              track.style.removeProperty("animation-delay");
-              /* 保留上一帧内容作遮罩，不 replaceChildren */
-            }
+            track.classList.remove("is-running");
+            track.style.removeProperty("animation");
+            track.style.removeProperty("animation-delay");
+            /* 保留上一帧内容作遮罩，不 replaceChildren */
+            return;
           }
-          return;
+          /* fall through：全量清理，恢复终点线底稿 */
         }
         host.classList.remove.apply(
           host.classList,
@@ -157145,11 +157231,28 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           return;
         }
         if (sprintFinishHourTaskMarqueeState.phase === "playing") {
-          if (now >= sprintFinishHourTaskMarqueeState.playEndsAt) {
+          const liveHost = hosts[0];
+          const liveOverlay =
+            liveHost &&
+            liveHost.querySelector(".done-sprint-finish-hour-task-marquee-overlay");
+          const liveTrack =
+            liveOverlay &&
+            liveOverlay.querySelector(".done-sprint-finish-hour-task-marquee__track");
+          const emptyOrFinished =
+            !liveTrack ||
+            !liveTrack.childNodes ||
+            !liveTrack.childNodes.length ||
+            (typeof marqueeTrackAnimationFinishedOffscreen === "function" &&
+              marqueeTrackAnimationFinishedOffscreen(liveTrack));
+          if (
+            now >= sprintFinishHourTaskMarqueeState.playEndsAt ||
+            emptyOrFinished
+          ) {
             const nextSlot = getSprintFinishHourTaskMarqueeClockSlot(new Date());
             const canHandoff =
               !!nextSlot &&
-              nextSlot.slotKey !== readSprintFinishHourTaskMarqueeLastSlotKey();
+              nextSlot.slotKey !== readSprintFinishHourTaskMarqueeLastSlotKey() &&
+              !emptyOrFinished;
             if (canHandoff) {
               /* A→B：finish 不 hidden，立刻 mount 下一条 */
               logMarqueeDomDiag("[marquee] handoff", {
@@ -163870,10 +163973,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       clearDoneSleepCountdownMottoMarqueeFinishTimer();
       clearDoneSleepCountdownMottoMarqueeOverlay(host);
-      host.classList.add("is-motto-marquee-playing");
-      if (kind === "closed-remind") {
-        host.classList.add("is-motto-marquee-playing--remind");
-      }
       const viewport = document.createElement("span");
       viewport.className = "done-sleep-countdown__motto-marquee";
       const track = document.createElement("span");
@@ -163910,6 +164009,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         passes = Math.max(1, Number(SLEEP_COUNTDOWN_MOTTO_MARQUEE_PASSES) || 2);
         passSec = Math.max(4, Number(SLEEP_COUNTDOWN_MOTTO_MARQUEE_PASS_SEC) || 10);
       }
+      /* 无滚动内容时绝不藏 HUD，否则只剩睡眠条背景/边框 */
+      if (!track.childNodes || !track.childNodes.length) {
+        return false;
+      }
+      host.classList.add("is-motto-marquee-playing");
+      if (kind === "closed-remind") {
+        host.classList.add("is-motto-marquee-playing--remind");
+      }
       viewport.appendChild(track);
       overlay.appendChild(viewport);
       const reduceMotion =
@@ -163921,19 +164028,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const token = doneSleepCountdownMottoMarqueeState.playToken;
       let playMs;
       if (!reduceMotion) {
-        /* continuous N 副本 + 物理 spacer */
+        /* continuous N 副本 + 物理 spacer；视口宽无效时 arm 回退 legacy（仍可见） */
         armSharedMarqueeContinuousTrack(track, passSec, passes, 0, {
           lane: "sleepMotto"
         });
+        const passN = Math.max(1, passes);
         if (!track.classList.contains("is-continuous")) {
           track.style.setProperty("--dsc-motto-duration", String(passSec) + "s");
-          track.style.setProperty("--dsc-motto-passes", "1");
+          track.style.setProperty("--dsc-motto-passes", String(passN));
+          /* legacy 总时长 = 单遍 × 遍数；勿只读 --marquee-duration（仅单遍） */
+          playMs = Math.round(passSec * passN * 1000);
         } else {
           track.style.setProperty("--dsc-motto-passes", "1");
+          playMs = readMarqueeTrackPlayMs(track, Math.round(passSec * passN * 1000));
         }
         /* 勿 void offsetWidth：强制 reflow 会让整条横条闪 */
         startSprintMarqueeTrackRunning(track);
-        playMs = readMarqueeTrackPlayMs(track, Math.round(passSec * passes * 1000));
       } else {
         playMs = Math.min(4, passSec) * 1000;
       }
@@ -163972,7 +164082,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         const now = Date.now();
         if (doneSleepCountdownMottoMarqueeState.phase === "playing") {
-          if (now >= doneSleepCountdownMottoMarqueeState.playEndsAt) {
+          const liveOverlay = host.querySelector(
+            ".done-sleep-countdown__motto-marquee-overlay"
+          );
+          const liveTrack =
+            liveOverlay &&
+            liveOverlay.querySelector(".done-sleep-countdown__motto-marquee__track");
+          const emptyOrFinished =
+            !liveTrack ||
+            !liveTrack.childNodes ||
+            !liveTrack.childNodes.length ||
+            (typeof marqueeTrackAnimationFinishedOffscreen === "function" &&
+              marqueeTrackAnimationFinishedOffscreen(liveTrack));
+          if (
+            now >= doneSleepCountdownMottoMarqueeState.playEndsAt ||
+            emptyOrFinished
+          ) {
             finishDoneSleepCountdownMottoMarquee(
               doneSleepCountdownMottoMarqueeState.playToken
             );
