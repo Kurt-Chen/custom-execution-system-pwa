@@ -104695,7 +104695,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014m";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014n";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -148205,6 +148205,9 @@
       forgeDayAggCache = null;
       forgeWeekMinAggCache = null;
       forgeLifetimeAggCache = null;
+      if (typeof invalidateForgeCardRefreshFresh === "function") {
+        invalidateForgeCardRefreshFresh();
+      }
 
       const dateKey = selectedDoneDate || formatDateInputValue(new Date());
       function syncForgeCheckinRowAndSiblings(targetRow) {
@@ -149583,10 +149586,92 @@
       };
     }
 
+    /**
+     * 协作式装配聚合缓存：各重扫之间让出一帧，避免底栏切入 Forge 堵在 beginCaches。
+     * epoch 失配返回 false（调用方应中止）；不落盘。
+     */
+    async function beginForgeTodayTaskRowsRefreshCachesCooperative(dateKey, epoch) {
+      function yieldFrame() {
+        return new Promise(function (resolve) {
+          requestAnimationFrame(function () {
+            resolve();
+          });
+        });
+      }
+      forgeLifetimeAggCache = {
+        mind: aggregateForgeCheckinsLifetimeForNormalizedLabel("mind"),
+        body: null,
+        spt: null
+      };
+      await yieldFrame();
+      if (epoch !== forgeCardRefreshEpoch) return false;
+      forgeLifetimeAggCache.body = aggregateForgeCheckinsLifetimeForNormalizedLabel("body");
+      await yieldFrame();
+      if (epoch !== forgeCardRefreshEpoch) return false;
+      forgeLifetimeAggCache.spt = aggregateForgeCheckinsLifetimeForNormalizedLabel("spt");
+      await yieldFrame();
+      if (epoch !== forgeCardRefreshEpoch) return false;
+      forgeWeekCheckinIndex = buildForgeWeekCheckinIndex(getForgeWeekMondayForView());
+      await yieldFrame();
+      if (epoch !== forgeCardRefreshEpoch) return false;
+      const weekKey = forgeGetThisWeekSundayKeyFromSelectedOrToday();
+      forgeDayAggCache = {
+        dateKey: dateKey,
+        all: aggregateForgeCheckinsByNormalizedLabel(dateKey),
+        mind: null,
+        body: null,
+        spt: null
+      };
+      await yieldFrame();
+      if (epoch !== forgeCardRefreshEpoch) return false;
+      forgeDayAggCache.mind = aggregateForgeCheckinsByNormalizedLabel(dateKey, "mind");
+      forgeDayAggCache.body = aggregateForgeCheckinsByNormalizedLabel(dateKey, "body");
+      await yieldFrame();
+      if (epoch !== forgeCardRefreshEpoch) return false;
+      forgeDayAggCache.spt = aggregateForgeCheckinsByNormalizedLabel(dateKey, "spt");
+      await yieldFrame();
+      if (epoch !== forgeCardRefreshEpoch) return false;
+      forgeWeekMinAggCache = {
+        weekSundayKey: weekKey,
+        mind: aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "mind"),
+        body: null,
+        spt: null
+      };
+      await yieldFrame();
+      if (epoch !== forgeCardRefreshEpoch) return false;
+      forgeWeekMinAggCache.body = aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "body");
+      forgeWeekMinAggCache.spt = aggregateForgeCheckinsWeekByNormalizedLabel(weekKey, "spt");
+      await yieldFrame();
+      return epoch === forgeCardRefreshEpoch;
+    }
+
     function endForgeTodayTaskRowsRefreshCaches() {
       forgeLifetimeAggCache = null;
       forgeDayAggCache = null;
       forgeWeekMinAggCache = null;
+    }
+
+    /**
+     * 全量刷卡世代：协作式与同步式共用，避免入口 render 与 pull 合并叠跑、
+     * 旧批次在让出后写回过期缓存/覆盖新数据。不落盘、不推云。
+     */
+    let forgeCardRefreshEpoch = 0;
+    /** 正在跑的协作式刷卡世代；0 = 无 */
+    let forgeCardCoopEpoch = 0;
+    /** 已完整刷完卡片的世代（paintForgeSlice 可跳过二次 sync 全量刷） */
+    let forgeCardFreshEpoch = 0;
+
+    function isForgeCardCoopRefreshRunning() {
+      return forgeCardCoopEpoch > 0 && forgeCardCoopEpoch === forgeCardRefreshEpoch;
+    }
+
+    function isForgeCardRefreshFresh() {
+      return forgeCardFreshEpoch > 0 && forgeCardFreshEpoch === forgeCardRefreshEpoch;
+    }
+
+    /** Done 已变且未走全量刷时：作废「新鲜」标记，避免误跳过 */
+    function invalidateForgeCardRefreshFresh() {
+      forgeCardFreshEpoch = 0;
     }
 
     function refreshAllForgeTodayTaskRowsFromDone() {
@@ -149599,6 +149684,8 @@
       const mod = document.getElementById("forgeModule");
       if (!mod) return;
       const dateKey = selectedDoneDate || formatDateInputValue(new Date());
+      /* 抬世代：取消进行中的协作式批次，避免双刷共享缓存 */
+      const epoch = ++forgeCardRefreshEpoch;
       try {
         beginForgeTodayTaskRowsRefreshCaches(dateKey);
         /*
@@ -149608,16 +149695,21 @@
         mod.querySelectorAll(".forge-task-row").forEach(function (row) {
           syncForgeTaskRowValFromDoneAggregates(row, dateKey);
         });
+        if (epoch !== forgeCardRefreshEpoch) return;
+        syncAllForgeOuterTitleDailyMinShortfall();
+        forgeCardFreshEpoch = epoch;
       } finally {
-        endForgeTodayTaskRowsRefreshCaches();
+        if (epoch === forgeCardRefreshEpoch) {
+          endForgeTodayTaskRowsRefreshCaches();
+        }
       }
-      syncAllForgeOuterTitleDailyMinShortfall();
     }
 
     /**
-     * 协作式全量刷卡：每批让出一帧，供 Forge 标签切换 / 周最低展开折叠插队。
+     * 协作式全量刷卡：每批让出一帧，供 Forge 标签切换 / 周最低展开折叠 / 底栏切入插队。
      * 仅 Forge pull 合并后使用；打卡/切日仍走同步 refresh（即时一致）。
      * 聚合缓存与同步路径相同；不落盘、不推云。
+     * 让出后若世代被更新（入口 sync 或更新一轮 coop）则停止，且不清理新批次缓存。
      */
     async function refreshAllForgeTodayTaskRowsFromDoneCooperative() {
       if (migrateForgeMindMetaRowKeysIfNeeded()) {
@@ -149628,23 +149720,45 @@
       if (!mod) return;
       const dateKey = selectedDoneDate || formatDateInputValue(new Date());
       const rows = Array.prototype.slice.call(mod.querySelectorAll(".forge-task-row"));
-      const YIELD_EVERY = 8;
+      /* 更小批次：底栏切入 / 点击 / 滚动可在同步刷卡间隙插队 */
+      const YIELD_EVERY = 4;
+      const epoch = ++forgeCardRefreshEpoch;
+      forgeCardCoopEpoch = epoch;
+      function yieldForgeCardCoopFrame() {
+        return new Promise(function (resolve) {
+          requestAnimationFrame(function () {
+            resolve();
+          });
+        });
+      }
       try {
-        beginForgeTodayTaskRowsRefreshCaches(dateKey);
+        /*
+         * 先让出一帧，再分步装配缓存：合并刚启动协作刷卡时，底栏切入 Forge
+         * 的 click 不应堵在整段 beginCaches（真实规模可数百 ms～数秒）上。
+         */
+        await yieldForgeCardCoopFrame();
+        if (epoch !== forgeCardRefreshEpoch) return;
+        const cachesOk = await beginForgeTodayTaskRowsRefreshCachesCooperative(dateKey, epoch);
+        if (!cachesOk || epoch !== forgeCardRefreshEpoch) return;
         for (let i = 0; i < rows.length; i++) {
+          if (epoch !== forgeCardRefreshEpoch) return;
           syncForgeTaskRowValFromDoneAggregates(rows[i], dateKey);
           if (i % YIELD_EVERY === YIELD_EVERY - 1 && i + 1 < rows.length) {
-            await new Promise(function (resolve) {
-              requestAnimationFrame(function () {
-                resolve();
-              });
-            });
+            await yieldForgeCardCoopFrame();
+            if (epoch !== forgeCardRefreshEpoch) return;
           }
         }
+        if (epoch !== forgeCardRefreshEpoch) return;
+        syncAllForgeOuterTitleDailyMinShortfall();
+        forgeCardFreshEpoch = epoch;
       } finally {
-        endForgeTodayTaskRowsRefreshCaches();
+        if (epoch === forgeCardRefreshEpoch) {
+          endForgeTodayTaskRowsRefreshCaches();
+        }
+        if (forgeCardCoopEpoch === epoch) {
+          forgeCardCoopEpoch = 0;
+        }
       }
-      syncAllForgeOuterTitleDailyMinShortfall();
     }
 
     /** Forge 顶栏日期：与 My Done 所选日一致，格式 MM/DD */
@@ -190334,8 +190448,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (paintForgeSlice) {
         let forgeDomPainted = false;
         try {
-          refreshAllForgeTodayTaskRowsFromDone();
-          forgeDomPainted = true;
+          /*
+           * 入口×同步叠跑证据：pull 合并已跑协作式刷卡时，再 sync 全量刷会
+           * maxInflight≥2、主线程阻塞数秒。协作进行中或同世代已刷完 → 跳过卡片全量，
+           * 只更新今日列表等轻量区；不停止同步、不丢合并结果。
+           */
+          if (
+            typeof isForgeCardCoopRefreshRunning === "function" &&
+            isForgeCardCoopRefreshRunning()
+          ) {
+            forgeDomPainted = true;
+          } else if (typeof isForgeCardRefreshFresh === "function" && isForgeCardRefreshFresh()) {
+            forgeDomPainted = true;
+          } else {
+            refreshAllForgeTodayTaskRowsFromDone();
+            forgeDomPainted = true;
+          }
         } catch (e) {
           console.warn("[Forge] 刷新今日行失败:", e);
         }
