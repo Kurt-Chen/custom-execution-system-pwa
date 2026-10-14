@@ -104888,7 +104888,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014zf";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014zg";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -148029,6 +148029,34 @@
       const n = parseInt(step, 10);
       if (!steps || Number.isNaN(n) || n < 1 || n > 10) return "";
       return "第" + n + "式 " + steps[n - 1][0];
+    }
+
+    /**
+     * 日/周最低列表用名：只要中文动作名（如「膝盖俯卧撑」），与打卡卡标题一致；
+     * 式号留在 source.step，不写进 label（避免「第3式 膝盖俯卧撑」与卡面主名不一致）。
+     */
+    function forgeCcMinListLabel(ccOrArt, stepOpt) {
+      let art = "";
+      let step = 0;
+      if (ccOrArt && typeof ccOrArt === "object") {
+        art = String(ccOrArt.art || "");
+        step = parseInt(ccOrArt.step, 10);
+      } else {
+        art = String(ccOrArt || "");
+        step = parseInt(stepOpt, 10);
+      }
+      const steps = FORGE_CC_STEPS_ZH_EN[art];
+      if (steps && !Number.isNaN(step) && step >= 1 && step <= 10) {
+        return String(steps[step - 1][0] || "").trim();
+      }
+      const full =
+        ccOrArt && typeof ccOrArt === "object"
+          ? String(ccOrArt.label || "")
+          : forgeCcCanonicalLabel(art, step);
+      if (typeof forgeWmSplitLabelSubtitle === "function" && full) {
+        return forgeWmSplitLabelSubtitle(full).primary || full;
+      }
+      return full;
     }
 
     function forgeCcSourceText(art) {
@@ -199382,8 +199410,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         const src = typeof forgeResolveWeeklyMinSource === "function" ? forgeResolveWeeklyMinSource(r) : null;
         if (src) {
-          if (src.label && String(r.label || "").trim() !== src.label) {
-            r.label = src.label;
+          let nextLabel = "";
+          if (src.kind === "cc") {
+            nextLabel =
+              typeof forgeCcMinListLabel === "function" ? forgeCcMinListLabel(src) : String(src.label || "");
+          } else if (src.label) {
+            nextLabel = String(src.label || "");
+          }
+          if (nextLabel && String(r.label || "").trim() !== nextLabel) {
+            r.label = nextLabel;
             changed = true;
           }
           const nextSource = {
@@ -199840,8 +199875,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           if (!lb) return;
           const cc = forgeResolveCcStepFromLabel(lb);
           if (!cc || !cc.label) return;
-          if (lb !== cc.label) {
-            r.label = cc.label;
+          /* 跪姿俯卧撑 → 膝盖俯卧撑（与卡面同名）；其它囚徒行同理用中文主名 */
+          const nextLabel =
+            typeof forgeCcMinListLabel === "function" ? forgeCcMinListLabel(cc) : cc.label;
+          if (nextLabel && lb !== nextLabel) {
+            r.label = nextLabel;
             changed = true;
           }
           const nextSource = {
@@ -199901,8 +199939,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         /* 囚徒 / Habit / Forge：规范动作名并写入准确来源 */
         const src = typeof forgeResolveWeeklyMinSource === "function" ? forgeResolveWeeklyMinSource(r) : null;
         if (src) {
-          if (src.label && String(r.label || "").trim() !== src.label) {
-            r.label = src.label;
+          let nextLabel = "";
+          if (src.kind === "cc") {
+            nextLabel =
+              typeof forgeCcMinListLabel === "function" ? forgeCcMinListLabel(src) : String(src.label || "");
+          } else if (src.label) {
+            nextLabel = String(src.label || "");
+          }
+          if (nextLabel && String(r.label || "").trim() !== nextLabel) {
+            r.label = nextLabel;
             changed = true;
           }
           const nextSource = {
@@ -200302,7 +200347,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             typeof forgeResolveWeeklyMinSource === "function"
               ? forgeResolveWeeklyMinSource(Object.assign({}, row, { label: nextLabel }))
               : null;
-          if (src && src.label) nextLabel = src.label;
+          if (src && src.kind === "cc" && typeof forgeCcMinListLabel === "function") {
+            nextLabel = forgeCcMinListLabel(src) || nextLabel;
+          } else if (src && src.label) {
+            nextLabel = src.label;
+          }
           row.label = nextLabel;
           if (src) {
             row.source = { kind: src.kind || "custom", text: src.text || "自定义" };
@@ -200636,7 +200685,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           if (wmMoreBtn) wireManualItemActionsWrap(wmActionsWrap, wmMoreBtn);
         });
         function pushRowState() {
-          row.label = nameInp ? nameInp.value.trim() : "";
+          let nextLabel = nameInp ? nameInp.value.trim() : "";
+          const src =
+            typeof forgeResolveWeeklyMinSource === "function"
+              ? forgeResolveWeeklyMinSource(Object.assign({}, row, { label: nextLabel }))
+              : null;
+          if (src && src.kind === "cc" && typeof forgeCcMinListLabel === "function") {
+            nextLabel = forgeCcMinListLabel(src) || nextLabel;
+          } else if (src && src.label) {
+            nextLabel = src.label;
+          }
+          row.label = nextLabel;
+          if (src) {
+            row.source = { kind: src.kind || "custom", text: src.text || "自定义" };
+            if (src.art) row.source.art = src.art;
+            if (src.step) row.source.step = src.step;
+            if (src.kg) row.source.kg = src.kg;
+          }
           row.unit = inferForgeWpGoalUnit(row.label);
           row.dailyMin = tgtInp ? tgtInp.value.trim() : "";
           saveState({ lists: ["forge"] });

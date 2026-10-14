@@ -15,7 +15,8 @@ const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 
 assert.ok(html.includes("跪姿俯卧撑: { art: \"push\", step: 3 }"), "missing 跪姿俯卧撑 alias");
 assert.ok(html.includes("按 DOM 中文主名匹配"), "missing DOM name matcher comment");
-assert.ok(html.includes("exec-system-pwa-v20261014zf"), "cache bump zf");
+assert.ok(html.includes("exec-system-pwa-v20261014zg"), "cache bump zg");
+assert.ok(html.includes("function forgeCcMinListLabel"), "CC min-list short label helper");
 assert.ok(
   html.includes("跪姿俯卧撑") && html.includes("displayNm"),
   "weekly-min display should prefer CC canonical name"
@@ -110,11 +111,23 @@ const report = await page.evaluate(function () {
       cc && typeof forgeWmSplitLabelSubtitle === "function"
         ? forgeWmSplitLabelSubtitle(cc.label).primary
         : "";
+    const minLabel =
+      typeof forgeCcMinListLabel === "function" ? forgeCcMinListLabel(cc) : primary;
     note(
-      "跪姿俯卧撑→CC",
-      cc && cc.art === "push" && Number(cc.step) === 3 && primary === "膝盖俯卧撑",
+      "跪姿俯卧撑→膝盖俯卧撑",
+      cc &&
+        cc.art === "push" &&
+        Number(cc.step) === 3 &&
+        primary === "膝盖俯卧撑" &&
+        minLabel === "膝盖俯卧撑",
       cc
-        ? JSON.stringify({ art: cc.art, step: cc.step, label: cc.label, primary: primary })
+        ? JSON.stringify({
+            art: cc.art,
+            step: cc.step,
+            label: cc.label,
+            primary: primary,
+            minLabel: minLabel
+          })
         : "null"
     );
     const flat = forgeResolveCcStepFromLabel("平卧抬膝");
