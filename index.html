@@ -197500,6 +197500,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /** 周最低名称跳转：短提示（不落盘、不推云） */
+    function hideForgeWmJumpHint() {
+      const el = document.getElementById("forgeWmJumpHint");
+      if (!el) return;
+      el.classList.remove("is-visible");
+      if (showForgeWmJumpHint._timer) {
+        clearTimeout(showForgeWmJumpHint._timer);
+        showForgeWmJumpHint._timer = 0;
+      }
+    }
+
     function showForgeWmJumpHint(msg) {
       const text = String(msg || "").trim();
       if (!text) return;
@@ -197517,6 +197527,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (showForgeWmJumpHint._timer) clearTimeout(showForgeWmJumpHint._timer);
       showForgeWmJumpHint._timer = window.setTimeout(function () {
         el.classList.remove("is-visible");
+        showForgeWmJumpHint._timer = 0;
       }, 1800);
     }
 
@@ -197553,6 +197564,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
       }
       const stored = wmRow.source && typeof wmRow.source === "object" ? wmRow.source : null;
+      if (stored && stored.kind === "custom") return null;
       if (stored && stored.kind === "kb" && stored.art) {
         return {
           kind: "kb",
@@ -197560,12 +197572,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           kg: stored.kg === "24" ? "24" : "16"
         };
       }
-      if (stored && stored.kind === "cc" && stored.art && stored.step) {
+      if (stored && stored.kind === "cc" && stored.art) {
         return {
           kind: "cc",
           art: String(stored.art),
-          step: Number(stored.step) || 0
+          step: Number(stored.step) > 0 ? Number(stored.step) : 1
         };
+      }
+      if (stored && stored.kind === "forge") {
+        const realm =
+          wmRow.realm === "mind" ? "mind" : wmRow.realm === "spt" ? "spt" : "body";
+        const rowKey = String((stored.label || wmRow.label || "").trim());
+        if (!rowKey || !findForgeTaskRowByWpKey(rowKey)) return null;
+        return { kind: "forge", realm: realm, rowKey: rowKey };
       }
       const live =
         typeof forgeResolveWeeklyMinSource === "function" ? forgeResolveWeeklyMinSource(wmRow) : null;
@@ -197578,14 +197597,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (live.kind === "kb" && live.art) {
         return { kind: "kb", art: String(live.art), kg: live.kg === "24" ? "24" : "16" };
       }
-      if (live.kind === "cc" && live.art && live.step) {
-        return { kind: "cc", art: String(live.art), step: Number(live.step) || 0 };
+      if (live.kind === "cc" && live.art) {
+        return {
+          kind: "cc",
+          art: String(live.art),
+          step: Number(live.step) > 0 ? Number(live.step) : 1
+        };
       }
       if (live.kind === "forge") {
+        /* 无 source 绑定时：仅当 DOM 上确有对应 data-forge-wp-row-key 才跳转 */
         const realm =
           wmRow.realm === "mind" ? "mind" : wmRow.realm === "spt" ? "spt" : "body";
         const rowKey = String(live.label || wmRow.label || "").trim();
-        if (!rowKey) return null;
+        if (!rowKey || !findForgeTaskRowByWpKey(rowKey)) return null;
         return { kind: "forge", realm: realm, rowKey: rowKey };
       }
       return null;
@@ -197626,6 +197650,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         showForgeWmJumpHint("未绑定打卡入口");
         return false;
       }
+      hideForgeWmJumpHint();
       if (target.kind === "habit") {
         const card = document.querySelector(
           '#habitHabitsBundle .habit-en-row[data-habit-key="' + target.habitKey + '"]'
