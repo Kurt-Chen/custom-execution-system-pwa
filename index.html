@@ -104888,7 +104888,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014zb";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014zc";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -150540,6 +150540,200 @@
       }
     }
 
+    /** 进行中的 Forge「恢复」id：防连点重复扣减 / 重复 tombstone */
+    const forgeDoneRestoreInFlightIds = Object.create(null);
+
+    /**
+     * 从已撤销的 Done 行推导刷卡用 meta（仅用于定位 DOM 行，不用于猜删其它 Done）。
+     * 优先 forge*Meta；旧文案仅有【Forge·…】前缀时解析 label/amount/dateKey。
+     */
+    function forgeMetaForUiRefreshFromRemovedDone(removed) {
+      if (!removed || typeof removed !== "object") return null;
+      if (removed.forgeMindMeta && typeof removed.forgeMindMeta === "object") {
+        return { meta: removed.forgeMindMeta, isMind: true };
+      }
+      if (removed.forgeBodyMeta && typeof removed.forgeBodyMeta === "object") {
+        return { meta: removed.forgeBodyMeta, isMind: false };
+      }
+      const info =
+        typeof getForgeDoneLineInfo === "function" ? getForgeDoneLineInfo(removed) : null;
+      if (!info || (info.kind !== "mind" && info.kind !== "body")) return null;
+      const stripped = String(info.stripped || "").trim();
+      const sep = stripped.lastIndexOf(" · ");
+      const label = (sep >= 0 ? stripped.slice(0, sep) : stripped).trim();
+      const amount = sep >= 0 ? stripped.slice(sep + 3).trim() : "";
+      let dateKey = "";
+      if (removed.completedAt && typeof formatDateInputValue === "function") {
+        try {
+          dateKey = formatDateInputValue(new Date(Number(removed.completedAt)));
+        } catch (_dk) {
+          dateKey = "";
+        }
+      }
+      if (!dateKey) {
+        dateKey =
+          (typeof selectedDoneDate !== "undefined" && selectedDoneDate) ||
+          (typeof formatDateInputValue === "function"
+            ? formatDateInputValue(new Date())
+            : "");
+      }
+      return {
+        meta: { dateKey: dateKey, amount: amount, rowKey: label },
+        isMind: info.kind === "mind"
+      };
+    }
+
+    /** 按规范化动作键找到需刷新的 Forge 任务行（不含猜删 Done） */
+    function forgeFindTaskRowsForRemovedCheckinMeta(meta, isMind) {
+      const mod = document.getElementById("forgeModule");
+      if (!mod || !meta) return [];
+      const rowKey = meta.rowKey != null ? String(meta.rowKey).trim() : "";
+      if (!rowKey) return [];
+      let nKey =
+        typeof forgeWpNormalizeTaskKey === "function"
+          ? forgeWpNormalizeTaskKey(rowKey)
+          : rowKey;
+      if (
+        !isMind &&
+        typeof forgeWpCanonicalPrimaryTaskKey === "function"
+      ) {
+        nKey = forgeWpCanonicalPrimaryTaskKey(nKey) || nKey;
+      }
+      if (!nKey) return [];
+      const preferCanonical = !isMind;
+      const out = [];
+      mod.querySelectorAll(".forge-task-row").forEach(function (r) {
+        if (!r) return;
+        const otherRaw =
+          typeof forgeWpRowBeforeSlashFromDom === "function"
+            ? forgeWpRowBeforeSlashFromDom(r)
+            : "";
+        let otherKey =
+          typeof forgeWpNormalizeTaskKey === "function"
+            ? forgeWpNormalizeTaskKey(otherRaw)
+            : String(otherRaw || "").trim();
+        if (
+          !isMind &&
+          typeof forgeWpCanonicalPrimaryTaskKey === "function"
+        ) {
+          otherKey = forgeWpCanonicalPrimaryTaskKey(otherKey) || otherKey;
+        }
+        if (!otherKey) return;
+        let same = otherKey === nKey;
+        if (
+          !same &&
+          typeof forgeNormalizedKeysMatch === "function" &&
+          forgeNormalizedKeysMatch(otherKey, nKey, preferCanonical)
+        ) {
+          same = true;
+        }
+        if (same) out.push(r);
+      });
+      return out;
+    }
+
+    /**
+     * Done「恢复」撤销 Forge 打卡后：就地刷新动作卡周格/累计/打卡钮与日周最低。
+     * 不依赖 Forge 是否为当前焦点模块；不全量刷 157 卡。
+     */
+    function finalizeForgeUiAfterDoneCheckinRemoved(removedTask) {
+      forgeWeekCheckinIndex = null;
+      forgeDayAggCache = null;
+      forgeWeekMinAggCache = null;
+      forgeLifetimeAggCache = null;
+      if (typeof invalidateForgeCardRefreshFresh === "function") {
+        invalidateForgeCardRefreshFresh();
+      }
+      const packed = forgeMetaForUiRefreshFromRemovedDone(removedTask);
+      const dateKey =
+        (packed && packed.meta && packed.meta.dateKey) ||
+        selectedDoneDate ||
+        formatDateInputValue(new Date());
+      if (packed && packed.meta) {
+        const rows = forgeFindTaskRowsForRemovedCheckinMeta(packed.meta, packed.isMind);
+        for (let i = 0; i < rows.length; i++) {
+          try {
+            syncForgeTaskRowValFromDoneAggregates(rows[i], dateKey);
+          } catch (_rowErr) {}
+        }
+        try {
+          const realm = packed.isMind ? "mind" : "body";
+          if (typeof updateForgeWmModuleBarSummary === "function") {
+            updateForgeWmModuleBarSummary(realm);
+            if (!packed.isMind) updateForgeWmModuleBarSummary("spt");
+          }
+        } catch (_wmBar) {}
+      }
+      try {
+        if (typeof renderForgeWeeklyMinRows === "function") renderForgeWeeklyMinRows();
+      } catch (_wmErr) {
+        console.warn("[Forge] 恢复后刷新周最低失败:", _wmErr);
+      }
+      try {
+        if (typeof renderForgeDailyMinRows === "function") renderForgeDailyMinRows();
+      } catch (_dmErr) {
+        console.warn("[Forge] 恢复后刷新日最低失败:", _dmErr);
+      }
+      try {
+        if (typeof renderForgeTodaysForgeList === "function") renderForgeTodaysForgeList();
+      } catch (_listErr) {
+        console.warn("[Forge] 恢复后刷新今日列表失败:", _listErr);
+      }
+      try {
+        if (typeof syncAllForgeOuterTitleDailyMinShortfall === "function") {
+          syncAllForgeOuterTitleDailyMinShortfall();
+        }
+      } catch (_sf) {}
+      try {
+        if (typeof markUiPaintSlicesDirty === "function") markUiPaintSlicesDirty(["done"]);
+        if (typeof clearUiPaintSlice === "function") clearUiPaintSlice("forge");
+      } catch (_dirty) {}
+      render();
+    }
+
+    /**
+     * 按 Done 行唯一 id 撤销一次 Forge 打卡。
+     * - 无 id：不操作（禁止按动作名/日期猜删）
+     * - 已不在 done：幂等成功
+     * - 写 syncTombstone + Done/Forge 域 tombstone，防跨端复活
+     */
+    function restoreForgeCheckinFromDoneById(doneId) {
+      const id = doneId != null ? String(doneId) : "";
+      if (!id) return false;
+      if (forgeDoneRestoreInFlightIds[id]) return false;
+      forgeDoneRestoreInFlightIds[id] = 1;
+      try {
+        const stillIdx = state.done.findIndex(function (item) {
+          return item && String(item.id) === id;
+        });
+        if (stillIdx === -1) return true;
+        const removed = state.done[stillIdx];
+        const isForge =
+          !!(removed && (removed.forgeMindMeta || removed.forgeBodyMeta)) ||
+          !!(typeof getForgeDoneLineInfo === "function" && getForgeDoneLineInfo(removed));
+        if (!isForge) return false;
+        state.done.splice(stillIdx, 1);
+        try {
+          if (typeof recordSyncTombstone === "function") recordSyncTombstone(id);
+        } catch (_ts) {}
+        try {
+          if (typeof notifyAliyunDoneRealTombstone === "function") {
+            notifyAliyunDoneRealTombstone("forge-restore-from-done", id, removed);
+          }
+        } catch (_doneTomb) {}
+        try {
+          if (typeof notifyAliyunForgeRealTombstone === "function") {
+            notifyAliyunForgeRealTombstone("forge-restore-from-done", id, removed);
+          }
+        } catch (_forgeTomb) {}
+        saveState({ lists: ["done", "forge"] });
+        finalizeForgeUiAfterDoneCheckinRemoved(removed);
+        return true;
+      } finally {
+        delete forgeDoneRestoreInFlightIds[id];
+      }
+    }
+
     function restoreTask(id) {
       const idx = state.done.findIndex((item) => item.id === id);
       if (idx === -1) return;
@@ -150685,16 +150879,17 @@
         render();
         return;
       }
-      if (task.forgeMindMeta) {
-        state.done.splice(idx, 1);
-        saveState();
-        render();
-        return;
-      }
-      if (task.forgeBodyMeta) {
-        state.done.splice(idx, 1);
-        saveState();
-        render();
+      /*
+       * Forge 打卡：Done 行本身就是唯一打卡记录（id + forge*Meta）。
+       * 必须按 id 精确撤销并 tombstone，立刻刷新动作卡/周格/周最低；
+       * 禁止无 id 时按动作名/日期猜测删其它次；重复点击幂等。
+       */
+      if (
+        task.forgeMindMeta ||
+        task.forgeBodyMeta ||
+        (typeof getForgeDoneLineInfo === "function" && getForgeDoneLineInfo(task))
+      ) {
+        restoreForgeCheckinFromDoneById(task.id);
         return;
       }
       const [removed] = state.done.splice(idx, 1);
@@ -151181,6 +151376,51 @@
         try {
           notifyAliyunDoneRealTombstone("delete", task.id, task);
         } catch (_aliyunDoneDel) {}
+      }
+      if (
+        listName === "done" &&
+        task &&
+        (task.forgeMindMeta ||
+          task.forgeBodyMeta ||
+          (typeof getForgeDoneLineInfo === "function" && getForgeDoneLineInfo(task))) &&
+        typeof notifyAliyunForgeRealTombstone === "function"
+      ) {
+        try {
+          notifyAliyunForgeRealTombstone("delete-from-done", task.id, task);
+        } catch (_aliyunForgeDel) {}
+      }
+      if (
+        listName === "done" &&
+        task &&
+        (task.forgeMindMeta || task.forgeBodyMeta) &&
+        typeof finalizeForgeUiAfterDoneCheckinRemoved === "function"
+      ) {
+        /* 删除 Forge 打卡行：与「恢复」同路径立刻回退动作卡累计（deleteTask 已 render，此处只补 Forge DOM） */
+        try {
+          forgeWeekCheckinIndex = null;
+          forgeDayAggCache = null;
+          forgeWeekMinAggCache = null;
+          forgeLifetimeAggCache = null;
+          if (typeof invalidateForgeCardRefreshFresh === "function") {
+            invalidateForgeCardRefreshFresh();
+          }
+          const packed = forgeMetaForUiRefreshFromRemovedDone(task);
+          const dateKey =
+            (packed && packed.meta && packed.meta.dateKey) ||
+            selectedDoneDate ||
+            formatDateInputValue(new Date());
+          if (packed && packed.meta) {
+            const rows = forgeFindTaskRowsForRemovedCheckinMeta(packed.meta, packed.isMind);
+            for (let i = 0; i < rows.length; i++) {
+              syncForgeTaskRowValFromDoneAggregates(rows[i], dateKey);
+            }
+          }
+          if (typeof renderForgeWeeklyMinRows === "function") renderForgeWeeklyMinRows();
+          if (typeof renderForgeDailyMinRows === "function") renderForgeDailyMinRows();
+          if (typeof renderForgeTodaysForgeList === "function") renderForgeTodaysForgeList();
+        } catch (_forgeDelUi) {
+          console.warn("[Forge] 删除后刷卡失败:", _forgeDelUi);
+        }
       }
       if (
         (listName === "dailyWin" ||
