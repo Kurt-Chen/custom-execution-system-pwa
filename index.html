@@ -104888,7 +104888,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014zc";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014zd";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -198828,9 +198828,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const details = document.querySelector(
           '#forgeModule details.forge-kb-art-details[data-forge-kb-art="' + target.art + '"]'
         );
-        const kbKey = String(target.art) + String(target.kg);
+        /* 跳转目标重量对齐「在练」选择，再走统一显隐；禁止临时揭开 hidden 行导致双重量卡同显 */
+        const kg = target.kg === "24" ? "24" : "16";
+        const artKey = String(target.art || "");
+        if (artKey && typeof ensureForgeKbWeightsState === "function") {
+          ensureForgeKbWeightsState();
+          if (state.forge && state.forge.kbWeightKg) state.forge.kbWeightKg[artKey] = kg;
+        }
+        if (typeof syncForgeKbWeightUi === "function") syncForgeKbWeightUi();
+        else if (typeof applyForgeKbWeightVisibility === "function") applyForgeKbWeightVisibility();
+        const kbKey = artKey + kg;
         let row =
           document.querySelector('#forgeModule .forge-task-row[data-forge-kb="' + kbKey + '"]') ||
+          (details && details.querySelector(".forge-kb-art-weights .forge-kb-task-row:not([hidden])")) ||
           (details && details.querySelector(".forge-task-row"));
         if (!row && details) row = details;
         if (!row) {
@@ -198838,7 +198848,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           return false;
         }
         ensureForgeJumpAncestorsOpen(row);
-        if (row.hasAttribute && row.hasAttribute("hidden")) row.removeAttribute("hidden");
         scrollForgeWmJumpTargetIntoView(row);
         return true;
       }
