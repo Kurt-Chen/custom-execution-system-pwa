@@ -15,9 +15,13 @@ const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 
 assert.ok(html.includes("跪姿俯卧撑: { art: \"push\", step: 3 }"), "missing 跪姿俯卧撑 alias");
 assert.ok(html.includes("按 DOM 中文主名匹配"), "missing DOM name matcher comment");
-assert.ok(html.includes("exec-system-pwa-v20261014ze"), "cache bump ze");
+assert.ok(html.includes("exec-system-pwa-v20261014zf"), "cache bump zf");
+assert.ok(
+  html.includes("跪姿俯卧撑") && html.includes("displayNm"),
+  "weekly-min display should prefer CC canonical name"
+);
 assert.equal(
-  /if \(stored && stored\.kind === "forge"\) \{[\s\S]*?if \(!rowKey \|\| !findForgeTaskRowByWpKey\(rowKey\)\) return null;/.test(
+  /if \(stored && stored\.kind === "forge"\) \{[\s\S]{0,500}?if \(!rowKey \|\| !findForgeTaskRowByWpKey\(rowKey\)\) return null;/.test(
     html
   ),
   false,
@@ -102,10 +106,16 @@ const report = await page.evaluate(function () {
 
   if (hasCc) {
     const cc = forgeResolveCcStepFromLabel("跪姿俯卧撑");
+    const primary =
+      cc && typeof forgeWmSplitLabelSubtitle === "function"
+        ? forgeWmSplitLabelSubtitle(cc.label).primary
+        : "";
     note(
       "跪姿俯卧撑→CC",
-      cc && cc.art === "push" && Number(cc.step) === 3,
-      cc ? JSON.stringify({ art: cc.art, step: cc.step, label: cc.label }) : "null"
+      cc && cc.art === "push" && Number(cc.step) === 3 && primary === "膝盖俯卧撑",
+      cc
+        ? JSON.stringify({ art: cc.art, step: cc.step, label: cc.label, primary: primary })
+        : "null"
     );
     const flat = forgeResolveCcStepFromLabel("平卧抬膝");
     note(
