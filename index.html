@@ -104888,7 +104888,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014zd";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014zg";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -147988,6 +147988,9 @@
       平卧抬膝: { art: "leg", step: 2 },
       第2式平卧屈膝抬腿: { art: "leg", step: 2 },
       第2式平卧抬膝: { art: "leg", step: 2 },
+      /* 周最低口语「跪姿俯卧撑」→ 第3式 膝盖俯卧撑 */
+      跪姿俯卧撑: { art: "push", step: 3 },
+      第3式跪姿俯卧撑: { art: "push", step: 3 },
       顶墙倒立: { art: "hspu", step: 1 },
       第1式顶墙倒立: { art: "hspu", step: 1 },
       靠墙顶立: { art: "hspu", step: 1 },
@@ -148026,6 +148029,34 @@
       const n = parseInt(step, 10);
       if (!steps || Number.isNaN(n) || n < 1 || n > 10) return "";
       return "第" + n + "式 " + steps[n - 1][0];
+    }
+
+    /**
+     * 日/周最低列表用名：只要中文动作名（如「膝盖俯卧撑」），与打卡卡标题一致；
+     * 式号留在 source.step，不写进 label（避免「第3式 膝盖俯卧撑」与卡面主名不一致）。
+     */
+    function forgeCcMinListLabel(ccOrArt, stepOpt) {
+      let art = "";
+      let step = 0;
+      if (ccOrArt && typeof ccOrArt === "object") {
+        art = String(ccOrArt.art || "");
+        step = parseInt(ccOrArt.step, 10);
+      } else {
+        art = String(ccOrArt || "");
+        step = parseInt(stepOpt, 10);
+      }
+      const steps = FORGE_CC_STEPS_ZH_EN[art];
+      if (steps && !Number.isNaN(step) && step >= 1 && step <= 10) {
+        return String(steps[step - 1][0] || "").trim();
+      }
+      const full =
+        ccOrArt && typeof ccOrArt === "object"
+          ? String(ccOrArt.label || "")
+          : forgeCcCanonicalLabel(art, step);
+      if (typeof forgeWmSplitLabelSubtitle === "function" && full) {
+        return forgeWmSplitLabelSubtitle(full).primary || full;
+      }
+      return full;
     }
 
     function forgeCcSourceText(art) {
@@ -198713,11 +198744,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         };
       }
       if (stored && stored.kind === "forge") {
-        const realm =
-          wmRow.realm === "mind" ? "mind" : wmRow.realm === "spt" ? "spt" : "body";
-        const rowKey = String((stored.label || wmRow.label || "").trim());
-        if (!rowKey || !findForgeTaskRowByWpKey(rowKey)) return null;
-        return { kind: "forge", realm: realm, rowKey: rowKey };
+        /*
+         * 旧行常把徒手/囚徒口语名落成 kind=forge；若 DOM 无精确 wp-row-key 会误判不可跳。
+         * 先看 live 是否已是 kb/cc；否则仅在能定位到打卡行时采用 forge，失败则继续 live。
+         */
+        const livePref =
+          typeof forgeResolveWeeklyMinSource === "function"
+            ? forgeResolveWeeklyMinSource(wmRow)
+            : null;
+        if (!livePref || (livePref.kind !== "kb" && livePref.kind !== "cc" && livePref.kind !== "habit")) {
+          const realm =
+            wmRow.realm === "mind" ? "mind" : wmRow.realm === "spt" ? "spt" : "body";
+          const rowKey = String((stored.label || wmRow.label || "").trim());
+          if (rowKey && findForgeTaskRowByWpKey(rowKey)) {
+            return { kind: "forge", realm: realm, rowKey: rowKey };
+          }
+        }
       }
       const live =
         typeof forgeResolveWeeklyMinSource === "function" ? forgeResolveWeeklyMinSource(wmRow) : null;
@@ -198738,7 +198780,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         };
       }
       if (live.kind === "forge") {
-        /* 无 source 绑定时：仅当 DOM 上确有对应 data-forge-wp-row-key 才跳转 */
+        /* 徒手等卡可无 data-forge-wp-row-key：按 DOM 中文主名匹配打卡行 */
         const realm =
           wmRow.realm === "mind" ? "mind" : wmRow.realm === "spt" ? "spt" : "body";
         const rowKey = String(live.label || wmRow.label || "").trim();
@@ -198748,18 +198790,70 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return null;
     }
 
+    /**
+     * 按周最低动作名定位 Forge 打卡行。
+     * 先精确匹配 data-forge-wp-row-key；再按卡片中文主名 / canonical 键匹配（徒手卡常无 wp-row-key）。
+     */
     function findForgeTaskRowByWpKey(rowKey) {
       const key = String(rowKey || "").trim();
       if (!key) return null;
       const mod = document.getElementById("forgeModule");
       if (!mod) return null;
-      const rows = mod.querySelectorAll(".forge-task-row[data-forge-wp-row-key]");
-      for (let i = 0; i < rows.length; i++) {
-        if (String(rows[i].getAttribute("data-forge-wp-row-key") || "").trim() === key) {
-          return rows[i];
+      const keyed = mod.querySelectorAll(".forge-task-row[data-forge-wp-row-key]");
+      for (let i = 0; i < keyed.length; i++) {
+        const attr = String(keyed[i].getAttribute("data-forge-wp-row-key") || "").trim();
+        if (attr === key) return keyed[i];
+        if (
+          typeof forgeWpSanitizeRowKeyHint === "function" &&
+          forgeWpSanitizeRowKeyHint(attr) === forgeWpSanitizeRowKeyHint(key)
+        ) {
+          return keyed[i];
         }
       }
-      return null;
+      const wantCanon =
+        typeof forgeWpCanonicalPrimaryTaskKey === "function"
+          ? forgeWpCanonicalPrimaryTaskKey(key)
+          : key;
+      const wantNorm =
+        typeof forgeWpNormalizeTaskKey === "function" ? forgeWpNormalizeTaskKey(key) : key;
+      const all = mod.querySelectorAll("#forgePanelBody .forge-task-row, #forgePanelMind .forge-task-row, #forgePanelSpt .forge-task-row");
+      const scan = all.length ? all : mod.querySelectorAll(".forge-task-row");
+      let hiddenHit = null;
+      for (let i = 0; i < scan.length; i++) {
+        const row = scan[i];
+        const domName =
+          typeof forgeWpRowBeforeSlashFromDom === "function"
+            ? forgeWpRowBeforeSlashFromDom(row)
+            : "";
+        if (!domName) continue;
+        if (domName === key) {
+          if (!row.hasAttribute("hidden")) return row;
+          if (!hiddenHit) hiddenHit = row;
+          continue;
+        }
+        const domCanon =
+          typeof forgeWpCanonicalPrimaryTaskKey === "function"
+            ? forgeWpCanonicalPrimaryTaskKey(domName)
+            : domName;
+        let matched = !!(wantCanon && domCanon && wantCanon === domCanon);
+        if (
+          !matched &&
+          typeof forgeNormalizedKeysMatch === "function" &&
+          forgeNormalizedKeysMatch(
+            typeof forgeWpNormalizeTaskKey === "function"
+              ? forgeWpNormalizeTaskKey(domName)
+              : domName,
+            wantNorm,
+            true
+          )
+        ) {
+          matched = true;
+        }
+        if (!matched) continue;
+        if (!row.hasAttribute("hidden")) return row;
+        if (!hiddenHit) hiddenHit = row;
+      }
+      return hiddenHit;
     }
 
     /** 打开祖先 details（壶铃/囚徒分类折叠），不改业务数据 */
@@ -199316,8 +199410,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         const src = typeof forgeResolveWeeklyMinSource === "function" ? forgeResolveWeeklyMinSource(r) : null;
         if (src) {
-          if (src.label && String(r.label || "").trim() !== src.label) {
-            r.label = src.label;
+          let nextLabel = "";
+          if (src.kind === "cc") {
+            nextLabel =
+              typeof forgeCcMinListLabel === "function" ? forgeCcMinListLabel(src) : String(src.label || "");
+          } else if (src.label) {
+            nextLabel = String(src.label || "");
+          }
+          if (nextLabel && String(r.label || "").trim() !== nextLabel) {
+            r.label = nextLabel;
             changed = true;
           }
           const nextSource = {
@@ -199774,8 +199875,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           if (!lb) return;
           const cc = forgeResolveCcStepFromLabel(lb);
           if (!cc || !cc.label) return;
-          if (lb !== cc.label) {
-            r.label = cc.label;
+          /* 跪姿俯卧撑 → 膝盖俯卧撑（与卡面同名）；其它囚徒行同理用中文主名 */
+          const nextLabel =
+            typeof forgeCcMinListLabel === "function" ? forgeCcMinListLabel(cc) : cc.label;
+          if (nextLabel && lb !== nextLabel) {
+            r.label = nextLabel;
             changed = true;
           }
           const nextSource = {
@@ -199835,8 +199939,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         /* 囚徒 / Habit / Forge：规范动作名并写入准确来源 */
         const src = typeof forgeResolveWeeklyMinSource === "function" ? forgeResolveWeeklyMinSource(r) : null;
         if (src) {
-          if (src.label && String(r.label || "").trim() !== src.label) {
-            r.label = src.label;
+          let nextLabel = "";
+          if (src.kind === "cc") {
+            nextLabel =
+              typeof forgeCcMinListLabel === "function" ? forgeCcMinListLabel(src) : String(src.label || "");
+          } else if (src.label) {
+            nextLabel = String(src.label || "");
+          }
+          if (nextLabel && String(r.label || "").trim() !== nextLabel) {
+            r.label = nextLabel;
             changed = true;
           }
           const nextSource = {
@@ -200132,18 +200243,24 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         function syncWmDisplayFromInputs() {
           const nm = nameInp ? nameInp.value.trim() : "";
-          const parts = forgeWmSplitLabelSubtitle(nm);
           const liveSrc =
             typeof forgeResolveWeeklyMinSource === "function"
               ? forgeResolveWeeklyMinSource(Object.assign({}, row, { label: nm }))
               : null;
+          /*
+           * 囚徒口语名（如「跪姿俯卧撑」）展示为规范主名「膝盖俯卧撑」，
+           * 与打卡卡一一对应；落盘仍由 hygiene / 保存写回 src.label。
+           */
+          const displayNm =
+            liveSrc && liveSrc.kind === "cc" && liveSrc.label ? String(liveSrc.label) : nm;
+          const parts = forgeWmSplitLabelSubtitle(displayNm);
           const sourceText =
             (liveSrc && liveSrc.text) ||
             (row.source && row.source.text) ||
             "";
           const tg = tgtInp ? parseFloat(String(tgtInp.value || "").trim()) : NaN;
           const tgN = !Number.isNaN(tg) && tg > 0 ? tg : 0;
-          const liveUnit = (nm ? inferForgeWpGoalUnit(nm) : unitDisp) || "min";
+          const liveUnit = (displayNm ? inferForgeWpGoalUnit(displayNm) : unitDisp) || "min";
           const goalText = tgN > 0 ? forgeWpFormatProgressNum(tgN) + " " + liveUnit : "\u2014";
           const kbLive =
             liveSrc && liveSrc.kind === "kb"
@@ -200161,7 +200278,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             if (kbLive && typeof forgeWmSetKbNameDisplay === "function" && forgeWmSetKbNameDisplay(d, kbLive)) {
               /* keep */
             } else {
-              d.textContent = parts.primary || nm || "\u2014";
+              d.textContent = parts.primary || displayNm || "\u2014";
             }
             d.classList.toggle("forge-wm-name-jump", canJump);
             if (canJump) {
@@ -200178,7 +200295,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             if (kbLive && typeof forgeWmSetKbNameDisplay === "function" && forgeWmSetKbNameDisplay(d, kbLive)) {
               /* keep */
             } else {
-              d.textContent = parts.primary || nm || "\u2014";
+              d.textContent = parts.primary || displayNm || "\u2014";
             }
             d.classList.toggle("forge-wm-name-jump", canJump);
             if (canJump) {
@@ -200230,7 +200347,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             typeof forgeResolveWeeklyMinSource === "function"
               ? forgeResolveWeeklyMinSource(Object.assign({}, row, { label: nextLabel }))
               : null;
-          if (src && src.label) nextLabel = src.label;
+          if (src && src.kind === "cc" && typeof forgeCcMinListLabel === "function") {
+            nextLabel = forgeCcMinListLabel(src) || nextLabel;
+          } else if (src && src.label) {
+            nextLabel = src.label;
+          }
           row.label = nextLabel;
           if (src) {
             row.source = { kind: src.kind || "custom", text: src.text || "自定义" };
@@ -200564,7 +200685,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           if (wmMoreBtn) wireManualItemActionsWrap(wmActionsWrap, wmMoreBtn);
         });
         function pushRowState() {
-          row.label = nameInp ? nameInp.value.trim() : "";
+          let nextLabel = nameInp ? nameInp.value.trim() : "";
+          const src =
+            typeof forgeResolveWeeklyMinSource === "function"
+              ? forgeResolveWeeklyMinSource(Object.assign({}, row, { label: nextLabel }))
+              : null;
+          if (src && src.kind === "cc" && typeof forgeCcMinListLabel === "function") {
+            nextLabel = forgeCcMinListLabel(src) || nextLabel;
+          } else if (src && src.label) {
+            nextLabel = src.label;
+          }
+          row.label = nextLabel;
+          if (src) {
+            row.source = { kind: src.kind || "custom", text: src.text || "自定义" };
+            if (src.art) row.source.art = src.art;
+            if (src.step) row.source.step = src.step;
+            if (src.kg) row.source.kg = src.kg;
+          }
           row.unit = inferForgeWpGoalUnit(row.label);
           row.dailyMin = tgtInp ? tgtInp.value.trim() : "";
           saveState({ lists: ["forge"] });
