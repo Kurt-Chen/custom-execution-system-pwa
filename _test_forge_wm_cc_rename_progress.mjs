@@ -14,7 +14,7 @@ const PORT = 8773;
 const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 
 assert.ok(html.includes("normalizeForgeCcMinListNamesInState"), "always-on CC min rename");
-assert.ok(html.includes("exec-system-pwa-v20261014zh"), "cache zh");
+assert.ok(/exec-system-pwa-v20261014z[h-i]/.test(html), "cache zh/zi");
 assert.ok(/第\s*\(\\d\+\)\s*式\s*\(\.\+\)/.test(html) || html.includes("式\\s*(.+)"), "optional space after 式");
 
 function contentType(p) {

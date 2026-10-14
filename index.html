@@ -104888,7 +104888,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014zh";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014zi";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -199010,11 +199010,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const details = document.querySelector(
           '#forgeModule details.forge-cc-art-details[data-forge-cc-art="' + target.art + '"]'
         );
+        /* 跳转目标式对齐「在练」选择，再走统一显隐；禁止临时揭开导致多式同显（同壶铃双重量卡问题） */
+        const artKey = String(target.art || "");
+        let step = parseInt(target.step, 10);
+        if (Number.isNaN(step) || step < 1) step = 1;
+        if (step > 10) step = 10;
+        if (artKey && typeof ensureForgeCcProgressState === "function") {
+          ensureForgeCcProgressState();
+          if (state.forge && state.forge.ccProgressStep) {
+            state.forge.ccProgressStep[artKey] = String(step);
+          }
+        }
+        if (typeof syncForgeCcProgressUi === "function") syncForgeCcProgressUi();
+        else if (typeof applyForgeCcStepVisibility === "function") applyForgeCcStepVisibility();
         let row = null;
-        if (details && target.step > 0) {
+        if (details && step > 0) {
           row = details.querySelector(
-            '.forge-task-row[data-forge-cc-step="' + String(target.step) + '"]'
+            '.forge-cc-art-steps .forge-task-row[data-forge-cc-step="' + String(step) + '"]'
           );
+        }
+        if (!row && details) {
+          row = details.querySelector(".forge-cc-art-steps .forge-task-row:not([hidden])");
         }
         if (!row && details) row = details;
         if (!row) {
@@ -199022,8 +199038,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           return false;
         }
         ensureForgeJumpAncestorsOpen(row);
-        /* 仅临时露出目标式以便滚动定位；不改 ccProgressStep、不 save */
-        if (row.hasAttribute("hidden")) row.removeAttribute("hidden");
         scrollForgeWmJumpTargetIntoView(row);
         return true;
       }
