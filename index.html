@@ -104888,7 +104888,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014za";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014zb";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -147472,6 +147472,10 @@
         state.forge.bodyTodayTab = k;
         saveState();
       }
+      /* 切分类后立刻用本机 done 填可见卡，避免先闪 0/空周格再等协作刷 */
+      if (typeof ensureForgeVisibleCardsShowLocalData === "function") {
+        ensureForgeVisibleCardsShowLocalData();
+      }
     }
 
     function bindForgeBodyCategoryTabs() {
@@ -147542,6 +147546,9 @@
         if (!state.forge || typeof state.forge !== "object") state.forge = {};
         state.forge.mindTodayTab = k;
         saveState();
+      }
+      if (typeof ensureForgeVisibleCardsShowLocalData === "function") {
+        ensureForgeVisibleCardsShowLocalData();
       }
     }
 
@@ -149880,18 +149887,109 @@
     let forgeCardCoopEpoch = 0;
     /** 已完整刷完卡片的世代（paintForgeSlice 可跳过二次 sync 全量刷） */
     let forgeCardFreshEpoch = 0;
+    /**
+     * 是否已用「存储就绪后的本机 state.done」刷过卡。
+     * initForgeModule 在 loadState 前用空 done 刷卡会把 0/未打卡标成「新鲜」，
+     * 导致切入 Forge 时误跳过；仅 storage ready 后的成功刷卡才算本地 hydrate。
+     */
+    let forgeCardsLocalHydrated = false;
 
     function isForgeCardCoopRefreshRunning() {
       return forgeCardCoopEpoch > 0 && forgeCardCoopEpoch === forgeCardRefreshEpoch;
     }
 
     function isForgeCardRefreshFresh() {
-      return forgeCardFreshEpoch > 0 && forgeCardFreshEpoch === forgeCardRefreshEpoch;
+      return (
+        forgeCardsLocalHydrated &&
+        forgeCardFreshEpoch > 0 &&
+        forgeCardFreshEpoch === forgeCardRefreshEpoch
+      );
     }
 
-    /** Done 已变且未走全量刷时：作废「新鲜」标记，避免误跳过 */
+    /**
+     * Done 已变且未走全量刷时：作废「新鲜」标记，避免误跳过。
+     * 不清除 forgeCardsLocalHydrated——打卡就地更新后仍算已本地 hydrate，
+     * 否则下次 paintForgeSlice 会再全量刷 157 卡（回退 #303/#305）。
+     */
     function invalidateForgeCardRefreshFresh() {
       forgeCardFreshEpoch = 0;
+    }
+
+    function markForgeCardsLocalHydrated(epoch) {
+      if (!stateStorageReady) return;
+      if (epoch != null && epoch !== forgeCardRefreshEpoch) return;
+      forgeCardsLocalHydrated = true;
+      if (epoch != null) forgeCardFreshEpoch = epoch;
+    }
+
+    /**
+     * 可见面板优先：切 Body/Mind/主 Tab 时先刷当前可见行，避免合作式扫到后排才填数。
+     * hidden 祖先或 [hidden] 行排后；不落盘。
+     */
+    function collectForgeTaskRowsVisibleFirst(mod) {
+      const all = Array.prototype.slice.call(
+        (mod || document).querySelectorAll(".forge-task-row")
+      );
+      const visible = [];
+      const hidden = [];
+      for (let i = 0; i < all.length; i++) {
+        const row = all[i];
+        let isHidden = !!(row && row.hidden);
+        if (!isHidden && row && typeof row.closest === "function") {
+          isHidden = !!row.closest("[hidden]");
+        }
+        if (isHidden) hidden.push(row);
+        else visible.push(row);
+      }
+      return visible.concat(hidden);
+    }
+
+    /**
+     * 仅同步刷当前可见动作卡（本机 done 已在内存时立刻出数）。
+     * 切分类 / 切入 Forge 且尚未本地 hydrate 时用；不抬全局世代、不取消协作全量批次的缓存装配，
+     * 但会写入可见行 DOM，避免先闪 0。完整世代仍由 refreshAll* 收尾。
+     */
+    function syncForgeVisibleTaskRowsFromDoneNow() {
+      if (!stateStorageReady) return false;
+      const mod = document.getElementById("forgeModule");
+      if (!mod) return false;
+      const dateKey = selectedDoneDate || formatDateInputValue(new Date());
+      const rows = collectForgeTaskRowsVisibleFirst(mod);
+      const visible = [];
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (row && !row.hidden && !(row.closest && row.closest("[hidden]"))) {
+          visible.push(row);
+        } else {
+          break;
+        }
+      }
+      if (!visible.length) return false;
+      const hadCaches =
+        !!(forgeDayAggCache && forgeDayAggCache.dateKey === dateKey) &&
+        !!forgeLifetimeAggCache &&
+        !!forgeWeekCheckinIndex &&
+        !!forgeWeekMinAggCache;
+      if (!hadCaches) {
+        beginForgeTodayTaskRowsRefreshCaches(dateKey);
+      }
+      for (let i = 0; i < visible.length; i++) {
+        syncForgeTaskRowValFromDoneAggregates(visible[i], dateKey);
+      }
+      syncAllForgeOuterTitleDailyMinShortfall();
+      /* 保留缓存供紧随其后的 refreshAll / 协作刷复用，避免二次 beginCaches */
+      return true;
+    }
+
+    /** 切分类后：有本机数据却仍显示空卡时，立刻用本地 done 填可见行 */
+    function ensureForgeVisibleCardsShowLocalData() {
+      if (!stateStorageReady) return;
+      if (forgeCardsLocalHydrated && isForgeCardRefreshFresh()) return;
+      try {
+        syncForgeVisibleTaskRowsFromDoneNow();
+      } catch (visHydrateErr) {
+        console.warn("[Forge] 可见卡本地 hydrate 失败:", visHydrateErr);
+      }
     }
 
     function refreshAllForgeTodayTaskRowsFromDone() {
@@ -149911,13 +150009,15 @@
         /*
          * syncForgeTaskRowValFromDoneAggregates 末尾已调 syncForgeTaskWeekMinProgressUi。
          * 再扫一遍卡片会重复整周聚合（同数据 A/B 约 +5.8s），UI 无差异；禁止第二遍。
+         * 可见面板优先：切入/切分类时当前屏先出真实累计，再扫隐藏面板。
          */
-        mod.querySelectorAll(".forge-task-row").forEach(function (row) {
-          syncForgeTaskRowValFromDoneAggregates(row, dateKey);
-        });
+        const rows = collectForgeTaskRowsVisibleFirst(mod);
+        for (let i = 0; i < rows.length; i++) {
+          syncForgeTaskRowValFromDoneAggregates(rows[i], dateKey);
+        }
         if (epoch !== forgeCardRefreshEpoch) return;
         syncAllForgeOuterTitleDailyMinShortfall();
-        forgeCardFreshEpoch = epoch;
+        markForgeCardsLocalHydrated(epoch);
       } finally {
         if (epoch === forgeCardRefreshEpoch) {
           endForgeTodayTaskRowsRefreshCaches();
@@ -149930,6 +150030,7 @@
      * 仅 Forge pull 合并后使用；打卡/切日仍走同步 refresh（即时一致）。
      * 聚合缓存与同步路径相同；不落盘、不推云。
      * 让出后若世代被更新（入口 sync 或更新一轮 coop）则停止，且不清理新批次缓存。
+     * 本地优先：缓存就绪后先同步刷可见行，再分批刷隐藏行，避免先闪 0。
      */
     async function refreshAllForgeTodayTaskRowsFromDoneCooperative() {
       if (migrateForgeMindMetaRowKeysIfNeeded()) {
@@ -149939,7 +150040,7 @@
       const mod = document.getElementById("forgeModule");
       if (!mod) return;
       const dateKey = selectedDoneDate || formatDateInputValue(new Date());
-      const rows = Array.prototype.slice.call(mod.querySelectorAll(".forge-task-row"));
+      const rows = collectForgeTaskRowsVisibleFirst(mod);
       /* 更小批次：底栏切入 / 点击 / 滚动可在同步刷卡间隙插队 */
       const YIELD_EVERY = 4;
       const epoch = ++forgeCardRefreshEpoch;
@@ -149960,17 +150061,32 @@
         if (epoch !== forgeCardRefreshEpoch) return;
         const cachesOk = await beginForgeTodayTaskRowsRefreshCachesCooperative(dateKey, epoch);
         if (!cachesOk || epoch !== forgeCardRefreshEpoch) return;
+        /* 缓存就绪后立刻刷可见行（同帧内），再 yield 刷隐藏行 */
+        let visibleCount = 0;
+        for (let v = 0; v < rows.length; v++) {
+          const row = rows[v];
+          if (row && !row.hidden && !(row.closest && row.closest("[hidden]"))) {
+            visibleCount = v + 1;
+          } else {
+            break;
+          }
+        }
         for (let i = 0; i < rows.length; i++) {
           if (epoch !== forgeCardRefreshEpoch) return;
           syncForgeTaskRowValFromDoneAggregates(rows[i], dateKey);
-          if (i % YIELD_EVERY === YIELD_EVERY - 1 && i + 1 < rows.length) {
+          const pastVisible = i + 1 >= visibleCount;
+          if (
+            pastVisible &&
+            i % YIELD_EVERY === YIELD_EVERY - 1 &&
+            i + 1 < rows.length
+          ) {
             await yieldForgeCardCoopFrame();
             if (epoch !== forgeCardRefreshEpoch) return;
           }
         }
         if (epoch !== forgeCardRefreshEpoch) return;
         syncAllForgeOuterTitleDailyMinShortfall();
-        forgeCardFreshEpoch = epoch;
+        markForgeCardsLocalHydrated(epoch);
       } finally {
         if (epoch === forgeCardRefreshEpoch) {
           endForgeTodayTaskRowsRefreshCaches();
@@ -149978,6 +150094,31 @@
         if (forgeCardCoopEpoch === epoch) {
           forgeCardCoopEpoch = 0;
         }
+      }
+    }
+
+    /**
+     * 启动 hydrate 后：用本机 done 预刷 Forge 卡，不依赖用户是否已切入 Forge。
+     * 云同步仍后台进行；有本地数据时首进即见真实累计。
+     */
+    function scheduleForgeLocalCardHydrateAfterBoot() {
+      const run = function () {
+        if (!stateStorageReady) return;
+        if (forgeCardsLocalHydrated) return;
+        if (typeof refreshAllForgeTodayTaskRowsFromDone !== "function") return;
+        try {
+          refreshAllForgeTodayTaskRowsFromDone();
+        } catch (bootHydrateErr) {
+          console.warn("[Forge] 启动本地刷卡失败:", bootHydrateErr);
+        }
+      };
+      /* 双 rAF：等首屏 commit 后再同步刷本机卡，早于云同步 idle；勿等 900ms idle 才 hydrate */
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(run);
+        });
+      } else {
+        window.setTimeout(run, 0);
       }
     }
 
@@ -190925,11 +191066,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         let forgeDomPainted = false;
         try {
           /*
-           * 入口×同步叠跑证据：pull 合并已跑协作式刷卡时，再 sync 全量刷会
-           * maxInflight≥2、主线程阻塞数秒。协作进行中或同世代已刷完 → 跳过卡片全量，
+           * 本地优先：尚未用 storage-ready 后的 done 刷过卡时，必须同步全量刷，
+           * 禁止因 init 空刷「假新鲜」或协作式让帧而先显示 0/未打卡。
+           * 已本地 hydrate 后：pull 协作进行中或同世代已刷完 → 跳过二次 sync 全量，
            * 只更新今日列表等轻量区；不停止同步、不丢合并结果。
            */
-          if (
+          const localHydrated =
+            typeof forgeCardsLocalHydrated === "boolean" ? forgeCardsLocalHydrated : true;
+          if (!localHydrated) {
+            if (typeof syncForgeVisibleTaskRowsFromDoneNow === "function") {
+              try {
+                syncForgeVisibleTaskRowsFromDoneNow();
+              } catch (_visFirst) {}
+            }
+            refreshAllForgeTodayTaskRowsFromDone();
+            forgeDomPainted = true;
+          } else if (
             typeof isForgeCardCoopRefreshRunning === "function" &&
             isForgeCardCoopRefreshRunning()
           ) {
@@ -194874,6 +195026,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
       } catch (_forgeRecoverErr) {
         console.warn("[Forge] 紧急备份累计恢复失败:", _forgeRecoverErr);
+      }
+      /* 用本机 done 预刷 Forge 卡，不阻塞云同步、不依赖用户是否已切入 */
+      try {
+        if (typeof scheduleForgeLocalCardHydrateAfterBoot === "function") {
+          scheduleForgeLocalCardHydrateAfterBoot();
+        }
+      } catch (_forgeBootHydrate) {
+        console.warn("[Forge] 调度启动本地刷卡失败:", _forgeBootHydrate);
       }
       try {
         scheduleDeferredCloudSyncBoot();
@@ -200605,6 +200765,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           afterActivate: function (tabKey) {
             if (tabKey === "forge-body") scheduleForgeKbCvWarmupExperiment();
             else cancelForgeKbCvWarmupExperiment();
+            /* 主分类切换：可见面板优先用本机 done 填数，勿等协作全量扫到后排 */
+            if (typeof ensureForgeVisibleCardsShowLocalData === "function") {
+              ensureForgeVisibleCardsShowLocalData();
+            }
           }
         }
       );
@@ -200621,7 +200785,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       forgeModule.querySelectorAll("#forgeMindCardBody .forge-task-title-note").forEach(function (el) {
         el.remove();
       });
-      refreshAllForgeTodayTaskRowsFromDone();
+      /*
+       * 禁止在 IndexedDB hydrate / loadState 前用空 done 全量刷卡：
+       * 会把 0、未打卡、空周格写成「新鲜」世代，首次切入 Forge 时 paintForgeSlice
+       * 误跳过，需等云同步协作刷数秒才恢复。存储就绪后由 boot idle / paintForge 刷。
+       */
+      if (stateStorageReady) {
+        refreshAllForgeTodayTaskRowsFromDone();
+      }
       ensureForgeWeeklyMinimumsState();
       ensureForgeDailyMinimumsState();
       bindForgeWeeklyMinTabs();
