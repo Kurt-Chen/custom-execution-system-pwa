@@ -38,7 +38,7 @@ assert.equal(
   "kb jump must NOT temporarily removeAttribute(hidden)"
 );
 assert.ok(
-  /exec-system-pwa-v20261014z[d-i]/.test(html),
+  /exec-system-pwa-v20261014z[d-j]/.test(html),
   "cache badge should bump with fix"
 );
 

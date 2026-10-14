@@ -14,7 +14,8 @@ const PORT = 8773;
 const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 
 assert.ok(html.includes("normalizeForgeCcMinListNamesInState"), "always-on CC min rename");
-assert.ok(/exec-system-pwa-v20261014z[h-i]/.test(html), "cache zh/zi");
+assert.ok(/exec-system-pwa-v20261014z[h-j]/.test(html), "cache zh..zj");
+assert.ok(html.includes("\\u200B-\\u200D\\uFEFF\\u00AD") || html.includes("200B"), "strip ZWSP in keys");
 assert.ok(/第\s*\(\\d\+\)\s*式\s*\(\.\+\)/.test(html) || html.includes("式\\s*(.+)"), "optional space after 式");
 
 function contentType(p) {
@@ -135,6 +136,14 @@ const report = await page.evaluate(function () {
   const cur = nKey ? forgeLifetimeMapSumForPrimaryKey(weekAgg, nKey) : 0;
   note("progress-key", !!nKey, String(nKey));
   note("progress-cur-10", cur === 10, String(cur) + " keys=" + Object.keys(weekAgg).join(","));
+
+  /* ZWSP 污染的口语名也必须改名 + 吃到进度 */
+  state.forge.weeklyMinimums[0].label = "跪\u200b姿俯卧撑";
+  state.forge.weeklyMinimums[0].source = { kind: "forge", text: "Forge · Body" };
+  const zwspRenamed = normalizeForgeCcMinListNamesInState();
+  note("zwsp-rename", zwspRenamed && state.forge.weeklyMinimums[0].label === "膝盖俯卧撑", state.forge.weeklyMinimums[0].label);
+  const curViaAlias = forgeLifetimeMapSumForPrimaryKey(weekAgg, "跪姿俯卧撑");
+  note("progress-via-alias-10", curViaAlias === 10, String(curViaAlias));
 
   /* 再故意写回旧名，渲染应再次纠正 */
   state.forge.weeklyMinimums[0].label = "跪姿俯卧撑";

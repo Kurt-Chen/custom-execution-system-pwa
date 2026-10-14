@@ -32,7 +32,7 @@ assert.equal(
   false,
   "cc jump must NOT temporarily removeAttribute(hidden)"
 );
-assert.ok(html.includes("exec-system-pwa-v20261014zi"), "cache zi");
+assert.ok(/exec-system-pwa-v20261014z[i-j]/.test(html), "cache zi/zj");
 
 function contentType(p) {
   if (p.endsWith(".html")) return "text/html; charset=utf-8";
