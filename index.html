@@ -104888,7 +104888,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014zg";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014zi";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -148072,21 +148072,29 @@
       if (!key) return null;
       let hit = FORGE_CC_LABEL_ALIAS_TO_STEP[key] || null;
       if (!hit) {
-        /* 规范「第N式 + 中文名」直匹配 */
-        const m = raw.replace(/\s+/g, " ").trim().match(/^第\s*(\d+)\s*式\s+(.+)$/);
+        /* 规范「第N式 + 中文名」：式号后允许无空格（聚合键常为「第3式膝盖俯卧撑」） */
+        const spaced = raw.replace(/\s+/g, " ").trim();
+        let m = spaced.match(/^第\s*(\d+)\s*式\s*(.+)$/);
+        if (!m) m = key.match(/^第(\d+)式(.+)$/);
         if (m) {
           const step = parseInt(m[1], 10);
           const nameKey = forgeWpCanonicalPrimaryTaskKey(m[2]) || forgeWpNormalizeTaskKey(m[2]);
-          FORGE_CC_ART_KEYS.some(function (art) {
-            const steps = FORGE_CC_STEPS_ZH_EN[art];
-            if (!steps || step < 1 || step > 10) return false;
-            const zhKey = forgeWpCanonicalPrimaryTaskKey(steps[step - 1][0]);
-            if (zhKey && zhKey === nameKey) {
-              hit = { art: art, step: step };
-              return true;
-            }
-            return false;
-          });
+          /* 式号名本身可能是口语别名（第3式跪姿俯卧撑） */
+          const aliasHit = FORGE_CC_LABEL_ALIAS_TO_STEP[nameKey] || FORGE_CC_LABEL_ALIAS_TO_STEP[key] || null;
+          if (aliasHit && Number(aliasHit.step) === step) {
+            hit = aliasHit;
+          } else {
+            FORGE_CC_ART_KEYS.some(function (art) {
+              const steps = FORGE_CC_STEPS_ZH_EN[art];
+              if (!steps || step < 1 || step > 10) return false;
+              const zhKey = forgeWpCanonicalPrimaryTaskKey(steps[step - 1][0]);
+              if (zhKey && zhKey === nameKey) {
+                hit = { art: art, step: step };
+                return true;
+              }
+              return false;
+            });
+          }
         }
       }
       if (!hit) {
@@ -149791,6 +149799,52 @@
      * Forge 日/周最低与相关 Done meta 整理：只改内存，返回是否有变更。
      * 供明确数据变更入口 / 启动落盘；禁止在纯渲染路径里再 saveState。
      */
+    /**
+     * 日/周最低囚徒行：口语/旧名 → 卡面中文主名（跪姿俯卧撑→膝盖俯卧撑）。
+     * 无 _done 守卫：云同步写回旧名后每次整理/渲染仍可纠正。
+     */
+    function normalizeForgeCcMinListNamesInState() {
+      if (!state.forge || typeof state.forge !== "object") return false;
+      if (typeof forgeResolveCcStepFromLabel !== "function") return false;
+      if (typeof forgeCcMinListLabel !== "function") return false;
+      let changed = false;
+      function rewrite(list) {
+        if (!Array.isArray(list)) return;
+        list.forEach(function (r) {
+          if (!r || typeof r !== "object" || r.habitKey) return;
+          const lb = String(r.label || "").trim();
+          if (!lb) return;
+          const cc = forgeResolveCcStepFromLabel(lb);
+          if (!cc) return;
+          const nextLabel = forgeCcMinListLabel(cc);
+          if (nextLabel && lb !== nextLabel) {
+            r.label = nextLabel;
+            changed = true;
+          }
+          const nextSource = {
+            kind: "cc",
+            text: cc.sourceText || "囚徒健身",
+            art: cc.art,
+            step: cc.step
+          };
+          const prev = r.source && typeof r.source === "object" ? r.source : null;
+          if (
+            !prev ||
+            prev.kind !== nextSource.kind ||
+            prev.text !== nextSource.text ||
+            prev.art !== nextSource.art ||
+            Number(prev.step || 0) !== Number(nextSource.step || 0)
+          ) {
+            r.source = nextSource;
+            changed = true;
+          }
+        });
+      }
+      rewrite(state.forge.weeklyMinimums);
+      rewrite(state.forge.dailyMinimums);
+      return changed;
+    }
+
     function runForgeMinsAndRelatedHygienePass() {
       let changed = false;
       if (migrateForgeSilvaPracticeKeysIfNeeded()) changed = true;
@@ -149801,6 +149855,9 @@
       if (migrateForgeArmDipToParallelBarDipIfNeeded()) changed = true;
       if (migrateForgeKbHaloHeadToNeckIfNeeded()) changed = true;
       if (typeof migrateForgeCcCanonicalLabelsIfNeeded === "function" && migrateForgeCcCanonicalLabelsIfNeeded()) {
+        changed = true;
+      }
+      if (typeof normalizeForgeCcMinListNamesInState === "function" && normalizeForgeCcMinListNamesInState()) {
         changed = true;
       }
       if (migrateForgeBodyMetaRowKeysIfNeeded()) changed = true;
@@ -198953,11 +199010,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const details = document.querySelector(
           '#forgeModule details.forge-cc-art-details[data-forge-cc-art="' + target.art + '"]'
         );
+        /* 跳转目标式对齐「在练」选择，再走统一显隐；禁止临时揭开导致多式同显（同壶铃双重量卡问题） */
+        const artKey = String(target.art || "");
+        let step = parseInt(target.step, 10);
+        if (Number.isNaN(step) || step < 1) step = 1;
+        if (step > 10) step = 10;
+        if (artKey && typeof ensureForgeCcProgressState === "function") {
+          ensureForgeCcProgressState();
+          if (state.forge && state.forge.ccProgressStep) {
+            state.forge.ccProgressStep[artKey] = String(step);
+          }
+        }
+        if (typeof syncForgeCcProgressUi === "function") syncForgeCcProgressUi();
+        else if (typeof applyForgeCcStepVisibility === "function") applyForgeCcStepVisibility();
         let row = null;
-        if (details && target.step > 0) {
+        if (details && step > 0) {
           row = details.querySelector(
-            '.forge-task-row[data-forge-cc-step="' + String(target.step) + '"]'
+            '.forge-cc-art-steps .forge-task-row[data-forge-cc-step="' + String(step) + '"]'
           );
+        }
+        if (!row && details) {
+          row = details.querySelector(".forge-cc-art-steps .forge-task-row:not([hidden])");
         }
         if (!row && details) row = details;
         if (!row) {
@@ -198965,8 +199038,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           return false;
         }
         ensureForgeJumpAncestorsOpen(row);
-        /* 仅临时露出目标式以便滚动定位；不改 ccProgressStep、不 save */
-        if (row.hasAttribute("hidden")) row.removeAttribute("hidden");
         scrollForgeWmJumpTargetIntoView(row);
         return true;
       }
@@ -200074,8 +200145,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function renderForgeWeeklyMinRows() {
       ensureManualItemActionsGlobalDismiss();
-      /* 纯渲染：不在此 migrate+saveState；整理见 persistForgeMinsAndRelatedHygieneIfNeeded */
+      /* 纯渲染不跑全量 hygiene；但囚徒口语名纠正必须每次渲染生效（防云同步写回旧名） */
       ensureForgeWeeklyMinimumsState();
+      let ccMinNamesDirty = false;
+      try {
+        if (typeof normalizeForgeCcMinListNamesInState === "function") {
+          ccMinNamesDirty = !!normalizeForgeCcMinListNamesInState();
+        }
+      } catch (_ccMinRenameErr) {}
       const mindWrap = document.getElementById("forgeWeeklyMinRowsMind");
       const bodyWrap = document.getElementById("forgeWeeklyMinRowsBody");
       const sptWrap = document.getElementById("forgeWeeklyMinRowsSpt");
@@ -200123,14 +200200,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (!wrap) return;
 
         const label = String(row.label || "").trim();
+        /* 进度键优先用囚徒规范全名（第N式…），避免口语名与 Done.rowKey 对不上导致 0 */
+        const liveSrcForProg =
+          typeof forgeResolveWeeklyMinSource === "function" ? forgeResolveWeeklyMinSource(row) : null;
+        const progLabel =
+          liveSrcForProg && liveSrcForProg.kind === "cc" && liveSrcForProg.label
+            ? String(liveSrcForProg.label)
+            : label;
         const nKey =
           realm === "body" || realm === "spt"
             ? typeof forgeWpResolveBodyAggregateKey === "function"
-              ? forgeWpResolveBodyAggregateKey(label)
-              : forgeWpCanonicalPrimaryTaskKey(label)
+              ? forgeWpResolveBodyAggregateKey(progLabel) || forgeWpResolveBodyAggregateKey(label)
+              : forgeWpCanonicalPrimaryTaskKey(progLabel || label)
             : forgeWpNormalizeTaskKey(label);
         const minN = parseFloat(String(row.weeklyMin || "").trim());
-        const unitHint = inferForgeWpGoalUnit(label);
+        const unitHint = inferForgeWpGoalUnit(progLabel || label);
         const cur = nKey ? forgeLifetimeMapSumForPrimaryKey(weekAgg, nKey) : 0;
         const target = !Number.isNaN(minN) && minN > 0 ? minN : 0;
         /* 有动作名时以推断单位为准，避免新增时写死的 min 覆盖自然单位 */
@@ -200463,12 +200547,25 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         updateForgeWmModuleBarSummary("body");
         updateForgeWmModuleBarSummary("spt");
       }
+      if (ccMinNamesDirty) {
+        try {
+          window.setTimeout(function () {
+            if (typeof saveState === "function") saveState({ lists: ["forge"] });
+          }, 0);
+        } catch (_ccMinSaveErr) {}
+      }
     }
 
     function renderForgeDailyMinRows() {
       ensureManualItemActionsGlobalDismiss();
-      /* 纯渲染：不在此 migrate+saveState；整理见 persistForgeMinsAndRelatedHygieneIfNeeded */
+      /* 纯渲染不跑全量 hygiene；囚徒口语名纠正同周最低 */
       ensureForgeDailyMinimumsState();
+      let ccMinNamesDirty = false;
+      try {
+        if (typeof normalizeForgeCcMinListNamesInState === "function") {
+          ccMinNamesDirty = !!normalizeForgeCcMinListNamesInState();
+        }
+      } catch (_ccMinRenameErr) {}
       const mindWrap = document.getElementById("forgeDailyMinRowsMind");
       const bodyWrap = document.getElementById("forgeDailyMinRowsBody");
       const sptWrap = document.getElementById("forgeDailyMinRowsSpt");
@@ -200516,17 +200613,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (!wrap) return;
 
         const label = String(row.label || "").trim();
+        const liveSrcForProg =
+          typeof forgeResolveWeeklyMinSource === "function" ? forgeResolveWeeklyMinSource(row) : null;
+        const progLabel =
+          liveSrcForProg && liveSrcForProg.kind === "cc" && liveSrcForProg.label
+            ? String(liveSrcForProg.label)
+            : label;
         const nKey =
           realm === "body" || realm === "spt"
             ? typeof forgeWpResolveBodyAggregateKey === "function"
-              ? forgeWpResolveBodyAggregateKey(label)
-              : forgeWpCanonicalPrimaryTaskKey(label)
+              ? forgeWpResolveBodyAggregateKey(progLabel) || forgeWpResolveBodyAggregateKey(label)
+              : forgeWpCanonicalPrimaryTaskKey(progLabel || label)
             : forgeWpNormalizeTaskKey(label);
         const minN = parseFloat(String(row.dailyMin || "").trim());
-        const unitHint = inferForgeWpGoalUnit(label);
+        const unitHint = inferForgeWpGoalUnit(progLabel || label);
         const cur = nKey ? forgeLifetimeMapSumForPrimaryKey(dayAgg, nKey) : 0;
         const target = !Number.isNaN(minN) && minN > 0 ? minN : 0;
-        const unitDisp = (label ? unitHint : String(row.unit || "").trim()) || "min";
+        const unitDisp = (label || progLabel ? unitHint : String(row.unit || "").trim()) || "min";
         if (label && String(row.unit || "").trim() !== unitDisp) {
           row.unit = unitDisp;
         }
@@ -200796,6 +200899,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         });
         wrap.appendChild(el);
       });
+      if (ccMinNamesDirty) {
+        try {
+          window.setTimeout(function () {
+            if (typeof saveState === "function") saveState({ lists: ["forge"] });
+          }, 0);
+        } catch (_ccMinSaveErr) {}
+      }
     }
 
     const FORGE_WEEKLY_MIN_TAB_KEYS = ["mind", "body", "spt"];
