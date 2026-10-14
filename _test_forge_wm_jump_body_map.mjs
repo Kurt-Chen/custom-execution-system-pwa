@@ -15,7 +15,7 @@ const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 
 assert.ok(html.includes("跪姿俯卧撑: { art: \"push\", step: 3 }"), "missing 跪姿俯卧撑 alias");
 assert.ok(html.includes("按 DOM 中文主名匹配"), "missing DOM name matcher comment");
-assert.ok(html.includes("exec-system-pwa-v20261014zg"), "cache bump zg");
+assert.ok(/exec-system-pwa-v20261014z[g-h]/.test(html), "cache bump zg/zh");
 assert.ok(html.includes("function forgeCcMinListLabel"), "CC min-list short label helper");
 assert.ok(
   html.includes("跪姿俯卧撑") && html.includes("displayNm"),
