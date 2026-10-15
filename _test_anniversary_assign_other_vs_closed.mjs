@@ -76,13 +76,13 @@ const closedPromote = html.indexOf("function promoteAnniversaryTaskToClosedList(
 if (closedPromote < 0) fail("missing promoteAnniversaryTaskToClosedList");
 ok("封闭清单 promote 仍保留");
 
-if (!html.includes('APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014p"')) {
-  fail("index.html cache badge not bumped to v20261014p");
+if (!html.includes('APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261015j"')) {
+  fail("index.html cache badge not bumped to v20261015j");
 }
 const sw = fs.readFileSync(path.join(__dirname, "sw.js"), "utf8");
-if (!sw.includes('CACHE_NAME = "exec-system-pwa-v20261014p"')) {
-  fail("sw.js CACHE_NAME not bumped to v20261014p");
+if (!sw.includes('CACHE_NAME = "exec-system-pwa-v20261015j"')) {
+  fail("sw.js CACHE_NAME not bumped to v20261015j");
 }
-ok("缓存版本 v20261014p");
+ok("缓存版本 v20261015j");
 
 console.log("\nAll checks passed.");
