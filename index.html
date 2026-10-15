@@ -104888,7 +104888,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261014zj";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261015d";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -116419,8 +116419,32 @@
           const stillFlush =
             typeof aliyunSyncPrimaryAnyDomainFlushBusy === "function" &&
             aliyunSyncPrimaryAnyDomainFlushBusy();
+          const bumpPending =
+            typeof isAliyunDoneDomainsMetaBumpPending === "function" &&
+            isAliyunDoneDomainsMetaBumpPending();
           const lived = Date.now() - (aliyunSyncPrimaryBadgeSyncingWatchStartedAt || Date.now());
-          if ((stillPull || stillFlush) && lived < ALIYUN_SYNC_PRIMARY_BADGE_SYNCING_MAX_MS) {
+          if (
+            (stillPull || stillFlush || bumpPending) &&
+            lived < ALIYUN_SYNC_PRIMARY_BADGE_SYNCING_MAX_MS
+          ) {
+            armAliyunSyncPrimaryBadgeSyncingWatchdog();
+            return;
+          }
+          /*
+           * P0：超时后若本地仍在上传 / Done meta bump 未完成，禁止刷成「已同步」。
+           * 仅重置计时并保持蓝标，后台队列继续跑（避免截图级绿标误导）。
+           */
+          if (stillPull || stillFlush || bumpPending) {
+            try {
+              console.warn("[aliyun-sync-primary] badge syncing watchdog keep-syncing", {
+                stillPull: stillPull,
+                stillFlush: stillFlush,
+                bumpPending: bumpPending,
+                livedMs: lived
+              });
+            } catch (_cKeep) {}
+            aliyunSyncPrimaryBadgeSyncingWatchStartedAt = Date.now();
+            setCloudSyncStatus("同步中…", "status-syncing");
             armAliyunSyncPrimaryBadgeSyncingWatchdog();
             return;
           }
@@ -116431,7 +116455,6 @@
               livedMs: lived
             });
           } catch (_c) {}
-          /* 超时仍忙：强制结束「同步中」，避免角标永久卡住（不阻断后台队列） */
           clearAliyunSyncPrimaryBadgeSyncingWatchdog();
           cloudSyncLastErrorMsg = "";
           if (typeof markCloudSyncSuccess === "function") markCloudSyncSuccess();
@@ -116451,8 +116474,16 @@
       /*
        * 「已同步」≠ 某次 HTTP 200：本地各域仍有待 flush 队列时只表示「刚才那次请求成功」，
        * 不能宣称所有本地改动已上传；保持「同步中…」直到队列清空。
+       * P1：Done 正文已 POST 但 rooms domains meta bump 未成功时也不刷绿，避免对端漏拉。
        */
       if (typeof aliyunSyncPrimaryAnyDomainFlushBusy === "function" && aliyunSyncPrimaryAnyDomainFlushBusy()) {
+        paintAliyunSyncPrimaryBadgeSyncing();
+        return;
+      }
+      if (
+        typeof isAliyunDoneDomainsMetaBumpPending === "function" &&
+        isAliyunDoneDomainsMetaBumpPending()
+      ) {
         paintAliyunSyncPrimaryBadgeSyncing();
         return;
       }
@@ -121017,12 +121048,21 @@
 
     function aliyunAnnivRealItemTs(item) {
       if (!item || typeof item !== "object") return 0;
-      return Math.max(
+      let maxTs = Math.max(
         Number(item.updatedAt) || 0,
         Number(item.deadlineUpdatedAt) || 0,
         Number(item.deletedAt) || 0,
         Number(item.createdAt) || 0
       );
+      /* 子任务文案/完成态也计入，避免只改 subs 时父任务看起来「未变」 */
+      if (Array.isArray(item.subs)) {
+        for (let si = 0; si < item.subs.length; si++) {
+          const s = item.subs[si];
+          if (!s || typeof s !== "object") continue;
+          maxTs = Math.max(maxTs, Number(s.updatedAt) || 0, Number(s.createdAt) || 0);
+        }
+      }
+      return maxTs;
     }
 
     function aliyunAnnivRealNormalizeModule(moduleKey) {
@@ -121402,8 +121442,12 @@
       cloned.id = id;
       cloned.module = mk;
       cloned.weekNum = String(weekNum);
-      const ts = Math.max(aliyunAnnivRealItemTs(cloned), aliyunAnnivRealItemTs(task), Date.now());
-      cloned.updatedAt = ts;
+      /*
+       * 勿强刷 Date.now()：weekUpsert 会重推同周兄弟任务；一律抬时钟会让旧子任务快照盖过对端新改。
+       * 真实变更应由 touchAnniversaryTwTaskRevision / 子 updatedAt 抬高；无时间戳时才用 now。
+       */
+      const ts = Math.max(aliyunAnnivRealItemTs(cloned), aliyunAnnivRealItemTs(task));
+      cloned.updatedAt = ts > 0 ? ts : Date.now();
       cloned.deleted = false;
       return cloned;
     }
@@ -121660,6 +121704,27 @@
       }
     }
 
+    /**
+     * 仅删子任务：必须单独 tombstone 子 id。
+     * 否则他端并集会把已删子任务「复活」，且父任务 upsert 不含 tomb 无法传达删除。
+     * 对齐 Sprint `notifyAliyunSprintRealTombstone("sprint-micro-delete")`。
+     */
+    function notifyAliyunAnnivRealSubDelete(sub, moduleKey, weekNum, parentTask) {
+      if (!isAliyunAnnivRealSyncEnabled() || aliyunAnnivRealSuppressPush) return;
+      if (!sub || sub.id == null) return;
+      notifyAliyunAnnivRealTombstone(
+        "anniv-sub-delete",
+        sub.id,
+        sub,
+        moduleKey,
+        weekNum != null
+          ? weekNum
+          : parentTask && parentTask.weekNum != null
+            ? parentTask.weekNum
+            : ""
+      );
+    }
+
     /** registry / archivedKeys / doneRef 变更后推 meta 切片 */
     function notifyAliyunAnnivRealMetaAfterLocalChange(reason) {
       if (!isAliyunAnnivRealSyncEnabled() || aliyunAnnivRealSuppressPush) return;
@@ -121877,6 +121942,7 @@
         const remoteTombs = env.tombstones || {};
         const remoteIds = Object.keys(remoteItems);
         const touchedModules = {};
+        const mergedRemoteTaskIds = new Set();
         let metaChanged = false;
         aliyunAnnivRealSuppressPush = true;
         try {
@@ -121920,15 +121986,83 @@
               }
             }
             const lTs = aliyunAnnivRealItemTs(local);
-            if (local && lTs > rTs) continue;
-
+            /* 本机父任务较新仍合并：子文案/子成员按 LWW+tomb；禁止整任务跳过导致他端改子任务永不落地 */
+            const preferRemote = !(local && lTs > rTs);
             const mergedTask =
               typeof mergeTwOneTask === "function"
-                ? mergeTwOneTask(remote, local || {}, true, { moduleKey: mk, weekNum: weekKey })
+                ? mergeTwOneTask(remote, local || {}, preferRemote, {
+                    moduleKey: mk,
+                    weekNum: weekKey
+                  })
                 : typeof cloneTwTaskForMerge === "function"
                   ? cloneTwTaskForMerge(remote)
                   : remote;
             mergedTask.id = rid;
+            /* 远端父任务不旧于本机时：以远端子列表为成员权威，丢掉无 tomb、又无更新的本机独有旧子任务 */
+            if (
+              preferRemote &&
+              remote &&
+              Array.isArray(remote.subs) &&
+              Array.isArray(mergedTask.subs)
+            ) {
+              const remIds = new Set();
+              for (let si = 0; si < remote.subs.length; si++) {
+                const rs = remote.subs[si];
+                if (rs && rs.id != null) remIds.add(String(rs.id));
+              }
+              const nextSubs = [];
+              const seenSub = new Set();
+              for (let si = 0; si < remote.subs.length; si++) {
+                const rs = remote.subs[si];
+                if (!rs || rs.id == null) continue;
+                const sid = String(rs.id);
+                let picked = null;
+                for (let mi = 0; mi < mergedTask.subs.length; mi++) {
+                  const ms = mergedTask.subs[mi];
+                  if (ms && String(ms.id) === sid) {
+                    picked = ms;
+                    break;
+                  }
+                }
+                if (!picked) {
+                  picked = {
+                    id: rs.id,
+                    text: typeof rs.text === "string" ? rs.text : "",
+                    done: Boolean(rs.done)
+                  };
+                  const ru = Number(rs.updatedAt);
+                  if (Number.isFinite(ru) && ru > 0) picked.updatedAt = ru;
+                } else {
+                  const rU = Number(rs.updatedAt) || 0;
+                  const lU = Number(picked.updatedAt) || 0;
+                  if (rU > lU || (rU === lU && String(rs.text || "") !== String(picked.text || ""))) {
+                    picked.text = typeof rs.text === "string" ? rs.text : picked.text;
+                    if (rU > 0 || lU > 0) picked.updatedAt = Math.max(rU, lU) || picked.updatedAt;
+                  }
+                }
+                nextSubs.push(picked);
+                seenSub.add(sid);
+              }
+              for (let mi = 0; mi < mergedTask.subs.length; mi++) {
+                const ms = mergedTask.subs[mi];
+                if (!ms || ms.id == null) continue;
+                const sid = String(ms.id);
+                if (seenSub.has(sid) || remIds.has(sid)) continue;
+                /* 本机独有：仅当子记录本身新于远端父任务时保留（刚新增尚未上云） */
+                if (aliyunAnnivRealItemTs(ms) > rTs) {
+                  nextSubs.push(ms);
+                  seenSub.add(sid);
+                }
+              }
+              mergedTask.subs = nextSubs;
+            }
+            if (
+              typeof omitTombstonedIdRecords === "function" &&
+              state.syncTombstones &&
+              Array.isArray(mergedTask.subs)
+            ) {
+              mergedTask.subs = omitTombstonedIdRecords(mergedTask.subs, state.syncTombstones);
+            }
             mergedTask.updatedAt =
               Math.max(rTs, lTs, Number(mergedTask.updatedAt) || 0) || Date.now();
             if (localIdx >= 0) {
@@ -121937,6 +122071,7 @@
               arr.push(mergedTask);
             }
             touchedModules[mk] = true;
+            mergedRemoteTaskIds.add(rid);
             mergedCount += 1;
           }
 
@@ -121999,6 +122134,23 @@
 
           if (mergedCount || tombstoneApplied || metaChanged) {
             saveState({ lists: ["closedList", "done"] });
+          }
+          /* 丢弃已合并任务的排队 upsert，避免本机旧快照随后 flush 盖回云端 */
+          if (mergedRemoteTaskIds.size && aliyunAnnivRealQueue.length) {
+            const beforeQ = aliyunAnnivRealQueue.length;
+            aliyunAnnivRealQueue = aliyunAnnivRealQueue.filter(function (q) {
+              if (!q || !q.mutation) return false;
+              const op = q.mutation.op;
+              if (op === "tombstone" || op === "meta") return true;
+              if (op === "upsert" && mergedRemoteTaskIds.has(String(q.mutation.id || ""))) {
+                return false;
+              }
+              return true;
+            });
+            const dropped = beforeQ - aliyunAnnivRealQueue.length;
+            if (dropped > 0) {
+              aliyunAnnivRealAppendLog("拉取后丢弃过期 upsert×" + dropped);
+            }
           }
         } finally {
           aliyunAnnivRealSuppressPush = false;
@@ -122238,6 +122390,63 @@
       } catch (_e) {
         return false;
       }
+    }
+
+    /**
+     * 本机 syncTombstones 已记删除，但 weeklyPlan 仍残留（旧 pull 复活）时剔除。
+     * 返回被剔除的主任务 id（用于回写云端 tomb）。
+     */
+    function stripResurrectedWeeklyPlanTasksMatchingLocalTombs() {
+      const out = { strippedIds: [], strippedCount: 0 };
+      const tombs =
+        state.syncTombstones && typeof state.syncTombstones === "object"
+          ? state.syncTombstones
+          : null;
+      if (!tombs || !state.weeklyPlan || typeof state.weeklyPlan !== "object") return out;
+      const weeks = Object.keys(state.weeklyPlan);
+      for (let wi = 0; wi < weeks.length; wi++) {
+        const wk = weeks[wi];
+        const arr = state.weeklyPlan[wk];
+        if (!Array.isArray(arr) || !arr.length) continue;
+        const next = [];
+        let changed = false;
+        for (let i = 0; i < arr.length; i++) {
+          const task = arr[i];
+          if (!task || task.id == null) {
+            next.push(task);
+            continue;
+          }
+          const sid = String(task.id);
+          if ((Number(tombs[sid]) || 0) > 0) {
+            out.strippedIds.push(sid);
+            out.strippedCount += 1;
+            changed = true;
+            continue;
+          }
+          if (Array.isArray(task.microTasks) && task.microTasks.length) {
+            const beforeMicros = task.microTasks.length;
+            task.microTasks = task.microTasks.filter(function (m) {
+              if (!m || m.id == null) return true;
+              const mid = String(m.id);
+              const microTombKey =
+                typeof weeklyPlanMicroTombstoneId === "function"
+                  ? weeklyPlanMicroTombstoneId(mid)
+                  : mid;
+              return !(
+                (Number(tombs[microTombKey]) || 0) > 0 ||
+                (Number(tombs[mid]) || 0) > 0
+              );
+            });
+            if (task.microTasks.length !== beforeMicros) {
+              changed = true;
+              out.strippedCount += beforeMicros - task.microTasks.length;
+            }
+          }
+          next.push(task);
+        }
+        if (changed) state.weeklyPlan[wk] = next;
+      }
+      return out;
     }
 
     /**
@@ -122510,7 +122719,7 @@
 
     function aliyunSprintRealItemTs(item) {
       if (!item || typeof item !== "object") return 0;
-      return Math.max(
+      let maxTs = Math.max(
         Number(item.updatedAt) || 0,
         Number(item.deadlineUpdatedAt) || 0,
         Number(item.completedAt) || 0,
@@ -122518,6 +122727,21 @@
         Number(item.deletedAt) || 0,
         Number(item.createdAt) || 0
       );
+      /* 子步骤文案/完成态也计入，避免只改 micro 时父任务看起来「未变」 */
+      if (Array.isArray(item.microTasks)) {
+        for (let mi = 0; mi < item.microTasks.length; mi++) {
+          const m = item.microTasks[mi];
+          if (!m || typeof m !== "object") continue;
+          maxTs = Math.max(
+            maxTs,
+            Number(m.updatedAt) || 0,
+            Number(m.statusAt) || 0,
+            Number(m.completedAt) || 0,
+            Number(m.createdAt) || 0
+          );
+        }
+      }
+      return maxTs;
     }
 
     function aliyunSprintRealNormalizeWeekKey(weekKey) {
@@ -122749,7 +122973,35 @@
         const prevTs = aliyunSprintRealItemTs(prevItem);
         const prevTomb = env.tombstones && env.tombstones[id];
         const prevTombTs = aliyunSprintRealItemTs(prevTomb);
-        if (ts < prevTs || ts < prevTombTs) return env;
+        /*
+         * 墓碑优先（含相等）：旧 weekUpsert / 同毫秒 upsert 不得清掉刚写入的 tomb
+         * 再把已删 Open List 任务写回 items。
+         */
+        if (ts < prevTs || ts <= prevTombTs) return env;
+        if (
+          typeof isWeeklyPlanIdTombstonedLocally === "function" &&
+          isWeeklyPlanIdTombstonedLocally(id)
+        ) {
+          if (env.items) delete env.items[id];
+          if (!env.tombstones) env.tombstones = {};
+          const reinforceAt = Math.max(prevTombTs, Date.now(), ts);
+          env.tombstones[id] = {
+            id: id,
+            deleted: true,
+            deletedAt: reinforceAt,
+            updatedAt: reinforceAt,
+            reason: "local-tomb-blocks-upsert",
+            weekKey:
+              item.weekKey != null
+                ? String(item.weekKey)
+                : prevItem
+                  ? String(prevItem.weekKey || "")
+                  : ""
+          };
+          env.envelopeUpdatedAt = Math.max(Number(env.envelopeUpdatedAt) || 0, now);
+          env.kind = ALIYUN_SPRINT_REAL_KIND;
+          return env;
+        }
         if (env.tombstones) delete env.tombstones[id];
         if (!env.items) env.items = {};
         env.items[id] = item;
@@ -122948,10 +123200,15 @@
     async function flushAliyunSprintRealQueue() {
       if (aliyunSprintRealFlushing) return;
       if (!aliyunSprintRealQueue.length) return;
-      if (!isAliyunSprintRealSyncEnabled() || aliyunSprintRealSuppressPush) {
+      if (!isAliyunSprintRealSyncEnabled()) {
         aliyunSprintRealQueue = [];
         return;
       }
+      /*
+       * 合并中 suppressPush：必须保留队列（尤其 tombstone）。
+       * 旧逻辑直接 Queue=[] 会吞掉「删除待上云」，云端旧副本稍后又并回 Open List。
+       */
+      if (aliyunSprintRealSuppressPush) return;
       /*
        * 首拉未完成：禁止 upsert 正文回写；tombstone 可单独冲刷，
        * 否则本机删除在门闩期间无法上云，会被云端偏高 updatedAt 立刻复活。
@@ -123392,6 +123649,7 @@
           }
         } catch (_snapOpen) {}
         let metaChanged = false;
+        const mergedRemoteSprintIds = new Set();
         aliyunSprintRealSuppressPush = true;
         try {
           metaChanged = !!aliyunSprintRealApplyRemoteMeta(env);
@@ -123466,6 +123724,78 @@
                   : remote;
             if (!mergedTask) continue;
             mergedTask.id = rid;
+            /*
+             * 远端父任务权威时：以远端子步骤为成员权威，丢掉无 tomb、又无更新的本机独有旧 micro；
+             * 对齐十二周年 subs 愈合，保证 3 天冲刺子任务多端一致。
+             */
+            if (
+              preferRemote &&
+              remote &&
+              Array.isArray(remote.microTasks) &&
+              Array.isArray(mergedTask.microTasks)
+            ) {
+              const remMicroIds = new Set();
+              for (let mi = 0; mi < remote.microTasks.length; mi++) {
+                const rm = remote.microTasks[mi];
+                if (rm && rm.id != null) remMicroIds.add(String(rm.id));
+              }
+              const nextMicros = [];
+              const seenMicro = new Set();
+              for (let mi = 0; mi < remote.microTasks.length; mi++) {
+                const rm = remote.microTasks[mi];
+                if (!rm || rm.id == null) continue;
+                const mid = String(rm.id);
+                let picked = null;
+                for (let li = 0; li < mergedTask.microTasks.length; li++) {
+                  const lm = mergedTask.microTasks[li];
+                  if (lm && String(lm.id) === mid) {
+                    picked = lm;
+                    break;
+                  }
+                }
+                if (!picked) {
+                  picked =
+                    typeof mergeWeeklyPlanMicroDoneForSync === "function"
+                      ? mergeWeeklyPlanMicroDoneForSync(null, rm, true, rid)
+                      : Object.assign({}, rm);
+                } else {
+                  const rU = Number(rm.updatedAt) || 0;
+                  const lU = Number(picked.updatedAt) || 0;
+                  if (
+                    rU > lU ||
+                    (rU === lU && String(rm.text || "") !== String(picked.text || ""))
+                  ) {
+                    picked.text = rm.text != null ? String(rm.text) : picked.text;
+                    if (rU > 0 || lU > 0) picked.updatedAt = Math.max(rU, lU);
+                  }
+                }
+                nextMicros.push(picked);
+                seenMicro.add(mid);
+              }
+              for (let li = 0; li < mergedTask.microTasks.length; li++) {
+                const lm = mergedTask.microTasks[li];
+                if (!lm || lm.id == null) continue;
+                const mid = String(lm.id);
+                if (seenMicro.has(mid) || remMicroIds.has(mid)) continue;
+                if (aliyunSprintRealItemTs(lm) > rTs) {
+                  nextMicros.push(lm);
+                  seenMicro.add(mid);
+                }
+              }
+              mergedTask.microTasks = nextMicros;
+              if (typeof applyWeeklyPlanMainDoneFromMicros === "function") {
+                applyWeeklyPlanMainDoneFromMicros(mergedTask);
+              }
+            }
+            if (
+              typeof omitTombstonedWeeklyPlanMicros === "function" &&
+              Array.isArray(mergedTask.microTasks)
+            ) {
+              mergedTask.microTasks = omitTombstonedWeeklyPlanMicros(
+                mergedTask.microTasks,
+                localSyncTombs
+              );
+            }
             if (typeof applyTodayPlanMarkTombstoneOnImport === "function") {
               mergedTask = applyTodayPlanMarkTombstoneOnImport(mergedTask);
             }
@@ -123481,6 +123811,7 @@
             } else {
               arr.push(mergedTask);
             }
+            mergedRemoteSprintIds.add(rid);
             mergedCount += 1;
           }
 
@@ -123532,9 +123863,88 @@
           if (mergedCount || tombstoneApplied || metaChanged) {
             saveState({ lists: ["weeklyPlan", "done", "closedList"] });
           }
+          /* 丢弃已合并任务的排队 upsert，避免本机旧 micro 快照随后 flush 盖回云端 */
+          if (mergedRemoteSprintIds.size && aliyunSprintRealQueue.length) {
+            const beforeQ = aliyunSprintRealQueue.length;
+            aliyunSprintRealQueue = aliyunSprintRealQueue.filter(function (q) {
+              if (!q || !q.mutation) return false;
+              const op = q.mutation.op;
+              if (op === "tombstone" || op === "meta") return true;
+              if (op === "upsert" && mergedRemoteSprintIds.has(String(q.mutation.id || ""))) {
+                return false;
+              }
+              return true;
+            });
+            const dropped = beforeQ - aliyunSprintRealQueue.length;
+            if (dropped > 0) {
+              aliyunSprintRealAppendLog("拉取后丢弃过期 upsert×" + dropped);
+            }
+          }
         } finally {
           aliyunSprintRealSuppressPush = false;
         }
+        /*
+         * 本机已删却仍在列表（历史 pull 在 tomb 守卫前写入）：剔除并 heal 云端 tomb。
+         * 须在 suppressPush=false 之后，notify 才能入队。
+         */
+        let strippedResurrected = 0;
+        try {
+          const stripRes =
+            typeof stripResurrectedWeeklyPlanTasksMatchingLocalTombs === "function"
+              ? stripResurrectedWeeklyPlanTasksMatchingLocalTombs()
+              : { strippedIds: [], strippedCount: 0 };
+          strippedResurrected = Number(stripRes.strippedCount) || 0;
+          const healIds = Array.isArray(stripRes.strippedIds) ? stripRes.strippedIds.slice() : [];
+          const localSyncTombsHeal =
+            state.syncTombstones && typeof state.syncTombstones === "object"
+              ? state.syncTombstones
+              : {};
+          const remoteHealIds = Object.keys(remoteItems || {});
+          for (let hi = 0; hi < remoteHealIds.length; hi++) {
+            const hid = remoteHealIds[hi];
+            const remoteLive = remoteItems[hid];
+            if (!remoteLive || remoteLive.deleted) continue;
+            const rTomb = remoteTombs && remoteTombs[hid];
+            const rTombTs = aliyunSprintRealItemTs(rTomb);
+            const rTs = aliyunSprintRealItemTs(remoteLive);
+            if (rTombTs > rTs) continue;
+            if ((Number(localSyncTombsHeal[hid]) || 0) <= 0) continue;
+            if (healIds.indexOf(hid) === -1) healIds.push(hid);
+          }
+          for (let h = 0; h < healIds.length; h++) {
+            const hid = healIds[h];
+            const remoteLive = remoteItems && remoteItems[hid];
+            const wkHeal =
+              remoteLive && remoteLive.weekKey != null
+                ? String(remoteLive.weekKey)
+                : "";
+            if (typeof notifyAliyunSprintRealTombstone === "function") {
+              notifyAliyunSprintRealTombstone(
+                "sprint-tomb-heal-local",
+                hid,
+                remoteLive || {
+                  id: hid,
+                  updatedAt: Number(localSyncTombsHeal[hid]) || Date.now()
+                },
+                wkHeal
+              );
+            }
+          }
+          if (strippedResurrected > 0) {
+            saveState({ lists: ["weeklyPlan", "done", "closedList"] });
+            mergedCount += strippedResurrected;
+          }
+          if (healIds.length && typeof flushAliyunSprintRealQueue === "function") {
+            Promise.resolve(flushAliyunSprintRealQueue()).catch(function () {});
+          }
+          if (strippedResurrected > 0 || healIds.length) {
+            logOpenListSyncDiag("pull-strip-heal-local-tombs", {
+              pullSeq: pullSeq,
+              stripped: strippedResurrected,
+              healIds: healIds.slice(0, 40)
+            });
+          }
+        } catch (_stripHeal) {}
         mergeMs = Date.now() - tMerge0;
         if (pullSeq !== aliyunSprintRealPullSeq) {
           staleSkipped = true;
@@ -129708,6 +130118,21 @@
           }
           const lane = getWeeklyPlanTaskLane(normalizeWeeklyPlanTask(p));
           const merged = insertWeeklyPlanTaskForLane(tasks, normalizeWeeklyPlanTask(p), lane);
+          /* 恢复须清 tomb，否则下次 pull strip/heal 会再次删掉 */
+          if (p.id != null && typeof clearSyncTombstone === "function") {
+            clearSyncTombstone(p.id);
+          }
+          if (Array.isArray(p.microTasks)) {
+            p.microTasks.forEach(function (m) {
+              if (!m || m.id == null) return;
+              if (typeof clearSyncTombstone === "function") {
+                clearSyncTombstone(m.id);
+                if (typeof weeklyPlanMicroTombstoneId === "function") {
+                  clearSyncTombstone(weeklyPlanMicroTombstoneId(m.id));
+                }
+              }
+            });
+          }
           saveWeeklyPlanTasksForWeek(merged, wk);
           okRemoveTrash();
           saveState();
@@ -131247,7 +131672,7 @@
           }
         } else if (rTextU > lTextU) text = rtText || text;
         else if (lTextU > rTextU) text = text || rtText;
-        else text = text || rtText;
+        else text = preferRemote ? rtText || text : text || rtText;
       }
       const out = Object.assign({}, l, r, {
         id: l.id,
@@ -131834,7 +132259,7 @@
             }
           } else if (rU > lU) text = rt || lt;
           else if (lU > rU) text = lt || rt;
-          else text = lt || rt; /* 时间戳持平：本机优先，禁止 preferRemote 无条件盖字 */
+          else text = preferRemote ? rt || lt : lt || rt; /* 持平：默认本机；Aliyun/云端较新时允许远端 */
         }
         const done = Boolean(ex.done) || Boolean(loc.done);
         const out = { id: loc.id, text: text, done: done };
@@ -172162,6 +172587,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       task.updatedAt = Date.now();
     }
 
+    /** 十二周年主任务 revision：子任务增删改/完成态后抬父 updatedAt，供阿里云 LWW */
+    function touchAnniversaryTwTaskRevision(task) {
+      if (!task || typeof task !== "object") return;
+      task.updatedAt = Date.now();
+    }
+
     function clearWeeklyPlanCompletionStamps(task) {
       if (!task) return;
       task.mainDone = false;
@@ -177136,7 +177567,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       task.microTasks.push({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         text,
-        done: false
+        done: false,
+        updatedAt: Date.now()
       });
       applyWeeklyPlanMainDoneFromMicros(task);
       touchWeeklyPlanTaskRevision(task);
@@ -183488,8 +183920,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!Array.isArray(task.subs)) {
         task.subs = [];
       }
-      task.subs.push({ id: newTw020Id(), text: t, done: false });
+      task.subs.push({ id: newTw020Id(), text: t, done: false, updatedAt: Date.now() });
       const sub = task.subs[task.subs.length - 1];
+      touchAnniversaryTwTaskRevision(task);
       saveStateAfterAnniversaryWeekChange("tw020", weekNum);
       afterAnniversaryTwSubAdded("tw020", weekNum, taskId, sub);
     }
@@ -183505,6 +183938,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       sub.text = String(text || "").trim();
       sub.updatedAt = Date.now();
+      touchAnniversaryTwTaskRevision(task);
       syncAllAnniversaryMirrorsForTask("tw020", taskId);
       saveStateAfterAnniversaryWeekChange("tw020", weekNum);
       patchAnniversaryTwTitleDom("tw020", weekNum, taskId, subId, sub.text);
@@ -183524,9 +183958,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           meta: { weekNum: weekNum, taskId: taskId }
         });
         recordSyncTombstone(subId);
+        try {
+          if (typeof notifyAliyunAnnivRealSubDelete === "function") {
+            notifyAliyunAnnivRealSubDelete(sub, "tw020", weekNum, task);
+          }
+        } catch (_annivSubTomb) {}
       }
       removeAnniversaryClosedListMirrors("tw020", weekNum, taskId, subId);
       task.subs = task.subs.filter((s) => s.id !== subId);
+      touchAnniversaryTwTaskRevision(task);
       saveStateAfterAnniversaryWeekChange("tw020", weekNum);
       afterAnniversaryTwSubDeleted("tw020", weekNum, taskId, subId);
     }
@@ -184900,6 +185340,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
 
       sub.done = Boolean(isDone);
+      sub.updatedAt = Date.now();
+      if (typeof touchAnniversaryTwTaskRevision === "function") {
+        touchAnniversaryTwTaskRevision(task);
+      } else {
+        task.updatedAt = Date.now();
+      }
       if (typeof syncAllAnniversaryMirrorsForTask === "function") {
         syncAllAnniversaryMirrorsForTask(mk, taskId);
       }
@@ -187060,8 +187506,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!Array.isArray(task.subs)) {
         task.subs = [];
       }
-      task.subs.push({ id: newTw020Id(), text: t, done: false });
+      task.subs.push({ id: newTw020Id(), text: t, done: false, updatedAt: Date.now() });
       const sub = task.subs[task.subs.length - 1];
+      touchAnniversaryTwTaskRevision(task);
       saveStateAfterAnniversaryWeekChange("tw021", weekNum);
       afterAnniversaryTwSubAdded("tw021", weekNum, taskId, sub);
     }
@@ -187077,6 +187524,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       sub.text = String(text || "").trim();
       sub.updatedAt = Date.now();
+      touchAnniversaryTwTaskRevision(task);
       syncAllAnniversaryMirrorsForTask("tw021", taskId);
       saveStateAfterAnniversaryWeekChange("tw021", weekNum);
       patchAnniversaryTwTitleDom("tw021", weekNum, taskId, subId, sub.text);
@@ -187096,9 +187544,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           meta: { weekNum: weekNum, taskId: taskId }
         });
         recordSyncTombstone(subId);
+        try {
+          if (typeof notifyAliyunAnnivRealSubDelete === "function") {
+            notifyAliyunAnnivRealSubDelete(sub, "tw021", weekNum, task);
+          }
+        } catch (_annivSubTomb) {}
       }
       removeAnniversaryClosedListMirrors("tw021", weekNum, taskId, subId);
       task.subs = task.subs.filter((s) => s.id !== subId);
+      touchAnniversaryTwTaskRevision(task);
       saveStateAfterAnniversaryWeekChange("tw021", weekNum);
       afterAnniversaryTwSubDeleted("tw021", weekNum, taskId, subId);
     }
@@ -187194,8 +187648,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const t = String(text || "").trim();
       if (!t) return;
       if (!Array.isArray(task.subs)) task.subs = [];
-      task.subs.push({ id: newTw020Id(), text: t, done: false });
+      task.subs.push({ id: newTw020Id(), text: t, done: false, updatedAt: Date.now() });
       const sub = task.subs[task.subs.length - 1];
+      touchAnniversaryTwTaskRevision(task);
       saveStateAfterAnniversaryWeekChange(moduleKey, weekNum);
       afterAnniversaryTwSubAdded(moduleKey, weekNum, taskId, sub);
     }
@@ -187211,6 +187666,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!sub) return;
       sub.text = String(text || "").trim();
       sub.updatedAt = Date.now();
+      touchAnniversaryTwTaskRevision(task);
       syncAllAnniversaryMirrorsForTask(moduleKey, taskId);
       saveStateAfterAnniversaryWeekChange(moduleKey, weekNum);
       patchAnniversaryTwTitleDom(moduleKey, weekNum, taskId, subId, sub.text);
@@ -187233,11 +187689,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           meta: { weekNum: weekNum, taskId: taskId, moduleKey: moduleKey }
         });
         recordSyncTombstone(subId);
+        try {
+          if (typeof notifyAliyunAnnivRealSubDelete === "function") {
+            notifyAliyunAnnivRealSubDelete(sub, moduleKey, weekNum, task);
+          }
+        } catch (_annivSubTomb) {}
       }
       removeAnniversaryClosedListMirrors(moduleKey, weekNum, taskId, subId);
       task.subs = task.subs.filter(function (s) {
         return s.id !== subId;
       });
+      touchAnniversaryTwTaskRevision(task);
       saveStateAfterAnniversaryWeekChange(moduleKey, weekNum);
       afterAnniversaryTwSubDeleted(moduleKey, weekNum, taskId, subId);
     }
@@ -188283,8 +188745,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!Array.isArray(task.subs)) {
         task.subs = [];
       }
-      task.subs.push({ id: newTw020Id(), text: t, done: false });
+      task.subs.push({ id: newTw020Id(), text: t, done: false, updatedAt: Date.now() });
       const sub = task.subs[task.subs.length - 1];
+      touchAnniversaryTwTaskRevision(task);
       saveStateAfterAnniversaryWeekChange("tw022", weekNum);
       afterAnniversaryTwSubAdded("tw022", weekNum, taskId, sub);
     }
@@ -188300,6 +188763,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       sub.text = String(text || "").trim();
       sub.updatedAt = Date.now();
+      touchAnniversaryTwTaskRevision(task);
       syncAllAnniversaryMirrorsForTask("tw022", taskId);
       saveStateAfterAnniversaryWeekChange("tw022", weekNum);
       patchAnniversaryTwTitleDom("tw022", weekNum, taskId, subId, sub.text);
@@ -188319,9 +188783,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           meta: { weekNum: weekNum, taskId: taskId }
         });
         recordSyncTombstone(subId);
+        try {
+          if (typeof notifyAliyunAnnivRealSubDelete === "function") {
+            notifyAliyunAnnivRealSubDelete(sub, "tw022", weekNum, task);
+          }
+        } catch (_annivSubTomb) {}
       }
       removeAnniversaryClosedListMirrors("tw022", weekNum, taskId, subId);
       task.subs = task.subs.filter((s) => s.id !== subId);
+      touchAnniversaryTwTaskRevision(task);
       saveStateAfterAnniversaryWeekChange("tw022", weekNum);
       afterAnniversaryTwSubDeleted("tw022", weekNum, taskId, subId);
     }
