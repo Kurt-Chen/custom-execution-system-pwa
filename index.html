@@ -104923,7 +104923,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261015g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261015h";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -132513,7 +132513,15 @@
           else if (lU > rU) text = lt || rt;
           else text = preferRemote ? rt || lt : lt || rt; /* 持平：默认本机；Aliyun/云端较新时允许远端 */
         }
-        const done = Boolean(ex.done) || Boolean(loc.done);
+        /* 完成态按 updatedAt LWW；禁止 OR 并集，否则撤销打卡会被旧云端 done=true 盖回 */
+        let done;
+        if (rU > lU) done = Boolean(ex.done);
+        else if (lU > rU) done = Boolean(loc.done);
+        else if (Boolean(ex.done) !== Boolean(loc.done)) {
+          done = preferRemote ? Boolean(ex.done) : Boolean(loc.done);
+        } else {
+          done = Boolean(loc.done);
+        }
         const out = { id: loc.id, text: text, done: done };
         const u = Math.max(rU, lU);
         if (u > 0) out.updatedAt = u;
@@ -143145,6 +143153,9 @@
         item.miniStep = subStepsNorm[0] ? subStepsNorm[0].text : "";
       }
       const mirrorJustAttached = tryAttachMirrorFromClosedListText(item);
+      if (item.mirrorOf && item.mirrorOf.kind === "anniversaryTw") {
+        ensureAnniversaryClosedListMirrorSubId(item);
+      }
       /**
        * 避免同一交互内重复触发（click 双射、触摸合成事件）把已完成立刻打回：目标状态与内存一致则不再写。
        * 例外：本次刚补写 mirrorOf（旧数据），即使 Closed List 已是目标态也要回写周计划对齐。
@@ -143158,13 +143169,21 @@
           applyWeeklyPlanCompletionFromMirror(moEarly, Boolean(item.completed), item.completedAt);
           syncAllWeeklyPlanMirrorsForWeek(moEarly.weekKey);
           saveStateWithCloudPulseImmediate({ lists: ["closedList", "done", "weeklyPlan"] });
-          refreshClosedListLocalUi();
+          refreshClosedListAndTodayPlanAfterMirrorSync();
+          try {
+            if (typeof refreshWeeklyPlanListAfterStructureChange === "function") {
+              refreshWeeklyPlanListAfterStructureChange();
+            }
+          } catch (_wpUi) {}
         } else if (moEarly && moEarly.kind === "anniversaryTw") {
-          applyAnniversaryCompletionFromMirror(moEarly, Boolean(item.completed));
-          syncAllAnniversaryMirrorsForTask(moEarly.module, moEarly.taskId);
-          /* 周年 DOM 走 heavy 指纹；无 weeklyPlan state 变更，不必脏 weeklyPlan */
-          saveStateWithCloudPulseImmediate({ lists: ["closedList", "done"] });
-          refreshClosedListLocalUi();
+          const locatedEarly = applyAnniversaryCompletionFromMirror(
+            moEarly,
+            Boolean(item.completed)
+          );
+          afterAnniversaryCompletionAppliedFromMirror(moEarly, locatedEarly);
+          /* 可能同步到「其他任务」Open 镜像，故脏 weeklyPlan；周年走 anniv 域 upsert，非全量重绘 */
+          saveStateWithCloudPulseImmediate({ lists: ["closedList", "done", "weeklyPlan"] });
+          refreshClosedListAndTodayPlanAfterMirrorSync();
         }
         return;
       }
@@ -143190,12 +143209,12 @@
         applyWeeklyPlanCompletionFromMirror(mo, Boolean(checked), item.completedAt);
         syncAllWeeklyPlanMirrorsForWeek(mo.weekKey);
       } else if (mo && mo.kind === "anniversaryTw") {
-        applyAnniversaryCompletionFromMirror(mo, Boolean(checked));
-        syncAllAnniversaryMirrorsForTask(mo.module, mo.taskId);
+        const located = applyAnniversaryCompletionFromMirror(mo, Boolean(checked));
+        afterAnniversaryCompletionAppliedFromMirror(mo, located);
       }
-      /* 仅周计划镜像会改 weeklyPlan；普通项 / 十二周年镜像只脏 closedList+done */
+      /* 周计划镜像 / 十二周年（可能连带其他任务 Open 镜像）均脏 weeklyPlan */
       const paintLists =
-        mo && mo.kind === "weeklyPlan"
+        mo && (mo.kind === "weeklyPlan" || mo.kind === "anniversaryTw")
           ? ["closedList", "done", "weeklyPlan"]
           : ["closedList", "done"];
       const saveOpts = { lists: paintLists };
@@ -143204,7 +143223,14 @@
         saveOpts.hygieneDomains = ["donePrune"];
       }
       saveStateWithCloudPulseImmediate(saveOpts);
-      refreshClosedListLocalUi();
+      refreshClosedListAndTodayPlanAfterMirrorSync();
+      if (mo && mo.kind === "weeklyPlan") {
+        try {
+          if (typeof refreshWeeklyPlanListAfterStructureChange === "function") {
+            refreshWeeklyPlanListAfterStructureChange();
+          }
+        } catch (_wpUi2) {}
+      }
     }
 
     function toggleMemoComplete(id, checked) {
@@ -143403,8 +143429,9 @@
         applyWeeklyPlanCompletionFromMirror(mo, want, item.completedAt);
         syncAllWeeklyPlanMirrorsForWeek(mo.weekKey);
       } else if (mo && mo.kind === "anniversaryTw") {
-        applyAnniversaryCompletionFromMirror(mo, want);
-        syncAllAnniversaryMirrorsForTask(mo.module, mo.taskId);
+        ensureAnniversaryClosedListMirrorSubId(item);
+        const located = applyAnniversaryCompletionFromMirror(mo, want);
+        afterAnniversaryCompletionAppliedFromMirror(mo, located);
       }
       return true;
     }
@@ -176767,18 +176794,255 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
     }
 
+    /**
+     * 封闭清单 / 其他任务 → 十二周年：按 mirrorOf.module + taskId + subId 精确回写。
+     * 有 subId 只改对应子任务；无 subId 才改父任务 done。返回 located 供调用方局部 patch / 云推送。
+     */
     function applyAnniversaryCompletionFromMirror(mirrorOf, complete) {
-      if (!mirrorOf || mirrorOf.kind !== "anniversaryTw") return;
+      if (!mirrorOf || mirrorOf.kind !== "anniversaryTw") return null;
       const located = findAnniversaryTaskInStorage(mirrorOf.module, mirrorOf.taskId, mirrorOf.weekNum);
-      if (!located) return;
+      if (!located) return null;
       if (Number(mirrorOf.weekNum) !== located.weekNum) mirrorOf.weekNum = located.weekNum;
-      if (mirrorOf.subId) {
-        const sub = (located.task.subs || []).find((s) => s && s.id === mirrorOf.subId);
-        if (sub) sub.done = Boolean(complete);
+      const want = Boolean(complete);
+      const now = Date.now();
+      if (mirrorOf.subId != null && String(mirrorOf.subId) !== "") {
+        const wantSubId = String(mirrorOf.subId);
+        const sub = (located.task.subs || []).find(function (s) {
+          return s && String(s.id) === wantSubId;
+        });
+        if (!sub) return null;
+        if (Boolean(sub.done) !== want) {
+          sub.done = want;
+          sub.updatedAt = now;
+        } else if (!Number(sub.updatedAt)) {
+          sub.updatedAt = now;
+        }
       } else {
-        located.task.done = Boolean(complete);
+        if (Boolean(located.task.done) !== want) {
+          located.task.done = want;
+        }
+      }
+      if (typeof touchAnniversaryTwTaskRevision === "function") {
+        touchAnniversaryTwTaskRevision(located.task);
+      } else {
+        located.task.updatedAt = now;
       }
       markHeavyModulesDepDirty();
+      return located;
+    }
+
+    /**
+     * 旧封闭清单文案含「 › 子任务」但 mirrorOf 缺 subId 时，按稳定 taskId + 子标题补回 subId。
+     * 不靠数组下标；找不到则保持父任务关联，避免误绑。
+     */
+    function ensureAnniversaryClosedListMirrorSubId(item) {
+      const mo = item && item.mirrorOf;
+      if (!mo || mo.kind !== "anniversaryTw") return false;
+      if (mo.subId != null && String(mo.subId) !== "") return false;
+      const raw = String(item.text || "");
+      const sep = raw.indexOf(" › ");
+      if (sep < 0) return false;
+      let subT = raw.slice(sep + 3).trim();
+      if (!subT) return false;
+      const located = findAnniversaryTaskInStorage(mo.module, mo.taskId, mo.weekNum);
+      if (!located) return false;
+      const sub = (located.task.subs || []).find(function (s) {
+        return s && String(s.text || "").trim() === subT;
+      });
+      if (!sub || sub.id == null || String(sub.id) === "") return false;
+      mo.subId = sub.id;
+      return true;
+    }
+
+    /** 十二周年完成态变更后：局部 patch 右侧任务卡 / 子行 / 周进度（禁止 full render） */
+    function patchAnniversaryDomAfterMirrorCompletion(mirrorOf, locatedOpt) {
+      if (!mirrorOf || mirrorOf.kind !== "anniversaryTw") return false;
+      const located =
+        locatedOpt ||
+        findAnniversaryTaskInStorage(mirrorOf.module, mirrorOf.taskId, mirrorOf.weekNum);
+      if (!located) return false;
+      const mk = mirrorOf.module;
+      const weekNum = located.weekNum;
+      const task = located.task;
+      const taskId = task.id;
+      let patched = false;
+      if (mirrorOf.subId != null && String(mirrorOf.subId) !== "") {
+        const subId = String(mirrorOf.subId);
+        const sub = (task.subs || []).find(function (s) {
+          return s && String(s.id) === subId;
+        });
+        const rowEl =
+          typeof findAnniversaryTwSubRowEl === "function"
+            ? findAnniversaryTwSubRowEl(mk, weekNum, taskId, subId)
+            : null;
+        const cardEl =
+          typeof findAnniversaryTwTaskCardEl === "function"
+            ? findAnniversaryTwTaskCardEl(mk, weekNum, taskId)
+            : null;
+        if (rowEl && sub && typeof patchAnniversarySubtaskRowDom === "function") {
+          if (patchAnniversarySubtaskRowDom(rowEl, sub.done)) patched = true;
+        }
+        if (cardEl && typeof syncLaneTaskCardProgressFromTask === "function") {
+          if (syncLaneTaskCardProgressFromTask(cardEl, task, "anniversaryTw")) patched = true;
+        }
+      } else {
+        const cardEl =
+          typeof findAnniversaryTwTaskCardEl === "function"
+            ? findAnniversaryTwTaskCardEl(mk, weekNum, taskId)
+            : null;
+        if (cardEl) {
+          if (typeof patchAnniversaryTaskDoneDom === "function") {
+            if (patchAnniversaryTaskDoneDom(cardEl, task.done)) patched = true;
+          }
+          if (typeof syncLaneTaskCardProgressFromTask === "function") {
+            if (syncLaneTaskCardProgressFromTask(cardEl, task, "anniversaryTw")) patched = true;
+          }
+        }
+      }
+      try {
+        const weekTasks =
+          typeof getAnniversaryTwWeekTasks === "function"
+            ? getAnniversaryTwWeekTasks(mk, weekNum)
+            : [];
+        const weekProg =
+          typeof computeAnniversaryWeekTaskProgress === "function"
+            ? computeAnniversaryWeekTaskProgress(weekTasks)
+            : null;
+        const mod =
+          typeof getAnniversaryTwStateModule === "function"
+            ? getAnniversaryTwStateModule(mk)
+            : null;
+        const bands = (mod && mod.progressBands) || ANNIVERSARY_PROGRESS_BAND_DEFAULTS;
+        if (
+          weekProg &&
+          typeof patchAnniversaryWeekProgressDom === "function" &&
+          patchAnniversaryWeekProgressDom(mk, weekNum, weekProg, bands)
+        ) {
+          patched = true;
+        }
+      } catch (_weekProgErr) {}
+      return patched;
+    }
+
+    /**
+     * 十二周年 → 其他任务（weeklyPlan Open + anniversaryTw mirrorOf）：按 id 同步 mainDone / 文案。
+     * 与封闭清单镜像并列，保证左右打卡一致。
+     */
+    function syncWeeklyPlanAnniversaryOtherMirrorsForTask(module, taskId) {
+      const located = findAnniversaryTaskInStorage(module, taskId);
+      if (!located) return false;
+      const src = located.task;
+      const plan = state.weeklyPlan;
+      if (!plan || typeof plan !== "object") return false;
+      let changed = false;
+      const touchedWeeks = [];
+      Object.keys(plan).forEach(function (wk) {
+        const arr = plan[wk];
+        if (!Array.isArray(arr)) return;
+        arr.forEach(function (wpTask) {
+          const mo = wpTask && wpTask.mirrorOf;
+          if (
+            !mo ||
+            mo.kind !== "anniversaryTw" ||
+            mo.module !== module ||
+            String(mo.taskId) !== String(taskId)
+          ) {
+            return;
+          }
+          let want;
+          let lineText;
+          let itemChanged = false;
+          if (mo.subId != null && String(mo.subId) !== "") {
+            const sub = (src.subs || []).find(function (s) {
+              return s && String(s.id) === String(mo.subId);
+            });
+            if (!sub) return;
+            want = Boolean(sub.done);
+            lineText = buildAnniversaryOtherTaskLineText(src.text, sub.text);
+          } else {
+            want = Boolean(src.done);
+            lineText = buildAnniversaryOtherTaskLineText(src.text);
+          }
+          if (String(wpTask.text || "").trim() !== lineText) {
+            wpTask.text = lineText;
+            itemChanged = true;
+          }
+          if (Boolean(wpTask.mainDone) !== want) {
+            wpTask.mainDone = want;
+            if (typeof stampWeeklyPlanMainDone === "function") {
+              stampWeeklyPlanMainDone(wpTask, want);
+            }
+            if (typeof touchWeeklyPlanTaskRevision === "function") {
+              touchWeeklyPlanTaskRevision(wpTask);
+            }
+            itemChanged = true;
+          }
+          if (Number(mo.weekNum) !== located.weekNum) {
+            mo.weekNum = located.weekNum;
+            itemChanged = true;
+          }
+          if (itemChanged) {
+            changed = true;
+            if (touchedWeeks.indexOf(wk) === -1) touchedWeeks.push(wk);
+          }
+        });
+      });
+      if (!changed) return false;
+      touchedWeeks.forEach(function (wk) {
+        try {
+          if (typeof noteCloudSyncWeeklyPlanPulseWeekKey === "function") {
+            noteCloudSyncWeeklyPlanPulseWeekKey(wk);
+          }
+        } catch (_wkNote) {}
+        try {
+          if (typeof notifyAliyunSprintRealWeekUpsert === "function") {
+            notifyAliyunSprintRealWeekUpsert(wk, "anniversary-other-mirror-sync");
+          }
+        } catch (_sprintNote) {}
+      });
+      return true;
+    }
+
+    /** 左侧打卡回写十二周年后：镜像对齐 + 右侧立刻 patch + Done + 周年域云推送（不改轮询策略） */
+    function afterAnniversaryCompletionAppliedFromMirror(mirrorOf, locatedOpt) {
+      if (!mirrorOf || mirrorOf.kind !== "anniversaryTw") return null;
+      const located =
+        locatedOpt ||
+        findAnniversaryTaskInStorage(mirrorOf.module, mirrorOf.taskId, mirrorOf.weekNum);
+      if (!located) return null;
+      syncAllAnniversaryMirrorsForTask(mirrorOf.module, mirrorOf.taskId);
+      syncWeeklyPlanAnniversaryOtherMirrorsForTask(mirrorOf.module, mirrorOf.taskId);
+      patchAnniversaryDomAfterMirrorCompletion(mirrorOf, located);
+      try {
+        if (typeof syncAnniversaryDoneMirrorAfterLocalToggle === "function") {
+          syncAnniversaryDoneMirrorAfterLocalToggle(mirrorOf.module);
+        }
+      } catch (_doneMir) {}
+      try {
+        if (typeof noteCloudSyncAnniversaryPulseWeek === "function") {
+          noteCloudSyncAnniversaryPulseWeek(mirrorOf.module, located.weekNum);
+        }
+      } catch (_pulse) {}
+      try {
+        if (typeof notifyAliyunAnnivRealWeekUpsert === "function") {
+          notifyAliyunAnnivRealWeekUpsert(
+            mirrorOf.module,
+            located.weekNum,
+            "anniversary-mirror-complete"
+          );
+        }
+      } catch (_annivPush) {}
+      return located;
+    }
+
+    /** 封闭清单 / 今日计划侧栏：镜像回写后立刻刷左侧，不等待全量 render */
+    function refreshClosedListAndTodayPlanAfterMirrorSync() {
+      try {
+        if (typeof refreshClosedListLocalUi === "function") refreshClosedListLocalUi();
+      } catch (_cl) {}
+      try {
+        if (typeof paintTodayPlanPanel === "function") paintTodayPlanPanel();
+      } catch (_tp) {}
     }
 
     /** 十二周年主/子任务 → 封闭清单（前缀【12周年】，mirrorOf 联动完成） */
@@ -177943,8 +178207,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } catch (_sprintDone) {}
       syncAllWeeklyPlanMirrorsForWeek(weekKey);
       syncWeeklyPlanDoneMirrorAfterLocalToggle(weekKey);
+      /* 十二周年 → 其他任务：按 mirrorOf.module/taskId/subId 回写来源子/父任务，并局部 patch + 周年域推送 */
+      const annMo = task.mirrorOf;
+      if (annMo && annMo.kind === "anniversaryTw") {
+        const locatedAnn = applyAnniversaryCompletionFromMirror(annMo, Boolean(checked));
+        afterAnniversaryCompletionAppliedFromMirror(annMo, locatedAnn);
+        try {
+          saveStateWithCloudPulseImmediate({ lists: ["closedList", "done", "weeklyPlan"] });
+        } catch (_annSave) {}
+      }
       refreshWeeklyPlanListAfterStructureChange();
-      if (todayPlanPanelExpanded) paintTodayPlanPanel();
+      refreshClosedListAndTodayPlanAfterMirrorSync();
     }
 
     /** 今日计划封闭清单打卡：复用 Closed List 完成态与云同步链路 */
@@ -184067,11 +184340,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           }
           task.subs = task.subs
             .filter((s) => s && typeof s === "object")
-            .map((s) => ({
-              id: typeof s.id === "string" ? s.id : newTw020Id(),
-              text: typeof s.text === "string" ? s.text : "",
-              done: typeof s.done === "boolean" ? s.done : false
-            }));
+            .map(function (s) {
+              const out = {
+                id: typeof s.id === "string" ? s.id : newTw020Id(),
+                text: typeof s.text === "string" ? s.text : "",
+                done: typeof s.done === "boolean" ? s.done : false
+              };
+              /* 保留 updatedAt，供子任务完成态跨端 LWW；normalize 不得剥掉 */
+              const u = Number(s.updatedAt);
+              if (Number.isFinite(u) && u > 0) out.updatedAt = u;
+              return out;
+            });
           const dlNorm = normalizeDeadlineAtMs(task.deadlineAt);
           if (dlNorm != null) task.deadlineAt = dlNorm;
           else delete task.deadlineAt;
@@ -185602,6 +185881,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (typeof syncAllAnniversaryMirrorsForTask === "function") {
         syncAllAnniversaryMirrorsForTask(mk, taskId);
       }
+      if (typeof syncWeeklyPlanAnniversaryOtherMirrorsForTask === "function") {
+        syncWeeklyPlanAnniversaryOtherMirrorsForTask(mk, taskId);
+      }
       if (perfIx && perfIx.active) {
         perfIx.active.marks.stateUpdateMs = Math.round((nowFn() - tState0) * 100) / 100;
       }
@@ -185637,6 +185919,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const tSave0 = nowFn();
         saveStateAfterAnniversaryWeekChange(mk, weekNum);
         syncAnniversaryDoneMirrorAfterLocalToggle(mk);
+        if (typeof refreshClosedListAndTodayPlanAfterMirrorSync === "function") {
+          refreshClosedListAndTodayPlanAfterMirrorSync();
+        }
         if (perfIx && perfIx.active) {
           perfIx.active.marks.saveStateMs = Math.round((nowFn() - tSave0) * 100) / 100;
         }
@@ -185672,6 +185957,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const tSave0 = nowFn();
       saveStateAfterAnniversaryWeekChange(mk, weekNum);
       syncAnniversaryDoneMirrorAfterLocalToggle(mk);
+      if (typeof refreshClosedListAndTodayPlanAfterMirrorSync === "function") {
+        refreshClosedListAndTodayPlanAfterMirrorSync();
+      }
       if (perfIx && perfIx.active) {
         perfIx.active.marks.saveStateMs = Math.round((nowFn() - tSave0) * 100) / 100;
       }
@@ -185719,8 +186007,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
 
       task.done = Boolean(isDone);
+      if (typeof touchAnniversaryTwTaskRevision === "function") {
+        touchAnniversaryTwTaskRevision(task);
+      } else {
+        task.updatedAt = Date.now();
+      }
       if (typeof syncAllAnniversaryMirrorsForTask === "function") {
         syncAllAnniversaryMirrorsForTask(mk, taskId);
+      }
+      if (typeof syncWeeklyPlanAnniversaryOtherMirrorsForTask === "function") {
+        syncWeeklyPlanAnniversaryOtherMirrorsForTask(mk, taskId);
       }
 
       const cardEl = findAnniversaryTwTaskCardEl(mk, weekNum, taskId);
@@ -185744,6 +186040,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         } catch (_pe) {}
         saveStateAfterAnniversaryWeekChange(mk, weekNum);
         syncAnniversaryDoneMirrorAfterLocalToggle(mk);
+        if (typeof refreshClosedListAndTodayPlanAfterMirrorSync === "function") {
+          refreshClosedListAndTodayPlanAfterMirrorSync();
+        }
         refreshAnniversaryTwWeekTasksPanel(mk, weekNum);
         result.fullRender = true;
         result.ok = true;
@@ -185765,6 +186064,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
       saveStateAfterAnniversaryWeekChange(mk, weekNum);
       syncAnniversaryDoneMirrorAfterLocalToggle(mk);
+      if (typeof refreshClosedListAndTodayPlanAfterMirrorSync === "function") {
+        refreshClosedListAndTodayPlanAfterMirrorSync();
+      }
       result.ok = true;
       result.fullRender = false;
       return result;
@@ -187591,11 +187893,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           }
           task.subs = task.subs
             .filter((s) => s && typeof s === "object")
-            .map((s) => ({
-              id: typeof s.id === "string" ? s.id : newTw020Id(),
-              text: typeof s.text === "string" ? s.text : "",
-              done: typeof s.done === "boolean" ? s.done : false
-            }));
+            .map(function (s) {
+              const out = {
+                id: typeof s.id === "string" ? s.id : newTw020Id(),
+                text: typeof s.text === "string" ? s.text : "",
+                done: typeof s.done === "boolean" ? s.done : false
+              };
+              const u = Number(s.updatedAt);
+              if (Number.isFinite(u) && u > 0) out.updatedAt = u;
+              return out;
+            });
         });
       }
       ensureAnniversaryTwModuleUi(state.anniversaryTw021);
@@ -188699,11 +189006,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           }
           task.subs = task.subs
             .filter((s) => s && typeof s === "object")
-            .map((s) => ({
-              id: typeof s.id === "string" ? s.id : newTw020Id(),
-              text: typeof s.text === "string" ? s.text : "",
-              done: typeof s.done === "boolean" ? s.done : false
-            }));
+            .map(function (s) {
+              const out = {
+                id: typeof s.id === "string" ? s.id : newTw020Id(),
+                text: typeof s.text === "string" ? s.text : "",
+                done: typeof s.done === "boolean" ? s.done : false
+              };
+              const u = Number(s.updatedAt);
+              if (Number.isFinite(u) && u > 0) out.updatedAt = u;
+              return out;
+            });
         });
       }
       ensureAnniversaryTwModuleUi(state.anniversaryTw022);
@@ -188837,11 +189149,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               return s && typeof s === "object";
             })
             .map(function (s) {
-              return {
+              const out = {
                 id: typeof s.id === "string" ? s.id : newTw020Id(),
                 text: typeof s.text === "string" ? s.text : "",
                 done: typeof s.done === "boolean" ? s.done : false
               };
+              const u = Number(s.updatedAt);
+              if (Number.isFinite(u) && u > 0) out.updatedAt = u;
+              return out;
             });
         });
       }
