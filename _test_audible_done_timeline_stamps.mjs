@@ -12,8 +12,8 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 const sw = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");
 
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006n"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261006n"/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261016d"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261016d"/);
 assert.match(html, /function normalizeHabitCheckinStampsList\(/);
 assert.match(html, /function collectHabitDoneRowClockStamps\(/);
 assert.match(html, /function getHabitNumericPrevStampsForPunch\(/);
