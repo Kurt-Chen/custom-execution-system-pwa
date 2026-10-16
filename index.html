@@ -15292,14 +15292,38 @@
 
     .today-plan-panel__section--closed .today-plan-panel__section-title {
       flex: 0 0 auto;
+      align-items: center;
+      gap: 4px;
       font-size: 16px;
       font-weight: 700;
       color: #0f172a;
     }
 
-    /* 今天死磕：非空且全部完成时标题深绿（复用 section--win；空清单不带 win） */
-    .today-plan-panel__section--closed.today-plan-panel__section--win .today-plan-panel__section-title {
-      color: #166534;
+    /*
+     * 今天死磕标题标签：小圆角矩形；数量在标签外。
+     * 未完成：粉红→橙渐变（与 kinetic-age-capsule 同款）；全部完成：实心绿 #16A34A。
+     * line-height:1 + 上下 4px → 总高约 24px，不抬标题栏。
+     */
+    .today-plan-panel__sikao-label {
+      display: inline-block;
+      box-sizing: border-box;
+      margin: 0;
+      padding: 4px 8px;
+      border: 0;
+      border-radius: 6px;
+      background: linear-gradient(90deg, #ec4899 0%, #f97316 100%);
+      color: #fff;
+      font-size: 16px;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+      vertical-align: baseline;
+    }
+
+    .today-plan-panel__section--closed.today-plan-panel__section--win .today-plan-panel__sikao-label {
+      background: #16A34A;
+      color: #fff;
     }
 
     /* 全部完成：数量用稍淡绿；撤销完成随 section--win 移除恢复 #6B7280 */
@@ -15661,23 +15685,20 @@
       color: #e2e8f0;
     }
 
-    /* 封闭清单 WIN：全部完成后的主视觉胜利横幅 */
+    /* 今天死磕 WIN：附件裁切的奖杯＋WIN 横幅（等比 contain，不拉伸、不额外撑高） */
     .today-plan-panel__win {
       display: flex;
       flex-direction: row;
       align-items: center;
       justify-content: center;
-      gap: 10px;
       width: 100%;
       margin: 0;
-      padding: 18px 14px 16px;
-      border: 1px solid rgba(251, 191, 36, 0.35);
-      border-radius: 14px;
-      background:
-        radial-gradient(circle at 18% 30%, rgba(253, 224, 71, 0.55) 0%, transparent 42%),
-        radial-gradient(circle at 82% 22%, rgba(254, 243, 199, 0.7) 0%, transparent 38%),
-        linear-gradient(160deg, #fffbeb 0%, #fef3c7 48%, #fde68a 100%);
-      box-shadow: 0 4px 14px rgba(245, 158, 11, 0.12);
+      padding: 0;
+      border: 0;
+      border-radius: 12px;
+      background: transparent;
+      box-shadow: none;
+      overflow: hidden;
       cursor: pointer;
       text-align: center;
       -webkit-tap-highlight-color: transparent;
@@ -15689,23 +15710,19 @@
       filter: brightness(1.02);
     }
 
-    .today-plan-panel__win-trophy {
-      font-size: 28px;
-      line-height: 1;
+    .today-plan-panel__win-banner {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      height: auto;
       margin: 0;
-      flex: 0 0 auto;
-    }
-
-    .today-plan-panel__win-title {
-      margin: 0;
-      font-size: 28px;
-      font-weight: 900;
-      font-style: italic;
-      letter-spacing: 0.06em;
-      line-height: 1.05;
-      color: #d97706;
-      text-shadow: 0 1px 0 rgba(255, 255, 255, 0.65);
-      flex: 0 0 auto;
+      padding: 0;
+      border: 0;
+      object-fit: contain;
+      object-position: center;
+      pointer-events: none;
+      user-select: none;
+      -webkit-user-drag: none;
     }
 
     .today-plan-panel__win-badge {
@@ -105033,7 +105050,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261016e";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261016f";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -183554,10 +183571,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /** 今日计划分区标题：名称 + 弱化数量（口径不变，仅拆节点便于样式） */
-    function fillTodayPlanSectionHeading(heading, title, total) {
+    /**
+     * 今日计划分区标题：名称 + 弱化数量。
+     * opts.sikaoLabel：今天死磕用渐变/绿色小圆角标签，数量仍在标签外。
+     */
+    function fillTodayPlanSectionHeading(heading, title, total, opts) {
       if (!heading) return;
+      opts = opts && typeof opts === "object" ? opts : {};
       heading.textContent = "";
-      heading.appendChild(document.createTextNode(String(title || "")));
+      if (opts.sikaoLabel) {
+        const label = document.createElement("span");
+        label.className = "today-plan-panel__sikao-label";
+        label.textContent = String(title || "");
+        heading.appendChild(label);
+      } else {
+        heading.appendChild(document.createTextNode(String(title || "")));
+      }
       const count = document.createElement("span");
       count.className = "today-plan-panel__section-count";
       count.textContent = "（" + Math.max(0, Number(total) || 0) + "）";
@@ -184276,7 +184305,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             : TODAY_PLAN_SECTION_ICON_OTHER;
         const heading = document.createElement("h3");
         heading.className = "today-plan-panel__section-title";
-        fillTodayPlanSectionHeading(heading, title, total);
+        fillTodayPlanSectionHeading(heading, title, total, {
+          sikaoLabel: kind === "closed"
+        });
         head.appendChild(icon);
         head.appendChild(heading);
         if (closedAllDone) {
@@ -184329,15 +184360,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           "aria-label",
           closedListWinExpanded ? "收起已完成今天死磕" : "查看已完成今天死磕"
         );
-        const trophy = document.createElement("span");
-        trophy.className = "today-plan-panel__win-trophy";
-        trophy.setAttribute("aria-hidden", "true");
-        trophy.textContent = "\uD83C\uDFC6";
-        const winTitle = document.createElement("div");
-        winTitle.className = "today-plan-panel__win-title";
-        winTitle.textContent = "WIN";
-        winBtn.appendChild(trophy);
-        winBtn.appendChild(winTitle);
+        const banner = document.createElement("img");
+        banner.className = "today-plan-panel__win-banner";
+        banner.src = "./assets/today-plan-win-banner.png";
+        banner.alt = "WIN";
+        banner.decoding = "async";
+        banner.draggable = false;
+        banner.setAttribute("aria-hidden", "true");
+        winBtn.appendChild(banner);
         winBtn.addEventListener("click", function (ev) {
           ev.preventDefault();
           ev.stopPropagation();
