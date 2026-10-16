@@ -24,8 +24,8 @@ assert.doesNotMatch(
   html,
   /if \(isHabitOptionalRemarkKey\(habitKey\)\) \{\s*if \(getHabitDoneRowsForDay\(habitKey, dateStr\)\.length > 0\) return;/
 );
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261006n"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261006n"/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261016d"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261016d"/);
 
 /** 纯逻辑：已有 0 行、times=2 → 应补 2 次 */
 function planSimpleHabitDoneFills(existingCount, expectTimes, stamps) {
