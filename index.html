@@ -15064,12 +15064,29 @@
 
     .today-plan-panel__section-title {
       flex: 0 1 auto;
+      display: inline-flex;
+      align-items: baseline;
       margin: 0;
       min-width: 0;
       font-size: 12.5px;
       font-weight: 700;
       color: #1e293b;
       letter-spacing: 0.01em;
+      white-space: nowrap;
+    }
+
+    /* 标题后数量：约 85% 字号、弱灰；与标题同行基线对齐，无胶囊 */
+    .today-plan-panel__section-count {
+      display: inline;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      font-size: 0.85em;
+      font-weight: inherit;
+      letter-spacing: inherit;
+      color: #6B7280;
+      line-height: inherit;
       white-space: nowrap;
     }
 
@@ -15285,6 +15302,11 @@
       color: #166534;
     }
 
+    /* 全部完成：数量用稍淡绿；撤销完成随 section--win 移除恢复 #6B7280 */
+    .today-plan-panel__section--closed.today-plan-panel__section--win .today-plan-panel__section-count {
+      color: #15803d;
+    }
+
     .today-plan-panel__section--other .today-plan-panel__section-icon {
       width: 18px;
       height: 18px;
@@ -15299,13 +15321,9 @@
 
     .today-plan-panel__section--other .today-plan-panel__section-title {
       flex: 0 0 auto;
-      color: #0f172a;
+      color: #4B5563;
       font-size: 16px;
       font-weight: 700;
-    }
-
-    .today-plan-panel__section-count {
-      display: none;
     }
 
     .today-plan-panel__list {
@@ -15317,8 +15335,10 @@
       gap: 0;
     }
 
-    .today-plan-panel__section--closed .today-plan-panel__list {
-      gap: 6px;
+    /* 今天死磕 / 其他任务：主任务卡片间距统一（原 6px → 0，约减 6px） */
+    .today-plan-panel__section--closed .today-plan-panel__list,
+    .today-plan-panel__section--other .today-plan-panel__list {
+      gap: 0;
     }
 
     .today-plan-panel__item {
@@ -15384,7 +15404,6 @@
 
     /* 其他任务：独立白卡（与封闭清单同级卡片感） */
     .today-plan-panel__section--other .today-plan-panel__list {
-      gap: 6px;
       border: 0;
       border-radius: 0;
       background: transparent;
@@ -15715,7 +15734,7 @@
     /* WIN 展开后的轻量完成列表（浅绿体系，与封闭清单一致） */
     .today-plan-panel__list--win-done {
       margin-top: 8px;
-      gap: 6px;
+      gap: 0;
       border: 0;
       border-radius: 0;
       background: transparent;
@@ -105014,7 +105033,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261016d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261016e";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -183433,6 +183452,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return wrap;
     }
 
+    /** 今日计划分区标题：名称 + 弱化数量（口径不变，仅拆节点便于样式） */
+    function fillTodayPlanSectionHeading(heading, title, total) {
+      if (!heading) return;
+      heading.textContent = "";
+      heading.appendChild(document.createTextNode(String(title || "")));
+      const count = document.createElement("span");
+      count.className = "today-plan-panel__section-count";
+      count.textContent = "（" + Math.max(0, Number(total) || 0) + "）";
+      heading.appendChild(count);
+    }
+
     /** 其他任务分区标题（可随数量重绘；不含 composer）；无折叠箭头，始终展开 */
     function paintTodayPlanOtherSectionHead(total) {
       if (!todayPlanOtherSectionHeadMount) return;
@@ -183445,7 +183475,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       icon.innerHTML = TODAY_PLAN_SECTION_ICON_OTHER;
       const heading = document.createElement("h3");
       heading.className = "today-plan-panel__section-title";
-      heading.textContent = "其他任务（" + Math.max(0, Number(total) || 0) + "）";
+      fillTodayPlanSectionHeading(heading, "其他任务", total);
       head.appendChild(icon);
       head.appendChild(heading);
       head.appendChild(buildTodayPlanAttentionFateBadge());
@@ -183964,8 +183994,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         ".today-plan-panel__section-title"
       );
       if (heading) {
-        heading.textContent =
-          "其他任务（" + Math.max(0, Number(total) || 0) + "）";
+        const countEl = heading.querySelector(".today-plan-panel__section-count");
+        if (countEl) {
+          countEl.textContent =
+            "（" + Math.max(0, Number(total) || 0) + "）";
+          return;
+        }
+        fillTodayPlanSectionHeading(heading, "其他任务", total);
         return;
       }
       paintTodayPlanOtherSectionHead(total);
@@ -184140,7 +184175,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             : TODAY_PLAN_SECTION_ICON_OTHER;
         const heading = document.createElement("h3");
         heading.className = "today-plan-panel__section-title";
-        heading.textContent = title + "（" + total + "）";
+        fillTodayPlanSectionHeading(heading, title, total);
         head.appendChild(icon);
         head.appendChild(heading);
         if (closedAllDone) {
