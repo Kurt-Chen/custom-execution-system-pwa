@@ -129907,6 +129907,20 @@
       return out;
     }
 
+    /**
+     * 时间轴删除封闭清单镜像后的 doneMirrorDismissed：跟较新的 updatedAt。
+     * 再勾选会清掉该标记并抬高 updatedAt，合并时不能被旧副本把「已删除」写回来。
+     */
+    function applyClosedListDoneMirrorDismissMerge(out, L, R) {
+      if (!out) return out;
+      const lu = Number(L && L.updatedAt) || 0;
+      const ru = Number(R && R.updatedAt) || 0;
+      const winner = L && R ? (lu >= ru ? L : R) : L || R || null;
+      if (winner && winner.doneMirrorDismissed) out.doneMirrorDismissed = true;
+      else delete out.doneMirrorDismissed;
+      return out;
+    }
+
     function mergeClosedListArraysForSync(localArr, remoteArr) {
       return mergeDetailCall("mergeClosedListArraysForSync", function () {
       const loc = coerceIdRecordList(localArr);
@@ -129960,6 +129974,7 @@
             pickLaterClosedListAssignmentSide(L, R, out);
             const u = Math.max(revBump, Number(out.updatedAt) || 0, Number(dlPick.deadlineUpdatedAt) || 0);
             if (u > 0) out.updatedAt = u;
+            applyClosedListDoneMirrorDismissMerge(out, L, R);
           }
           return out;
         }
@@ -129988,6 +130003,7 @@
         }
         const u = Math.max(revBump, Number(out.updatedAt) || 0, Number(dlPick.deadlineUpdatedAt) || 0);
         if (u > 0) out.updatedAt = u;
+        applyClosedListDoneMirrorDismissMerge(out, L, R);
         return out;
       });
       });
@@ -143197,13 +143213,62 @@
      * Lists→Done 安全网：封闭清单 / 备忘录完成态已由 Lists 域同步；
      * pull 后若 Done 缺镜像则补齐（skipNotify）。本地勾选仍走 upsert。
      */
+    function findClosedListItemForDoneTask(task) {
+      if (!task || !Array.isArray(state.closedList)) return null;
+      const sid = task.closedListMeta && task.closedListMeta.sourceId;
+      if (sid != null) {
+        const byId = state.closedList.find(function (x) {
+          return x && x.id === sid;
+        });
+        if (byId) return byId;
+      }
+      const text = String(task.text || "");
+      const prefix = "【Closed List】";
+      if (text.indexOf(prefix) !== 0) return null;
+      const body = text.slice(prefix.length);
+      return (
+        state.closedList.find(function (x) {
+          return x && String(x.text || "") === body;
+        }) || null
+      );
+    }
+
+    /**
+     * 用户在时间轴删掉封闭清单镜像：保留封闭清单勾选，但禁止再自动补回 Done 行。
+     * 周计划镜像同时抑制周计划 Done 补写，直到再次手动勾选。
+     */
+    function dismissClosedListDoneMirror(doneTask) {
+      const src = findClosedListItemForDoneTask(doneTask);
+      if (!src) return;
+      if (!src.doneMirrorDismissed) {
+        src.doneMirrorDismissed = true;
+        stampEntityRevision(src);
+      }
+      const mo = src.mirrorOf;
+      if (mo && mo.kind === "weeklyPlan" && mo.id != null) {
+        suppressWeeklyPlanDoneMirrorForTask(mo.id);
+      }
+    }
+
+    function clearClosedListDoneMirrorDismiss(item) {
+      if (!item || !item.doneMirrorDismissed) return false;
+      delete item.doneMirrorDismissed;
+      return true;
+    }
+
     function reconcileListsDerivedDoneMirrorsFromState() {
       if (!Array.isArray(state.done)) state.done = [];
       let changed = false;
       const closedKeep = Object.create(null);
+      const closedDismissed = Object.create(null);
       (Array.isArray(state.closedList) ? state.closedList : []).forEach(function (item) {
         if (!item || item.id == null || !item.completed) return;
         const sid = String(item.id);
+        /* 用户已从时间轴删除：不要因为封闭清单仍勾选就把 Done 行补回来 */
+        if (item.doneMirrorDismissed) {
+          closedDismissed[sid] = true;
+          return;
+        }
         closedKeep[sid] = true;
         const existing = state.done.find(function (d) {
           return d && d.closedListMeta && String(d.closedListMeta.sourceId) === sid;
@@ -143213,10 +143278,29 @@
         changed = true;
       });
       const beforeCl = state.done.length;
+      const removedDismissed = [];
       state.done = state.done.filter(function (d) {
         if (!d || !d.closedListMeta || d.closedListMeta.sourceId == null) return true;
-        return Boolean(closedKeep[String(d.closedListMeta.sourceId)]);
+        const sid = String(d.closedListMeta.sourceId);
+        if (closedDismissed[sid]) {
+          removedDismissed.push(d);
+          return false;
+        }
+        return Boolean(closedKeep[sid]);
       });
+      if (removedDismissed.length) {
+        removedDismissed.forEach(function (it) {
+          if (!it || it.id == null) return;
+          try {
+            recordSyncTombstone(it.id);
+          } catch (_clDismissTs) {}
+          try {
+            if (typeof notifyAliyunDoneRealTombstone === "function") {
+              notifyAliyunDoneRealTombstone("closedList-dismiss", it.id, it);
+            }
+          } catch (_clDismissNt) {}
+        });
+      }
       if (state.done.length !== beforeCl) changed = true;
 
       const memoKeep = Object.create(null);
@@ -143478,10 +143562,12 @@
         window.setTimeout(function () {
           clearClosedListCompleteEnterClass(id);
         }, 750);
+        clearClosedListDoneMirrorDismiss(item);
         syncClosedListToDone(item);
       } else {
         closedListCompleteAnimIds.delete(id);
         delete item.completedAt;
+        clearClosedListDoneMirrorDismiss(item);
         removeClosedListDoneCopy(item.id);
       }
       /* 抬高 updatedAt，避免跨端 LWW / Lists 域合并时本机完成态被旧副本盖回 */
@@ -143700,10 +143786,12 @@
         window.setTimeout(function () {
           clearClosedListCompleteEnterClass(item.id);
         }, 750);
+        clearClosedListDoneMirrorDismiss(item);
         syncClosedListToDone(item);
       } else {
         closedListCompleteAnimIds.delete(item.id);
         delete item.completedAt;
+        clearClosedListDoneMirrorDismiss(item);
         removeClosedListDoneCopy(item.id);
       }
       const mo = item.mirrorOf;
@@ -152438,7 +152526,16 @@
             }
           }
         }
-        /** closedListMeta：从 My Done 删除仅移除 Done 行，不回写封闭清单勾选（保留已完成划线） */
+        /**
+         * 从时间轴删除封闭清单镜像：不取消封闭清单勾选。
+         * 打 doneMirrorDismissed，避免 Lists 拉取后把同一条再补回时间轴。
+         */
+        if (
+          (task.closedListMeta && task.closedListMeta.sourceId != null) ||
+          String(task.text || "").indexOf("【Closed List】") === 0
+        ) {
+          dismissClosedListDoneMirror(task);
+        }
       }
       if (listName === "closedList") {
         /** 含 mirrorOf 的镜像：仅删封闭清单行，不删周计划/十二周年源任务 */
@@ -173657,6 +173754,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (want) {
           const wpAt = getWeeklyPlanDoneSyncTimestampMs(task, null);
           item.completedAt = wpAt != null ? wpAt : Date.now();
+          clearClosedListDoneMirrorDismiss(item);
           const tid = String(mo.id);
           if (!syncedDoneForTask.has(tid)) {
             syncedDoneForTask.add(tid);
@@ -173664,6 +173762,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           }
         } else {
           delete item.completedAt;
+          clearClosedListDoneMirrorDismiss(item);
           removeClosedListDoneCopy(item.id);
         }
         stampEntityRevision(item);
@@ -177096,9 +177195,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         item.completed = want;
         if (want) {
           item.completedAt = Date.now();
+          clearClosedListDoneMirrorDismiss(item);
           syncClosedListToDone(item);
         } else {
           delete item.completedAt;
+          clearClosedListDoneMirrorDismiss(item);
           removeClosedListDoneCopy(item.id);
         }
         stampEntityRevision(item);
