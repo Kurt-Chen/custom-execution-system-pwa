@@ -160,6 +160,8 @@ aliyunAmbRealCloneTombstonesFromState()
 
 **推荐下一轮唯一变量**：先做 **A（gzip）**（链路已证实未压缩、正确性风险最低）；AMB 裁剪单独立项，不得与 gzip 同轮合并。
 
+> **2026-10-17 续**：A（gzip）已在仓库实现（`alicloud-fc-smoke-a/app.py` + `docs/aliyun-fc-response-gzip-20261017.md`）。**须另行 WebIDE 部署 FC 才生效**；见该报告 Go/No-Go。
+
 ---
 
 ## 8. 建议观测（不增高频请求）
