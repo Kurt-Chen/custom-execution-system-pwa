@@ -105943,7 +105943,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261019p";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261019q";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -118271,6 +118271,36 @@
       return out;
     }
 
+    /**
+     * Done 合并：判断回写是否真有正文变化（忽略 updatedAt）。
+     * 旧逻辑在 rTs>=lTs 时一律 mergedCount++，同内容回写也会触发全量 Done render。
+     */
+    function aliyunDoneRealItemContentDiffers(local, next) {
+      if (!local || !next) return true;
+      const keys = Object.keys(next);
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        if (k === "updatedAt") continue;
+        const a = local[k];
+        const b = next[k];
+        if (a === b) continue;
+        if (a == null && b == null) continue;
+        if (
+          (a != null && typeof a === "object") ||
+          (b != null && typeof b === "object")
+        ) {
+          try {
+            if (JSON.stringify(a) !== JSON.stringify(b)) return true;
+          } catch (_e) {
+            return true;
+          }
+        } else if (a !== b) {
+          return true;
+        }
+      }
+      return false;
+    }
+
     function aliyunDoneRealEmptyEnvelope() {
       return {
         kind: ALIYUN_DONE_REAL_KIND,
@@ -118779,6 +118809,7 @@
       let ok = false;
       let errMsg = "";
       let mergedCount = 0;
+      let appliedLwwCount = 0;
       let tombstoneApplied = 0;
       try {
         aliyunDoneRealAppendLog("拉取 Done docId=" + docId);
@@ -118962,11 +118993,14 @@
             ) {
               next.habitMeta = local.habitMeta;
             }
+            const contentDiffers = aliyunDoneRealItemContentDiffers(local, next);
             Object.keys(next).forEach(function (k) {
               local[k] = next[k];
             });
             local.updatedAt = next.updatedAt;
-            mergedCount += 1;
+            appliedLwwCount += 1;
+            /* 仅正文变化计入 mergedCount，避免同内容 LWW 回写触发 Done 全量 render */
+            if (contentDiffers) mergedCount += 1;
           }
         }
         const tombIds = Object.keys(remoteTombs);
@@ -119035,26 +119069,35 @@
           if (typeof flowDiagNoteMerge === "function" && mergeMs > 0) flowDiagNoteMerge(mergeMs);
         } catch (_flowMergeNote) {}
 
-        if (mergedCount || tombstoneApplied) {
-          /* 只脏 Done：避免 uiPaintDirty===null 时全量 paint */
-          if (uiPaintDirty == null) {
-            uiPaintDirty = {};
-            if (typeof UI_PAINT_SLICE_KEYS !== "undefined") {
-              UI_PAINT_SLICE_KEYS.forEach(function (k) {
-                uiPaintDirty[k] = false;
-              });
+        if (mergedCount || tombstoneApplied || appliedLwwCount) {
+          const needDonePaint = !!(mergedCount || tombstoneApplied);
+          if (needDonePaint) {
+            /* 只脏 Done：避免 uiPaintDirty===null 时全量 paint */
+            if (uiPaintDirty == null) {
+              uiPaintDirty = {};
+              if (typeof UI_PAINT_SLICE_KEYS !== "undefined") {
+                UI_PAINT_SLICE_KEYS.forEach(function (k) {
+                  uiPaintDirty[k] = false;
+                });
+              }
             }
+            markUiPaintSlicesDirty(["done"]);
           }
-          markUiPaintSlicesDirty(["done"]);
           /* 抑制云推送：Done 已走阿里云，避免 saveState 再触发 Firebase 全量 */
           const prevSuppress = cloudSyncSuppressPush;
           cloudSyncSuppressPush = true;
           try {
-            saveState({ lists: ["done"] });
+            /* 同内容 LWW：skipUiPaintDirty，避免 saveState 再把 done 标脏 */
+            saveState(
+              needDonePaint
+                ? { lists: ["done"] }
+                : { lists: ["done"], skipUiPaintDirty: true }
+            );
           } finally {
             cloudSyncSuppressPush = prevSuppress;
           }
-
+        }
+        if (mergedCount || tombstoneApplied) {
           const tRen0 = Date.now();
           /* 仅脏 Done 切片的局部 render；rAF 错开网络回调，避免卡输入 */
           logUiPartialUpdate("done");
@@ -119080,12 +119123,20 @@
           try {
             if (typeof flowDiagNoteCloudRender === "function" && renderMs > 0) flowDiagNoteCloudRender(renderMs);
           } catch (_flowRenNote) {}
+        } else if (appliedLwwCount > 0) {
+          /* 同内容 LWW 已落盘 updatedAt；跳过 Done 全量 render（真卡顿主因） */
+          logSyncNoDataChangeSkipRender("done");
+          aliyunDoneRealAppendLog(
+            "正文无变化（LWW 回写 " + appliedLwwCount + "），已落盘、跳过 render"
+          );
         }
         aliyunSyncPrimaryMarkPullFingerprint("done", donePullFp);
         ok = true;
         aliyunDoneRealAppendLog(
-          "合并完成：upsert/更新 " +
+          "合并完成：正文变更 " +
             mergedCount +
+            "，LWW回写 " +
+            appliedLwwCount +
             "，tombstone 生效 " +
             tombstoneApplied +
             (moveBreakMerged ? "，moveBreakDay 已合并" : "")
@@ -119112,6 +119163,7 @@
           networkWaitMs: networkWaitMs,
           mainThreadWorkMs: mainThreadWorkMs,
           mergedCount: mergedCount,
+          appliedLwwCount: appliedLwwCount,
           tombstoneApplied: tombstoneApplied,
           error: errMsg || undefined
         });
@@ -138309,7 +138361,7 @@
         if (!opts.fromHygiene && !opts.skipUiPaintDirty && !saveListsSkipStateHygiene(opts.lists)) {
           markStateHygieneDirty(opts.hygieneDomains);
         }
-        if (opts.lists) {
+        if (opts.lists && !opts.skipUiPaintDirty) {
           markUiPaintSlicesDirty(opts.lists);
           if (saveListsTouchHeavyModules(opts.lists)) markHeavyModulesDepDirty();
         } else if (!opts.fromHygiene && !opts.skipUiPaintDirty) {
