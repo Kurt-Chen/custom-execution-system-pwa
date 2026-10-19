@@ -105943,7 +105943,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261019n";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261019l";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -112166,17 +112166,13 @@
           body: aggregateForgeCheckinsByNormalizedLabel(dmDateKey, "body"),
           spt: aggregateForgeCheckinsByNormalizedLabel(dmDateKey, "spt")
         }).list;
-        const guardedDaily =
-          typeof retainForgeMinEditingLocalRows === "function"
-            ? retainForgeMinEditingLocalRows("dailyMinimums", nextDaily)
-            : nextDaily;
         try {
-          if (JSON.stringify(state.forge.dailyMinimums || []) !== JSON.stringify(guardedDaily)) {
-            state.forge.dailyMinimums = guardedDaily;
+          if (JSON.stringify(state.forge.dailyMinimums || []) !== JSON.stringify(nextDaily)) {
+            state.forge.dailyMinimums = nextDaily;
             changed = true;
           }
         } catch (_dmCmp) {
-          state.forge.dailyMinimums = guardedDaily;
+          state.forge.dailyMinimums = nextDaily;
           changed = true;
         }
       }
@@ -112185,17 +112181,13 @@
           Array.isArray(state.forge.weeklyMinimums) ? state.forge.weeklyMinimums : [],
           forgeSlice.weeklyMinimums
         );
-        const guardedWeekly =
-          typeof retainForgeMinEditingLocalRows === "function"
-            ? retainForgeMinEditingLocalRows("weeklyMinimums", nextWeekly)
-            : nextWeekly;
         try {
-          if (JSON.stringify(state.forge.weeklyMinimums || []) !== JSON.stringify(guardedWeekly)) {
-            state.forge.weeklyMinimums = guardedWeekly;
+          if (JSON.stringify(state.forge.weeklyMinimums || []) !== JSON.stringify(nextWeekly)) {
+            state.forge.weeklyMinimums = nextWeekly;
             changed = true;
           }
         } catch (_wmCmp) {
-          state.forge.weeklyMinimums = guardedWeekly;
+          state.forge.weeklyMinimums = nextWeekly;
           changed = true;
         }
       }
@@ -121668,12 +121660,6 @@
             next = mergeIdRecordArraysPreferLocalOnTie(loc, rem);
           }
         }
-        if (
-          (key === "dailyMinimums" || key === "weeklyMinimums") &&
-          typeof retainForgeMinEditingLocalRows === "function"
-        ) {
-          next = retainForgeMinEditingLocalRows(key, next);
-        }
         try {
           if (JSON.stringify(loc) !== JSON.stringify(next)) {
             state.forge[key] = next;
@@ -122248,12 +122234,10 @@
               const forgeSettingsBusy =
                 (typeof isAppUiBusyForBackgroundRefresh === "function" &&
                   isAppUiBusyForBackgroundRefresh()) ||
-                (typeof isForgeMinListEditingInProgress === "function" &&
-                  isForgeMinListEditingInProgress()) ||
                 !!appUiImeComposing ||
                 (typeof isTextEntryHot === "function" && isTextEntryHot());
               if (forgeSettingsBusy) {
-                /* state 已合入；仅延后日/周最低 DOM，退出编辑后再渲 */
+                /* 日/周最低目标输入中：禁止 innerHTML 清空；state 已合入，退出编辑后再渲 */
                 renderDeferredWhileEditing = true;
                 if (typeof scheduleRenderWhenEditingEnds === "function") {
                   scheduleRenderWhenEditingEnds();
@@ -132595,21 +132579,15 @@
         Array.isArray(ro.dailyMinimums) ? ro.dailyMinimums : []
       );
       const dmDateKey = formatDateInputValue(new Date());
-      let nextDailyMins = dedupeForgeMinimumsList(mergedDailyMinimums, {
+      out.dailyMinimums = dedupeForgeMinimumsList(mergedDailyMinimums, {
         mind: aggregateForgeCheckinsByNormalizedLabel(dmDateKey, "mind"),
         body: aggregateForgeCheckinsByNormalizedLabel(dmDateKey, "body"),
         spt: aggregateForgeCheckinsByNormalizedLabel(dmDateKey, "spt")
       }).list;
-      let nextWeeklyMins = mergeIdRecordArraysPreferLocalOnTie(
+      out.weeklyMinimums = mergeIdRecordArraysPreferLocalOnTie(
         Array.isArray(lo.weeklyMinimums) ? lo.weeklyMinimums : [],
         Array.isArray(ro.weeklyMinimums) ? ro.weeklyMinimums : []
       );
-      if (typeof retainForgeMinEditingLocalRows === "function") {
-        nextDailyMins = retainForgeMinEditingLocalRows("dailyMinimums", nextDailyMins);
-        nextWeeklyMins = retainForgeMinEditingLocalRows("weeklyMinimums", nextWeeklyMins);
-      }
-      out.dailyMinimums = nextDailyMins;
-      out.weeklyMinimums = nextWeeklyMins;
       out.kbWeightKg = mergeForgeShallowMapsForSync(lo.kbWeightKg, ro.kbWeightKg, preferRemote);
       out.ccProgressStep = mergeForgeShallowMapsForSync(lo.ccProgressStep, ro.ccProgressStep, preferRemote);
       return out;
@@ -150262,10 +150240,6 @@
         state.forge.bodyTodayTab = k;
         saveState();
       }
-      /* 切 Body 子分类：结束周/日最低编辑，避免 --editing 残留挡刷新 */
-      if (persist && typeof endForgeMinEditingSessions === "function") {
-        endForgeMinEditingSessions({ revert: true });
-      }
       /* 切分类后立刻用本机 done 填可见卡，避免先闪 0/空周格再等协作刷 */
       if (typeof ensureForgeVisibleCardsShowLocalData === "function") {
         ensureForgeVisibleCardsShowLocalData();
@@ -150340,9 +150314,6 @@
         if (!state.forge || typeof state.forge !== "object") state.forge = {};
         state.forge.mindTodayTab = k;
         saveState();
-      }
-      if (persist && typeof endForgeMinEditingSessions === "function") {
-        endForgeMinEditingSessions({ revert: true });
       }
       if (typeof ensureForgeVisibleCardsShowLocalData === "function") {
         ensureForgeVisibleCardsShowLocalData();
@@ -194445,10 +194416,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return true;
       }
       if (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) return true;
-      /*
-       * 周/日最低编辑：不并入全局 busy（避免挡 Done/Habit 等域 UI）。
-       * 仅在 renderForge*MinRows / Forge settings 局部刷新处单独延后列表重绘。
-       */
       if (isAppUiEditingInProgress()) return true;
       if (document.querySelector("[data-manual-editing=\"1\"]")) return true;
       if (document.querySelector(".weekly-plan-main-title-editing, .task-title-ix--editing")) {
@@ -194462,11 +194429,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       renderWhenEditingEndsTimer = setTimeout(function () {
         renderWhenEditingEndsTimer = null;
         if (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) {
-          scheduleRenderWhenEditingEnds();
-          return;
-        }
-        /* 周/日最低编辑不在全局 busy，须单独挡住积压 flush */
-        if (typeof isForgeMinListEditingInProgress === "function" && isForgeMinListEditingInProgress()) {
           scheduleRenderWhenEditingEnds();
           return;
         }
@@ -203747,165 +203709,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       );
     }
 
-    /**
-     * 周/日最低是否处于「…→修改」会话（不依赖焦点）。
-     * 桌面三套布局只显示一套：编辑时常 focus 到 display:none 的手机端 input，
-     * isActiveEditableField 会判否，导致同步/重渲拆掉编辑态。
-     */
-    function isForgeMinListEditingInProgress() {
-      try {
-        return !!document.querySelector(
-          "#forgeModule .forge-weekly-min-row--editing, #forgeDailyMinBoard .forge-weekly-min-row--editing"
-        );
-      } catch (_e) {
-        return false;
-      }
-    }
-
-    /** 三套布局 input 中取当前可见者，供 focus / 读值 */
-    function forgeWmPickVisibleInput(inputs) {
-      const list = inputs && typeof inputs.length === "number" ? inputs : [];
-      for (let i = 0; i < list.length; i++) {
-        const inp = list[i];
-        if (!inp) continue;
-        if (typeof isFieldVisibleForEditGuard === "function") {
-          if (isFieldVisibleForEditGuard(inp)) return inp;
-        } else {
-          try {
-            const r = inp.getBoundingClientRect();
-            if (r.width > 0 || r.height > 0) return inp;
-          } catch (_r) {}
-        }
-      }
-      return list[0] || null;
-    }
-
-    function forgeMinFindRowById(listKey, id) {
-      const list =
-        state.forge && Array.isArray(state.forge[listKey]) ? state.forge[listKey] : [];
-      const sid = String(id == null ? "" : id);
-      if (!sid) return null;
-      for (let i = 0; i < list.length; i++) {
-        const r = list[i];
-        if (r && String(r.id) === sid) return r;
-      }
-      return null;
-    }
-
-    /**
-     * 合并日/周最低列表时：只把正在编辑行的 DOM 草稿（label + 目标）盖回已合并条目。
-     * - 不整份替换本地旧对象（远端其它字段 / 他端删除仍生效）
-     * - 不碰 Done 打卡；进度仍由打卡聚合在重绘时计算
-     * - 远端已删该 id：不复活；编辑 DOM 仍在，退出编辑后积压重绘会去掉
-     */
-    function retainForgeMinEditingLocalRows(listKey, nextArr) {
-      if (!Array.isArray(nextArr)) return nextArr;
-      const isDaily = listKey === "dailyMinimums";
-      const attr = isDaily ? "data-forge-dm-id" : "data-forge-wm-id";
-      const targetField = isDaily ? "dailyMin" : "weeklyMin";
-      let editingEls;
-      try {
-        editingEls = document.querySelectorAll(
-          "#forgeModule .forge-weekly-min-row--editing[" +
-            attr +
-            "], #forgeDailyMinBoard .forge-weekly-min-row--editing[" +
-            attr +
-            "]"
-        );
-      } catch (_q) {
-        return nextArr;
-      }
-      if (!editingEls || !editingEls.length) return nextArr;
-      const byId = new Map();
-      nextArr.forEach(function (r) {
-        if (r && r.id != null) byId.set(String(r.id), r);
-      });
-      for (let i = 0; i < editingEls.length; i++) {
-        const el = editingEls[i];
-        const id = el && el.getAttribute(attr);
-        if (!id) continue;
-        const item = byId.get(String(id));
-        if (!item) continue;
-        const nameInp = forgeWmPickVisibleInput(el.querySelectorAll(".forge-weekly-min-name"));
-        const tgtInp = forgeWmPickVisibleInput(el.querySelectorAll(".forge-weekly-min-target"));
-        if (nameInp) item.label = String(nameInp.value || "").trim();
-        if (tgtInp) item[targetField] = String(tgtInp.value || "").trim();
-      }
-      return nextArr;
-    }
-
-    /**
-     * 结束周/日最低编辑会话（取消未保存草稿），并触发积压的 deferred render。
-     * exceptEl：正在进入编辑的行可保留。
-     */
-    function endForgeMinEditingSessions(opts) {
-      opts = opts || {};
-      const exceptEl = opts.exceptEl || null;
-      const revert = opts.revert !== false;
-      let ended = 0;
-      let rows;
-      try {
-        rows = document.querySelectorAll(
-          "#forgeModule .forge-weekly-min-row--editing, #forgeDailyMinBoard .forge-weekly-min-row--editing"
-        );
-      } catch (_q) {
-        return 0;
-      }
-      for (let i = 0; i < rows.length; i++) {
-        const el = rows[i];
-        if (!el || (exceptEl && el === exceptEl)) continue;
-        const wmId = el.getAttribute("data-forge-wm-id");
-        const dmId = el.getAttribute("data-forge-dm-id");
-        if (revert) {
-          const live = wmId
-            ? forgeMinFindRowById("weeklyMinimums", wmId)
-            : dmId
-              ? forgeMinFindRowById("dailyMinimums", dmId)
-              : null;
-          if (live) {
-            const lb = String(live.label || "").trim();
-            el.querySelectorAll(".forge-weekly-min-name").forEach(function (inp) {
-              inp.value = lb;
-            });
-            const raw = wmId
-              ? String(live.weeklyMin || "").trim()
-              : String(live.dailyMin || "").trim();
-            const wn = parseFloat(raw);
-            const tv = !Number.isNaN(wn) && wn > 0 ? raw : "";
-            el.querySelectorAll(".forge-weekly-min-target").forEach(function (inp) {
-              inp.value = tv;
-            });
-          }
-        }
-        el.querySelectorAll(".forge-weekly-min-name, .forge-weekly-min-target").forEach(function (inp) {
-          inp.setAttribute("readonly", "readonly");
-        });
-        el.classList.remove("forge-weekly-min-row--editing");
-        el.querySelectorAll(".forge-weekly-min-save").forEach(function (btn) {
-          btn.disabled = true;
-        });
-        el.querySelectorAll(".forge-weekly-min-actions.manual-item-actions-wrap").forEach(function (wrap) {
-          const btn = wrap.querySelector(".manual-item-more-btn");
-          wrap.classList.remove("is-expanded");
-          if (btn) btn.setAttribute("aria-expanded", "false");
-        });
-        ended += 1;
-      }
-      if (ended > 0) {
-        if (renderDeferredWhileEditing && typeof scheduleRenderWhenEditingEnds === "function") {
-          scheduleRenderWhenEditingEnds();
-        } else if (typeof renderForgeWeeklyMinRows === "function") {
-          try {
-            renderForgeWeeklyMinRows();
-          } catch (_wm) {}
-          try {
-            if (typeof renderForgeDailyMinRows === "function") renderForgeDailyMinRows();
-          } catch (_dm) {}
-        }
-      }
-      return ended;
-    }
-
     function forgeWmBuildActionsHtml() {
       return (
         '<div class="forge-weekly-min-actions forge-weekly-min-actions--icons manual-item-actions-wrap">' +
@@ -203941,7 +203744,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const rangeEl = document.getElementById("forgeWeeklyMinWeekRange");
       const forgeWmHostBusy = function (host) {
         if (!host) return false;
-        if (host.querySelector(".forge-weekly-min-row--editing")) return true;
         const ae = document.activeElement;
         return !!(
           ae &&
@@ -203953,7 +203755,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         forgeWmHostBusy(mindWrap) ||
         forgeWmHostBusy(bodyWrap) ||
         forgeWmHostBusy(sptWrap) ||
-        (typeof isForgeMinListEditingInProgress === "function" && isForgeMinListEditingInProgress()) ||
         appUiImeComposing
       ) {
         renderDeferredWhileEditing = true;
@@ -204084,15 +203885,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           "</div>";
         const nameInputs = Array.from(el.querySelectorAll(".forge-weekly-min-name"));
         const tgtInputs = Array.from(el.querySelectorAll(".forge-weekly-min-target"));
-        /* 读写/聚焦用当前可见布局的 input，避免桌面误绑隐藏的手机端节点 */
-        function wmNameInp() {
-          return forgeWmPickVisibleInput(nameInputs) || nameInputs[0] || null;
-        }
-        function wmTgtInp() {
-          return forgeWmPickVisibleInput(tgtInputs) || tgtInputs[0] || null;
-        }
-        const nameInp = wmNameInp();
-        const tgtInp = wmTgtInp();
+        const nameInp = nameInputs[0] || null;
+        const tgtInp = tgtInputs[0] || null;
         const saveBtns = el.querySelectorAll(".forge-weekly-min-save");
         const editBtns = el.querySelectorAll(".forge-weekly-min-edit");
         nameInputs.forEach(function (inp) {
@@ -204117,13 +203911,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           syncWmDisplayFromInputs();
         }
         function syncWmDisplayFromInputs() {
-          const nameEl = wmNameInp();
-          const tgtEl = wmTgtInp();
-          const nm = nameEl ? nameEl.value.trim() : "";
-          const liveRow = forgeMinFindRowById("weeklyMinimums", id) || row;
+          const nm = nameInp ? nameInp.value.trim() : "";
           const liveSrc =
             typeof forgeResolveWeeklyMinSource === "function"
-              ? forgeResolveWeeklyMinSource(Object.assign({}, liveRow, { label: nm }))
+              ? forgeResolveWeeklyMinSource(Object.assign({}, row, { label: nm }))
               : null;
           /*
            * 囚徒口语名（如「跪姿俯卧撑」）展示为规范主名「膝盖俯卧撑」，
@@ -204141,9 +203932,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           const parts = forgeWmSplitLabelSubtitle(displayNm);
           const sourceText =
             (liveSrc && liveSrc.text) ||
-            (liveRow.source && liveRow.source.text) ||
+            (row.source && row.source.text) ||
             "";
-          const tg = tgtEl ? parseFloat(String(tgtEl.value || "").trim()) : NaN;
+          const tg = tgtInp ? parseFloat(String(tgtInp.value || "").trim()) : NaN;
           const tgN = !Number.isNaN(tg) && tg > 0 ? tg : 0;
           const liveUnit = (displayNm ? inferForgeWpGoalUnit(displayNm) : unitDisp) || "min";
           const goalText = tgN > 0 ? forgeWpFormatProgressNum(tgN) + " " + liveUnit : "\u2014";
@@ -204156,7 +203947,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           const sourceForUi = kbLive ? "Forge · 壶铃" : sourceText;
           const jumpTarget =
             typeof resolveForgeWmJumpTarget === "function"
-              ? resolveForgeWmJumpTarget(Object.assign({}, liveRow, { label: nm }))
+              ? resolveForgeWmJumpTarget(Object.assign({}, row, { label: nm }))
               : null;
           const canJump = !!jumpTarget;
           el.querySelectorAll(".forge-wm-name-display").forEach(function (d) {
@@ -204227,38 +204018,34 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           if (wmMoreBtn) wireManualItemActionsWrap(wmActionsWrap, wmMoreBtn);
         });
         function pushRowState() {
-          const nameEl = wmNameInp();
-          const tgtEl = wmTgtInp();
-          let nextLabel = nameEl ? nameEl.value.trim() : "";
-          const live = forgeMinFindRowById("weeklyMinimums", id) || row;
+          let nextLabel = nameInp ? nameInp.value.trim() : "";
           const src =
             typeof forgeResolveWeeklyMinSource === "function"
-              ? forgeResolveWeeklyMinSource(Object.assign({}, live, { label: nextLabel }))
+              ? forgeResolveWeeklyMinSource(Object.assign({}, row, { label: nextLabel }))
               : null;
           if (src && src.kind === "cc" && typeof forgeCcMinListLabel === "function") {
             nextLabel = forgeCcMinListLabel(src) || nextLabel;
           } else if (src && src.label) {
             nextLabel = src.label;
           }
-          live.label = nextLabel;
+          row.label = nextLabel;
           if (src) {
-            live.source = { kind: src.kind || "custom", text: src.text || "自定义" };
-            if (src.art) live.source.art = src.art;
-            if (src.step) live.source.step = src.step;
-            if (src.kg) live.source.kg = src.kg;
+            row.source = { kind: src.kind || "custom", text: src.text || "自定义" };
+            if (src.art) row.source.art = src.art;
+            if (src.step) row.source.step = src.step;
+            if (src.kg) row.source.kg = src.kg;
           }
-          live.unit = inferForgeWpGoalUnit(live.label);
-          live.weeklyMin = tgtEl ? tgtEl.value.trim() : "";
+          row.unit = inferForgeWpGoalUnit(row.label);
+          row.weeklyMin = tgtInp ? tgtInp.value.trim() : "";
           /* 单次落盘；日/周整理已在启动/拉取入口完成，勿在每次保存重跑 */
           saveState({ lists: ["forge"] });
         }
         function revertWeeklyMinInputsFromRow() {
-          const live = forgeMinFindRowById("weeklyMinimums", id) || row;
-          const lb = String(live.label || "").trim();
+          const lb = String(row.label || "").trim();
           nameInputs.forEach(function (inp) {
             inp.value = lb;
           });
-          const w = String(live.weeklyMin || "").trim();
+          const w = String(row.weeklyMin || "").trim();
           const wn = parseFloat(w);
           const tv = !Number.isNaN(wn) && wn > 0 ? w : "";
           tgtInputs.forEach(function (inp) {
@@ -204306,9 +204093,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         const isNewEmptyRow = !label && !String(row.weeklyMin || "").trim();
         applyWeeklyMinRowLocked(!isNewEmptyRow);
-        if (isNewEmptyRow) {
-          const focusName = wmNameInp();
-          if (focusName) focusName.focus();
+        if (isNewEmptyRow && nameInp) {
+          nameInp.focus();
         }
         editBtns.forEach(function (editBtn) {
           editBtn.addEventListener("click", function () {
@@ -204316,18 +204102,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               revertWeeklyMinInputsFromRow();
               syncWmDisplayFromInputs();
               applyWeeklyMinRowLocked(true);
-              if (renderDeferredWhileEditing && typeof scheduleRenderWhenEditingEnds === "function") {
-                scheduleRenderWhenEditingEnds();
-              }
             } else {
-              if (typeof endForgeMinEditingSessions === "function") {
-                endForgeMinEditingSessions({ revert: true, exceptEl: el });
-              }
               applyWeeklyMinRowLocked(false);
-              const focusName = wmNameInp();
-              if (focusName) {
-                focusName.focus();
-                focusName.select();
+              if (nameInp) {
+                nameInp.focus();
+                nameInp.select();
               }
             }
           });
@@ -204337,17 +204116,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             if (saveBtn.disabled) return;
             pushRowState();
             /*
-             * 就地锁定并刷新本行进度/摘要，禁止 renderForgeWeeklyMinRows 全量 innerHTML
-             *（会闪动、丢焦点、丢滚动与展开态）。不触发全量任务卡 refresh。
+             * 同数据 A/B：Save 路径主阻塞是 refreshAllForgeTodayTaskRowsFromDone
+             *（百余张任务卡逐行 sync，可达数秒～十余秒）。周最低改的是目标而非打卡，
+             * 禁止在此全量刷新任务卡；进度条仍由 renderForgeWeeklyMinRows 更新。
              */
-            applyWeeklyMinRowLocked(true);
-            if (typeof updateForgeWmModuleBarSummary === "function") {
-              updateForgeWmModuleBarSummary(realm);
-            }
-            /* 保存结束编辑：应用编辑期间积压的远端合并 UI */
-            if (renderDeferredWhileEditing && typeof scheduleRenderWhenEditingEnds === "function") {
-              scheduleRenderWhenEditingEnds();
-            }
+            renderForgeWeeklyMinRows();
           });
         });
         el.querySelectorAll(".forge-weekly-min-remove").forEach(function (removeBtn) {
@@ -204356,13 +204129,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               return x.id !== id;
             });
             saveState({ lists: ["forge"] });
-            if (el.parentNode) el.parentNode.removeChild(el);
-            if (typeof updateForgeWmModuleBarSummary === "function") {
-              updateForgeWmModuleBarSummary(realm);
-            }
-            if (renderDeferredWhileEditing && typeof scheduleRenderWhenEditingEnds === "function") {
-              scheduleRenderWhenEditingEnds();
-            }
+            renderForgeWeeklyMinRows();
           });
         });
         wrap.appendChild(el);
@@ -204397,7 +204164,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const rangeEl = document.getElementById("forgeDailyMinDayRange");
       const forgeDmHostBusy = function (host) {
         if (!host) return false;
-        if (host.querySelector(".forge-weekly-min-row--editing")) return true;
         const ae = document.activeElement;
         return !!(
           ae &&
@@ -204409,7 +204175,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         forgeDmHostBusy(mindWrap) ||
         forgeDmHostBusy(bodyWrap) ||
         forgeDmHostBusy(sptWrap) ||
-        (typeof isForgeMinListEditingInProgress === "function" && isForgeMinListEditingInProgress()) ||
         appUiImeComposing
       ) {
         renderDeferredWhileEditing = true;
@@ -204539,14 +204304,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           "</div>";
         const nameInputs = Array.from(el.querySelectorAll(".forge-weekly-min-name"));
         const tgtInputs = Array.from(el.querySelectorAll(".forge-weekly-min-target"));
-        function dmNameInp() {
-          return forgeWmPickVisibleInput(nameInputs) || nameInputs[0] || null;
-        }
-        function dmTgtInp() {
-          return forgeWmPickVisibleInput(tgtInputs) || tgtInputs[0] || null;
-        }
-        const nameInp = dmNameInp();
-        const tgtInp = dmTgtInp();
+        const nameInp = nameInputs[0] || null;
+        const tgtInp = tgtInputs[0] || null;
         const saveBtns = el.querySelectorAll(".forge-weekly-min-save");
         const editBtns = el.querySelectorAll(".forge-weekly-min-edit");
         nameInputs.forEach(function (inp) {
@@ -204571,13 +204330,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           syncWmDisplayFromInputs();
         }
         function syncWmDisplayFromInputs() {
-          const nameEl = dmNameInp();
-          const tgtEl = dmTgtInp();
-          const nm = nameEl ? nameEl.value.trim() : "";
-          const liveRow = forgeMinFindRowById("dailyMinimums", id) || row;
+          const nm = nameInp ? nameInp.value.trim() : "";
           const liveSrc =
             typeof forgeResolveWeeklyMinSource === "function"
-              ? forgeResolveWeeklyMinSource(Object.assign({}, liveRow, { label: nm }))
+              ? forgeResolveWeeklyMinSource(Object.assign({}, row, { label: nm }))
               : null;
           let displayNm =
             liveSrc && liveSrc.kind === "cc" && liveSrc.label ? String(liveSrc.label) : nm;
@@ -204585,7 +204341,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             displayNm = "膝盖俯卧撑";
           }
           const parts = forgeWmSplitLabelSubtitle(displayNm);
-          const tg = tgtEl ? parseFloat(String(tgtEl.value || "").trim()) : NaN;
+          const tg = tgtInp ? parseFloat(String(tgtInp.value || "").trim()) : NaN;
           const tgN = !Number.isNaN(tg) && tg > 0 ? tg : 0;
           const liveUnit = (displayNm ? inferForgeWpGoalUnit(displayNm) : unitDisp) || "min";
           const goalText = tgN > 0 ? forgeWpFormatProgressNum(tgN) + " " + liveUnit : "\u2014";
@@ -204633,37 +204389,33 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           if (wmMoreBtn) wireManualItemActionsWrap(wmActionsWrap, wmMoreBtn);
         });
         function pushRowState() {
-          const nameEl = dmNameInp();
-          const tgtEl = dmTgtInp();
-          let nextLabel = nameEl ? nameEl.value.trim() : "";
-          const live = forgeMinFindRowById("dailyMinimums", id) || row;
+          let nextLabel = nameInp ? nameInp.value.trim() : "";
           const src =
             typeof forgeResolveWeeklyMinSource === "function"
-              ? forgeResolveWeeklyMinSource(Object.assign({}, live, { label: nextLabel }))
+              ? forgeResolveWeeklyMinSource(Object.assign({}, row, { label: nextLabel }))
               : null;
           if (src && src.kind === "cc" && typeof forgeCcMinListLabel === "function") {
             nextLabel = forgeCcMinListLabel(src) || nextLabel;
           } else if (src && src.label) {
             nextLabel = src.label;
           }
-          live.label = nextLabel;
+          row.label = nextLabel;
           if (src) {
-            live.source = { kind: src.kind || "custom", text: src.text || "自定义" };
-            if (src.art) live.source.art = src.art;
-            if (src.step) live.source.step = src.step;
-            if (src.kg) live.source.kg = src.kg;
+            row.source = { kind: src.kind || "custom", text: src.text || "自定义" };
+            if (src.art) row.source.art = src.art;
+            if (src.step) row.source.step = src.step;
+            if (src.kg) row.source.kg = src.kg;
           }
-          live.unit = inferForgeWpGoalUnit(live.label);
-          live.dailyMin = tgtEl ? tgtEl.value.trim() : "";
+          row.unit = inferForgeWpGoalUnit(row.label);
+          row.dailyMin = tgtInp ? tgtInp.value.trim() : "";
           saveState({ lists: ["forge"] });
         }
         function revertWeeklyMinInputsFromRow() {
-          const live = forgeMinFindRowById("dailyMinimums", id) || row;
-          const lb = String(live.label || "").trim();
+          const lb = String(row.label || "").trim();
           nameInputs.forEach(function (inp) {
             inp.value = lb;
           });
-          const w = String(live.dailyMin || "").trim();
+          const w = String(row.dailyMin || "").trim();
           const wn = parseFloat(w);
           const tv = !Number.isNaN(wn) && wn > 0 ? w : "";
           tgtInputs.forEach(function (inp) {
@@ -204711,9 +204463,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         const isNewEmptyRow = !label && !String(row.dailyMin || "").trim();
         applyWeeklyMinRowLocked(!isNewEmptyRow);
-        if (isNewEmptyRow) {
-          const focusName = dmNameInp();
-          if (focusName) focusName.focus();
+        if (isNewEmptyRow && nameInp) {
+          nameInp.focus();
         }
         editBtns.forEach(function (editBtn) {
           editBtn.addEventListener("click", function () {
@@ -204721,18 +204472,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               revertWeeklyMinInputsFromRow();
               syncWmDisplayFromInputs();
               applyWeeklyMinRowLocked(true);
-              if (renderDeferredWhileEditing && typeof scheduleRenderWhenEditingEnds === "function") {
-                scheduleRenderWhenEditingEnds();
-              }
             } else {
-              if (typeof endForgeMinEditingSessions === "function") {
-                endForgeMinEditingSessions({ revert: true, exceptEl: el });
-              }
               applyWeeklyMinRowLocked(false);
-              const focusName = dmNameInp();
-              if (focusName) {
-                focusName.focus();
-                focusName.select();
+              if (nameInp) {
+                nameInp.focus();
+                nameInp.select();
               }
             }
           });
@@ -204741,11 +204485,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           saveBtn.addEventListener("click", function () {
             if (saveBtn.disabled) return;
             pushRowState();
-            /* 就地锁定刷新；禁止 renderForgeDailyMinRows 全量重建 */
-            applyWeeklyMinRowLocked(true);
-            if (renderDeferredWhileEditing && typeof scheduleRenderWhenEditingEnds === "function") {
-              scheduleRenderWhenEditingEnds();
-            }
+            /* 同周最低：日最低保存不触发全量任务卡 refresh（见上） */
+            renderForgeDailyMinRows();
           });
         });
         el.querySelectorAll(".forge-weekly-min-remove").forEach(function (removeBtn) {
@@ -204754,10 +204495,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               return x.id !== id;
             });
             saveState({ lists: ["forge"] });
-            if (el.parentNode) el.parentNode.removeChild(el);
-            if (renderDeferredWhileEditing && typeof scheduleRenderWhenEditingEnds === "function") {
-              scheduleRenderWhenEditingEnds();
-            }
+            renderForgeDailyMinRows();
           });
         });
         wrap.appendChild(el);
@@ -205249,10 +204987,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           afterActivate: function (tabKey) {
             if (tabKey === "forge-body") scheduleForgeKbCvWarmupExperiment();
             else cancelForgeKbCvWarmupExperiment();
-            /* Mind/Body/性表现等主分类切换：取消未保存的周/日最低编辑并刷积压更新 */
-            if (typeof endForgeMinEditingSessions === "function") {
-              endForgeMinEditingSessions({ revert: true });
-            }
             /* 主分类切换：可见面板优先用本机 done 填数，勿等协作全量扫到后排 */
             if (typeof ensureForgeVisibleCardsShowLocalData === "function") {
               ensureForgeVisibleCardsShowLocalData();
