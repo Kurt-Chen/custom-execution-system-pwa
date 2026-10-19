@@ -105943,7 +105943,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261019o";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261019p";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -109753,6 +109753,9 @@
         a.renders[k].calls += 1;
         a.flags.didRender = true;
       }
+      try {
+        if (typeof forgeLagMeasNoteRender === "function") forgeLagMeasNoteRender(k, ms);
+      } catch (_flr) {}
       if (typeof flowDiagActiveCheckin === "function" && flowDiagActiveCheckin()) {
         if (k === "render") {
           if (typeof flowDiagNoteFullRenderCall === "function") flowDiagNoteFullRenderCall();
@@ -117829,6 +117832,11 @@
         }
         /* 复用启动串行拉取；Phase 1b domains meta 未变则跳过正文；域内指纹未变再跳过 merge/render */
         const report = await runAliyunSyncPrimaryBootPull({ reason: pullReason });
+        try {
+          if (typeof forgeLagMeasNotePull === "function") {
+            forgeLagMeasNotePull(pullReason, report);
+          }
+        } catch (_flPull) {}
         if (report && report.ok) {
           /*
            * boot / 回前台：强制回补本机已有「每天三赢」Done → 阿里云（修历史漏传，无需重填）。
@@ -121674,10 +121682,26 @@
       assignObj("ccProgressStep");
       assignMinListArr("dailyMinimums");
       assignMinListArr("weeklyMinimums");
+      /*
+       * 仅内容变更才返回 true 触发 UI 重渲。
+       * 旧逻辑：remTs > locTs 时强制 changed=true → 同内容 echo 也跑
+       * refreshAllForgeTodayTaskRowsFromDoneCooperative + 周/日最低全量重建（卡顿主因之一）。
+       * 时间戳仍可前进以保持 LWW，但不把「纯戳前进」当成内容变更。
+       */
+      const stampOnly = remTs > locTs && !changed;
       if (remTs > locTs || changed) {
         state.forge.settingsUpdatedAt = remTs;
-        if (remTs > locTs) changed = true;
       }
+      try {
+        if (typeof forgeLagMeasNoteSettingsApply === "function") {
+          forgeLagMeasNoteSettingsApply({
+            contentChanged: !!changed,
+            stampOnly: !!stampOnly,
+            remTs: remTs,
+            locTs: locTs
+          });
+        }
+      } catch (_flSet) {}
       return changed;
     }
 
@@ -129657,6 +129681,244 @@
         return aliyunOtsDiagExplicitTrigger;
       };
     } catch (_diagWin) {}
+
+    /**
+     * Forge/同步卡顿测量（事件挂钩，无 setInterval）。
+     * 控制台：
+     *   __forgeLagMeas.start("idle")  // 静置 ≥10s 后 stop
+     *   __forgeLagMeas.start("edit") / start("save") / start("switch-tab")
+     *   __forgeLagMeas.stop()
+     *   __forgeLagMeas.last()
+     */
+    const forgeLagMeasState = {
+      active: null,
+      history: [],
+      hooked: false
+    };
+
+    function forgeLagMeasNow() {
+      return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+    }
+
+    function forgeLagMeasWmFp() {
+      try {
+        const wm =
+          state.forge && Array.isArray(state.forge.weeklyMinimums) ? state.forge.weeklyMinimums : [];
+        return wm.length + ":" + JSON.stringify(wm);
+      } catch (_e) {
+        return "?";
+      }
+    }
+
+    function forgeLagMeasEnsureHooks() {
+      if (forgeLagMeasState.hooked) return;
+      forgeLagMeasState.hooked = true;
+      try {
+        if (typeof installSwitchPerfRenderWrappers === "function") {
+          installSwitchPerfRenderWrappers();
+        }
+      } catch (_w) {}
+      const origNote = aliyunOtsDiagNoteEvent;
+      if (typeof origNote === "function" && !origNote.__forgeLagWrapped) {
+        function wrappedNote(ev) {
+          try {
+            if (forgeLagMeasState.active) {
+              forgeLagMeasState.active.netCount += 1;
+              const trig = String((ev && ev.trigger) || "unknown");
+              const mod = String((ev && ev.module) || "unknown");
+              const rt = String((ev && ev.requestType) || "");
+              forgeLagMeasState.active.byTrigger[trig] =
+                (forgeLagMeasState.active.byTrigger[trig] || 0) + 1;
+              forgeLagMeasState.active.byModule[mod] =
+                (forgeLagMeasState.active.byModule[mod] || 0) + 1;
+              forgeLagMeasState.active.byRequestType[rt] =
+                (forgeLagMeasState.active.byRequestType[rt] || 0) + 1;
+              forgeLagMeasState.active.netBytes += Number(ev && ev.responseBytes) || 0;
+              forgeLagMeasState.active.events.push({
+                kind: "net",
+                t: Date.now(),
+                trigger: trig,
+                module: mod,
+                requestType: rt,
+                bytes: Number(ev && ev.responseBytes) || 0,
+                ms: Number(ev && ev.elapsedMs) || 0
+              });
+            }
+          } catch (_n) {}
+          return origNote(ev);
+        }
+        wrappedNote.__forgeLagWrapped = true;
+        aliyunOtsDiagNoteEvent = wrappedNote;
+      }
+    }
+
+    function forgeLagMeasNoteRender(name, ms) {
+      const s = forgeLagMeasState.active;
+      if (!s) return;
+      const k = String(name || "");
+      if (!s.renders[k]) s.renders[k] = { calls: 0, ms: 0, maxMs: 0 };
+      s.renders[k].calls += 1;
+      const n = Number(ms) || 0;
+      s.renders[k].ms += n;
+      if (n > s.renders[k].maxMs) s.renders[k].maxMs = n;
+      const fp = forgeLagMeasWmFp();
+      const sameFp = fp === s.lastWmFp;
+      if (k === "render" || k === "renderForgeWeeklyMinRows" || k === "renderForgeDailyMinRows") {
+        s.events.push({
+          kind: "render",
+          name: k,
+          ms: Math.round(n * 10) / 10,
+          sameWmFp: sameFp,
+          t: Date.now()
+        });
+        if (sameFp) s.redrawSameFp += 1;
+        else s.redrawChangedFp += 1;
+      }
+      s.lastWmFp = fp;
+    }
+
+    function forgeLagMeasNoteSettingsApply(info) {
+      const s = forgeLagMeasState.active;
+      if (!s || !info) return;
+      s.settingsApply += 1;
+      if (info.contentChanged) s.settingsContentChanged += 1;
+      if (info.stampOnly) s.settingsStampOnly += 1;
+      s.events.push({
+        kind: "settings-apply",
+        contentChanged: !!info.contentChanged,
+        stampOnly: !!info.stampOnly,
+        remTs: info.remTs,
+        locTs: info.locTs,
+        t: Date.now()
+      });
+    }
+
+    function forgeLagMeasNotePull(reason, report) {
+      const s = forgeLagMeasState.active;
+      if (!s) return;
+      s.pullCount += 1;
+      const r = String(reason || "");
+      s.pullByReason[r] = (s.pullByReason[r] || 0) + 1;
+      if (report && report.skippedAll) s.pullSkippedAll += 1;
+      s.events.push({
+        kind: "pull",
+        reason: r,
+        skippedAll: !!(report && report.skippedAll),
+        changedDomains: (report && report.changedDomains) || [],
+        t: Date.now()
+      });
+    }
+
+    function forgeLagMeasClassify(s) {
+      const renderMs = s.renders.render ? s.renders.render.ms : 0;
+      const wmMs = s.renders.renderForgeWeeklyMinRows
+        ? s.renders.renderForgeWeeklyMinRows.ms
+        : 0;
+      const wmCalls = s.renders.renderForgeWeeklyMinRows
+        ? s.renders.renderForgeWeeklyMinRows.calls
+        : 0;
+      const netPerMin =
+        s.elapsedMs > 0 ? Math.round((s.netCount / (s.elapsedMs / 60000)) * 10) / 10 : 0;
+      const classes = [];
+      if (s.pullCount >= 2 && s.elapsedMs >= 8000 && s.pullSkippedAll >= s.pullCount - 1) {
+        classes.push("idle-poll-meta-only-ok");
+      }
+      if (s.settingsStampOnly > 0) {
+        classes.push("stamp-only-settings-was-issue-fixed");
+      }
+      if (s.redrawSameFp > 0 && (wmCalls > 1 || (s.renders.render && s.renders.render.calls > 1))) {
+        classes.push("duplicate-redraw-same-data");
+      }
+      if (wmMs >= 80 || renderMs >= 120) {
+        classes.push("single-render-costly");
+      }
+      if (netPerMin > 30) {
+        classes.push("network-chatty");
+      }
+      return {
+        classes: classes,
+        netPerMin: netPerMin,
+        renderTotalMs: Math.round((renderMs + wmMs) * 10) / 10,
+        wmCalls: wmCalls,
+        wmMs: Math.round(wmMs * 10) / 10,
+        fullRenderCalls: s.renders.render ? s.renders.render.calls : 0,
+        fullRenderMs: Math.round(renderMs * 10) / 10,
+        settingsStampOnly: s.settingsStampOnly,
+        settingsContentChanged: s.settingsContentChanged,
+        redrawSameFp: s.redrawSameFp,
+        pullSkippedAll: s.pullSkippedAll,
+        pullCount: s.pullCount
+      };
+    }
+
+    function forgeLagMeasStart(label) {
+      forgeLagMeasEnsureHooks();
+      const lab = String(label || "session");
+      forgeLagMeasState.active = {
+        label: lab,
+        t0: Date.now(),
+        p0: forgeLagMeasNow(),
+        elapsedMs: 0,
+        netCount: 0,
+        netBytes: 0,
+        byTrigger: Object.create(null),
+        byModule: Object.create(null),
+        byRequestType: Object.create(null),
+        renders: Object.create(null),
+        pullCount: 0,
+        pullSkippedAll: 0,
+        pullByReason: Object.create(null),
+        settingsApply: 0,
+        settingsContentChanged: 0,
+        settingsStampOnly: 0,
+        redrawSameFp: 0,
+        redrawChangedFp: 0,
+        lastWmFp: forgeLagMeasWmFp(),
+        events: []
+      };
+      try {
+        console.log("[forgeLagMeas] start", lab, "wmFpLen=" + String(forgeLagMeasState.active.lastWmFp).length);
+      } catch (_c) {}
+      return "measuring:" + lab;
+    }
+
+    function forgeLagMeasStop() {
+      const s = forgeLagMeasState.active;
+      if (!s) return { ok: false, reason: "no-active" };
+      s.elapsedMs = Date.now() - s.t0;
+      s.classify = forgeLagMeasClassify(s);
+      forgeLagMeasState.active = null;
+      forgeLagMeasState.history.push(s);
+      if (forgeLagMeasState.history.length > 20) forgeLagMeasState.history.shift();
+      try {
+        console.log("[forgeLagMeas] stop", s.label, s.classify);
+        console.log("[forgeLagMeas] byTrigger", s.byTrigger);
+        console.log("[forgeLagMeas] renders", s.renders);
+        console.log("[forgeLagMeas] pullByReason", s.pullByReason);
+      } catch (_c) {}
+      return s;
+    }
+
+    try {
+      window.__forgeLagMeas = {
+        start: forgeLagMeasStart,
+        stop: forgeLagMeasStop,
+        last: function () {
+          return forgeLagMeasState.history.length
+            ? forgeLagMeasState.history[forgeLagMeasState.history.length - 1]
+            : null;
+        },
+        history: function () {
+          return forgeLagMeasState.history.slice();
+        },
+        active: function () {
+          return forgeLagMeasState.active;
+        }
+      };
+      window.forgeLagMeasNoteRender = forgeLagMeasNoteRender;
+      window.forgeLagMeasNoteSettingsApply = forgeLagMeasNoteSettingsApply;
+      window.forgeLagMeasNotePull = forgeLagMeasNotePull;
+    } catch (_flWin) {}
 
     /**
      * 临时诊断：一次打卡对应多少次 FC 请求。
