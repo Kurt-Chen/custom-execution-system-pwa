@@ -32,8 +32,16 @@ mustInclude("禁止把 verify 里他域更高版本写进 lastSeen", "bump no cr
 mustInclude("packed.skippedMeta) continue", "after-round skip skippedMeta lastSeen");
 mustInclude("aliyunDomainsMetaRoundEffectivelyComplete", "safety watermark effective-complete helper");
 mustInclude("skip safety/boot watermark: round not effectively complete", "warn on failed safety");
-mustInclude("exec-system-pwa-v20261020o", "cache bump in html");
-assert.ok(sw.includes("exec-system-pwa-v20261020o"), "cache bump in sw");
+mustInclude("pullGen: pullGen || undefined", "AfterPullRound receives pullGen");
+mustInclude("afterRoundStillCurrent", "AfterPullRound gen guard");
+mustInclude("AfterPullRound skip lastSeen after seed await", "seed await superseded guard");
+mustInclude("AfterPullRound skip lastSeen after meta fetch await", "fetch await superseded guard");
+mustInclude("if (local && lTs > rTs) continue", "Done LWW: skip older remote");
+mustInclude("if (remTs < locTs) return false", "Forge settings LWW by settingsUpdatedAt");
+mustInclude("function mergeNetWorthWanForSync", "netWorth LWW helper");
+mustInclude("if (ra > la) return { netWorthWan: rv, netWorthWanUpdatedAt: ra }", "netWorth prefers newer remote only");
+mustInclude("exec-system-pwa-v20261020p", "cache bump in html");
+assert.ok(sw.includes("exec-system-pwa-v20261020p"), "cache bump in sw");
 
 /* —— 纯逻辑：请求代次（旧 finally 不误释新锁）—— */
 function makePullLock() {
@@ -382,6 +390,189 @@ const ALL = ["done", "habit", "forge"];
     !html.includes("function markAliyunSyncPrimaryPullInFlight"),
     "old ungarded markAliyunSyncPrimaryPullInFlight must be removed"
   );
+}
+
+/* —— LWW：旧 d.run() 在代次失效后继续 merge，不得覆盖本机已更新数据 —— */
+/** 镜像 Done：lTs > rTs 跳过 */
+function doneMergeApplyRemote(localById, remoteItems) {
+  const out = Object.assign({}, localById);
+  for (const rid of Object.keys(remoteItems)) {
+    const remote = remoteItems[rid];
+    const local = out[rid];
+    const rTs = Number(remote && remote.updatedAt) || 0;
+    const lTs = Number(local && local.updatedAt) || 0;
+    if (local && lTs > rTs) continue;
+    if (!local) {
+      out[rid] = { id: rid, text: remote.text, updatedAt: rTs };
+      continue;
+    }
+    if (rTs >= lTs) {
+      out[rid] = {
+        id: rid,
+        text: remote.text,
+        updatedAt: Math.max(rTs, lTs)
+      };
+    }
+  }
+  return out;
+}
+
+{
+  /* 新轮已写入更新正文；旧轮过期远端不得回盖 */
+  const afterNewPull = {
+    a: { id: "a", text: "newer-local", updatedAt: 200 }
+  };
+  const staleRemote = {
+    a: { id: "a", text: "stale-cloud", updatedAt: 100 }
+  };
+  const merged = doneMergeApplyRemote(afterNewPull, staleRemote);
+  assert.strictEqual(merged.a.text, "newer-local");
+  assert.strictEqual(merged.a.updatedAt, 200);
+}
+
+{
+  /* 远端更新：仍可前进 */
+  const local = { a: { id: "a", text: "old", updatedAt: 100 } };
+  const remote = { a: { id: "a", text: "cloud-new", updatedAt: 150 } };
+  const merged = doneMergeApplyRemote(local, remote);
+  assert.strictEqual(merged.a.text, "cloud-new");
+  assert.strictEqual(merged.a.updatedAt, 150);
+}
+
+/** 镜像 Forge settings：remTs < locTs 拒绝 */
+function forgeApplyRemoteSettings(localSettingsAt, localMap, remoteSettings) {
+  const remTs = Number(remoteSettings.updatedAt) || 0;
+  const locTs = Number(localSettingsAt) || 0;
+  if (remTs < locTs) return { applied: false, map: localMap, settingsUpdatedAt: locTs };
+  return {
+    applied: true,
+    map: remoteSettings.kbWeightKg || localMap,
+    settingsUpdatedAt: remTs > locTs ? remTs : locTs
+  };
+}
+
+{
+  const r = forgeApplyRemoteSettings(500, { x: 1 }, { updatedAt: 400, kbWeightKg: { x: 9 } });
+  assert.strictEqual(r.applied, false);
+  assert.deepStrictEqual(r.map, { x: 1 });
+}
+
+/** 镜像净值：仅 ra > la 才用远端 */
+function mergeNetWorthWanForSync(locVal, locAt, remVal, remAt) {
+  const la = Number(locAt) || 0;
+  const ra = Number(remAt) || 0;
+  if (locVal == null && remVal == null) return { netWorthWan: -20, netWorthWanUpdatedAt: 0 };
+  if (locVal == null) return { netWorthWan: remVal, netWorthWanUpdatedAt: ra };
+  if (remVal == null) return { netWorthWan: locVal, netWorthWanUpdatedAt: la };
+  if (ra > la) return { netWorthWan: remVal, netWorthWanUpdatedAt: ra };
+  return { netWorthWan: locVal, netWorthWanUpdatedAt: la };
+}
+
+{
+  /* 新轮已写 -20.00@T2；旧轮 -27.68@T1 不得回盖 */
+  const m = mergeNetWorthWanForSync(-20, 2000, -27.68, 1000);
+  assert.strictEqual(m.netWorthWan, -20);
+  assert.strictEqual(m.netWorthWanUpdatedAt, 2000);
+}
+
+{
+  const m = mergeNetWorthWanForSync(-27.68, 1000, -20, 2000);
+  assert.strictEqual(m.netWorthWan, -20);
+  assert.strictEqual(m.netWorthWanUpdatedAt, 2000);
+}
+
+/* —— AfterPullRound：await 期间代次失效 → 不得推进 lastSeen —— */
+async function simulateAfterPullRoundAsync({
+  pullGen,
+  isCurrent,
+  seedNeeded,
+  remoteVersions,
+  bootLike,
+  results
+}) {
+  const lastSeen = Object.create(null);
+  let safetyAt = 0;
+  function stillCurrent() {
+    if (!pullGen) return true;
+    return isCurrent(pullGen);
+  }
+  if (!stillCurrent()) return { lastSeen, safetyAt, aborted: "before-start" };
+
+  if (seedNeeded) {
+    await Promise.resolve(); /* 模拟 seed await */
+    if (!stillCurrent()) return { lastSeen, safetyAt, aborted: "after-seed-await" };
+    lastSeen.done = 1;
+    lastSeen.forge = 1;
+    return { lastSeen, safetyAt, aborted: null };
+  }
+  if (remoteVersions) {
+    if (!stillCurrent()) return { lastSeen, safetyAt, aborted: "before-remoteVersions" };
+    for (const id of Object.keys(remoteVersions)) {
+      const packed = results && results[id];
+      if (!packed || packed.ok === false || packed.skippedMeta) continue;
+      lastSeen[id] = remoteVersions[id];
+    }
+    return { lastSeen, safetyAt, aborted: null };
+  }
+  if (bootLike) {
+    await Promise.resolve(); /* 模拟 meta fetch await */
+    if (!stillCurrent()) return { lastSeen, safetyAt, aborted: "after-fetch-await" };
+    lastSeen.done = 9;
+    lastSeen.forge = 9;
+    return { lastSeen, safetyAt, aborted: null };
+  }
+  return { lastSeen, safetyAt, aborted: null };
+}
+
+{
+  /* seed await 期间代次失效 → 不写 lastSeen */
+  let calls = 0;
+  const out = await simulateAfterPullRoundAsync({
+    pullGen: 3,
+    isCurrent: () => {
+      calls += 1;
+      return calls === 1; /* 进入时 true；seed await 后再查为 false */
+    },
+    seedNeeded: true,
+    remoteVersions: null,
+    bootLike: false,
+    results: null
+  });
+  assert.strictEqual(out.aborted, "after-seed-await");
+  assert.strictEqual(Object.keys(out.lastSeen).length, 0);
+}
+
+{
+  /* boot meta-fetch await 期间代次失效 → 不写 lastSeen */
+  let calls = 0;
+  const out = await simulateAfterPullRoundAsync({
+    pullGen: 7,
+    isCurrent: () => {
+      calls += 1;
+      return calls === 1;
+    },
+    seedNeeded: false,
+    remoteVersions: null,
+    bootLike: true,
+    results: null
+  });
+  assert.strictEqual(out.aborted, "after-fetch-await");
+  assert.ok(!out.lastSeen.done, "must not write lastSeen after superseded fetch await");
+}
+
+{
+  /* remoteVersions 同步路径：全程 current → 可推进 */
+  const out = await simulateAfterPullRoundAsync({
+    pullGen: 1,
+    isCurrent: () => true,
+    seedNeeded: false,
+    remoteVersions: { done: 5, forge: 5 },
+    bootLike: false,
+    results: { done: { ok: true }, forge: { ok: true } }
+  });
+  assert.strictEqual(out.aborted, null);
+  assert.strictEqual(out.lastSeen.done, 5);
+  assert.strictEqual(out.lastSeen.forge, 5);
 }
 
 console.log("ok: tablet aliyun sync recovery tests passed");
