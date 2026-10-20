@@ -1,6 +1,7 @@
 /**
  * 平板阿里云同步恢复 · 静态回归（不打真实 FC）
- * 覆盖：僵尸 inflight、visibility→visible、bump 不跨域推进 lastSeen、AfterPullRound 不推进失败域
+ * 覆盖：僵尸 inflight 代次、旧 finally 不误释新锁、过期轮次丢弃、
+ *       safety-full 仅有效完成后推进水位、bump/AfterPullRound lastSeen 安全
  * Run: node _test_aliyun_tablet_sync_recovery.mjs
  */
 import assert from "assert";
@@ -15,7 +16,11 @@ function mustInclude(s, label) {
 
 mustInclude("ALIYUN_SYNC_PRIMARY_PULL_STALE_MS", "stale inflight threshold");
 mustInclude("clearAliyunSyncPrimaryStalePullInFlight", "stale clear helper");
-mustInclude("markAliyunSyncPrimaryPullInFlight", "inflight marker with timestamp");
+mustInclude("beginAliyunSyncPrimaryPullInFlight", "begin pull with generation");
+mustInclude("endAliyunSyncPrimaryPullInFlight", "end pull generation-guarded");
+mustInclude("isAliyunSyncPrimaryPullGenerationCurrent", "generation current check");
+mustInclude("aliyunSyncPrimaryPullGen", "pull generation counter");
+mustInclude('reason: "superseded"', "superseded reason");
 mustInclude("aliyunSyncPrimaryResumeFromBackground", "resume helper");
 mustInclude("restartAliyunSyncPrimaryPollIntervalOnly", "interval restart without killing schedule");
 mustInclude('scheduleAliyunSyncPrimaryNearRealtimePull("visible")', "resume uses visible reason");
@@ -25,15 +30,169 @@ mustInclude("__aliyunSyncPrimaryDebugSnapshot", "tablet debug snapshot");
 mustInclude("gateReason: domainsGate && domainsGate.reason", "pass gateReason to after-round");
 mustInclude("禁止把 verify 里他域更高版本写进 lastSeen", "bump no cross-domain lastSeen");
 mustInclude("packed.skippedMeta) continue", "after-round skip skippedMeta lastSeen");
-mustInclude("exec-system-pwa-v20261020n", "cache bump in html");
-assert.ok(sw.includes("exec-system-pwa-v20261020n"), "cache bump in sw");
+mustInclude("aliyunDomainsMetaRoundEffectivelyComplete", "safety watermark effective-complete helper");
+mustInclude("skip safety/boot watermark: round not effectively complete", "warn on failed safety");
+mustInclude("exec-system-pwa-v20261020o", "cache bump in html");
+assert.ok(sw.includes("exec-system-pwa-v20261020o"), "cache bump in sw");
 
-/* 纯逻辑：bump verify 不得跨域推进 lastSeen */
+/* —— 纯逻辑：请求代次（旧 finally 不误释新锁）—— */
+function makePullLock() {
+  let inFlight = false;
+  let startedAt = 0;
+  let gen = 0;
+  const STALE_MS = 60_000;
+  return {
+    begin() {
+      gen += 1;
+      inFlight = true;
+      startedAt = Date.now();
+      return gen;
+    },
+    end(g) {
+      if (Number(g) !== Number(gen)) return false;
+      inFlight = false;
+      startedAt = 0;
+      return true;
+    },
+    clearStale(now, why) {
+      if (!inFlight) return false;
+      const age = startedAt > 0 ? now - startedAt : STALE_MS + 1;
+      if (age < STALE_MS) return false;
+      gen += 1;
+      inFlight = false;
+      startedAt = 0;
+      return true;
+    },
+    isCurrent(g) {
+      return Number(g) > 0 && Number(g) === Number(gen);
+    },
+    snapshot() {
+      return { inFlight, gen, startedAt };
+    }
+  };
+}
+
+{
+  const lock = makePullLock();
+  const g1 = lock.begin();
+  assert.strictEqual(g1, 1);
+  assert.strictEqual(lock.snapshot().inFlight, true);
+
+  /* 模拟超过 60s 后清僵尸：代次递增，旧 finally 不得清新锁 */
+  const cleared = lock.clearStale(Date.now() + 61_000, "test");
+  assert.strictEqual(cleared, true);
+  assert.strictEqual(lock.snapshot().inFlight, false);
+  assert.strictEqual(lock.snapshot().gen, 2);
+  assert.strictEqual(lock.end(g1), false, "old finally must not release after stale clear");
+
+  const g2 = lock.begin();
+  assert.strictEqual(g2, 3);
+  assert.strictEqual(lock.snapshot().inFlight, true);
+  assert.strictEqual(lock.end(g1), false, "old gen must not release new lock");
+  assert.strictEqual(lock.snapshot().inFlight, true);
+  assert.strictEqual(lock.end(g2), true);
+  assert.strictEqual(lock.snapshot().inFlight, false);
+}
+
+/* 过期响应不得覆盖：superseded 轮次跳过 AfterPullRound / 角标副作用 */
+function simulateBootPullRound({ pullGen, activeGen, domains, runDomain }) {
+  const results = {};
+  let afterRoundCalled = false;
+  let badgePainted = false;
+  let superseded = false;
+  for (let i = 0; i < domains.length; i++) {
+    if (pullGen && pullGen !== activeGen) {
+      superseded = true;
+      for (let j = i; j < domains.length; j++) {
+        if (!results[domains[j]]) {
+          results[domains[j]] = { ok: false, skipped: true, reason: "superseded" };
+        }
+      }
+      break;
+    }
+    const id = domains[i];
+    const r = runDomain(id);
+    if (pullGen && pullGen !== activeGen) {
+      superseded = true;
+      results[id] = { ok: false, skipped: true, reason: "superseded" };
+      break;
+    }
+    results[id] = r;
+  }
+  if (pullGen && pullGen !== activeGen) superseded = true;
+  if (!superseded) {
+    afterRoundCalled = true;
+    badgePainted = true;
+  }
+  return {
+    superseded,
+    afterRoundCalled,
+    badgePainted,
+    results,
+    report: superseded
+      ? { ok: false, skipped: true, reason: "superseded", results }
+      : { ok: true, results }
+  };
+}
+
+{
+  /* 旧轮 gen=1，清僵尸后 activeGen=2：旧轮不得 AfterPullRound / 角标 */
+  let callCount = 0;
+  const out = simulateBootPullRound({
+    pullGen: 1,
+    activeGen: 2,
+    domains: ["done", "forge", "habit"],
+    runDomain(id) {
+      callCount += 1;
+      return { ok: true, body: id + "-stale" };
+    }
+  });
+  assert.strictEqual(out.superseded, true);
+  assert.strictEqual(out.afterRoundCalled, false, "superseded must skip AfterPullRound");
+  assert.strictEqual(out.badgePainted, false, "superseded must skip badge paint");
+  assert.strictEqual(out.report.reason, "superseded");
+  assert.strictEqual(callCount, 0, "must not start domain pulls when already superseded");
+}
+
+{
+  /* 显式中途失效：await done 期间清僵尸 → 不 Mark 后续域、不 AfterPullRound */
+  const results = {};
+  const pullGen = 5;
+  let activeGen = 5;
+  let afterRound = false;
+  const domains = ["done", "forge", "habit"];
+  for (let i = 0; i < domains.length; i++) {
+    if (pullGen !== activeGen) {
+      for (let j = i; j < domains.length; j++) {
+        if (!results[domains[j]]) {
+          results[domains[j]] = { ok: false, skipped: true, reason: "superseded" };
+        }
+      }
+      break;
+    }
+    const id = domains[i];
+    /* 模拟 await 域拉取期间代次被清僵尸递增 */
+    if (id === "done") activeGen = 6;
+    if (pullGen !== activeGen) {
+      results[id] = { ok: false, skipped: true, reason: "superseded" };
+      for (let j = i + 1; j < domains.length; j++) {
+        results[domains[j]] = { ok: false, skipped: true, reason: "superseded" };
+      }
+      break;
+    }
+    results[id] = { ok: true };
+  }
+  if (pullGen === activeGen) afterRound = true;
+  assert.strictEqual(afterRound, false);
+  assert.strictEqual(results.done.reason, "superseded");
+  assert.strictEqual(results.forge.reason, "superseded");
+  assert.strictEqual(results.habit.reason, "superseded");
+}
+
+/* —— bump verify 不得跨域推进 lastSeen —— */
 function applyBumpVerifyLastSeen(lastSeen, bumpedId, verifyVersions) {
   const next = Object.assign({}, lastSeen);
-  const remoteV = Number(verifyVersions[bumpedId]) || 0;
-  next[bumpedId] = remoteV;
-  /* 正确行为：不遍历他域 */
+  next[bumpedId] = Number(verifyVersions[bumpedId]) || 0;
   return next;
 }
 
@@ -42,11 +201,11 @@ function applyBumpVerifyLastSeen(lastSeen, bumpedId, verifyVersions) {
   const verify = { done: 11, habit: 9, forge: 25 };
   const next = applyBumpVerifyLastSeen(lastSeen, "done", verify);
   assert.strictEqual(next.done, 11);
-  assert.strictEqual(next.habit, 5, "habit lastSeen must not jump without body pull");
-  assert.strictEqual(next.forge, 20, "forge lastSeen must not jump without body pull");
+  assert.strictEqual(next.habit, 5);
+  assert.strictEqual(next.forge, 20);
 }
 
-/* AfterPullRound：失败 / skippedMeta 不推进 */
+/* AfterPullRound：失败 / skippedMeta 不推进 lastSeen */
 function afterRoundAlignLastSeen(lastSeen, remoteVersions, results) {
   const next = Object.assign({}, lastSeen);
   for (const id of Object.keys(remoteVersions)) {
@@ -69,47 +228,159 @@ function afterRoundAlignLastSeen(lastSeen, remoteVersions, results) {
   };
   const next = afterRoundAlignLastSeen(lastSeen, remote, results);
   assert.strictEqual(next.done, 2);
-  assert.strictEqual(next.habit, 1, "failed pull must not advance lastSeen");
-  assert.strictEqual(next.forge, 1, "skippedMeta must not advance lastSeen");
+  assert.strictEqual(next.habit, 1);
+  assert.strictEqual(next.forge, 1);
 }
 
-/* 僵尸 inflight：超过阈值可清除 */
-function clearStale(inFlight, startedAt, now, staleMs) {
-  if (!inFlight) return { cleared: false, inFlight: false };
-  const age = startedAt > 0 ? now - startedAt : staleMs + 1;
-  if (age < staleMs) return { cleared: false, inFlight: true };
-  return { cleared: true, inFlight: false };
+/* —— safety-full 水位：仅有效完成后推进 —— */
+function roundEffectivelyComplete(domainIds, results) {
+  if (!results) return false;
+  for (const id of domainIds) {
+    const packed = results[id];
+    if (!packed || packed.ok === false) return false;
+    if (packed.skippedMeta || packed.reason === "superseded") return false;
+  }
+  return true;
 }
 
-{
-  const t0 = 1_000_000;
-  assert.strictEqual(clearStale(true, t0, t0 + 30_000, 60_000).cleared, false);
-  assert.strictEqual(clearStale(true, t0, t0 + 61_000, 60_000).cleared, true);
-  assert.strictEqual(clearStale(true, 0, t0, 60_000).cleared, true);
-}
-
-/* safety 水位：gateReason=safety-full 即使 pullReason=poll 也推进 */
-function shouldAdvanceSafety(pullReason, gateReason, forceAll, safetyAt) {
+function shouldAdvanceSafetyWatermark({
+  pullReason,
+  gateReason,
+  forceAll,
+  safetyAt,
+  domainIds,
+  results
+}) {
   const isSafety = gateReason === "safety-full" || pullReason === "safety-full";
   const isBootLike = !!forceAll || pullReason === "boot" || gateReason === "boot";
-  return isSafety || (isBootLike && safetyAt <= 0);
+  if (!(isSafety || (isBootLike && safetyAt <= 0))) return false;
+  return roundEffectivelyComplete(domainIds, results);
 }
 
-{
-  assert.strictEqual(shouldAdvanceSafety("poll", "safety-full", false, 100), true);
-  assert.strictEqual(shouldAdvanceSafety("poll", "meta-unchanged", false, 100), false);
-  assert.strictEqual(shouldAdvanceSafety("boot", "boot", true, 0), true);
-}
+const ALL = ["done", "habit", "forge"];
 
-/* visibility 字面量：旧 bug 用 visibility/pageshow，门闩检查 visible */
 {
-  assert.ok(
-    !html.includes('scheduleAliyunSyncPrimaryNearRealtimePull("visibility")'),
-    "must not schedule with reason=visibility anymore"
+  /* 成功的 safety-full → 推进 */
+  assert.strictEqual(
+    shouldAdvanceSafetyWatermark({
+      pullReason: "poll",
+      gateReason: "safety-full",
+      forceAll: false,
+      safetyAt: 100,
+      domainIds: ALL,
+      results: { done: { ok: true }, habit: { ok: true }, forge: { ok: true } }
+    }),
+    true
   );
+}
+
+{
+  /* 失败的 safety-full（一域 ok:false）→ 不推进 */
+  assert.strictEqual(
+    shouldAdvanceSafetyWatermark({
+      pullReason: "poll",
+      gateReason: "safety-full",
+      forceAll: false,
+      safetyAt: 100,
+      domainIds: ALL,
+      results: { done: { ok: true }, habit: { ok: false, error: "timeout" }, forge: { ok: true } }
+    }),
+    false,
+    "failed safety-full must not advance watermark"
+  );
+}
+
+{
+  /* 缺失域结果 → 不推进 */
+  assert.strictEqual(
+    shouldAdvanceSafetyWatermark({
+      pullReason: "poll",
+      gateReason: "safety-full",
+      forceAll: false,
+      safetyAt: 100,
+      domainIds: ALL,
+      results: { done: { ok: true }, habit: { ok: true } }
+    }),
+    false
+  );
+}
+
+{
+  /* superseded → 不推进 */
+  assert.strictEqual(
+    shouldAdvanceSafetyWatermark({
+      pullReason: "poll",
+      gateReason: "safety-full",
+      forceAll: false,
+      safetyAt: 100,
+      domainIds: ALL,
+      results: {
+        done: { ok: true },
+        habit: { ok: false, reason: "superseded" },
+        forge: { ok: true }
+      }
+    }),
+    false
+  );
+}
+
+{
+  /* meta-unchanged 非 safety → 不推进 */
+  assert.strictEqual(
+    shouldAdvanceSafetyWatermark({
+      pullReason: "poll",
+      gateReason: "meta-unchanged",
+      forceAll: false,
+      safetyAt: 100,
+      domainIds: ALL,
+      results: { done: { ok: true }, habit: { ok: true }, forge: { ok: true } }
+    }),
+    false
+  );
+}
+
+{
+  /* 首次 boot 全成功且 safetyAt=0 → 推进 */
+  assert.strictEqual(
+    shouldAdvanceSafetyWatermark({
+      pullReason: "boot",
+      gateReason: "boot",
+      forceAll: true,
+      safetyAt: 0,
+      domainIds: ALL,
+      results: { done: { ok: true }, habit: { ok: true }, forge: { ok: true } }
+    }),
+    true
+  );
+}
+
+{
+  /* 首次 boot 失败 → 不推进 */
+  assert.strictEqual(
+    shouldAdvanceSafetyWatermark({
+      pullReason: "boot",
+      gateReason: "boot",
+      forceAll: true,
+      safetyAt: 0,
+      domainIds: ALL,
+      results: { done: { ok: false }, habit: { ok: true }, forge: { ok: true } }
+    }),
+    false,
+    "failed boot must not seed safety watermark"
+  );
+}
+
+/* visibility 字面量 */
+{
+  assert.ok(!html.includes('scheduleAliyunSyncPrimaryNearRealtimePull("visibility")'));
+  assert.ok(!html.includes('scheduleAliyunSyncPrimaryNearRealtimePull("pageshow")'));
+}
+
+/* 禁止无代次的 markAliyunSyncPrimaryPullInFlight(false) 盲清 */
+{
   assert.ok(
-    !html.includes('scheduleAliyunSyncPrimaryNearRealtimePull("pageshow")'),
-    "must not schedule with reason=pageshow anymore"
+    !html.includes("function markAliyunSyncPrimaryPullInFlight"),
+    "old ungarded markAliyunSyncPrimaryPullInFlight must be removed"
   );
 }
 

@@ -106387,7 +106387,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261020n";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261020o";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -117326,6 +117326,7 @@
     async function runAliyunSyncPrimaryBootPull(opts) {
       const pullOpts = opts && typeof opts === "object" ? opts : {};
       const pullReason = String(pullOpts.reason || "boot");
+      const pullGen = Number(pullOpts.pullGen) || 0;
       if (!isAliyunSyncPrimaryEnabled()) {
         try {
           console.log("[aliyun-sync-primary] boot pull skipped: primary off");
@@ -117557,7 +117558,23 @@
         }
       } catch (_c0) {}
 
+      let superseded = false;
       for (let i = 0; i < domains.length; i++) {
+        /*
+         * 代次失效（清僵尸后新轮已开始）：停止后续域，勿 MarkDomainPulled / AfterPullRound。
+         * 当前已 await 中的单域 merge 可能仍完成（LWW 兜底）；最小改动不改各域内部。
+         */
+        if (pullGen && !isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
+          superseded = true;
+          for (let j = i; j < domains.length; j++) {
+            const sid = domains[j].id;
+            if (!results[sid]) {
+              results[sid] = { ok: false, skipped: true, reason: "superseded" };
+            }
+          }
+          allOk = false;
+          break;
+        }
         const d = domains[i];
         if (!pullIdSet[d.id]) {
           results[d.id] = { ok: true, skippedMeta: true, reason: "domains-meta-unchanged" };
@@ -117603,6 +117620,18 @@
             aliyunSyncCheckMarkBodyDomain(d.id);
           }
           const r = await d.run();
+          if (pullGen && !isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
+            superseded = true;
+            results[d.id] = { ok: false, skipped: true, reason: "superseded" };
+            for (let j = i + 1; j < domains.length; j++) {
+              const sid = domains[j].id;
+              if (!results[sid]) {
+                results[sid] = { ok: false, skipped: true, reason: "superseded" };
+              }
+            }
+            allOk = false;
+            break;
+          }
           const packed = r && typeof r === "object" ? r : { ok: true, raw: r };
           results[d.id] = packed;
           if (r && r.ok === false) allOk = false;
@@ -117639,7 +117668,14 @@
         }
       }
 
-      if (typeof aliyunDomainsMetaAfterPullRound === "function") {
+      if (pullGen && !isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
+        superseded = true;
+      }
+
+      if (
+        !superseded &&
+        typeof aliyunDomainsMetaAfterPullRound === "function"
+      ) {
         try {
           await aliyunDomainsMetaAfterPullRound({
             reason: pullReason,
@@ -117673,6 +117709,20 @@
         });
       }
 
+      if (superseded) {
+        return {
+          ok: false,
+          skipped: true,
+          reason: "superseded",
+          pullGen: pullGen,
+          results: results,
+          metaKB: metaKB,
+          bodyDownloadKB: bodyDownloadKB,
+          changedDomains: [],
+          skippedFullPull: false
+        };
+      }
+
       const report = {
         ok: allOk,
         results: results,
@@ -117680,7 +117730,8 @@
         bodyDownloadKB: bodyDownloadKB,
         changedDomains: forceAllBodies ? domainIds.slice() : changedDomains.slice(),
         skippedFullPull: skippedFullPull,
-        reason: pullReason
+        reason: pullReason,
+        pullGen: pullGen || undefined
       };
       try {
         window.__aliyunSyncPrimaryBootPullReport = report;
@@ -117765,38 +117816,63 @@
     const ALIYUN_SYNC_PRIMARY_PULL_STALE_MS = 60000;
     let aliyunSyncPrimaryPullInFlight = false;
     let aliyunSyncPrimaryPullStartedAt = 0;
+    /** 拉取代次：清僵尸 / 开新轮时递增；旧 finally 与过期响应不得动新锁或写角标/lastSeen */
+    let aliyunSyncPrimaryPullGen = 0;
     let aliyunSyncPrimaryPollTimer = null;
     let aliyunSyncPrimaryVisiblePullTimer = null;
     let aliyunSyncPrimaryVisibilityBound = false;
     const aliyunSyncPrimaryLastPullFp = Object.create(null);
 
-    /** 清除僵尸 pullInFlight（休眠挂起的 GET）；未超时则不动。返回是否已清除。 */
+    function isAliyunSyncPrimaryPullGenerationCurrent(gen) {
+      return Number(gen) > 0 && Number(gen) === Number(aliyunSyncPrimaryPullGen);
+    }
+
+    /**
+     * 开启一轮拉取锁，返回本轮代次。
+     * 调用方必须在 finally 里 endAliyunSyncPrimaryPullInFlight(gen)。
+     */
+    function beginAliyunSyncPrimaryPullInFlight() {
+      aliyunSyncPrimaryPullGen += 1;
+      const gen = aliyunSyncPrimaryPullGen;
+      aliyunSyncPrimaryPullInFlight = true;
+      aliyunSyncPrimaryPullStartedAt = Date.now();
+      return gen;
+    }
+
+    /** 仅当代次仍匹配时释放锁；旧请求 finally 不会误清新请求的锁 */
+    function endAliyunSyncPrimaryPullInFlight(gen) {
+      if (!isAliyunSyncPrimaryPullGenerationCurrent(gen)) return false;
+      aliyunSyncPrimaryPullInFlight = false;
+      aliyunSyncPrimaryPullStartedAt = 0;
+      return true;
+    }
+
+    /**
+     * 清除僵尸 pullInFlight（休眠挂起的 GET）；未超时则不动。
+     * 递增代次使仍在跑的旧 fetch 成为 superseded（不得再推进 lastSeen/角标）。
+     */
     function clearAliyunSyncPrimaryStalePullInFlight(why) {
       if (!aliyunSyncPrimaryPullInFlight) return false;
       const started = Number(aliyunSyncPrimaryPullStartedAt) || 0;
       const age = started > 0 ? Date.now() - started : ALIYUN_SYNC_PRIMARY_PULL_STALE_MS + 1;
       if (age < ALIYUN_SYNC_PRIMARY_PULL_STALE_MS) return false;
+      const staleGen = aliyunSyncPrimaryPullGen;
+      aliyunSyncPrimaryPullGen += 1;
       aliyunSyncPrimaryPullInFlight = false;
       aliyunSyncPrimaryPullStartedAt = 0;
       try {
         console.warn(
           "[aliyun-sync-primary] cleared stale pullInFlight ageMs=" +
             age +
+            " staleGen=" +
+            staleGen +
+            " nextGen=" +
+            aliyunSyncPrimaryPullGen +
             " why=" +
             String(why || "")
         );
       } catch (_c) {}
       return true;
-    }
-
-    function markAliyunSyncPrimaryPullInFlight(on) {
-      if (on) {
-        aliyunSyncPrimaryPullInFlight = true;
-        aliyunSyncPrimaryPullStartedAt = Date.now();
-      } else {
-        aliyunSyncPrimaryPullInFlight = false;
-        aliyunSyncPrimaryPullStartedAt = 0;
-      }
     }
 
     function aliyunSyncPrimaryPayloadFingerprint(payloadStr) {
@@ -118177,7 +118253,7 @@
       if (aliyunSyncPrimaryPullInFlight) {
         return { ok: false, skipped: true, reason: "in-flight" };
       }
-      markAliyunSyncPrimaryPullInFlight(true);
+      const pullGen = beginAliyunSyncPrimaryPullInFlight();
       aliyunSyncPrimaryReadonlyDuringFlushLastAt = now;
       aliyunSyncPrimaryHabitReadonlyDuringFlushLastAt = now;
       aliyunSyncPrimaryLastPullReason =
@@ -118195,8 +118271,14 @@
           );
         } catch (_c) {}
         if (canDone) {
+          if (!isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
+            return { ok: false, skipped: true, reason: "superseded", pullGen: pullGen };
+          }
           try {
             await runAliyunDoneRealPullAndMerge();
+            if (!isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
+              return { ok: false, skipped: true, reason: "superseded", pullGen: pullGen };
+            }
             const doneRep =
               typeof aliyunDoneRealLastReport === "object" && aliyunDoneRealLastReport
                 ? aliyunDoneRealLastReport
@@ -118210,8 +118292,14 @@
           }
         }
         if (canHabit) {
+          if (!isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
+            return { ok: false, skipped: true, reason: "superseded", pullGen: pullGen };
+          }
           try {
             const r = await runAliyunHabitRealPullAndMerge();
+            if (!isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
+              return { ok: false, skipped: true, reason: "superseded", pullGen: pullGen };
+            }
             results.habit = r && typeof r === "object" ? r : { ok: true, raw: r };
           } catch (habitErr) {
             results.habit = {
@@ -118219,6 +118307,9 @@
               error: habitErr && habitErr.message ? habitErr.message : String(habitErr)
             };
           }
+        }
+        if (!isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
+          return { ok: false, skipped: true, reason: "superseded", pullGen: pullGen };
         }
         const anyFail =
           (results.done && results.done.ok === false) ||
@@ -118246,6 +118337,7 @@
           habitReadonlyDuringFlush: !!canHabit,
           doneReadonlyDuringFlush: !!canDone,
           reason: reason || "poll",
+          pullGen: pullGen,
           results: results
         };
       } catch (err) {
@@ -118260,10 +118352,11 @@
           skipped: false,
           readonlyDuringFlush: true,
           reason: reason || "poll",
+          pullGen: pullGen,
           error: err && err.message ? err.message : String(err)
         };
       } finally {
-        markAliyunSyncPrimaryPullInFlight(false);
+        endAliyunSyncPrimaryPullInFlight(pullGen);
       }
     }
 
@@ -118292,7 +118385,7 @@
       if (aliyunSyncPrimaryAnyDomainFlushBusy()) {
         return await runAliyunSyncPrimaryReadonlyPullDuringFlushBusy(reason || "poll");
       }
-      markAliyunSyncPrimaryPullInFlight(true);
+      const pullGen = beginAliyunSyncPrimaryPullInFlight();
       /*
        * 5s 静默轮询：已是「已同步」时不切到「同步中…」，避免绿↔蓝闪烁伤流畅性。
        * boot / 回前台 / 异常恢复仍显示同步中。
@@ -118312,7 +118405,20 @@
           } catch (_c) {}
         }
         /* 复用启动串行拉取；Phase 1b domains meta 未变则跳过正文；域内指纹未变再跳过 merge/render */
-        const report = await runAliyunSyncPrimaryBootPull({ reason: pullReason });
+        const report = await runAliyunSyncPrimaryBootPull({
+          reason: pullReason,
+          pullGen: pullGen
+        });
+        /* 本轮已被清僵尸/新轮取代：不写角标、不打开门闩，避免过期响应覆盖 */
+        if (!isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
+          return {
+            ok: false,
+            skipped: true,
+            reason: "superseded",
+            pullGen: pullGen,
+            results: report && report.results
+          };
+        }
         try {
           if (typeof forgeLagMeasNotePull === "function") {
             forgeLagMeasNotePull(pullReason, report);
@@ -118356,12 +118462,15 @@
         } else if (report && !report.skipped) {
           paintAliyunSyncPrimaryBadgeError(aliyunSyncPrimaryFirstErrorFromBootReport(report));
         }
+        if (report && typeof report === "object") report.pullGen = pullGen;
         return report;
       } catch (err) {
-        paintAliyunSyncPrimaryBadgeError(err && err.message ? err.message : String(err));
+        if (isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
+          paintAliyunSyncPrimaryBadgeError(err && err.message ? err.message : String(err));
+        }
         throw err;
       } finally {
-        markAliyunSyncPrimaryPullInFlight(false);
+        endAliyunSyncPrimaryPullInFlight(pullGen);
       }
     }
 
@@ -118513,6 +118622,7 @@
           visibility:
             typeof document !== "undefined" ? String(document.visibilityState || "") : "",
           pullInFlight: !!aliyunSyncPrimaryPullInFlight,
+          pullGen: Number(aliyunSyncPrimaryPullGen) || 0,
           pullStartedAt: started,
           pullAgeMs: started > 0 ? Date.now() - started : 0,
           lastPullReason: String(aliyunSyncPrimaryLastPullReason || ""),
@@ -120773,6 +120883,28 @@
       return { ok: false, error: lastErr || "bump-exhausted", domain: id };
     }
 
+    /**
+     * safety-full / 首次 boot 水位：须本轮「应拉域」均有效完成才推进。
+     * 任一 ok:false 或缺失结果 → 不推进，下次仍可 needSafety 重试。
+     * skippedMeta 在 safety/forceAll 路径不应出现；若出现视为未完成。
+     */
+    function aliyunDomainsMetaRoundEffectivelyComplete(info) {
+      const i = info || {};
+      const results = i.results && typeof i.results === "object" ? i.results : null;
+      if (!results) return false;
+      const ids =
+        Array.isArray(i.domainIds) && i.domainIds.length
+          ? i.domainIds
+          : ALIYUN_DOMAINS_META_IDS;
+      for (let di = 0; di < ids.length; di++) {
+        const id = ids[di];
+        const packed = results[id];
+        if (!packed || packed.ok === false) return false;
+        if (packed.skippedMeta || packed.reason === "superseded") return false;
+      }
+      return true;
+    }
+
     /** 一轮拉取结束后：标记 boot/safety、必要时 seed、对齐 lastSeen */
     async function aliyunDomainsMetaAfterPullRound(info) {
       if (!isAliyunSyncMetaGateEnabled()) return;
@@ -120785,10 +120917,23 @@
       aliyunDomainsMetaBootBodyDone = true;
       /*
        * safety-full 由 gateDecide 返回 gateReason，编排层 pullReason 仍是 poll/visible。
-       * 必须用 gateReason 推进水位，否则 12 分钟后每轮都误判 needSafety → 十域全文。
+       * 必须用 gateReason 识别；且仅在全域有效完成后推进水位，
+       * 避免失败全量被当成成功 → 12 分钟内不再 safety 重试。
        */
       if (isSafety || (isBootLike && aliyunDomainsMetaLastSafetyFullAt <= 0)) {
-        aliyunDomainsMetaLastSafetyFullAt = Date.now();
+        if (aliyunDomainsMetaRoundEffectivelyComplete(i)) {
+          aliyunDomainsMetaLastSafetyFullAt = Date.now();
+        } else {
+          try {
+            console.warn(
+              "[aliyun-domains-meta] skip safety/boot watermark: round not effectively complete" +
+                " gateReason=" +
+                gateReason +
+                " pullReason=" +
+                pullReason
+            );
+          } catch (_cWm) {}
+        }
       }
       if (i.seedNeeded) {
         const seedRes = await aliyunDomainsMetaSeedIfNeeded(Date.now());
