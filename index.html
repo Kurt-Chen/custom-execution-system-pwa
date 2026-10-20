@@ -74426,16 +74426,9 @@
       overflow: visible;
     }
 
+    /* 「当前周」不再占顶栏；节点若残留也不占位 */
     #anniversaryModule .tw020-wk-current-badge {
-      display: inline-flex;
-      align-items: center;
-      padding: 1px 8px;
-      border-radius: 999px;
-      font-size: 11px;
-      font-weight: 700;
-      color: #be185d;
-      background: #fce7f3;
-      border: 1px solid #f9a8d4;
+      display: none !important;
     }
 
     #anniversaryModule .tw020-week-detail-stepper {
@@ -74872,6 +74865,44 @@
       background: linear-gradient(90deg, #fbcfe8, #e11d48);
     }
 
+    /*
+     * 状态文案在轨道内部水平垂直居中。无胶囊底、无边框。
+     * 深色字 + 白描边：已填充（绿/橙/粉）与未填充（米色轨道）都可读。
+     * 不改轨道宽高、填充色和 85% 阈值线。
+     */
+    #anniversaryModule .tw020-week-detail-host .tw020-week-progress > .tw020-week-status-chip {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+      margin: 0;
+      padding: 0;
+      max-height: none;
+      width: auto;
+      border: 0;
+      border-radius: 0;
+      background: none;
+      box-shadow: none;
+      color: #0f172a;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: 0;
+      -webkit-text-stroke: 2px #fff;
+      paint-order: stroke fill;
+      text-shadow:
+        0 0 2px #fff,
+        1px 0 0 #fff,
+        -1px 0 0 #fff,
+        0 1px 0 #fff,
+        0 -1px 0 #fff;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
     /* 手机端提醒叠在轨道中线上方（不放入 overflow 轨道，光晕不被裁切；不改轨道高度） */
     #anniversaryModule .tw020-week-progress-label {
       position: absolute;
@@ -74918,17 +74949,33 @@
 
     /*
      * 周卡提醒（原「疯狂使用AI」）端侧：
-     * - 默认（手机，含横屏矮视口）：进度条中线一枚「AI 规划·复盘」，顶栏副本不占位，避免挤日期。
+     * - 默认（手机，含横屏矮视口）：顶栏一枚「AI 规划·复盘」（状态已进进度条，不再叠在轨道上）。
      * - 桌面（精细指针且宽≥768）与平板（768–1366、粗指针、视口够高）以及更宽屏幕：
-     *   顶栏标题与状态之间并排两枚（AI规划 7:30 / AI复盘 21:30）。
-     * 纯静态文案，无点击。
+     *   顶栏标题与切换按钮之间并排两枚（AI规划 7:30 / AI复盘 21:30）。
+     * 纯静态文案，无点击。胶囊外观沿用原渐变与字号。
      */
     #anniversaryModule .tw020-week-head-slogan {
-      display: none;
+      display: inline-flex;
+      align-items: center;
+      flex: 0 0 auto;
+      width: max-content;
+      max-width: 100%;
+      margin: 0;
+      padding: 0;
+      border: none;
+      background: none;
+      box-shadow: none;
+      pointer-events: none;
+      white-space: nowrap;
     }
 
     #anniversaryModule .tw020-ai-remind--pair {
       display: none;
+    }
+
+    #anniversaryModule .tw020-ai-remind--single {
+      display: inline-flex;
+      align-items: center;
     }
 
     #anniversaryModule .tw020-ai-remind__pill {
@@ -75041,6 +75088,10 @@
         flex: 0 0 auto;
         width: max-content;
         max-width: 100%;
+      }
+
+      #anniversaryModule .tw020-week-head-slogan .tw020-ai-remind--single {
+        display: none;
       }
 
       #anniversaryModule .tw020-week-head-slogan .tw020-ai-remind__pill {
@@ -106471,7 +106522,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261020q";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261020r";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -189200,8 +189251,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     /**
      * 周卡静态提醒胶囊（原「疯狂使用AI」）。
-     * 顶栏只挂电脑/平板双胶囊；手机单胶囊挂在进度条槽上，由 CSS 按原端侧断点只显示其一。
-     * 无点击、不写 state。
+     * 顶栏同时挂电脑/平板双胶囊与手机单胶囊，由 CSS 按端侧断点只显示其一。
+     * 状态文案改挂在进度条内部，手机胶囊不再叠在轨道上。无点击、不写 state。
      */
     function createAnniversaryAiRemindPill(nameText, timeText) {
       const pill = document.createElement("span");
@@ -189233,10 +189284,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         pair.appendChild(createAnniversaryAiRemindPill("AI规划", "7:30"));
         pair.appendChild(createAnniversaryAiRemindPill("AI复盘", "21:30"));
         slogan.appendChild(pair);
+        const single = document.createElement("span");
+        single.className = "tw020-ai-remind tw020-ai-remind--single";
+        single.appendChild(createAnniversaryAiRemindPill("AI 规划·复盘", ""));
+        slogan.appendChild(single);
         return slogan;
       }
       slogan.appendChild(createAnniversaryAiRemindPill("AI 规划·复盘", ""));
       return slogan;
+    }
+
+    function createAnniversaryWeekStatusChipElement(progress, bands) {
+      const chip = document.createElement("span");
+      chip.className = "tw020-week-status-chip";
+      chip.dataset.tw020Chip = anniversaryWeekFillBandFromProgress(progress, bands);
+      chip.textContent = anniversaryWeekStatusChipText(progress, bands);
+      return chip;
     }
 
     function createAnniversaryWeekProgressBarElement(progress, bands) {
@@ -189267,8 +189330,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const fillBand = anniversaryWeekFillBandFromProgress(progress, bands);
       bar.dataset.tw020Fill = fillBand;
       bar.appendChild(fill);
+      bar.appendChild(createAnniversaryWeekStatusChipElement(progress, bands));
       barSlot.appendChild(bar);
-      barSlot.appendChild(createAnniversaryWeekAiSloganElement("tw020-week-progress-label"));
       row.appendChild(barSlot);
       wrap.appendChild(row);
       return wrap;
@@ -191241,16 +191304,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       tag.className = "tw020-wk-tag";
       tag.textContent = "总结周 · 规划下一个十二周年";
       headMain.appendChild(tag);
-      const headMeta = document.createElement("div");
-      headMeta.className = "tw020-week-head-meta";
-      const chip = document.createElement("span");
-      chip.className = "tw020-week-status-chip";
-      chip.dataset.tw020Chip = anniversaryWeekFillBandFromProgress(pW, bands);
-      chip.textContent = anniversaryWeekStatusChipText(pW, bands);
-      headMeta.appendChild(chip);
       head.appendChild(headMain);
       head.appendChild(createAnniversaryWeekAiSloganElement("tw020-week-head-slogan"));
-      head.appendChild(headMeta);
 
       const progressWrap = createAnniversaryWeekProgressBarElement(pW, bands);
       appendAnniversaryTwWeekViewBar(progressWrap, moduleKey, w);
@@ -191401,12 +191456,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       r.appendChild(document.createTextNode(formatAnniversaryTwCapsuleDateRange(s, e)));
       titleLine.appendChild(lab);
       titleLine.appendChild(r);
-      if (currentWk === w) {
-        const curBadge = document.createElement("span");
-        curBadge.className = "tw020-wk-current-badge";
-        curBadge.textContent = "当前周";
-        titleLine.appendChild(curBadge);
-      }
       headMain.appendChild(titleLine);
       if (w === 13) {
         const tag = document.createElement("span");
@@ -191417,11 +191466,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
       const headMeta = document.createElement("div");
       headMeta.className = "tw020-week-head-meta";
-      const chip = document.createElement("span");
-      chip.className = "tw020-week-status-chip";
-      chip.dataset.tw020Chip = anniversaryWeekFillBandFromProgress(pW, bands);
-      chip.textContent = anniversaryWeekStatusChipText(pW, bands);
-      headMeta.appendChild(chip);
       const detailNav = document.createElement("div");
       detailNav.className = "tw020-week-detail-stepper";
       detailNav.setAttribute("role", "group");
