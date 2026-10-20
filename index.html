@@ -35235,6 +35235,53 @@
       display: none;
     }
 
+    /* 每小时末 5 分钟：左侧 lead 替换为 Extreme Agency 快捷入口（默认隐藏） */
+    .done-manual-input-wrap--done-slogan .done-manual-input-slogan__lead-ea {
+      display: none;
+      appearance: none;
+      -webkit-appearance: none;
+      margin: 0;
+      padding: 0;
+      border: none;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      font-style: italic;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      line-height: inherit;
+      white-space: nowrap;
+      cursor: pointer;
+      pointer-events: auto;
+      -webkit-tap-highlight-color: transparent;
+      text-shadow: 0 0 0 transparent;
+      transition: text-shadow 160ms ease-out, filter 160ms ease-out, transform 120ms ease-out;
+      transform: translateZ(0);
+    }
+    .done-manual-input-wrap--done-slogan .done-manual-input-slogan__lead-ea:hover {
+      text-shadow: 0 0 8px rgba(233, 30, 140, 0.35);
+      filter: brightness(1.04);
+    }
+    .done-manual-input-wrap--done-slogan .done-manual-input-slogan__lead-ea:active {
+      transform: translateY(0.5px) scale(0.985);
+      filter: brightness(0.98);
+    }
+    .done-manual-input-wrap--done-slogan .done-manual-input-slogan__lead-ea:focus-visible {
+      outline: 2px solid rgba(233, 30, 140, 0.55);
+      outline-offset: 3px;
+      border-radius: 4px;
+    }
+    .done-manual-input-wrap--done-slogan.is-hourly-extreme-agency-reminder
+      .done-manual-input-slogan__lead-default,
+    .done-manual-input-wrap--done-slogan.is-hourly-extreme-agency-reminder
+      .done-manual-input-slogan__lead-mobile {
+      display: none !important;
+    }
+    .done-manual-input-wrap--done-slogan.is-hourly-extreme-agency-reminder
+      .done-manual-input-slogan__lead-ea {
+      display: inline;
+    }
+
     /* 「难」：洋红实心小胶囊 + 白字，约周围中文 110%；胶囊整体轻微右倾，内文反向补偿避免二次加斜 */
     .done-manual-input-wrap--done-slogan .done-manual-input-slogan__hard {
       display: inline-flex;
@@ -87406,6 +87453,12 @@
                     >选<span class="done-manual-input-slogan__hard"><span class="done-manual-input-slogan__hard-char">难</span></span>的了吗？</span
                   >
                   <span class="done-manual-input-slogan__lead-mobile">生产、创造</span>
+                  <button
+                    type="button"
+                    id="doneLeadExtremeAgencyShortcut"
+                    class="done-manual-input-slogan__lead-ea"
+                    aria-label="打开 Purpose &amp; Values · Extreme Agency"
+                  >Extreme Agency</button>
                 </span>
                 <span class="done-manual-input-slogan__core">
                   <span class="done-manual-input-slogan__focus" title="FOCUS">
@@ -106144,7 +106197,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261020b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261020c";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -167242,6 +167295,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         [syncSprintFinishAuditMarquee, "审计"],
         [syncDoneInputSloganMarquee, "Done 输入条"],
         [syncDoneInputHourlyCreativityReminder, "每小时前5分钟提醒"],
+        [syncDoneInputHourlyExtremeAgencyReminder, "每小时末5分钟 Extreme Agency"],
         [syncDoneInputGainHourStaticSlogan, "黄金 1 小时"]
       ];
       let i = 0;
@@ -172694,6 +172748,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return d.getMinutes() < 5;
     }
 
+    /** 本地分钟 55–59：每小时末 5 分钟 Extreme Agency 快捷入口窗口 */
+    function isDoneInputHourlyExtremeAgencyWindow(dateOpt) {
+      const d = dateOpt instanceof Date ? dateOpt : new Date();
+      return d.getMinutes() >= 55;
+    }
+
     /** 创造力提醒：仅按可用宽度略缩字号，不撑高横条（基准 16/14/12，桌面+20%、手机+10%） */
     function fitDoneInputHourlyCreativityReminder() {
       const wrap = queryDoneInputSloganMarqueeHost
@@ -172757,8 +172817,45 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
+     * 每小时 55:00–59:59：左侧 lead 显示 Extreme Agency 可点快捷入口。
+     * 纯本地展示；仅状态变化时改 class；不 saveState / 不同步。
+     * 与跑马灯共存：播放中 slogan 仍被遮罩；结束后若仍在窗口则本提醒继续显示。
+     * 与「黄金 1 小时」：本窗口优先（保留 FOCUS/OBSESSION），结束后再按当前时间恢复黄金小时。
+     */
+    function syncDoneInputHourlyExtremeAgencyReminder() {
+      const host = queryDoneInputSloganMarqueeHost
+        ? queryDoneInputSloganMarqueeHost()
+        : document.querySelector(
+            "#dynamicModule .kinetic-sub-done .done-manual-input-wrap--done-slogan"
+          );
+      if (!host) return;
+      const show = isDoneInputHourlyExtremeAgencyWindow(new Date());
+      const was = host.classList.contains("is-hourly-extreme-agency-reminder");
+      if (show === was) return;
+      host.classList.toggle("is-hourly-extreme-agency-reminder", show);
+      if (show) {
+        if (host.classList.contains("is-gain-hour-static")) {
+          host.classList.remove("is-gain-hour-static");
+        }
+        if (typeof fitDoneManualInputSlogan === "function") {
+          fitDoneManualInputSlogan();
+        }
+        return;
+      }
+      if (typeof syncDoneInputGainHourStaticSlogan === "function") {
+        syncDoneInputGainHourStaticSlogan();
+      }
+      if (
+        !host.classList.contains("is-gain-hour-static") &&
+        typeof fitDoneManualInputSlogan === "function"
+      ) {
+        fitDoneManualInputSlogan();
+      }
+    }
+
+    /**
      * 21:30–22:30 且输入条无跑马灯时：静态显示「黄金 1 小时」。
-     * 跑马灯播放中、每小时前5分钟提醒、或时段外恢复原三件套标语。
+     * 跑马灯播放中、每小时前5分钟提醒、每小时末 Extreme Agency、或时段外恢复原三件套标语。
      */
     function syncDoneInputGainHourStaticSlogan() {
       const host = queryDoneInputSloganMarqueeHost
@@ -172776,8 +172873,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const inCreativity =
         typeof isDoneInputHourlyCreativityReminderWindow === "function" &&
         isDoneInputHourlyCreativityReminderWindow(new Date());
-      /* 前5分钟创造力提醒优先；结束后再恢复黄金小时 */
-      const show = Boolean(inWindow && !playing && !inCreativity);
+      const inExtremeAgency =
+        typeof isDoneInputHourlyExtremeAgencyWindow === "function" &&
+        isDoneInputHourlyExtremeAgencyWindow(new Date());
+      /* 前5分钟创造力 / 末5分钟 Extreme Agency 优先；结束后再恢复黄金小时 */
+      const show = Boolean(inWindow && !playing && !inCreativity && !inExtremeAgency);
       const was = host.classList.contains("is-gain-hour-static");
       if (show === was) return;
       host.classList.toggle("is-gain-hour-static", show);
@@ -173854,6 +173954,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       doneInputSloganMarqueeState.playDurationMs = 0;
       if (typeof syncDoneInputHourlyCreativityReminder === "function") {
         syncDoneInputHourlyCreativityReminder();
+      }
+      if (typeof syncDoneInputHourlyExtremeAgencyReminder === "function") {
+        syncDoneInputHourlyExtremeAgencyReminder();
       }
       if (typeof syncDoneInputGainHourStaticSlogan === "function") {
         syncDoneInputGainHourStaticSlogan();
@@ -201383,6 +201486,24 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       bindOne(document.getElementById("habitLeadAgencyShortcutBtn"));
     }
 
+    /** Done 输入条：每小时末 5 分钟 Extreme Agency 文案 → Purpose · Extreme Agency */
+    function bindDoneLeadExtremeAgencyShortcut() {
+      const btn = document.getElementById("doneLeadExtremeAgencyShortcut");
+      if (!btn || btn.dataset.eaShortcutBound === "1") return;
+      btn.dataset.eaShortcutBound = "1";
+      btn.addEventListener("mousedown", function (event) {
+        /* 避免点快捷入口时聚焦背后 Done 输入框 */
+        event.preventDefault();
+      });
+      btn.addEventListener("click", function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof openPurposeExtremeAgencyShortcut === "function") {
+          openPurposeExtremeAgencyShortcut();
+        }
+      });
+    }
+
     function bindPviGenuineDesireBlock() {
       document.querySelectorAll("#purposeValuesIdentityModule .pvi-genuine-desire-block").forEach(function (block) {
         if (block.dataset.pviDesireBound === "1") return;
@@ -207816,6 +207937,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     bindGoalNestedSubBlocks();
     bindPviGenuineDesireBlock();
     bindHabitAiFirstAgencyShortcut();
+    bindDoneLeadExtremeAgencyShortcut();
+    if (typeof syncDoneInputHourlyExtremeAgencyReminder === "function") {
+      syncDoneInputHourlyExtremeAgencyReminder();
+    }
     initDisclosureToggleGlyphs();
 
     try {
