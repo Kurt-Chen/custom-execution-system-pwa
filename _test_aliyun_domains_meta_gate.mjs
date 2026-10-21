@@ -23,9 +23,9 @@ mustInclude('aliyunDomainsMetaBumpDomain("goals")', "goals bump");
 mustInclude("reason: pullReason", "poll passes reason");
 mustInclude("pullGen: pullGen", "poll passes pull generation");
 mustInclude("Phase 1b", "phase 1b marker");
-mustInclude("exec-system-pwa-v20261021g", "cache bump in html");
+mustInclude("exec-system-pwa-v20261021h", "cache bump in html");
 assert.ok(
-  fs.readFileSync("sw.js", "utf8").includes("exec-system-pwa-v20261021g"),
+  fs.readFileSync("sw.js", "utf8").includes("exec-system-pwa-v20261021h"),
   "cache bump in sw"
 );
 
