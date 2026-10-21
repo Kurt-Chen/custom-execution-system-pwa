@@ -87903,7 +87903,7 @@
               >
                 隐藏
               </button>
-              <div class="module-header-version-line" aria-live="polite">版本 v20261021g</div>
+              <div class="module-header-version-line" aria-live="polite">版本 v20261021h</div>
             </div>
           </div>
           <button id="toggleDynamicModuleBtn" class="toggle-btn toggle-chevron" type="button" aria-label="切换此区块" aria-expanded="false"></button>
@@ -89972,7 +89972,7 @@
             <div class="module-header-right-row">
               <button type="button" class="module-header-cloud-sync cloud-sync-badge" aria-live="polite">未同步</button>
             </div>
-            <div class="module-header-version-line" aria-live="polite">版本 v20261021g</div>
+            <div class="module-header-version-line" aria-live="polite">版本 v20261021h</div>
           </div>
           <button id="toggleHabitRoutineModuleBtn" class="toggle-btn toggle-chevron" type="button" aria-label="切换此区块" aria-expanded="false"></button>
         </div>
@@ -94728,7 +94728,7 @@
               <span id="forgeHeaderDate" class="forge-header-date" aria-live="polite"></span>
               <button type="button" class="module-header-cloud-sync cloud-sync-badge" aria-live="polite">未同步</button>
             </div>
-            <div class="module-header-version-line" aria-live="polite">版本 v20261021g</div>
+            <div class="module-header-version-line" aria-live="polite">版本 v20261021h</div>
           </div>
           <button id="toggleForgeModuleBtn" class="toggle-btn toggle-chevron" type="button" aria-label="切换此区块" aria-expanded="false"></button>
         </div>
@@ -100983,7 +100983,7 @@
             <div class="module-header-right-row">
               <button type="button" class="module-header-cloud-sync cloud-sync-badge" aria-live="polite">未同步</button>
             </div>
-            <div class="module-header-version-line" aria-live="polite">版本 v20261021g</div>
+            <div class="module-header-version-line" aria-live="polite">版本 v20261021h</div>
           </div>
           <button id="toggleMyGoalsModuleBtn" class="toggle-btn toggle-chevron" type="button" aria-label="切换此区块" aria-expanded="false"></button>
         </div>
@@ -103232,7 +103232,7 @@
             <div class="module-header-right-row">
               <button type="button" class="module-header-cloud-sync cloud-sync-badge" aria-live="polite">未同步</button>
             </div>
-            <div class="module-header-version-line" aria-live="polite">版本 v20261021g</div>
+            <div class="module-header-version-line" aria-live="polite">版本 v20261021h</div>
           </div>
           <button id="togglePurposeValuesIdentityModuleBtn" class="toggle-btn toggle-chevron" type="button" aria-label="切换此区块" aria-expanded="false"></button>
         </div>
@@ -106858,7 +106858,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261021g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261021h";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -118261,8 +118261,14 @@
         bodyDownloadKB: bodyDownloadKB,
         changedDomains: forceAllBodies ? domainIds.slice() : changedDomains.slice(),
         skippedFullPull: skippedFullPull,
+        forceAllBodies: !!forceAllBodies,
+        localSparse: !!localSparse,
         reason: pullReason,
-        pullGen: pullGen || undefined
+        pullGen: pullGen || undefined,
+        roomId:
+          typeof getAliyunSyncRoomIdForDocs === "function"
+            ? String(getAliyunSyncRoomIdForDocs() || "")
+            : ""
       };
       try {
         window.__aliyunSyncPrimaryBootPullReport = report;
@@ -118913,6 +118919,86 @@
       return await runAliyunSyncPrimaryReadonlyPullDuringFlushBusy(reason);
     }
 
+    /**
+     * 关键面（Done / Lists / Sprint / TodayPlan）拉取结果是否像「云端无正文」：
+     * 404/empty、或 payloadKB 全接近 0。用于区分「真同步成功」与「错房间/空房刷绿」。
+     */
+    function aliyunSyncPrimaryPullLooksCloudEmpty(report) {
+      if (!report || typeof report !== "object") return true;
+      if (report.skippedAll) return true;
+      const bodyKB = Number(report.bodyDownloadKB) || 0;
+      const ids = ["done", "lists", "sprint", "todayPlan"];
+      const results = report.results && typeof report.results === "object" ? report.results : {};
+      let emptyish = 0;
+      let saw = 0;
+      let kbSum = 0;
+      for (let i = 0; i < ids.length; i++) {
+        const r = results[ids[i]];
+        if (!r || typeof r !== "object") {
+          emptyish += 1;
+          continue;
+        }
+        saw += 1;
+        const kb = Number(r.payloadKB) || Number(r.bodyKB) || 0;
+        kbSum += kb;
+        if (r.empty || r.notFound || r.skippedMissingItems) emptyish += 1;
+        else if (r.ok === false) emptyish += 1;
+        else if (kb <= 0 && !r.unchanged && !r.skippedMeta) emptyish += 1;
+      }
+      if (bodyKB < 0.5 && kbSum < 0.5) return true;
+      return saw > 0 && emptyish >= Math.min(3, saw);
+    }
+
+    function aliyunSyncPrimaryClearPullFingerprints() {
+      try {
+        const keys = Object.keys(aliyunSyncPrimaryLastPullFp || {});
+        for (let i = 0; i < keys.length; i++) {
+          delete aliyunSyncPrimaryLastPullFp[keys[i]];
+        }
+      } catch (_fp) {}
+    }
+
+    /**
+     * 空壳拉完全文后仍空：禁止刷绿；角标提示房间；清指纹便于下一轮重试。
+     * 不自动改房间（避免误切）；诊断面板可一键 default-room。
+     */
+    function aliyunSyncPrimaryHandleUnhydratedSparse(report, pullReason) {
+      const room =
+        typeof getAliyunSyncRoomIdForDocs === "function"
+          ? String(getAliyunSyncRoomIdForDocs() || "")
+          : "";
+      try {
+        noteBootHealth("unhydrated-sparse-after-pull", {
+          reason: pullReason,
+          room: room,
+          bodyKB: report && report.bodyDownloadKB,
+          cloudEmpty: true
+        });
+      } catch (_n) {}
+      try {
+        console.warn(
+          "[aliyun-sync-primary] unhydrated sparse after pull room=" +
+            room +
+            " bodyKB=" +
+            (report && report.bodyDownloadKB)
+        );
+      } catch (_c) {}
+      aliyunSyncPrimaryClearPullFingerprints();
+      try {
+        if (typeof aliyunDomainsMetaLastSeen === "object" && aliyunDomainsMetaLastSeen) {
+          const ids = Object.keys(aliyunDomainsMetaLastSeen);
+          for (let i = 0; i < ids.length; i++) delete aliyunDomainsMetaLastSeen[ids[i]];
+        }
+      } catch (_ls) {}
+      paintAliyunSyncPrimaryBadgeError(
+        "空壳无正文 · 房间 " + (room || "?") + "（连点版本×5 可改 default-room）"
+      );
+      if (report && typeof report === "object") {
+        report.unhydratedSparse = true;
+        report.roomId = room;
+      }
+    }
+
     async function runAliyunSyncPrimaryNearRealtimePull(reason) {
       if (!isAliyunSyncPrimaryEnabled()) {
         return { ok: false, skipped: true, reason: "primary-off" };
@@ -118940,6 +119026,9 @@
        */
       const pullReason = reason || "poll";
       aliyunSyncPrimaryLastPullReason = pullReason;
+      const sparseBefore =
+        typeof isAliyunSyncPrimaryLocalDataSparse === "function" &&
+        isAliyunSyncPrimaryLocalDataSparse();
       const quietPoll =
         pullReason === "poll" &&
         cloudSyncMachineStatus === "synced" &&
@@ -118972,6 +119061,9 @@
             forgeLagMeasNotePull(pullReason, report);
           }
         } catch (_flPull) {}
+        const sparseAfter =
+          typeof isAliyunSyncPrimaryLocalDataSparse === "function" &&
+          isAliyunSyncPrimaryLocalDataSparse();
         if (report && report.ok) {
           /*
            * boot / 回前台：强制回补本机已有「每天三赢」Done → 阿里云（修历史漏传，无需重填）。
@@ -118992,20 +119084,45 @@
             }
           }
           /*
-           * boot/回前台/手动全量成功后打开上传门闩。
-           * 静默 5s poll（尤其 skippedAll）不打开，避免从未拉过 todayPlan/Sprint 就回写旧挂牌。
+           * 空壳强制全文后仍空，且关键域像 404/零正文：禁止刷绿「已同步」。
+           * 典型：平板房间键与手机不一致 → 拉到空房仍 ok。
            */
           if (
+            sparseBefore &&
+            sparseAfter &&
             (pullReason === "boot" ||
               pullReason === "visible" ||
-              pullReason === "manual-full") &&
-            typeof markAliyunSyncPrimaryInitialPullSettled === "function"
+              pullReason === "manual-full" ||
+              !!report.forceAllBodies) &&
+            aliyunSyncPrimaryPullLooksCloudEmpty(report)
           ) {
-            markAliyunSyncPrimaryInitialPullSettled("pull-ok:" + pullReason);
-          }
-          /* 静默轮询且全域 meta 未变：不刷新角标时钟，避免无意义 UI 抖动 */
-          if (!(quietPoll && report.skippedAll)) {
-            paintAliyunSyncPrimaryBadgeOk();
+            if (
+              (pullReason === "boot" ||
+                pullReason === "visible" ||
+                pullReason === "manual-full") &&
+              typeof markAliyunSyncPrimaryInitialPullSettled === "function"
+            ) {
+              /* 仍打开上传门闩，避免合法编辑永久卡死；但不宣称已对齐 */
+              markAliyunSyncPrimaryInitialPullSettled("unhydrated-sparse:" + pullReason);
+            }
+            aliyunSyncPrimaryHandleUnhydratedSparse(report, pullReason);
+          } else {
+            /*
+             * boot/回前台/手动全量成功后打开上传门闩。
+             * 静默 5s poll（尤其 skippedAll）不打开，避免从未拉过 todayPlan/Sprint 就回写旧挂牌。
+             */
+            if (
+              (pullReason === "boot" ||
+                pullReason === "visible" ||
+                pullReason === "manual-full") &&
+              typeof markAliyunSyncPrimaryInitialPullSettled === "function"
+            ) {
+              markAliyunSyncPrimaryInitialPullSettled("pull-ok:" + pullReason);
+            }
+            /* 静默轮询且全域 meta 未变：不刷新角标时钟，避免无意义 UI 抖动 */
+            if (!(quietPoll && report.skippedAll)) {
+              paintAliyunSyncPrimaryBadgeOk();
+            }
           }
         } else if (report && !report.skipped) {
           paintAliyunSyncPrimaryBadgeError(aliyunSyncPrimaryFirstErrorFromBootReport(report));
@@ -119198,11 +119315,26 @@
         copyBtn.textContent = "复制摘要";
         copyBtn.className = "btn";
         copyBtn.style.cssText = "min-height:40px;padding:8px 14px;";
+        const roomBtn = document.createElement("button");
+        roomBtn.type = "button";
+        roomBtn.id = "bootHealthResetRoomBtn";
+        roomBtn.textContent = "改用 default-room 并重拉";
+        roomBtn.className = "btn";
+        roomBtn.style.cssText = "min-height:40px;padding:8px 14px;";
+        roomBtn.title = "平板房间键常与手机不一致时用；不删本机业务数据";
         const closeBtn = document.createElement("button");
         closeBtn.type = "button";
         closeBtn.textContent = "关闭";
         closeBtn.className = "btn-primary";
         closeBtn.style.cssText = "min-height:40px;padding:8px 14px;";
+        roomBtn.addEventListener("click", function () {
+          try {
+            if (typeof aliyunSyncPrimaryResetRoomToDefaultAndRepull === "function") {
+              aliyunSyncPrimaryResetRoomToDefaultAndRepull();
+              roomBtn.textContent = "已触发重拉…";
+            }
+          } catch (_rb) {}
+        });
         copyBtn.addEventListener("click", function () {
           const body = (document.getElementById("bootHealthPanelPre") || {}).textContent || "";
           function ok() {
@@ -119247,6 +119379,7 @@
             overlay.style.display = "none";
           }
         });
+        row.appendChild(roomBtn);
         row.appendChild(copyBtn);
         row.appendChild(closeBtn);
         panel.appendChild(title);
@@ -119261,6 +119394,52 @@
       overlay.classList.remove("hidden");
       overlay.style.display = "flex";
       noteBootHealth("diag-panel-opened");
+    }
+
+    /**
+     * 平板诊断：把房间键改回 default-room，清 meta lastSeen / 指纹，强制全文重拉。
+     * 不 clear IndexedDB / 不删业务列表；仅纠正错房间导致的空壳。
+     */
+    function aliyunSyncPrimaryResetRoomToDefaultAndRepull() {
+      const target =
+        typeof ALIYUN_SYNC_ROOM_FALLBACK !== "undefined"
+          ? String(ALIYUN_SYNC_ROOM_FALLBACK || "default-room")
+          : "default-room";
+      const prev =
+        typeof getAliyunSyncRoomIdForDocs === "function"
+          ? String(getAliyunSyncRoomIdForDocs() || "")
+          : "";
+      try {
+        localStorage.setItem(CLOUD_SYNC_ROOM_KEY, target);
+        cloudSyncRoomId = target;
+      } catch (_w) {}
+      try {
+        noteBootHealth("diag-reset-room-repull", { from: prev, to: target });
+      } catch (_n) {}
+      aliyunSyncPrimaryClearPullFingerprints();
+      try {
+        if (typeof aliyunDomainsMetaLastSeen === "object" && aliyunDomainsMetaLastSeen) {
+          const ids = Object.keys(aliyunDomainsMetaLastSeen);
+          for (let i = 0; i < ids.length; i++) delete aliyunDomainsMetaLastSeen[ids[i]];
+        }
+      } catch (_ls) {}
+      try {
+        aliyunSyncPrimaryBootPullStarted = false;
+      } catch (_bootFlag) {}
+      paintAliyunSyncPrimaryBadgeSyncing();
+      try {
+        if (typeof scheduleAliyunSyncPrimaryBootPull === "function") {
+          scheduleAliyunSyncPrimaryBootPull();
+        } else if (typeof runAliyunSyncPrimaryNearRealtimePull === "function") {
+          Promise.resolve(runAliyunSyncPrimaryNearRealtimePull("manual-full")).catch(function () {});
+        }
+      } catch (_pull) {}
+      try {
+        window.setTimeout(function () {
+          if (typeof showBootHealthPanel === "function") showBootHealthPanel();
+        }, 2500);
+      } catch (_reshow) {}
+      return { from: prev, to: target };
     }
 
     function bindBootHealthVersionTapOnce() {
@@ -119391,6 +119570,10 @@
             typeof isAliyunSyncPrimaryLocalDataSparse === "function"
               ? !!isAliyunSyncPrimaryLocalDataSparse()
               : null,
+          roomId:
+            typeof getAliyunSyncRoomIdForDocs === "function"
+              ? String(getAliyunSyncRoomIdForDocs() || "")
+              : "",
           weeklyPlanKeys:
             state.weeklyPlan && typeof state.weeklyPlan === "object"
               ? Object.keys(state.weeklyPlan).length
@@ -119409,6 +119592,8 @@
         };
       };
       window.__showBootHealthPanel = showBootHealthPanel;
+      window.__aliyunSyncPrimaryResetRoomToDefaultAndRepull =
+        aliyunSyncPrimaryResetRoomToDefaultAndRepull;
       window.shouldSkipFirebaseCloudSyncBootForAliyunPrimary =
         shouldSkipFirebaseCloudSyncBootForAliyunPrimary;
       window.recoverAliyunPrimaryAfterLegacyFirebaseMisclick =
@@ -120241,13 +120426,13 @@
         aliyunDoneRealAppendLog(
           "Done 真实同步未启用：请勾选面板开关或设 window.__ALIYUN_DONE_REAL_SYNC_ENABLED=true"
         );
-        return;
+        return { ok: false, error: "disabled" };
       }
       const base = aliyunDoneRealBaseUrl();
       const docId = aliyunDoneRealDocId();
       if (!base || aliyunExpHasForbiddenSecret(base)) {
         aliyunDoneRealAppendLog(!base ? "请填写 Function URL" : "中止：URL 疑似 AccessKey");
-        return;
+        return { ok: false, error: "bad-url" };
       }
       const lt = aliyunDoneRealStartLtObserver();
       const tAll = Date.now();
@@ -120269,9 +120454,9 @@
         downloadMs = Date.now() - tDl0;
         networkWaitMs += downloadMs;
         if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
-          aliyunDoneRealAppendLog("云端尚无 Done 文档（首次写入前正常）");
+          aliyunDoneRealAppendLog("云端尚无 Done 文档（首次写入前正常）docId=" + docId);
           ok = true;
-          return;
+          return { ok: true, empty: true, notFound: true, docId: docId };
         }
         if (!getRes.ok) {
           throw new Error("GET HTTP " + getRes.status);
@@ -130043,7 +130228,7 @@
         networkWaitMs += downloadMs;
         if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
           ok = true;
-          return { ok: true, empty: true, docId: docId };
+          return { ok: true, empty: true, notFound: true, docId: docId };
         }
         if (!getRes.ok) throw new Error("GET HTTP " + getRes.status);
 

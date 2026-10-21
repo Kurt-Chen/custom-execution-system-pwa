@@ -36,13 +36,20 @@ mustInclude("window.__bootHealthSnapshot", "boot health snapshot");
 mustInclude("showBootHealthPanel", "diag panel");
 mustInclude("bindBootHealthVersionTapOnce", "version tap binder");
 mustInclude("连点版本号 5 次打开", "tablet diag hint");
-mustInclude("exec-system-pwa-v20261021g", "cache bump in html");
-assert.ok(sw.includes("exec-system-pwa-v20261021g"), "cache bump in sw");
-mustInclude("版本 v20261021g</div>", "static HTML version (no JS needed)");
+mustInclude("exec-system-pwa-v20261021h", "cache bump in html");
+assert.ok(sw.includes("exec-system-pwa-v20261021h"), "cache bump in sw");
+mustInclude("版本 v20261021h</div>", "static HTML version (no JS needed)");
 mustInclude("immediate-version-painted", "immediate DOM version paint");
 mustInclude("isAliyunSyncPrimaryLocalDataSparse", "local sparse helper");
 mustInclude("force-full-pull-local-sparse", "sparse forces full body pull");
 mustInclude("!!localSparse ||", "forceAllBodies includes localSparse");
+
+
+mustInclude("unhydrated-sparse-after-pull", "unhydrated sparse handler");
+mustInclude("aliyunSyncPrimaryPullLooksCloudEmpty", "cloud-empty assessor");
+mustInclude("空壳无正文", "badge error for empty shell");
+mustInclude("aliyunSyncPrimaryResetRoomToDefaultAndRepull", "diag reset room");
+mustInclude("notFound: true, docId: docId", "Done 404 structured return");
 
 /* 纯逻辑：超时后迟到 open 不得写成主连接 */
 function simulateIdbOpenWithTimeout({ timeoutMs, lateSuccessAtMs }) {
