@@ -87623,6 +87623,560 @@
   </style>
 </head>
 <body class="app-locked primary-module-fullscreen has-primary-bottom-nav">
+  <!-- 启动诊断：独立于业务脚本 / IDB / render；登录层之上可点 -->
+  <button type="button" id="earlyBootDiagBtn" class="early-boot-diag-btn" aria-label="启动诊断">启动诊断</button>
+  <style id="earlyBootDiagStyle">
+    .early-boot-diag-btn {
+      position: fixed;
+      left: max(10px, env(safe-area-inset-left, 0px));
+      bottom: max(12px, env(safe-area-inset-bottom, 0px));
+      z-index: 100000;
+      min-height: 40px;
+      padding: 8px 12px;
+      border: 1px solid #94a3b8;
+      border-radius: 999px;
+      background: #0f172a;
+      color: #f8fafc;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.2;
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.35);
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      pointer-events: auto;
+      touch-action: manipulation;
+    }
+    .early-boot-diag-btn:active { opacity: 0.88; }
+    #earlyBootDiagOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100001;
+      background: rgba(15, 23, 42, 0.55);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    #earlyBootDiagOverlay.is-open { display: flex; }
+    #earlyBootDiagPanel {
+      max-width: 560px;
+      width: 100%;
+      max-height: 85vh;
+      overflow: auto;
+      background: #fff;
+      border-radius: 12px;
+      padding: 14px 16px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+      -webkit-user-select: text;
+      user-select: text;
+    }
+    #earlyBootDiagPre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 11px;
+      line-height: 1.45;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 10px;
+      max-height: 55vh;
+      overflow: auto;
+      margin: 0 0 12px;
+      color: #0f172a;
+      -webkit-user-select: text;
+      user-select: text;
+    }
+  </style>
+  <script>
+    /* 启动诊断早期壳：不依赖 lodash/Firebase/IDB/主业务脚本 */
+    (function installEarlyBootDiag() {
+      var UNKNOWN = "未知";
+      var NOT_RUN = "未执行";
+      var state = {
+        installedAt: Date.now(),
+        cacheHint: "v20261021j",
+        currentStep: "early-diag-installing",
+        steps: [],
+        notes: [],
+        firstJsError: null,
+        unhandledRejections: [],
+        versionTap: {
+          bound: false,
+          lastTapAt: null,
+          tapCount: 0,
+          blockedByUpdateBadge: false,
+          note: "连点版本依赖主脚本；请优先用左下角「启动诊断」"
+        },
+        cloud: {
+          read: { status: NOT_RUN, count: null, at: null, detail: null },
+          parse: { status: NOT_RUN, count: null, at: null, detail: null },
+          merge: { status: NOT_RUN, count: null, at: null, detail: null },
+          render: { status: NOT_RUN, count: null, at: null, detail: null },
+          lastPullReason: null,
+          lastPullOk: null
+        },
+        business: {
+          mainScriptStarted: false,
+          storageReady: null,
+          idbTimedOut: null,
+          loadState: null,
+          firstRender: null,
+          initError: null
+        }
+      };
+
+      function pushCapped(arr, row, max) {
+        arr.push(row);
+        if (arr.length > max) arr.splice(0, arr.length - max);
+      }
+
+      function safeStr(v, n) {
+        try {
+          return String(v == null ? "" : v).slice(0, n || 200);
+        } catch (_e) {
+          return "";
+        }
+      }
+
+      function formatCount(c) {
+        if (c == null || typeof c !== "number" || !isFinite(c)) return UNKNOWN;
+        return String(c);
+      }
+
+      function markStep(name, detail) {
+        try {
+          var row = { at: Date.now(), step: safeStr(name, 80) };
+          if (detail != null) row.detail = safeStr(detail, 160);
+          state.currentStep = row.step;
+          pushCapped(state.steps, row, 40);
+        } catch (_m) {}
+      }
+
+      function note(msg, extra) {
+        try {
+          var row = { at: Date.now(), msg: safeStr(msg, 160) };
+          if (extra != null && typeof extra === "object") {
+            var keys = Object.keys(extra).slice(0, 10);
+            var safe = {};
+            for (var i = 0; i < keys.length; i++) {
+              var k = keys[i];
+              var v = extra[k];
+              if (v == null || typeof v === "number" || typeof v === "boolean") safe[k] = v;
+              else safe[k] = safeStr(v, 80);
+            }
+            row.extra = safe;
+          }
+          pushCapped(state.notes, row, 32);
+        } catch (_n) {}
+      }
+
+      function setCloudStage(stage, patch) {
+        try {
+          if (!state.cloud[stage]) return;
+          var cur = state.cloud[stage];
+          if (!patch || typeof patch !== "object") return;
+          if (patch.status != null) cur.status = safeStr(patch.status, 40);
+          if ("count" in patch) {
+            cur.count =
+              patch.count == null || typeof patch.count !== "number" || !isFinite(patch.count)
+                ? null
+                : patch.count;
+          }
+          if ("detail" in patch) cur.detail = patch.detail == null ? null : safeStr(patch.detail, 120);
+          cur.at = Date.now();
+        } catch (_c) {}
+      }
+
+      function captureError(kind, err, src, line, col) {
+        try {
+          if (state.firstJsError) return;
+          var msg = "";
+          var stack = "";
+          if (err && typeof err === "object") {
+            msg = safeStr(err.message || err, 240);
+            stack = safeStr(err.stack, 400);
+          } else {
+            msg = safeStr(err, 240);
+          }
+          state.firstJsError = {
+            kind: safeStr(kind, 40),
+            message: msg,
+            source: src != null ? safeStr(src, 200) : null,
+            line: typeof line === "number" && isFinite(line) ? line : null,
+            col: typeof col === "number" && isFinite(col) ? col : null,
+            stack: stack || null,
+            at: Date.now()
+          };
+          markStep("first-js-error", msg);
+        } catch (_e) {}
+      }
+
+      function buildText() {
+        var bizSnap = null;
+        try {
+          if (typeof window.__bootHealthSnapshot === "function") {
+            bizSnap = window.__bootHealthSnapshot();
+          }
+        } catch (_b) {
+          bizSnap = { error: "business-snapshot-failed" };
+        }
+        var cloudView = {
+          read: {
+            status: state.cloud.read.status,
+            count: formatCount(state.cloud.read.count),
+            at: state.cloud.read.at,
+            detail: state.cloud.read.detail
+          },
+          parse: {
+            status: state.cloud.parse.status,
+            count: formatCount(state.cloud.parse.count),
+            at: state.cloud.parse.at,
+            detail: state.cloud.parse.detail
+          },
+          merge: {
+            status: state.cloud.merge.status,
+            count: formatCount(state.cloud.merge.count),
+            at: state.cloud.merge.at,
+            detail: state.cloud.merge.detail
+          },
+          render: {
+            status: state.cloud.render.status,
+            count: formatCount(state.cloud.render.count),
+            at: state.cloud.render.at,
+            detail: state.cloud.render.detail
+          },
+          lastPullReason: state.cloud.lastPullReason,
+          lastPullOk: state.cloud.lastPullOk
+        };
+        var out = {
+          at: Date.now(),
+          diag: "early-boot-diag",
+          cacheHint: state.cacheHint,
+          currentStep: state.currentStep || UNKNOWN,
+          steps: state.steps.slice(-24),
+          firstJsError: state.firstJsError || "无（尚未捕获）",
+          unhandledRejections: state.unhandledRejections.length
+            ? state.unhandledRejections.slice(-6)
+            : "无（尚未捕获）",
+          versionTap: state.versionTap,
+          cloudStages: cloudView,
+          business: state.business,
+          notes: state.notes.slice(-16),
+          businessSnapshot: bizSnap,
+          privacy: "无任务正文/无密钥"
+        };
+        try {
+          return JSON.stringify(out, null, 2);
+        } catch (_j) {
+          return String(out);
+        }
+      }
+
+      function ensureOverlay() {
+        var overlay = document.getElementById("earlyBootDiagOverlay");
+        if (overlay) return overlay;
+        overlay = document.createElement("div");
+        overlay.id = "earlyBootDiagOverlay";
+        overlay.setAttribute("role", "dialog");
+        overlay.setAttribute("aria-modal", "true");
+        overlay.setAttribute("aria-label", "启动诊断");
+        var panel = document.createElement("div");
+        panel.id = "earlyBootDiagPanel";
+        var title = document.createElement("div");
+        title.textContent = "启动诊断（无任务正文）";
+        title.style.cssText = "font-weight:700;font-size:16px;margin-bottom:6px;color:#0f172a;";
+        var hint = document.createElement("div");
+        hint.id = "earlyBootDiagHint";
+        hint.textContent = "可点「复制摘要」；失败时可直接选中下方文本或截图。";
+        hint.style.cssText = "font-size:12px;color:#64748b;margin-bottom:10px;";
+        var pre = document.createElement("pre");
+        pre.id = "earlyBootDiagPre";
+        var row = document.createElement("div");
+        row.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;";
+        var copyBtn = document.createElement("button");
+        copyBtn.type = "button";
+        copyBtn.id = "earlyBootDiagCopyBtn";
+        copyBtn.textContent = "复制摘要";
+        copyBtn.style.cssText =
+          "min-height:40px;padding:8px 14px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;font-weight:600;";
+        var closeBtn = document.createElement("button");
+        closeBtn.type = "button";
+        closeBtn.textContent = "关闭";
+        closeBtn.style.cssText =
+          "min-height:40px;padding:8px 14px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-weight:600;";
+        copyBtn.addEventListener("click", function () {
+          var body = (document.getElementById("earlyBootDiagPre") || {}).textContent || "";
+          var hintEl = document.getElementById("earlyBootDiagHint");
+          function ok() {
+            copyBtn.textContent = "已复制";
+            if (hintEl) hintEl.textContent = "已复制到剪贴板。";
+            window.setTimeout(function () {
+              copyBtn.textContent = "复制摘要";
+            }, 1200);
+          }
+          function fail() {
+            if (hintEl) {
+              hintEl.textContent = "复制失败：请长按选中下方文本，或直接截图。";
+              hintEl.style.color = "#b45309";
+            }
+            try {
+              var preEl = document.getElementById("earlyBootDiagPre");
+              if (preEl && window.getSelection) {
+                var range = document.createRange();
+                range.selectNodeContents(preEl);
+                var sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+              }
+            } catch (_sel) {}
+          }
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(body).then(ok).catch(fail);
+              return;
+            }
+          } catch (_c0) {}
+          try {
+            var ta = document.createElement("textarea");
+            ta.value = body;
+            ta.setAttribute("readonly", "");
+            ta.style.cssText = "position:fixed;left:-9999px;top:0;";
+            document.body.appendChild(ta);
+            ta.select();
+            var copied = document.execCommand("copy");
+            document.body.removeChild(ta);
+            if (copied) ok();
+            else fail();
+          } catch (_c1) {
+            fail();
+          }
+        });
+        closeBtn.addEventListener("click", function () {
+          overlay.classList.remove("is-open");
+          overlay.style.display = "none";
+        });
+        overlay.addEventListener("click", function (ev) {
+          if (ev.target === overlay) {
+            overlay.classList.remove("is-open");
+            overlay.style.display = "none";
+          }
+        });
+        row.appendChild(copyBtn);
+        row.appendChild(closeBtn);
+        panel.appendChild(title);
+        panel.appendChild(hint);
+        panel.appendChild(pre);
+        panel.appendChild(row);
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
+        return overlay;
+      }
+
+      function openPanel() {
+        try {
+          markStep("diag-panel-open");
+          note("diag-panel-opened-early");
+          var overlay = ensureOverlay();
+          var pre = document.getElementById("earlyBootDiagPre");
+          if (pre) pre.textContent = buildText();
+          var hintEl = document.getElementById("earlyBootDiagHint");
+          if (hintEl) {
+            hintEl.style.color = "#64748b";
+            hintEl.textContent = "可点「复制摘要」；失败时可直接选中下方文本或截图。";
+          }
+          overlay.classList.add("is-open");
+          overlay.style.display = "flex";
+          return true;
+        } catch (err) {
+          try {
+            window.alert("启动诊断打开失败: " + (err && err.message ? err.message : String(err)));
+          } catch (_a) {}
+          return false;
+        }
+      }
+
+      function bindButton() {
+        var btn = document.getElementById("earlyBootDiagBtn");
+        if (!btn || btn.__earlyDiagBound) return;
+        btn.__earlyDiagBound = true;
+        btn.addEventListener(
+          "click",
+          function (ev) {
+            try {
+              if (ev) {
+                ev.preventDefault();
+                ev.stopPropagation();
+              }
+            } catch (_e) {}
+            openPanel();
+          },
+          true
+        );
+      }
+
+      function onError(msg, src, line, col, err) {
+        captureError("window.onerror", err || msg, src, line, col);
+      }
+      function onRejection(ev) {
+        try {
+          var reason = ev && ev.reason;
+          var row = {
+            at: Date.now(),
+            message: safeStr(
+              reason && reason.message ? reason.message : reason,
+              240
+            ),
+            stack: reason && reason.stack ? safeStr(reason.stack, 400) : null
+          };
+          pushCapped(state.unhandledRejections, row, 8);
+          if (!state.firstJsError) {
+            captureError("unhandledrejection", reason || row.message, null, null, null);
+          }
+        } catch (_r) {}
+      }
+
+      try {
+        window.addEventListener("error", function (ev) {
+          onError(
+            ev && ev.message,
+            ev && ev.filename,
+            ev && ev.lineno,
+            ev && ev.colno,
+            ev && ev.error
+          );
+        });
+        window.onerror = function (msg, src, line, col, err) {
+          onError(msg, src, line, col, err);
+          return false;
+        };
+        window.addEventListener("unhandledrejection", onRejection);
+      } catch (_bindErr) {}
+
+      var api = {
+        markStep: markStep,
+        note: note,
+        setCloudStage: setCloudStage,
+        open: openPanel,
+        getState: function () {
+          return state;
+        },
+        formatCount: formatCount,
+        noteCloudFromPullReport: function (report) {
+          try {
+            state.cloud.lastPullReason = report && report.reason != null ? safeStr(report.reason, 80) : null;
+            state.cloud.lastPullOk = report ? !!report.ok : null;
+            if (!report) {
+              setCloudStage("read", { status: UNKNOWN, count: null, detail: "no-report" });
+              setCloudStage("parse", { status: UNKNOWN, count: null, detail: "no-report" });
+              setCloudStage("merge", { status: UNKNOWN, count: null, detail: "no-report" });
+              setCloudStage("render", { status: UNKNOWN, count: null, detail: "no-report" });
+              return;
+            }
+            if (report.skipped) {
+              setCloudStage("read", {
+                status: NOT_RUN,
+                count: null,
+                detail: "skipped:" + safeStr(report.reason, 60)
+              });
+              setCloudStage("parse", { status: NOT_RUN, count: null, detail: "skipped" });
+              setCloudStage("merge", { status: NOT_RUN, count: null, detail: "skipped" });
+              setCloudStage("render", { status: NOT_RUN, count: null, detail: "skipped" });
+              return;
+            }
+            if (report.skippedAll || report.skippedFullPull) {
+              setCloudStage("read", {
+                status: "成功",
+                count: null,
+                detail: "meta-only-no-body"
+              });
+              setCloudStage("parse", { status: NOT_RUN, count: null, detail: "no-body" });
+              setCloudStage("merge", { status: NOT_RUN, count: null, detail: "no-body" });
+              setCloudStage("render", { status: NOT_RUN, count: null, detail: "no-body" });
+              return;
+            }
+            var kb = typeof report.bodyDownloadKB === "number" ? report.bodyDownloadKB : null;
+            setCloudStage("read", {
+              status: report.ok === false ? "失败" : "成功",
+              count: kb,
+              detail: kb == null ? "bodyKB未知" : "bodyKB"
+            });
+            var results = report.results && typeof report.results === "object" ? report.results : null;
+            var domainIds = results ? Object.keys(results) : [];
+            var parsed = 0;
+            var merged = 0;
+            var painted = 0;
+            var sawParse = false;
+            var sawMerge = false;
+            var sawPaint = false;
+            for (var i = 0; i < domainIds.length; i++) {
+              var r = results[domainIds[i]];
+              if (!r || typeof r !== "object") continue;
+              if (r.skippedMeta || r.skipped) continue;
+              sawParse = true;
+              if (r.ok !== false) parsed += 1;
+              if (r.unchanged) continue;
+              if (r.changed === true || (typeof r.mergedCount === "number" && r.mergedCount > 0)) {
+                sawMerge = true;
+                merged += typeof r.mergedCount === "number" ? r.mergedCount : 1;
+              } else if (r.ok && !r.empty && !r.notFound && !r.unchanged) {
+                sawMerge = true;
+                merged += 1;
+              }
+              if (r.changed === true || r.painted === true) {
+                sawPaint = true;
+                painted += 1;
+              }
+            }
+            setCloudStage("parse", {
+              status: sawParse ? (report.ok === false ? "失败" : "成功") : NOT_RUN,
+              count: sawParse ? parsed : null,
+              detail: sawParse ? "domainsParsed" : null
+            });
+            setCloudStage("merge", {
+              status: sawMerge ? "成功" : report.forceAllBodies || domainIds.length ? "未知" : NOT_RUN,
+              count: sawMerge ? merged : null,
+              detail: sawMerge ? "mergeSignals" : "无明确 merge 计数"
+            });
+            setCloudStage("render", {
+              status: sawPaint ? "成功" : "未知",
+              count: sawPaint ? painted : null,
+              detail: sawPaint ? "domainPaintSignals" : "未记录到 paint 信号"
+            });
+          } catch (_nr) {}
+        },
+        setBusinessFlag: function (key, val) {
+          try {
+            if (key && Object.prototype.hasOwnProperty.call(state.business, key)) {
+              state.business[key] = val;
+            }
+          } catch (_bf) {}
+        },
+        setVersionTapMeta: function (patch) {
+          try {
+            if (!patch || typeof patch !== "object") return;
+            for (var k in patch) {
+              if (Object.prototype.hasOwnProperty.call(patch, k)) state.versionTap[k] = patch[k];
+            }
+          } catch (_vt) {}
+        }
+      };
+
+      try {
+        window.__EARLY_BOOT_DIAG = api;
+        window.__showEarlyBootDiag = openPanel;
+        window.__showBootHealthPanel = openPanel;
+      } catch (_w) {}
+
+      function bootUi() {
+        bindButton();
+        markStep("early-diag-ready");
+        note("early-boot-diag-ready");
+      }
+      if (document.body) bootUi();
+      else document.addEventListener("DOMContentLoaded", bootUi);
+    })();
+  </script>
+
   <div id="loginGate" class="login-gate">
     <div class="login-card">
       <h2 id="loginTitle" class="login-title">登录</h2>
@@ -87903,7 +88457,7 @@
               >
                 隐藏
               </button>
-              <div class="module-header-version-line" aria-live="polite">版本 v20261021i</div>
+              <div class="module-header-version-line" aria-live="polite">版本 v20261021j</div>
             </div>
           </div>
           <button id="toggleDynamicModuleBtn" class="toggle-btn toggle-chevron" type="button" aria-label="切换此区块" aria-expanded="false"></button>
@@ -89972,7 +90526,7 @@
             <div class="module-header-right-row">
               <button type="button" class="module-header-cloud-sync cloud-sync-badge" aria-live="polite">未同步</button>
             </div>
-            <div class="module-header-version-line" aria-live="polite">版本 v20261021i</div>
+            <div class="module-header-version-line" aria-live="polite">版本 v20261021j</div>
           </div>
           <button id="toggleHabitRoutineModuleBtn" class="toggle-btn toggle-chevron" type="button" aria-label="切换此区块" aria-expanded="false"></button>
         </div>
@@ -94728,7 +95282,7 @@
               <span id="forgeHeaderDate" class="forge-header-date" aria-live="polite"></span>
               <button type="button" class="module-header-cloud-sync cloud-sync-badge" aria-live="polite">未同步</button>
             </div>
-            <div class="module-header-version-line" aria-live="polite">版本 v20261021i</div>
+            <div class="module-header-version-line" aria-live="polite">版本 v20261021j</div>
           </div>
           <button id="toggleForgeModuleBtn" class="toggle-btn toggle-chevron" type="button" aria-label="切换此区块" aria-expanded="false"></button>
         </div>
@@ -100983,7 +101537,7 @@
             <div class="module-header-right-row">
               <button type="button" class="module-header-cloud-sync cloud-sync-badge" aria-live="polite">未同步</button>
             </div>
-            <div class="module-header-version-line" aria-live="polite">版本 v20261021i</div>
+            <div class="module-header-version-line" aria-live="polite">版本 v20261021j</div>
           </div>
           <button id="toggleMyGoalsModuleBtn" class="toggle-btn toggle-chevron" type="button" aria-label="切换此区块" aria-expanded="false"></button>
         </div>
@@ -103232,7 +103786,7 @@
             <div class="module-header-right-row">
               <button type="button" class="module-header-cloud-sync cloud-sync-badge" aria-live="polite">未同步</button>
             </div>
-            <div class="module-header-version-line" aria-live="polite">版本 v20261021i</div>
+            <div class="module-header-version-line" aria-live="polite">版本 v20261021j</div>
           </div>
           <button id="togglePurposeValuesIdentityModuleBtn" class="toggle-btn toggle-chevron" type="button" aria-label="切换此区块" aria-expanded="false"></button>
         </div>
@@ -106522,6 +107076,17 @@
         bootHealthNotes.push(row);
         if (bootHealthNotes.length > 24) bootHealthNotes.splice(0, bootHealthNotes.length - 24);
       } catch (_n) {}
+      /* 同步写入早期诊断（即使后续业务挂掉，面板仍能看到这些笔记） */
+      try {
+        if (window.__EARLY_BOOT_DIAG) {
+          if (typeof window.__EARLY_BOOT_DIAG.note === "function") {
+            window.__EARLY_BOOT_DIAG.note(msg, extra);
+          }
+          if (typeof window.__EARLY_BOOT_DIAG.markStep === "function") {
+            window.__EARLY_BOOT_DIAG.markStep(String(msg || "note"), extra && extra.message);
+          }
+        }
+      } catch (_earlyNote) {}
     }
 
     function appStateIdbConnectionLive(db) {
@@ -106858,10 +107423,16 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261021i";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261021j";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
+    try {
+      if (window.__EARLY_BOOT_DIAG) {
+        window.__EARLY_BOOT_DIAG.setBusinessFlag("mainScriptStarted", true);
+        window.__EARLY_BOOT_DIAG.markStep("main-script-started");
+      }
+    } catch (_mainStart) {}
     /**
      * 版本号：在任何后续可能抛错的顶层代码之前同步写入 DOM。
      * 不依赖 setAppVersionText / initAppAfterStorageReady（二者更靠后，CDN/lodash/IDB 出错时到不了）。
@@ -119313,11 +119884,34 @@
           report.todaySurfaceEmptyBefore = !!todayEmptyBefore;
           report.todaySurfaceEmptyAfter = !!todayEmptyAfter;
         }
+        try {
+          if (
+            window.__EARLY_BOOT_DIAG &&
+            typeof window.__EARLY_BOOT_DIAG.noteCloudFromPullReport === "function"
+          ) {
+            window.__EARLY_BOOT_DIAG.noteCloudFromPullReport(report || null);
+          }
+          if (window.__EARLY_BOOT_DIAG && typeof window.__EARLY_BOOT_DIAG.markStep === "function") {
+            window.__EARLY_BOOT_DIAG.markStep(
+              "cloud-pull-" + pullReason,
+              report && report.ok ? "ok" : report && report.skipped ? "skipped" : "fail"
+            );
+          }
+        } catch (_cloudDiag) {}
         return report;
       } catch (err) {
         if (isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
           paintAliyunSyncPrimaryBadgeError(err && err.message ? err.message : String(err));
         }
+        try {
+          if (window.__EARLY_BOOT_DIAG && typeof window.__EARLY_BOOT_DIAG.setCloudStage === "function") {
+            window.__EARLY_BOOT_DIAG.setCloudStage("read", {
+              status: "失败",
+              count: null,
+              detail: err && err.message ? String(err.message).slice(0, 120) : "pull-throw"
+            });
+          }
+        } catch (_cloudErrDiag) {}
         throw err;
       } finally {
         endAliyunSyncPrimaryPullInFlight(pullGen);
@@ -119454,131 +120048,45 @@
     let bootHealthTapCount = 0;
     let bootHealthTapTimer = null;
 
-    /** 平板无 DevTools：版本行连点 5 次打开启动健康面板（只读摘要，可复制） */
+    /**
+     * 平板无 DevTools：统一走早期独立诊断壳（左下角「启动诊断」/ 版本连点）。
+     * 主业务失败时早期壳仍可用；此处仅补充业务快照与房间重拉按钮。
+     */
     function showBootHealthPanel() {
-      let snap = null;
       try {
-        snap =
-          typeof window.__bootHealthSnapshot === "function"
-            ? window.__bootHealthSnapshot()
-            : null;
-      } catch (_s) {
-        snap = { error: "snapshot-failed" };
-      }
-      let text = "";
-      try {
-        text = JSON.stringify(snap, null, 2);
-      } catch (_j) {
-        text = String(snap);
-      }
-      let overlay = document.getElementById("bootHealthPanelOverlay");
-      if (!overlay) {
-        overlay = document.createElement("div");
-        overlay.id = "bootHealthPanelOverlay";
-        overlay.setAttribute("role", "dialog");
-        overlay.setAttribute("aria-modal", "true");
-        overlay.setAttribute("aria-label", "启动诊断");
-        overlay.style.cssText =
-          "position:fixed;inset:0;z-index:99999;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px;";
-        const panel = document.createElement("div");
-        panel.style.cssText =
-          "max-width:560px;width:100%;max-height:80vh;overflow:auto;background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.25);";
-        const title = document.createElement("div");
-        title.textContent = "启动诊断（无任务正文）";
-        title.style.cssText = "font-weight:700;font-size:16px;margin-bottom:8px;color:#0f172a;";
-        const hint = document.createElement("div");
-        hint.textContent = "连点版本号 5 次打开。可复制下列摘要发给排查。";
-        hint.style.cssText = "font-size:12px;color:#64748b;margin-bottom:10px;";
-        const pre = document.createElement("pre");
-        pre.id = "bootHealthPanelPre";
-        pre.style.cssText =
-          "white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.45;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;max-height:50vh;overflow:auto;margin:0 0 12px;";
-        const row = document.createElement("div");
-        row.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;";
-        const copyBtn = document.createElement("button");
-        copyBtn.type = "button";
-        copyBtn.textContent = "复制摘要";
-        copyBtn.className = "btn";
-        copyBtn.style.cssText = "min-height:40px;padding:8px 14px;";
-        const roomBtn = document.createElement("button");
-        roomBtn.type = "button";
-        roomBtn.id = "bootHealthResetRoomBtn";
-        roomBtn.textContent = "改用 default-room 并重拉";
-        roomBtn.className = "btn";
-        roomBtn.style.cssText = "min-height:40px;padding:8px 14px;";
-        roomBtn.title = "平板房间键常与手机不一致时用；不删本机业务数据";
-        const closeBtn = document.createElement("button");
-        closeBtn.type = "button";
-        closeBtn.textContent = "关闭";
-        closeBtn.className = "btn-primary";
-        closeBtn.style.cssText = "min-height:40px;padding:8px 14px;";
-        roomBtn.addEventListener("click", function () {
+        if (window.__EARLY_BOOT_DIAG && typeof window.__EARLY_BOOT_DIAG.open === "function") {
+          window.__EARLY_BOOT_DIAG.open();
+          noteBootHealth("diag-panel-opened");
+          /* 业务可用时，在早期面板下方追加「改房间」快捷（不替代早期壳） */
           try {
-            if (typeof aliyunSyncPrimaryResetRoomToDefaultAndRepull === "function") {
-              aliyunSyncPrimaryResetRoomToDefaultAndRepull();
-              roomBtn.textContent = "已触发重拉…";
+            const panel = document.getElementById("earlyBootDiagPanel");
+            if (panel && !document.getElementById("bootHealthResetRoomBtn")) {
+              const roomBtn = document.createElement("button");
+              roomBtn.type = "button";
+              roomBtn.id = "bootHealthResetRoomBtn";
+              roomBtn.textContent = "改用 default-room 并重拉";
+              roomBtn.style.cssText =
+                "min-height:40px;padding:8px 14px;margin-right:8px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;font-weight:600;";
+              roomBtn.title = "平板房间键常与手机不一致时用；不删本机业务数据";
+              roomBtn.addEventListener("click", function () {
+                try {
+                  if (typeof aliyunSyncPrimaryResetRoomToDefaultAndRepull === "function") {
+                    aliyunSyncPrimaryResetRoomToDefaultAndRepull();
+                    roomBtn.textContent = "已触发重拉…";
+                  }
+                } catch (_rb) {}
+              });
+              const row = panel.lastElementChild;
+              if (row) row.insertBefore(roomBtn, row.firstChild);
             }
-          } catch (_rb) {}
-        });
-        copyBtn.addEventListener("click", function () {
-          const body = (document.getElementById("bootHealthPanelPre") || {}).textContent || "";
-          function ok() {
-            try {
-              copyBtn.textContent = "已复制";
-              window.setTimeout(function () {
-                copyBtn.textContent = "复制摘要";
-              }, 1200);
-            } catch (_ok) {}
-          }
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(body).then(ok).catch(function () {
-              try {
-                const ta = document.createElement("textarea");
-                ta.value = body;
-                document.body.appendChild(ta);
-                ta.select();
-                document.execCommand("copy");
-                document.body.removeChild(ta);
-                ok();
-              } catch (_c) {}
-            });
-          } else {
-            try {
-              const ta = document.createElement("textarea");
-              ta.value = body;
-              document.body.appendChild(ta);
-              ta.select();
-              document.execCommand("copy");
-              document.body.removeChild(ta);
-              ok();
-            } catch (_c2) {}
-          }
-        });
-        closeBtn.addEventListener("click", function () {
-          overlay.classList.add("hidden");
-          overlay.style.display = "none";
-        });
-        overlay.addEventListener("click", function (ev) {
-          if (ev.target === overlay) {
-            overlay.classList.add("hidden");
-            overlay.style.display = "none";
-          }
-        });
-        row.appendChild(roomBtn);
-        row.appendChild(copyBtn);
-        row.appendChild(closeBtn);
-        panel.appendChild(title);
-        panel.appendChild(hint);
-        panel.appendChild(pre);
-        panel.appendChild(row);
-        overlay.appendChild(panel);
-        document.body.appendChild(overlay);
-      }
-      const preEl = document.getElementById("bootHealthPanelPre");
-      if (preEl) preEl.textContent = text;
-      overlay.classList.remove("hidden");
-      overlay.style.display = "flex";
-      noteBootHealth("diag-panel-opened");
+          } catch (_roomUi) {}
+          return;
+        }
+      } catch (_earlyOpen) {}
+      noteBootHealth("diag-panel-fallback-missing-early");
+      try {
+        window.alert("早期诊断壳未加载。请硬刷新后再试「启动诊断」。");
+      } catch (_a) {}
     }
 
     /**
@@ -119630,6 +120138,14 @@
     function bindBootHealthVersionTapOnce() {
       if (bootHealthPanelBound) return;
       bootHealthPanelBound = true;
+      try {
+        if (window.__EARLY_BOOT_DIAG && typeof window.__EARLY_BOOT_DIAG.setVersionTapMeta === "function") {
+          window.__EARLY_BOOT_DIAG.setVersionTapMeta({
+            bound: true,
+            note: "版本连点已绑定；仍建议用左下角「启动诊断」单击打开"
+          });
+        }
+      } catch (_meta) {}
       document.addEventListener(
         "click",
         function (ev) {
@@ -119642,14 +120158,39 @@
                 : null;
           if (!el) return;
           if (el.classList && el.classList.contains("app-version-badge--update-available")) {
+            try {
+              if (
+                window.__EARLY_BOOT_DIAG &&
+                typeof window.__EARLY_BOOT_DIAG.setVersionTapMeta === "function"
+              ) {
+                window.__EARLY_BOOT_DIAG.setVersionTapMeta({
+                  blockedByUpdateBadge: true,
+                  lastTapAt: Date.now()
+                });
+              }
+            } catch (_blk) {}
+            /* 「发现新版本」点击留给刷新逻辑；诊断请用左下角按钮 */
             return;
           }
           bootHealthTapCount += 1;
+          try {
+            if (
+              window.__EARLY_BOOT_DIAG &&
+              typeof window.__EARLY_BOOT_DIAG.setVersionTapMeta === "function"
+            ) {
+              window.__EARLY_BOOT_DIAG.setVersionTapMeta({
+                lastTapAt: Date.now(),
+                tapCount: bootHealthTapCount,
+                blockedByUpdateBadge: false
+              });
+            }
+          } catch (_tapMeta) {}
           if (bootHealthTapTimer) clearTimeout(bootHealthTapTimer);
+          /* 平板点按较慢：放宽到 2.5s；主入口仍是「启动诊断」按钮 */
           bootHealthTapTimer = window.setTimeout(function () {
             bootHealthTapCount = 0;
             bootHealthTapTimer = null;
-          }, 1400);
+          }, 2500);
           if (bootHealthTapCount >= 5) {
             bootHealthTapCount = 0;
             if (bootHealthTapTimer) {
@@ -201613,11 +202154,30 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } catch (_earlyDiag) {}
       try {
         await ensureStateStorageReady();
+        try {
+          if (window.__EARLY_BOOT_DIAG) {
+            window.__EARLY_BOOT_DIAG.setBusinessFlag("storageReady", !!stateStorageReady);
+            window.__EARLY_BOOT_DIAG.setBusinessFlag(
+              "idbTimedOut",
+              !!stateStorageIdbOpenTimedOut
+            );
+            window.__EARLY_BOOT_DIAG.markStep(
+              stateStorageIdbOpenTimedOut ? "storage-ready-idb-timeout" : "storage-ready"
+            );
+          }
+        } catch (_stFlag) {}
       } catch (storageInitErr) {
         console.warn("存储初始化失败，尝试从 localStorage 加载:", storageInitErr);
         noteBootHealth("storage-init-outer-catch");
         stateStorageUseIdb = false;
         stateStorageReady = true;
+        try {
+          if (window.__EARLY_BOOT_DIAG) {
+            window.__EARLY_BOOT_DIAG.setBusinessFlag("storageReady", true);
+            window.__EARLY_BOOT_DIAG.setBusinessFlag("idbTimedOut", true);
+            window.__EARLY_BOOT_DIAG.markStep("storage-init-outer-catch");
+          }
+        } catch (_stFailFlag) {}
         try {
           if (!_stateJsonCache) {
             const emerg = localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY);
@@ -201632,6 +202192,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         done: Array.isArray(state.done) ? state.done.length : -1,
         closed: Array.isArray(state.closedList) ? state.closedList.length : -1
       });
+      try {
+        if (window.__EARLY_BOOT_DIAG) {
+          window.__EARLY_BOOT_DIAG.setBusinessFlag("loadState", "ok");
+        }
+      } catch (_lsFlag) {}
       /* 底栏 init 可能在 loadState 前用空 state 预渲染并清掉 dirty；加载后必须全脏，否则 Stop Doing 等会一直「暂无条目」 */
       markAllUiPaintSlicesDirty();
       if (!Array.isArray(state.done)) state.done = [];
@@ -201898,6 +202463,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           name: bootErr && bootErr.name,
           message: bootErr && bootErr.message
         });
+        try {
+          if (window.__EARLY_BOOT_DIAG) {
+            window.__EARLY_BOOT_DIAG.setBusinessFlag(
+              "initError",
+              String((bootErr && bootErr.message) || bootErr || "boot-err").slice(0, 200)
+            );
+            window.__EARLY_BOOT_DIAG.markStep("boot-err", bootErr && bootErr.message);
+          }
+        } catch (_bootFlag) {}
         if (!Array.isArray(state.done)) state.done = [];
         try {
           if (typeof setAppVersionText === "function") {
@@ -201910,12 +202484,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       try {
         render();
         noteBootHealth("first-render-ok");
+        try {
+          if (window.__EARLY_BOOT_DIAG) {
+            window.__EARLY_BOOT_DIAG.setBusinessFlag("firstRender", "ok");
+            window.__EARLY_BOOT_DIAG.markStep("first-render-ok");
+          }
+        } catch (_frOk) {}
       } catch (firstRenderErr) {
         console.error("首次 render 失败:", firstRenderErr);
         noteBootHealth("first-render-err", {
           name: firstRenderErr && firstRenderErr.name,
           message: firstRenderErr && firstRenderErr.message
         });
+        try {
+          if (window.__EARLY_BOOT_DIAG) {
+            window.__EARLY_BOOT_DIAG.setBusinessFlag(
+              "firstRender",
+              "err:" + String((firstRenderErr && firstRenderErr.message) || firstRenderErr).slice(0, 120)
+            );
+            window.__EARLY_BOOT_DIAG.markStep("first-render-err", firstRenderErr && firstRenderErr.message);
+          }
+        } catch (_frErr) {}
       }
       /* 首屏后：若 Forge 终身累计仍空，从紧急备份并回 meta（条数不变也会写回） */
       try {
