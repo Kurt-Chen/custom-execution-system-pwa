@@ -41,9 +41,9 @@ assert.ok(
   "no double observe"
 );
 
-assert.ok(html.includes("exec-system-pwa-v20261021l"), "cache bump html");
-assert.ok(sw.includes("exec-system-pwa-v20261021l"), "cache bump sw");
-assert.ok(html.includes("版本 v20261021l</div>"), "static version k");
+assert.ok(html.includes("exec-system-pwa-v20261021m"), "cache bump html");
+assert.ok(sw.includes("exec-system-pwa-v20261021m"), "cache bump sw");
+assert.ok(html.includes("版本 v20261021m</div>"), "static version k");
 
 /* 模拟 TDZ：let 在后、访问在前会抛；初始化后可安全访问 */
 function simulateObserverOrder(accessBeforeInit) {
