@@ -36,9 +36,9 @@ mustInclude('return UNKNOWN', "unknown count path");
 mustInclude("可直接选中下方文本或截图", "copy-fail fallback hint");
 mustInclude("user-select: text", "selectable diag text");
 mustInclude("z-index: 100001", "diag overlay above UI");
-mustInclude("exec-system-pwa-v20261021l", "cache bump html");
-assert.ok(sw.includes("exec-system-pwa-v20261021l"), "cache bump sw");
-mustInclude("版本 v20261021l</div>", "static version j");
+mustInclude("exec-system-pwa-v20261021m", "cache bump html");
+assert.ok(sw.includes("exec-system-pwa-v20261021m"), "cache bump sw");
+mustInclude("版本 v20261021m</div>", "static version j");
 mustInclude("diag-panel-fallback-missing-early", "fallback if early missing");
 mustInclude("版本连点已绑定", "version tap meta when bound");
 

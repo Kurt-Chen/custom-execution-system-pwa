@@ -40,8 +40,8 @@ mustInclude("if (local && lTs > rTs) continue", "Done LWW: skip older remote");
 mustInclude("if (remTs < locTs) return false", "Forge settings LWW by settingsUpdatedAt");
 mustInclude("function mergeNetWorthWanForSync", "netWorth LWW helper");
 mustInclude("if (ra > la) return { netWorthWan: rv, netWorthWanUpdatedAt: ra }", "netWorth prefers newer remote only");
-mustInclude("exec-system-pwa-v20261021l", "cache bump in html");
-assert.ok(sw.includes("exec-system-pwa-v20261021l"), "cache bump in sw");
+mustInclude("exec-system-pwa-v20261021m", "cache bump in html");
+assert.ok(sw.includes("exec-system-pwa-v20261021m"), "cache bump in sw");
 
 /* —— 纯逻辑：请求代次（旧 finally 不误释新锁）—— */
 function makePullLock() {
