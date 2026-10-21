@@ -87694,7 +87694,7 @@
       var NOT_RUN = "未执行";
       var state = {
         installedAt: Date.now(),
-        cacheHint: "v20261021j",
+        cacheHint: "v20261021k",
         currentStep: "early-diag-installing",
         steps: [],
         notes: [],
@@ -88457,7 +88457,7 @@
               >
                 隐藏
               </button>
-              <div class="module-header-version-line" aria-live="polite">版本 v20261021j</div>
+              <div class="module-header-version-line" aria-live="polite">版本 v20261021k</div>
             </div>
           </div>
           <button id="toggleDynamicModuleBtn" class="toggle-btn toggle-chevron" type="button" aria-label="切换此区块" aria-expanded="false"></button>
@@ -90526,7 +90526,7 @@
             <div class="module-header-right-row">
               <button type="button" class="module-header-cloud-sync cloud-sync-badge" aria-live="polite">未同步</button>
             </div>
-            <div class="module-header-version-line" aria-live="polite">版本 v20261021j</div>
+            <div class="module-header-version-line" aria-live="polite">版本 v20261021k</div>
           </div>
           <button id="toggleHabitRoutineModuleBtn" class="toggle-btn toggle-chevron" type="button" aria-label="切换此区块" aria-expanded="false"></button>
         </div>
@@ -95282,7 +95282,7 @@
               <span id="forgeHeaderDate" class="forge-header-date" aria-live="polite"></span>
               <button type="button" class="module-header-cloud-sync cloud-sync-badge" aria-live="polite">未同步</button>
             </div>
-            <div class="module-header-version-line" aria-live="polite">版本 v20261021j</div>
+            <div class="module-header-version-line" aria-live="polite">版本 v20261021k</div>
           </div>
           <button id="toggleForgeModuleBtn" class="toggle-btn toggle-chevron" type="button" aria-label="切换此区块" aria-expanded="false"></button>
         </div>
@@ -101537,7 +101537,7 @@
             <div class="module-header-right-row">
               <button type="button" class="module-header-cloud-sync cloud-sync-badge" aria-live="polite">未同步</button>
             </div>
-            <div class="module-header-version-line" aria-live="polite">版本 v20261021j</div>
+            <div class="module-header-version-line" aria-live="polite">版本 v20261021k</div>
           </div>
           <button id="toggleMyGoalsModuleBtn" class="toggle-btn toggle-chevron" type="button" aria-label="切换此区块" aria-expanded="false"></button>
         </div>
@@ -103786,7 +103786,7 @@
             <div class="module-header-right-row">
               <button type="button" class="module-header-cloud-sync cloud-sync-badge" aria-live="polite">未同步</button>
             </div>
-            <div class="module-header-version-line" aria-live="polite">版本 v20261021j</div>
+            <div class="module-header-version-line" aria-live="polite">版本 v20261021k</div>
           </div>
           <button id="togglePurposeValuesIdentityModuleBtn" class="toggle-btn toggle-chevron" type="button" aria-label="切换此区块" aria-expanded="false"></button>
         </div>
@@ -107423,7 +107423,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261021j";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261021k";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -108144,6 +108144,11 @@
     ]);
 
     let todayPlanPanelExpanded = false;
+    /**
+     * 金钱公式条 ResizeObserver：必须在平板横屏 sync IIFE / setTodayPlanPanelExpanded
+     * 首次调用之前完成初始化，否则 TDZ（Cannot access before initialization）会中断整段主脚本。
+     */
+    let todayPlanMoneyBarResizeObserver = null;
     /**
      * 仅内存：其他任务「Attention is Fate」说明浮窗开合。
      * 不落盘、不进云同步；打开/关闭不走 saveState / render。
@@ -119309,6 +119314,32 @@
             armAliyunSyncPrimaryBadgeSyncingWatchdog();
             return;
           }
+          /*
+           * 业务启动未完成（首拉未 settle）时禁止刷绿「已同步」。
+           * 典型：主脚本中途 TDZ/异常中断 → initial paint 已 arm watchdog，但 boot pull
+           * 从未跑完；超时后 stillPull=false 会误写成 synced（诊断见 machineStatus=synced
+           * 且云端 read/parse/merge/render 全未执行）。
+           */
+          const bootIncomplete =
+            typeof isAliyunSyncPrimaryUploadGateOpen === "function"
+              ? !isAliyunSyncPrimaryUploadGateOpen()
+              : !aliyunSyncPrimaryInitialPullSettled;
+          if (bootIncomplete) {
+            try {
+              noteBootHealth("badge-watchdog-skip-synced-boot-incomplete", {
+                livedMs: lived,
+                bootPullStarted: !!aliyunSyncPrimaryBootPullStarted,
+                initialSettled: !!aliyunSyncPrimaryInitialPullSettled
+              });
+              console.warn(
+                "[aliyun-sync-primary] badge syncing watchdog skip synced: boot incomplete"
+              );
+            } catch (_bootInc) {}
+            clearAliyunSyncPrimaryBadgeSyncingWatchdog();
+            /* 保持「同步中…」，不 markCloudSyncSuccess、不改 connected */
+            setCloudSyncStatus("同步中…", "status-syncing");
+            return;
+          }
           try {
             console.warn("[aliyun-sync-primary] badge syncing watchdog settle", {
               stillPull: stillPull,
@@ -119336,7 +119367,19 @@
        * 「已同步」≠ 某次 HTTP 200：本地各域仍有待 flush 队列时只表示「刚才那次请求成功」，
        * 不能宣称所有本地改动已上传；保持「同步中…」直到队列清空。
        * P1：Done 正文已 POST 但 rooms domains meta bump 未成功时也不刷绿，避免对端漏拉。
+       * 首拉未 settle：禁止刷绿（与 watchdog 同源，避免业务未启动完误报成功）。
        */
+      if (
+        typeof isAliyunSyncPrimaryUploadGateOpen === "function"
+          ? !isAliyunSyncPrimaryUploadGateOpen()
+          : !aliyunSyncPrimaryInitialPullSettled
+      ) {
+        try {
+          noteBootHealth("badge-ok-blocked-boot-incomplete");
+        } catch (_blk) {}
+        paintAliyunSyncPrimaryBadgeSyncing();
+        return;
+      }
       if (typeof aliyunSyncPrimaryAnyDomainFlushBusy === "function" && aliyunSyncPrimaryAnyDomainFlushBusy()) {
         paintAliyunSyncPrimaryBadgeSyncing();
         return;
@@ -188154,60 +188197,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
-    (function initTodayPlanTabletLandscapeSync() {
-      let mql = null;
-      let rafId = 0;
-      try {
-        mql = window.matchMedia(TODAY_PLAN_TABLET_LANDSCAPE_MQ);
-      } catch (_mqInitErr) {
-        mql = null;
-      }
-      if (!mql) return;
-      const onChange = function () {
-        /* 旋转时合并到下一帧，减轻横竖屏切换卡顿 */
-        if (rafId) {
-          try {
-            cancelAnimationFrame(rafId);
-          } catch (_cafErr) {}
-        }
-        rafId = requestAnimationFrame(function () {
-          rafId = 0;
-          syncTodayPlanPanelForTabletLandscape();
-        });
-      };
-      if (typeof mql.addEventListener === "function") {
-        mql.addEventListener("change", onChange);
-      } else if (typeof mql.addListener === "function") {
-        mql.addListener(onChange);
-      }
-      syncTodayPlanPanelForTabletLandscape();
-    })();
-
-    window.addEventListener("resize", function () {
-      /* 横竖屏切换时同步遮罩（竖屏悬浮 ↔ 横屏侧栏） */
-      syncTodayPlanPanelBackdrop();
-      if (!todayPlanPanelExpanded) return;
-      syncTodayPlanPanelDockBottom();
-    });
-    (function initTodayPlanMobileFloatBackdropSync() {
-      let mql = null;
-      try {
-        mql = window.matchMedia(TODAY_PLAN_MOBILE_FLOAT_MQ);
-      } catch (_mqInitErr) {
-        mql = null;
-      }
-      if (!mql) return;
-      const onChange = function () {
-        syncTodayPlanPanelBackdrop();
-      };
-      if (typeof mql.addEventListener === "function") {
-        mql.addEventListener("change", onChange);
-      } else if (typeof mql.addListener === "function") {
-        mql.addListener(onChange);
-      }
-      syncTodayPlanPanelBackdrop();
-    })();
-    syncTodayPlanPanelDockBottom();
+    /* 平板横屏 sync / 竖屏遮罩 MQ：延后到 bindTodayPlanMoneyFormulaBarResize 之后再挂，见 initTodayPlanLayoutMqAfterDeps */
 
     function syncWeeklyPlanTodayPlanButton(btn, joined) {
       if (!btn) return;
@@ -189581,9 +189571,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
     }
 
-    let todayPlanMoneyBarResizeObserver = null;
     function bindTodayPlanMoneyFormulaBarResize() {
       const bar = todayPlanPanelMoneyBar || document.getElementById("todayPlanPanelMoneyBar");
+      /* 已绑定则跳过，避免横竖屏多次 expand 重复 observe */
       if (!bar || todayPlanMoneyBarResizeObserver || typeof ResizeObserver !== "function") {
         return;
       }
@@ -189592,6 +189582,64 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
       todayPlanMoneyBarResizeObserver.observe(bar);
     }
+
+    /**
+     * 平板横屏默认展开 / 竖屏遮罩 / resize：须在金钱条 observer、paint 依赖声明完成后再首次执行。
+     * 旧位置在 bind 之前同步跑 syncTodayPlanPanelForTabletLandscape → TDZ 中断主脚本（云拉取/版本诊断绑定全停）。
+     */
+    (function initTodayPlanLayoutMqAfterDeps() {
+      let landscapeRafId = 0;
+      let landscapeMql = null;
+      try {
+        landscapeMql = window.matchMedia(TODAY_PLAN_TABLET_LANDSCAPE_MQ);
+      } catch (_mqInitErr) {
+        landscapeMql = null;
+      }
+      if (landscapeMql) {
+        const onLandscapeChange = function () {
+          if (landscapeRafId) {
+            try {
+              cancelAnimationFrame(landscapeRafId);
+            } catch (_cafErr) {}
+          }
+          landscapeRafId = requestAnimationFrame(function () {
+            landscapeRafId = 0;
+            syncTodayPlanPanelForTabletLandscape();
+          });
+        };
+        if (typeof landscapeMql.addEventListener === "function") {
+          landscapeMql.addEventListener("change", onLandscapeChange);
+        } else if (typeof landscapeMql.addListener === "function") {
+          landscapeMql.addListener(onLandscapeChange);
+        }
+        syncTodayPlanPanelForTabletLandscape();
+      }
+
+      window.addEventListener("resize", function () {
+        syncTodayPlanPanelBackdrop();
+        if (!todayPlanPanelExpanded) return;
+        syncTodayPlanPanelDockBottom();
+      });
+
+      let floatMql = null;
+      try {
+        floatMql = window.matchMedia(TODAY_PLAN_MOBILE_FLOAT_MQ);
+      } catch (_mqFloatErr) {
+        floatMql = null;
+      }
+      if (floatMql) {
+        const onFloatChange = function () {
+          syncTodayPlanPanelBackdrop();
+        };
+        if (typeof floatMql.addEventListener === "function") {
+          floatMql.addEventListener("change", onFloatChange);
+        } else if (typeof floatMql.addListener === "function") {
+          floatMql.addListener(onFloatChange);
+        }
+        syncTodayPlanPanelBackdrop();
+      }
+      syncTodayPlanPanelDockBottom();
+    })();
 
     /**
      * 只写今日计划可变区：进度、封闭清单 mount、其他任务 head/list。

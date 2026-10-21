@@ -38,9 +38,9 @@ mustInclude('return UNKNOWN', "unknown count path");
 mustInclude("可直接选中下方文本或截图", "copy-fail fallback hint");
 mustInclude("user-select: text", "selectable diag text");
 mustInclude("z-index: 100000", "button above login gate");
-mustInclude("exec-system-pwa-v20261021j", "cache bump html");
-assert.ok(sw.includes("exec-system-pwa-v20261021j"), "cache bump sw");
-mustInclude("版本 v20261021j</div>", "static version j");
+mustInclude("exec-system-pwa-v20261021k", "cache bump html");
+assert.ok(sw.includes("exec-system-pwa-v20261021k"), "cache bump sw");
+mustInclude("版本 v20261021k</div>", "static version j");
 mustInclude("diag-panel-fallback-missing-early", "fallback if early missing");
 mustInclude("版本连点已绑定", "version tap meta when bound");
 
