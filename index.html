@@ -15545,6 +15545,24 @@
       color: #0f172a;
     }
 
+    /* 今天死磕 / 其他任务：父 › 子 单行层级；› 略浅灰，不另加胶囊 */
+    .today-plan-panel__name-parent,
+    .today-plan-panel__name-child {
+      font-weight: inherit;
+      color: inherit;
+    }
+
+    .today-plan-panel__name-sep {
+      color: #94a3b8;
+      font-weight: 400;
+    }
+
+    .today-plan-panel__item.is-done .today-plan-panel__name-sep,
+    .today-plan-panel__section--closed .today-plan-panel__item.is-done .today-plan-panel__name-sep,
+    .today-plan-panel__section--other .today-plan-panel__item.is-done .today-plan-panel__name-sep {
+      color: #94a3b8;
+    }
+
     .today-plan-panel__item-chevron {
       flex: 0 0 auto;
       color: #cbd5e1;
@@ -106677,7 +106695,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261021a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261021b";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -155929,6 +155947,7 @@
           if (t.closest(".manual-item-edit-input")) return;
           if (t.closest(".manual-item-actions-wrap.is-expanded")) return;
           if (t.closest(".btn-save")) return;
+          if (typeof isLaneTaskFloatingMenuTarget === "function" && isLaneTaskFloatingMenuTarget(t)) return;
           taskTitleIxClear("leave-panel");
           if (typeof taskTitleIxUnlockAndFlush === "function") {
             taskTitleIxUnlockAndFlush("leave-panel");
@@ -156635,12 +156654,57 @@
     }
 
 
+    /**
+     * 任务「··· / 归入 / 今日其他」菜单挂在 body 上。
+     * 点菜单时若先收起操作条，行高一变会触发 scroll，scroll 监听会在 click 之前把菜单关掉，删除等于没点到。
+     */
+    let laneTaskFloatingMenuPointerHeld = false;
+
+    function isLaneTaskFloatingMenuTarget(node) {
+      if (!node || typeof node.closest !== "function") return false;
+      return !!(
+        node.closest(".weekly-plan-task-ops-menu-panel") ||
+        node.closest(".weekly-plan-assign-menu-panel") ||
+        node.closest(".today-plan-other-ops-menu-panel")
+      );
+    }
+
+    function bindLaneTaskFloatingMenuPointerHold() {
+      if (window.__laneTaskFloatingMenuPointerHoldBound) return;
+      window.__laneTaskFloatingMenuPointerHoldBound = true;
+      document.addEventListener(
+        "pointerdown",
+        function (ev) {
+          if (isLaneTaskFloatingMenuTarget(ev.target)) laneTaskFloatingMenuPointerHeld = true;
+        },
+        true
+      );
+      document.addEventListener(
+        "pointerup",
+        function () {
+          setTimeout(function () {
+            laneTaskFloatingMenuPointerHeld = false;
+          }, 0);
+        },
+        true
+      );
+      document.addEventListener(
+        "pointercancel",
+        function () {
+          laneTaskFloatingMenuPointerHeld = false;
+        },
+        true
+      );
+    }
+    bindLaneTaskFloatingMenuPointerHold();
+
     function ensureManualItemActionsGlobalDismiss() {
       if (window.__manualItemActionsDismissBound) return;
       window.__manualItemActionsDismissBound = true;
       document.addEventListener(
         "pointerdown",
         function (ev) {
+          if (isLaneTaskFloatingMenuTarget(ev.target)) return;
           document.querySelectorAll(".manual-item-actions-wrap.is-expanded").forEach(function (w) {
             if (w.contains(ev.target)) return;
             /*
@@ -178496,6 +178560,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       window.addEventListener(
         "scroll",
         function () {
+          if (laneTaskFloatingMenuPointerHeld) return;
           if (!weeklyPlanAssignMenuPanelEl || weeklyPlanAssignMenuPanelEl.hidden) return;
           closeWeeklyPlanAssignMenu();
         },
@@ -178668,6 +178733,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       window.addEventListener(
         "scroll",
         function () {
+          if (laneTaskFloatingMenuPointerHeld) return;
           if (!weeklyPlanTaskOpsMenuPanelEl || weeklyPlanTaskOpsMenuPanelEl.hidden) return;
           closeWeeklyPlanTaskOpsMenu();
         },
@@ -178739,7 +178805,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const text = document.createElement("span");
         text.textContent = label;
         btn.appendChild(text);
-        btn.addEventListener("click", function (ev) {
+        let ran = false;
+        function runMenuAction(ev) {
+          if (ran) return;
+          ran = true;
           ev.preventDefault();
           ev.stopPropagation();
           const c = weeklyPlanTaskOpsMenuCtx;
@@ -178758,7 +178827,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               deleteWeeklyPlanTask(c.taskId);
             }
           }
+        }
+        /* pointerup 先于 click；菜单若在 click 前被 scroll 关掉，松手仍能删 */
+        btn.addEventListener("pointerup", function (ev) {
+          if (ev.pointerType === "mouse" && ev.button !== 0) return;
+          runMenuAction(ev);
         });
+        btn.addEventListener("click", runMenuAction);
         panel.appendChild(btn);
       }
 
@@ -178885,6 +178960,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       window.addEventListener(
         "scroll",
         function () {
+          if (laneTaskFloatingMenuPointerHeld) return;
           if (!anniversaryAssignMenuPanelEl || anniversaryAssignMenuPanelEl.hidden) return;
           closeAnniversaryAssignMenu();
         },
@@ -180494,16 +180570,113 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * 今天死磕标题展示：【12周年】→12周年（仅移除外层括号，省横向空间）。
-     * 不改 item.text / 封闭清单正文 / mirrorOf / 云同步。
+     * 今天死磕标题层级（仅 UI）：
+     * 【12周年】第N周 · 任务 → { parent: "12周年第N周", child: "任务" }
+     * 优先 mirrorOf 实况；不改 item.text / 同步。
      */
-    function formatTodayPlanClosedDisplayName(rawText) {
-      let display = String(rawText || "").trim();
-      if (!display) return "（无标题）";
-      if (display.indexOf(CLOSED_LIST_ANNIVERSARY_PREFIX) === 0) {
-        display = "12周年" + display.slice(CLOSED_LIST_ANNIVERSARY_PREFIX.length);
+    function buildTodayPlanClosedHierarchyParts(rawText, closedListItem) {
+      const mo = closedListItem && closedListItem.mirrorOf;
+      if (mo && mo.kind === "anniversaryTw") {
+        const located =
+          typeof findAnniversaryTaskInStorage === "function"
+            ? findAnniversaryTaskInStorage(mo.module, mo.taskId, mo.weekNum)
+            : null;
+        if (located) {
+          const parent = "12周年" + "第" + located.weekNum + "周";
+          const mainT =
+            String((located.task && located.task.text) || "").trim() || "（任务）";
+          let child = mainT;
+          if (mo.subId) {
+            const subs = (located.task && located.task.subs) || [];
+            let subT = "（子任务）";
+            for (let i = 0; i < subs.length; i++) {
+              if (subs[i] && String(subs[i].id) === String(mo.subId)) {
+                subT = String(subs[i].text || "").trim() || "（子任务）";
+                break;
+              }
+            }
+            child = mainT + " › " + subT;
+          }
+          return { parent: parent, child: child, flat: parent + " › " + child };
+        }
       }
-      return display;
+      const raw = String(rawText || "").trim();
+      if (!raw) return { parent: "", child: "（无标题）", flat: "（无标题）" };
+      if (raw.indexOf(CLOSED_LIST_ANNIVERSARY_PREFIX) === 0) {
+        const rest = stripAnniversaryClosedListLineDecorations(
+          raw.slice(CLOSED_LIST_ANNIVERSARY_PREFIX.length)
+        );
+        const m = /^(第\d+周)\s*·\s*([\s\S]+)$/.exec(rest);
+        if (m) {
+          const parent = "12周年" + m[1];
+          const child = String(m[2] || "").trim() || "（任务）";
+          return { parent: parent, child: child, flat: parent + " › " + child };
+        }
+        const flat = "12周年" + rest;
+        return { parent: "", child: flat, flat: flat };
+      }
+      /* 兼容仅去掉【】后仍带 · 的展示串 */
+      const loose = /^(12周年)(第\d+周)\s*·\s*([\s\S]+)$/.exec(raw);
+      if (loose) {
+        const parent = loose[1] + loose[2];
+        const child = String(loose[3] || "").trim() || "（任务）";
+        return { parent: parent, child: child, flat: parent + " › " + child };
+      }
+      return { parent: "", child: raw, flat: raw };
+    }
+
+    /**
+     * 其他任务标题层级（仅 UI）：micro 有可靠父任务时 → 父 › 子。
+     * 无 _parentTaskId / 找不到父任务则保持原名；不猜测文案父子。
+     */
+    function buildTodayPlanOtherHierarchyParts(task) {
+      const child = String((task && task.text) || "").trim() || "（无标题）";
+      if (task && task._todayPlanKind === "weeklyPlanMicro" && task._parentTaskId) {
+        const parentTask =
+          typeof findWeeklyPlanTaskRaw === "function"
+            ? findWeeklyPlanTaskRaw(task._parentTaskId)
+            : null;
+        const parentName = parentTask ? String(parentTask.text || "").trim() : "";
+        if (parentName) {
+          return {
+            parent: parentName,
+            child: child,
+            flat: parentName + " › " + child
+          };
+        }
+      }
+      return { parent: "", child: child, flat: child };
+    }
+
+    /** 填充 today-plan-panel__name：有父级时拆成 父 + 浅灰 › + 子 */
+    function fillTodayPlanHierarchyNameEl(nameEl, parts) {
+      if (!nameEl) return;
+      const p = parts && typeof parts === "object" ? parts : {};
+      const flat = String(p.flat || p.child || "（无标题）");
+      nameEl.title = flat;
+      while (nameEl.firstChild) nameEl.removeChild(nameEl.firstChild);
+      if (p.parent && p.child) {
+        const parentSpan = document.createElement("span");
+        parentSpan.className = "today-plan-panel__name-parent";
+        parentSpan.textContent = String(p.parent);
+        const sepSpan = document.createElement("span");
+        sepSpan.className = "today-plan-panel__name-sep";
+        sepSpan.setAttribute("aria-hidden", "true");
+        sepSpan.textContent = " › ";
+        const childSpan = document.createElement("span");
+        childSpan.className = "today-plan-panel__name-child";
+        childSpan.textContent = String(p.child);
+        nameEl.appendChild(parentSpan);
+        nameEl.appendChild(sepSpan);
+        nameEl.appendChild(childSpan);
+      } else {
+        nameEl.textContent = flat;
+      }
+    }
+
+    /** 兼容旧调用：返回扁平标题 */
+    function formatTodayPlanClosedDisplayName(rawText, closedListItem) {
+      return buildTodayPlanClosedHierarchyParts(rawText, closedListItem).flat;
     }
 
     function anniversaryMirrorMatchesTarget(mo, module, taskId, subIdOpt) {
@@ -187389,6 +187562,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       window.addEventListener(
         "scroll",
         function () {
+          if (laneTaskFloatingMenuPointerHeld) return;
           if (!todayPlanOtherOpsMenuPanelEl || todayPlanOtherOpsMenuPanelEl.hidden) return;
           closeTodayPlanOtherOpsMenu();
         },
@@ -187547,9 +187721,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const parentId =
           task._todayPlanKind === "weeklyPlanMicro" ? String(task._parentTaskId || "") : "";
         if (parentId && closedIdSet[parentId]) continue;
+        const nameParts = buildTodayPlanOtherHierarchyParts(task);
         otherRows.push({
           id: id,
-          name: String(task.text || "").trim() || "（无标题）",
+          name: nameParts.flat,
+          nameParts: nameParts,
           done: isTodayPlanOtherRowDone(task),
           kind: task._todayPlanKind || "weeklyPlanTask",
           parentTaskId: parentId || ""
@@ -187610,8 +187786,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       const name = document.createElement("span");
       name.className = "today-plan-panel__name";
-      name.textContent = row.name;
-      name.title = row.name;
+      fillTodayPlanHierarchyNameEl(
+        name,
+        row.nameParts || { parent: "", child: row.name, flat: row.name }
+      );
       li.appendChild(mark);
       li.appendChild(name);
       if (row.id) {
@@ -187849,8 +188027,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             }
             const name = document.createElement("span");
             name.className = "today-plan-panel__name";
-            name.textContent = row.name;
-            name.title = row.name;
+            fillTodayPlanHierarchyNameEl(
+              name,
+              row.nameParts || { parent: "", child: row.name, flat: row.name }
+            );
             li.appendChild(mark);
             li.appendChild(name);
             ulDone.appendChild(li);
@@ -187891,8 +188071,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         const name = document.createElement("span");
         name.className = "today-plan-panel__name";
-        name.textContent = row.name;
-        name.title = row.name;
+        fillTodayPlanHierarchyNameEl(
+          name,
+          row.nameParts || { parent: "", child: row.name, flat: row.name }
+        );
         li.appendChild(mark);
         li.appendChild(name);
         ul.appendChild(li);
@@ -188034,10 +188216,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (item.id) closedIdSet[String(item.id)] = 1;
         const mirror = item.mirrorOf;
         if (mirror && mirror.id) closedIdSet[String(mirror.id)] = 1;
-        const name = formatTodayPlanClosedDisplayName(item.text);
+        const nameParts = buildTodayPlanClosedHierarchyParts(item.text, item);
         closedRows.push({
           id: item.id ? String(item.id) : "",
-          name: name,
+          name: nameParts.flat,
+          nameParts: nameParts,
           done: !!item.completed,
           isNext: false
         });
@@ -188051,10 +188234,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const parentId =
           task._todayPlanKind === "weeklyPlanMicro" ? String(task._parentTaskId || "") : "";
         if (parentId && closedIdSet[parentId]) continue;
-        const name = String(task.text || "").trim() || "（无标题）";
+        const nameParts = buildTodayPlanOtherHierarchyParts(task);
         otherRows.push({
           id: id,
-          name: name,
+          name: nameParts.flat,
+          nameParts: nameParts,
           done: isTodayPlanOtherRowDone(task),
           isNext: false,
           kind: task._todayPlanKind || "weeklyPlanTask",
