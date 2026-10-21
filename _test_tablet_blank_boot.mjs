@@ -35,12 +35,12 @@ mustInclude(
 mustInclude("window.__bootHealthSnapshot", "boot health snapshot");
 mustInclude("showBootHealthPanel", "diag panel");
 mustInclude("bindBootHealthVersionTapOnce", "version tap binder");
-mustInclude('id="earlyBootDiagBtn"', "visible early diag button");
+assert.ok(!html.includes('id="earlyBootDiagBtn"'), "floating diag button removed");
 mustInclude("installEarlyBootDiag", "early diag independent of business");
 mustInclude("window.__EARLY_BOOT_DIAG", "early diag API");
-mustInclude("exec-system-pwa-v20261021k", "cache bump in html");
-assert.ok(sw.includes("exec-system-pwa-v20261021k"), "cache bump in sw");
-mustInclude("版本 v20261021k</div>", "static HTML version (no JS needed)");
+mustInclude("exec-system-pwa-v20261021l", "cache bump in html");
+assert.ok(sw.includes("exec-system-pwa-v20261021l"), "cache bump in sw");
+mustInclude("版本 v20261021l</div>", "static HTML version (no JS needed)");
 mustInclude("immediate-version-painted", "immediate DOM version paint");
 mustInclude("isAliyunSyncPrimaryLocalDataSparse", "local sparse helper");
 mustInclude("force-full-pull-local-sparse", "sparse forces full body pull");
