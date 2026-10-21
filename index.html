@@ -106677,7 +106677,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261020w";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261021a";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -175135,43 +175135,218 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       fitAnniversaryPrincipleBanner();
     }
 
+    /**
+     * 跑马灯 / hour-row 冻结期间：只把尚未出现在 #doneList 的 Done 行增量插入现有时段块。
+     * 禁止：ul.innerHTML 清空、重建 block、触碰 .done-time-sprint-finish（跑马灯 host）、
+     * applyDoneTimeBlockSprintLayer / remount / restart 跑马灯。失败则跳过该项，保留现有 DOM。
+     * 全量排序/徽章/折叠仍等 hourRowDoneTimelineRenderDeferred 解冻后 catch-up。
+     */
+    function doneTimelineDomHasItemId(root, itemId) {
+      const sid = String(itemId || "");
+      if (!sid || !root) return false;
+      try {
+        const nodes = root.querySelectorAll("li.timeline-item.done[data-done-id]");
+        for (let i = 0; i < nodes.length; i++) {
+          if (nodes[i].getAttribute("data-done-id") === sid) return true;
+        }
+      } catch (_q) {}
+      return false;
+    }
+
+    function ensureDoneTimeBlockItemsWrapForIncremental(blockLi) {
+      if (!blockLi) return null;
+      let itemWrap = blockLi.querySelector("ul.done-time-block-items");
+      if (itemWrap) return itemWrap;
+      const body = blockLi.querySelector(".done-time-block-body");
+      if (!body) return null;
+      /* 空块可能只有 head：补 contentCol，绝不调用 sprint-layer / 跑马灯装配 */
+      let contentCol = body.querySelector(".done-time-content");
+      if (!contentCol) {
+        contentCol = document.createElement("div");
+        contentCol.className = "done-time-content";
+        body.appendChild(contentCol);
+      }
+      itemWrap = document.createElement("ul");
+      itemWrap.className = "done-time-block-items";
+      contentCol.appendChild(itemWrap);
+      return itemWrap;
+    }
+
+    /** 只插任务行；绝不移动/替换 .done-time-sprint-finish（跑马灯 host） */
+    function insertDoneTaskLiIntoBlockItems(wrap, rowLi, afterSiblingOpt) {
+      if (!wrap || !rowLi) return;
+      if (afterSiblingOpt && afterSiblingOpt.parentNode === wrap) {
+        wrap.insertBefore(rowLi, afterSiblingOpt.nextSibling);
+        return;
+      }
+      const firstTaskEl = wrap.querySelector("li.timeline-item.done");
+      if (firstTaskEl) {
+        wrap.insertBefore(rowLi, firstTaskEl);
+        return;
+      }
+      const firstSprint = wrap.querySelector("li.done-time-sprint-finish");
+      if (firstSprint) {
+        wrap.insertBefore(rowLi, firstSprint.nextSibling);
+        return;
+      }
+      wrap.appendChild(rowLi);
+    }
+
+    /**
+     * @returns {{ inserted: number, skipped: number }}
+     */
+    function appendMissingDoneItemsWhileTimelineFrozen(ul, orderedTasks, listName) {
+      const out = { inserted: 0, skipped: 0 };
+      if (!ul || !Array.isArray(orderedTasks) || !orderedTasks.length) return out;
+      const ln = listName || "done";
+      const missing = [];
+      for (let i = 0; i < orderedTasks.length; i++) {
+        const task = orderedTasks[i];
+        if (!task || task.id == null || task.id === "") continue;
+        if (doneTimelineDomHasItemId(ul, task.id)) continue;
+        missing.push(task);
+      }
+      if (!missing.length) return out;
+      /* missing 已按时间轴 newer→older；同块内接在上一条新插入之后，保持相对序 */
+      let lastInserted = null;
+      let lastInsertedBlockKey = "";
+      for (let mi = 0; mi < missing.length; mi++) {
+        const task = missing[mi];
+        const blockKey = getDoneTimeBlockKey(task.completedAt);
+        const blockLi = ul.querySelector(
+          'li.done-time-block[data-done-block-key="' + blockKey + '"]'
+        );
+        if (!blockLi) {
+          out.skipped += 1;
+          continue;
+        }
+        const itemWrap = ensureDoneTimeBlockItemsWrapForIncremental(blockLi);
+        if (!itemWrap) {
+          out.skipped += 1;
+          continue;
+        }
+        if (doneTimelineDomHasItemId(ul, task.id)) {
+          out.skipped += 1;
+          continue;
+        }
+        let li;
+        try {
+          li = taskItem(task, ln, mi, missing.length, undefined, {
+            suppressDuplicateDoneTime: false,
+            timeBlockFlexLayout: true,
+            blockKey: blockKey,
+            blockIndex: mi,
+            blockLength: missing.length
+          });
+        } catch (_ti) {
+          out.skipped += 1;
+          continue;
+        }
+        if (!li) {
+          out.skipped += 1;
+          continue;
+        }
+        li.classList.add(
+          "done-time-block-item",
+          "done-time-block-item--" + blockKey,
+          "done-time-block-item--flex-row"
+        );
+        try {
+          const afterSameBlock =
+            lastInserted && lastInsertedBlockKey === blockKey ? lastInserted : null;
+          insertDoneTaskLiIntoBlockItems(itemWrap, li, afterSameBlock);
+          blockLi.classList.remove("done-time-block--empty", "done-time-block--empty-no-mantra");
+          lastInserted = li;
+          lastInsertedBlockKey = blockKey;
+          out.inserted += 1;
+        } catch (_ins) {
+          out.skipped += 1;
+        }
+      }
+      if (out.inserted > 0) {
+        try {
+          if (typeof doneEmpty !== "undefined" && doneEmpty) doneEmpty.style.display = "none";
+        } catch (_empty) {}
+      }
+      return out;
+    }
+
     function renderDoneTimeBlockTimeline(ul, orderedTasks, listName) {
       const ln = listName || "done";
       hourRowDoneTimelineRenderDeferred = false;
       /* A/B 冻结：禁止整表 innerHTML 重建（会连带闪 flex 任务行 + sprint-finish） */
       if (isHourRowUpdateFrozen()) {
         hourRowDoneTimelineRenderDeferred = true;
+        let incrFreeze = { inserted: 0, skipped: 0 };
         try {
-          habitCheckinPerfLog("hourTickerGate", { blocked: true, reason: "FREEZE_HOUR_ROW_UPDATES" });
+          incrFreeze = appendMissingDoneItemsWhileTimelineFrozen(ul, orderedTasks, ln);
+        } catch (_incrFreezeErr) {
+          incrFreeze = { inserted: 0, skipped: 0 };
+        }
+        try {
+          habitCheckinPerfLog("hourTickerGate", {
+            blocked: true,
+            reason: "FREEZE_HOUR_ROW_UPDATES",
+            incremental: true,
+            inserted: incrFreeze.inserted,
+            skipped: incrFreeze.skipped
+          });
+          if (incrFreeze.inserted > 0) {
+            habitCheckinPerfLog("doneDomCommitted", {
+              tasks: incrFreeze.inserted,
+              via: "incremental-while-hour-row-frozen"
+            });
+          }
         } catch (_hpFreeze) {}
         logHourRowEvent("render", {
           blocked: true,
           reason: "FREEZE_HOUR_ROW_UPDATES",
+          incremental: true,
+          inserted: incrFreeze.inserted,
           taskCount: Array.isArray(orderedTasks) ? orderedTasks.length : 0,
           trace: true
         });
         return;
       }
-      /* 跑马灯播放中：推迟整表重建，避免父层 repaint 闪整条小时冲刺条 */
+      /* 跑马灯播放中：推迟整表重建，避免父层 repaint 闪整条小时冲刺条；缺失条目仍增量插入 */
       if (isFinishLineMarqueePlayingNow()) {
         hourRowDoneTimelineRenderDeferred = true;
+        let incrMarquee = { inserted: 0, skipped: 0 };
+        try {
+          incrMarquee = appendMissingDoneItemsWhileTimelineFrozen(ul, orderedTasks, ln);
+        } catch (_incrMarqueeErr) {
+          incrMarquee = { inserted: 0, skipped: 0 };
+        }
         try {
           habitCheckinPerfLog("hourTickerGate", {
             blocked: true,
-            reason: finishLineMarqueePlayingFreezeReason()
+            reason: finishLineMarqueePlayingFreezeReason(),
+            incremental: true,
+            inserted: incrMarquee.inserted,
+            skipped: incrMarquee.skipped
           });
+          if (incrMarquee.inserted > 0) {
+            habitCheckinPerfLog("doneDomCommitted", {
+              tasks: incrMarquee.inserted,
+              via: "incremental-while-marquee"
+            });
+          }
         } catch (_hpGate) {}
         if (isCloseLoopMarqueePlayingNow()) {
           logCloseLoopFlashDiag("CLOSE_LOOP_PARENT_RENDER", {
             via: "renderDoneTimeBlockTimeline",
             blocked: true,
+            incremental: true,
+            inserted: incrMarquee.inserted,
             taskCount: Array.isArray(orderedTasks) ? orderedTasks.length : 0,
-            note: "与 hour-task 相同：播放中冻结整表 innerHTML 重建"
+            note: "冻结整表重建；缺失 Done 行已尝试增量插入，未触碰跑马灯 host"
           });
         }
         logHourRowEvent("render", {
           blocked: true,
           reason: finishLineMarqueePlayingFreezeReason(),
+          incremental: true,
+          inserted: incrMarquee.inserted,
           taskCount: Array.isArray(orderedTasks) ? orderedTasks.length : 0,
           trace: true
         });
@@ -180316,6 +180491,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         line += " › " + subT;
       }
       return line;
+    }
+
+    /**
+     * 今天死磕标题展示：【12周年】→12周年（仅移除外层括号，省横向空间）。
+     * 不改 item.text / 封闭清单正文 / mirrorOf / 云同步。
+     */
+    function formatTodayPlanClosedDisplayName(rawText) {
+      let display = String(rawText || "").trim();
+      if (!display) return "（无标题）";
+      if (display.indexOf(CLOSED_LIST_ANNIVERSARY_PREFIX) === 0) {
+        display = "12周年" + display.slice(CLOSED_LIST_ANNIVERSARY_PREFIX.length);
+      }
+      return display;
     }
 
     function anniversaryMirrorMatchesTarget(mo, module, taskId, subIdOpt) {
@@ -187846,7 +188034,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (item.id) closedIdSet[String(item.id)] = 1;
         const mirror = item.mirrorOf;
         if (mirror && mirror.id) closedIdSet[String(mirror.id)] = 1;
-        const name = String(item.text || "").trim() || "（无标题）";
+        const name = formatTodayPlanClosedDisplayName(item.text);
         closedRows.push({
           id: item.id ? String(item.id) : "",
           name: name,
