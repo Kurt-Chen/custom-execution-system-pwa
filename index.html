@@ -106494,6 +106494,35 @@
     /** 已成功打开的 IDB 连接；失效（close / versionchange）后清空，下次再 open */
     let appStateIdbDb = null;
     let appStateIdbOpenPromise = null;
+    /**
+     * 平板/Android 休眠后 indexedDB.open 可能永不 onsuccess/onerror。
+     * 超时后本会话改走 localStorage / 紧急备份，禁止再向 IDB 写入空壳以免覆盖云端同源数据。
+     */
+    const APP_STATE_IDB_OPEN_TIMEOUT_MS = 4000;
+    let stateStorageIdbOpenTimedOut = false;
+    /** 启动健康笔记（环形；平板诊断入口可读；不含任务正文/密钥） */
+    const bootHealthNotes = [];
+    function noteBootHealth(msg, extra) {
+      try {
+        const row = {
+          at: Date.now(),
+          msg: String(msg || "").slice(0, 160)
+        };
+        if (extra != null && typeof extra === "object") {
+          const keys = Object.keys(extra).slice(0, 8);
+          const safe = {};
+          for (let i = 0; i < keys.length; i++) {
+            const k = keys[i];
+            const v = extra[k];
+            if (v == null || typeof v === "number" || typeof v === "boolean") safe[k] = v;
+            else safe[k] = String(v).slice(0, 80);
+          }
+          row.extra = safe;
+        }
+        bootHealthNotes.push(row);
+        if (bootHealthNotes.length > 24) bootHealthNotes.splice(0, bootHealthNotes.length - 24);
+      } catch (_n) {}
+    }
 
     function appStateIdbConnectionLive(db) {
       if (!db) return false;
@@ -106544,20 +106573,50 @@
       if (appStateIdbOpenPromise) return appStateIdbOpenPromise;
       if (!window.indexedDB) return Promise.reject(new Error("IndexedDB 不可用"));
       let settled = false;
+      let timeoutTimer = null;
       appStateIdbOpenPromise = new Promise(function (resolve, reject) {
         let req;
+        function settleReject(err) {
+          if (settled) return;
+          settled = true;
+          if (timeoutTimer) {
+            clearTimeout(timeoutTimer);
+            timeoutTimer = null;
+          }
+          appStateIdbOpenPromise = null;
+          reject(err);
+        }
+        function settleResolve(db) {
+          if (settled) return;
+          settled = true;
+          if (timeoutTimer) {
+            clearTimeout(timeoutTimer);
+            timeoutTimer = null;
+          }
+          resolve(db);
+        }
         try {
           req = indexedDB.open(IDB_APP_NAME, IDB_APP_VERSION);
         } catch (openErr) {
-          settled = true;
-          appStateIdbOpenPromise = null;
-          reject(openErr);
+          settleReject(openErr);
           return;
         }
+        timeoutTimer = window.setTimeout(function () {
+          timeoutTimer = null;
+          if (settled) return;
+          stateStorageIdbOpenTimedOut = true;
+          noteBootHealth("idb-open-timeout", { ms: APP_STATE_IDB_OPEN_TIMEOUT_MS });
+          try {
+            console.warn(
+              "[存储] IndexedDB 打开超时（" +
+                APP_STATE_IDB_OPEN_TIMEOUT_MS +
+                "ms），本会话回退 localStorage/紧急备份，不写空壳进 IDB"
+            );
+          } catch (_cTo) {}
+          settleReject(new Error("IndexedDB 打开超时"));
+        }, APP_STATE_IDB_OPEN_TIMEOUT_MS);
         req.onerror = function () {
-          settled = true;
-          appStateIdbOpenPromise = null;
-          reject(req.error || new Error("IndexedDB 打开失败"));
+          settleReject(req.error || new Error("IndexedDB 打开失败"));
         };
         req.onupgradeneeded = function (ev) {
           const upgrading = ev.target.result;
@@ -106567,12 +106626,25 @@
         };
         req.onsuccess = function () {
           const db = req.result;
+          /*
+           * 超时后迟到的 onsuccess：关掉连接、保留库内数据；本会话已回退，勿再挂成主连接，
+           * 避免随后空 state 写入覆盖平板上仍完好的 IDB。
+           */
+          if (settled) {
+            try {
+              db.close();
+            } catch (_lateClose) {}
+            return;
+          }
           bindAppStateIdbConnection(db);
           if (appStateIdbConnectionLive(db)) {
             appStateIdbDb = db;
-            settled = true;
-            resolve(db);
+            settleResolve(db);
             return;
+          }
+          if (timeoutTimer) {
+            clearTimeout(timeoutTimer);
+            timeoutTimer = null;
           }
           settled = true;
           appStateIdbOpenPromise = null;
@@ -106695,17 +106767,37 @@
             localStorage.removeItem(STORAGE_KEY);
           } catch (_rm) {}
         } catch (err) {
-          console.warn("[存储] IndexedDB 不可用，继续使用 localStorage:", err);
+          const timedOut = !!stateStorageIdbOpenTimedOut;
+          console.warn(
+            timedOut
+              ? "[存储] IndexedDB 打开超时，继续使用 localStorage/紧急备份:"
+              : "[存储] IndexedDB 不可用，继续使用 localStorage:",
+            err
+          );
+          noteBootHealth(timedOut ? "storage-fallback-idb-timeout" : "storage-fallback-idb-error");
+          /* 超时/失败：本会话禁用 IDB 写入，避免空壳覆盖仍完好的本机库 */
           stateStorageUseIdb = false;
           _stateJsonCache = localStorage.getItem(STORAGE_KEY);
           try {
             const emergLs = localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY);
-            if (emergLs && _stateJsonCache && emergLs === _stateJsonCache) {
+            if (emergLs && (!_stateJsonCache || !_stateJsonCache.length)) {
+              /* 主键已迁走时，用紧急备份作启动缓存（只读进内存；不在此处写回 IDB） */
+              _stateJsonCache = emergLs;
+              _emergencyBackupJsonCache = emergLs;
+              noteBootHealth("storage-hydrate-from-emergency", {
+                chars: emergLs.length
+              });
+            } else if (emergLs && _stateJsonCache && emergLs === _stateJsonCache) {
               _emergencyBackupJsonCache = emergLs;
             }
           } catch (_emergLsBoot) {}
         }
         stateStorageReady = true;
+        noteBootHealth("storage-ready", {
+          backend: stateStorageUseIdb ? "indexeddb" : "localstorage",
+          idbTimedOut: !!stateStorageIdbOpenTimedOut,
+          cacheChars: _stateJsonCache ? String(_stateJsonCache).length : 0
+        });
       })();
       return stateStorageInitPromise;
     }
@@ -106726,7 +106818,11 @@
     }
 
     async function writeStateJsonToBackend(json) {
-      if (stateStorageUseIdb) {
+      /*
+       * IDB 打开曾超时的会话：禁止再 put 进 IDB（内存可能仍是空壳/部分态），
+       * 只写 localStorage，保留平板上未打开成功的 IDB 原数据供下次冷启动。
+       */
+      if (stateStorageUseIdb && !stateStorageIdbOpenTimedOut) {
         await idbSetJson(STORAGE_KEY, json);
         try {
           localStorage.removeItem(STORAGE_KEY);
@@ -106739,8 +106835,30 @@
       _stateJsonCache = json;
     }
 
+    /**
+     * lodash 未加载（CDN 失败/拦截）时的 debounce 兜底，避免顶层 `_.debounce` 抛错中断整页初始化。
+     * 行为：延迟执行最后一次调用；不依赖外部库。
+     */
+    function appSafeDebounce(fn, waitMs) {
+      const wait = Math.max(0, Number(waitMs) || 0);
+      if (typeof _ !== "undefined" && _ && typeof _.debounce === "function") {
+        return _.debounce(fn, wait);
+      }
+      noteBootHealth("lodash-missing-safe-debounce");
+      let timer = null;
+      return function () {
+        const ctx = this;
+        const args = arguments;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(function () {
+          timer = null;
+          fn.apply(ctx, args);
+        }, wait);
+      };
+    }
+
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261021e";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261021f";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -118484,14 +118602,15 @@
       setCloudSyncStatus("同步异常", "status-error");
     }
 
-    /** 启动时：有上次成功时间则先显示已同步；否则显示同步中（等待 boot 拉取） */
+    /**
+     * 启动角标：一律先「同步中…」，禁止用跨会话陈旧 lastSuccessAt 刷绿。
+     * 根因：脚本一加载就 paint 时 loadState/boot 尚未完成，绿标「已同步 · HH:mm」只代表
+     * 历史墙钟，易被当成「本次已对齐」；平板 IDB 挂起时更会整页空白却仍显示已同步。
+     * 真正成功仍只由 paintAliyunSyncPrimaryBadgeOk / markCloudSyncSuccess 写入。
+     */
     function paintAliyunSyncPrimaryBadgeInitial() {
       if (typeof isAliyunSyncPrimaryEnabled !== "function" || !isAliyunSyncPrimaryEnabled()) return;
-      if (getCloudSyncLastSuccessAt() > 0) {
-        setCloudSyncStatus(buildCloudSyncConnectedBadgeText(), "status-connected");
-      } else {
-        paintAliyunSyncPrimaryBadgeSyncing();
-      }
+      paintAliyunSyncPrimaryBadgeSyncing();
     }
 
     /**
@@ -118956,6 +119075,161 @@
       }
     }
 
+    let bootHealthPanelBound = false;
+    let bootHealthTapCount = 0;
+    let bootHealthTapTimer = null;
+
+    /** 平板无 DevTools：版本行连点 5 次打开启动健康面板（只读摘要，可复制） */
+    function showBootHealthPanel() {
+      let snap = null;
+      try {
+        snap =
+          typeof window.__bootHealthSnapshot === "function"
+            ? window.__bootHealthSnapshot()
+            : null;
+      } catch (_s) {
+        snap = { error: "snapshot-failed" };
+      }
+      let text = "";
+      try {
+        text = JSON.stringify(snap, null, 2);
+      } catch (_j) {
+        text = String(snap);
+      }
+      let overlay = document.getElementById("bootHealthPanelOverlay");
+      if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.id = "bootHealthPanelOverlay";
+        overlay.setAttribute("role", "dialog");
+        overlay.setAttribute("aria-modal", "true");
+        overlay.setAttribute("aria-label", "启动诊断");
+        overlay.style.cssText =
+          "position:fixed;inset:0;z-index:99999;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px;";
+        const panel = document.createElement("div");
+        panel.style.cssText =
+          "max-width:560px;width:100%;max-height:80vh;overflow:auto;background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.25);";
+        const title = document.createElement("div");
+        title.textContent = "启动诊断（无任务正文）";
+        title.style.cssText = "font-weight:700;font-size:16px;margin-bottom:8px;color:#0f172a;";
+        const hint = document.createElement("div");
+        hint.textContent = "连点版本号 5 次打开。可复制下列摘要发给排查。";
+        hint.style.cssText = "font-size:12px;color:#64748b;margin-bottom:10px;";
+        const pre = document.createElement("pre");
+        pre.id = "bootHealthPanelPre";
+        pre.style.cssText =
+          "white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.45;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;max-height:50vh;overflow:auto;margin:0 0 12px;";
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;";
+        const copyBtn = document.createElement("button");
+        copyBtn.type = "button";
+        copyBtn.textContent = "复制摘要";
+        copyBtn.className = "btn";
+        copyBtn.style.cssText = "min-height:40px;padding:8px 14px;";
+        const closeBtn = document.createElement("button");
+        closeBtn.type = "button";
+        closeBtn.textContent = "关闭";
+        closeBtn.className = "btn-primary";
+        closeBtn.style.cssText = "min-height:40px;padding:8px 14px;";
+        copyBtn.addEventListener("click", function () {
+          const body = (document.getElementById("bootHealthPanelPre") || {}).textContent || "";
+          function ok() {
+            try {
+              copyBtn.textContent = "已复制";
+              window.setTimeout(function () {
+                copyBtn.textContent = "复制摘要";
+              }, 1200);
+            } catch (_ok) {}
+          }
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(body).then(ok).catch(function () {
+              try {
+                const ta = document.createElement("textarea");
+                ta.value = body;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand("copy");
+                document.body.removeChild(ta);
+                ok();
+              } catch (_c) {}
+            });
+          } else {
+            try {
+              const ta = document.createElement("textarea");
+              ta.value = body;
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand("copy");
+              document.body.removeChild(ta);
+              ok();
+            } catch (_c2) {}
+          }
+        });
+        closeBtn.addEventListener("click", function () {
+          overlay.classList.add("hidden");
+          overlay.style.display = "none";
+        });
+        overlay.addEventListener("click", function (ev) {
+          if (ev.target === overlay) {
+            overlay.classList.add("hidden");
+            overlay.style.display = "none";
+          }
+        });
+        row.appendChild(copyBtn);
+        row.appendChild(closeBtn);
+        panel.appendChild(title);
+        panel.appendChild(hint);
+        panel.appendChild(pre);
+        panel.appendChild(row);
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
+      }
+      const preEl = document.getElementById("bootHealthPanelPre");
+      if (preEl) preEl.textContent = text;
+      overlay.classList.remove("hidden");
+      overlay.style.display = "flex";
+      noteBootHealth("diag-panel-opened");
+    }
+
+    function bindBootHealthVersionTapOnce() {
+      if (bootHealthPanelBound) return;
+      bootHealthPanelBound = true;
+      document.addEventListener(
+        "click",
+        function (ev) {
+          const t = ev && ev.target;
+          const el =
+            t && t.closest
+              ? t.closest(".module-header-version-line")
+              : t && t.classList && t.classList.contains("module-header-version-line")
+                ? t
+                : null;
+          if (!el) return;
+          if (el.classList && el.classList.contains("app-version-badge--update-available")) {
+            return;
+          }
+          bootHealthTapCount += 1;
+          if (bootHealthTapTimer) clearTimeout(bootHealthTapTimer);
+          bootHealthTapTimer = window.setTimeout(function () {
+            bootHealthTapCount = 0;
+            bootHealthTapTimer = null;
+          }, 1400);
+          if (bootHealthTapCount >= 5) {
+            bootHealthTapCount = 0;
+            if (bootHealthTapTimer) {
+              clearTimeout(bootHealthTapTimer);
+              bootHealthTapTimer = null;
+            }
+            try {
+              ev.preventDefault();
+              ev.stopPropagation();
+            } catch (_e) {}
+            showBootHealthPanel();
+          }
+        },
+        true
+      );
+    }
+
     try {
       window.isAliyunSyncPrimaryEnabled = isAliyunSyncPrimaryEnabled;
       window.setAliyunSyncPrimaryEnabled = setAliyunSyncPrimaryEnabled;
@@ -119000,6 +119274,64 @@
               : null
         };
       };
+      /**
+       * 平板空白诊断快照（无任务正文/密钥）：版本行连点 5 次可打开面板。
+       * 含存储后端、IDB 超时、条数、角标时钟、boot 拉取摘要。
+       */
+      window.__bootHealthSnapshot = function () {
+        let versionText = "";
+        try {
+          const el = document.querySelector(".module-header-version-line");
+          versionText = el ? String(el.textContent || "") : "";
+        } catch (_vt) {}
+        let bootPull = null;
+        try {
+          const r =
+            typeof window !== "undefined" ? window.__aliyunSyncPrimaryBootPullReport : null;
+          if (r && typeof r === "object") {
+            bootPull = {
+              ok: !!r.ok,
+              skipped: !!r.skipped,
+              skippedAll: !!r.skippedAll,
+              reason: String(r.reason || "").slice(0, 80),
+              changedDomains: Array.isArray(r.changedDomains)
+                ? r.changedDomains.slice(0, 12)
+                : []
+            };
+          }
+        } catch (_bp) {}
+        const lastOk =
+          typeof getCloudSyncLastSuccessAt === "function" ? getCloudSyncLastSuccessAt() : 0;
+        return {
+          at: Date.now(),
+          cache: typeof APP_CACHE_NAME_FOR_BADGE !== "undefined" ? APP_CACHE_NAME_FOR_BADGE : "",
+          versionText: versionText,
+          storageReady: !!stateStorageReady,
+          storageBackend: stateStorageUseIdb ? "indexeddb" : "localstorage",
+          idbTimedOut: !!stateStorageIdbOpenTimedOut,
+          lodashOk:
+            typeof _ !== "undefined" && _ && typeof _.debounce === "function",
+          doneCount: Array.isArray(state.done) ? state.done.length : -1,
+          closedCount: Array.isArray(state.closedList) ? state.closedList.length : -1,
+          memoCount: Array.isArray(state.memo) ? state.memo.length : -1,
+          weeklyPlanKeys:
+            state.weeklyPlan && typeof state.weeklyPlan === "object"
+              ? Object.keys(state.weeklyPlan).length
+              : -1,
+          lastSuccessAt: lastOk,
+          lastSuccessClock:
+            typeof formatCloudSyncClockLabel === "function"
+              ? formatCloudSyncClockLabel(lastOk)
+              : "",
+          lastSuccessAgeMin:
+            lastOk > 0 ? Math.round((Date.now() - lastOk) / 60000) : null,
+          machineStatus: String(cloudSyncMachineStatus || ""),
+          lastError: String(cloudSyncLastErrorMsg || "").slice(0, 160),
+          bootPull: bootPull,
+          notes: bootHealthNotes.slice(-16)
+        };
+      };
+      window.__showBootHealthPanel = showBootHealthPanel;
       window.shouldSkipFirebaseCloudSyncBootForAliyunPrimary =
         shouldSkipFirebaseCloudSyncBootForAliyunPrimary;
       window.recoverAliyunPrimaryAfterLegacyFirebaseMisclick =
@@ -146198,7 +146530,7 @@
       });
     }
 
-    const persistFuelDayDebounced = _.debounce(persistFuelDayCloudSync, 600);
+    const persistFuelDayDebounced = appSafeDebounce(persistFuelDayCloudSync, 600);
 
     function persistFuelDay() {
       if (!commitFuelDayLocal()) {
@@ -197891,7 +198223,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
-    const pushEffortScoreToUserPath = _.debounce(pushEffortScoreToUserPathImmediate, 600);
+    const pushEffortScoreToUserPath = appSafeDebounce(pushEffortScoreToUserPathImmediate, 600);
 
     function updateFuelEffortBarDom() {
       const bar = document.getElementById("fuelEffortBar");
@@ -200810,15 +201142,45 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     const FORGE_WP_SPT_TASK_NAME_EXTRAS = ["腹肌轮", "凯格尔", "边缘控制"];
 
     void (async function initAppAfterStorageReady() {
+      /*
+       * 版本角标尽早写入（先于 await IDB）：平板 IDB open 挂起时也不能一直停在 HTML「版本 --」。
+       * 与业务 hydrate / 云同步解耦；失败忽略。
+       */
+      try {
+        if (typeof setAppVersionText === "function") {
+          setAppVersionText(
+            String(APP_CACHE_NAME_FOR_BADGE || "").replace(/^exec-system-pwa-/, "") || "unknown"
+          );
+        }
+        noteBootHealth("early-version-painted");
+      } catch (_earlyVer) {
+        noteBootHealth("early-version-failed");
+      }
+      /* IDB await 之前就绑定诊断入口，避免存储挂起时无法打开面板 */
+      try {
+        if (typeof bindBootHealthVersionTapOnce === "function") bindBootHealthVersionTapOnce();
+      } catch (_earlyDiag) {}
       try {
         await ensureStateStorageReady();
       } catch (storageInitErr) {
         console.warn("存储初始化失败，尝试从 localStorage 加载:", storageInitErr);
+        noteBootHealth("storage-init-outer-catch");
         stateStorageUseIdb = false;
         stateStorageReady = true;
+        try {
+          if (!_stateJsonCache) {
+            const emerg = localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY);
+            _stateJsonCache = localStorage.getItem(STORAGE_KEY) || emerg || null;
+            if (emerg && _stateJsonCache === emerg) _emergencyBackupJsonCache = emerg;
+          }
+        } catch (_lsBoot) {}
       }
       try {
       loadState();
+      noteBootHealth("loadState-done", {
+        done: Array.isArray(state.done) ? state.done.length : -1,
+        closed: Array.isArray(state.closedList) ? state.closedList.length : -1
+      });
       /* 底栏 init 可能在 loadState 前用空 state 预渲染并清掉 dirty；加载后必须全脏，否则 Stop Doing 等会一直「暂无条目」 */
       markAllUiPaintSlicesDirty();
       if (!Array.isArray(state.done)) state.done = [];
@@ -200985,6 +201347,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           setAppVersionText(String(APP_CACHE_NAME_FOR_BADGE || "").replace(/^exec-system-pwa-/, "") || "unknown");
         } catch (_setVerErr) {}
       }
+      try {
+        if (typeof bindBootHealthVersionTapOnce === "function") bindBootHealthVersionTapOnce();
+      } catch (_diagBind) {}
       /* Phase 1：不在此启动云同步，避免与首次 render 抢主线程；见 scheduleDeferredCloudSyncBoot */
     }
 
@@ -201078,12 +201443,28 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     initPurposeMissionDualViewTabs();
       } catch (bootErr) {
         console.error("应用初始化失败:", bootErr);
+        noteBootHealth("boot-err", {
+          name: bootErr && bootErr.name,
+          message: bootErr && bootErr.message
+        });
         if (!Array.isArray(state.done)) state.done = [];
+        try {
+          if (typeof setAppVersionText === "function") {
+            setAppVersionText(
+              String(APP_CACHE_NAME_FOR_BADGE || "").replace(/^exec-system-pwa-/, "") || "unknown"
+            );
+          }
+        } catch (_verBootErr) {}
       }
       try {
         render();
+        noteBootHealth("first-render-ok");
       } catch (firstRenderErr) {
         console.error("首次 render 失败:", firstRenderErr);
+        noteBootHealth("first-render-err", {
+          name: firstRenderErr && firstRenderErr.name,
+          message: firstRenderErr && firstRenderErr.message
+        });
       }
       /* 首屏后：若 Forge 终身累计仍空，从紧急备份并回 meta（条数不变也会写回） */
       try {
