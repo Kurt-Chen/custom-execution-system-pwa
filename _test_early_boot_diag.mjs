@@ -16,18 +16,16 @@ function mustInclude(s, label) {
 }
 
 /* —— 位置：早期壳必须在登录门之后、lodash/主业务脚本之前 —— */
-const btnIdx = html.indexOf('id="earlyBootDiagBtn"');
 const earlyApiIdx = html.indexOf("window.__EARLY_BOOT_DIAG");
 const lodashIdx = html.indexOf("cdn.jsdelivr.net/npm/lodash");
 const mainScriptBadgeIdx = html.indexOf("APP_CACHE_NAME_FOR_BADGE");
-assert.ok(btnIdx > 0, "earlyBootDiagBtn present");
 assert.ok(earlyApiIdx > 0, "__EARLY_BOOT_DIAG present");
-assert.ok(btnIdx < lodashIdx, "diag button before lodash");
 assert.ok(earlyApiIdx < lodashIdx, "early diag script before lodash");
-assert.ok(btnIdx < mainScriptBadgeIdx, "diag button before main APP_CACHE_NAME");
+assert.ok(earlyApiIdx < mainScriptBadgeIdx, "early diag before main APP_CACHE_NAME");
+assert.ok(!html.includes('id="earlyBootDiagBtn"'), "floating diag button removed");
 
-mustInclude('id="earlyBootDiagBtn"', "visible diag button");
-mustInclude("启动诊断", "diag button label");
+mustInclude("__showEarlyBootDiag", "programmatic diag open");
+mustInclude("启动诊断（无任务正文）", "diag panel title");
 mustInclude("installEarlyBootDiag", "early installer");
 mustInclude("window.onerror", "first JS error capture");
 mustInclude("unhandledrejection", "promise rejection capture");
@@ -37,10 +35,10 @@ mustInclude("formatCount", "count formatter");
 mustInclude('return UNKNOWN', "unknown count path");
 mustInclude("可直接选中下方文本或截图", "copy-fail fallback hint");
 mustInclude("user-select: text", "selectable diag text");
-mustInclude("z-index: 100000", "button above login gate");
-mustInclude("exec-system-pwa-v20261021k", "cache bump html");
-assert.ok(sw.includes("exec-system-pwa-v20261021k"), "cache bump sw");
-mustInclude("版本 v20261021k</div>", "static version j");
+mustInclude("z-index: 100001", "diag overlay above UI");
+mustInclude("exec-system-pwa-v20261021l", "cache bump html");
+assert.ok(sw.includes("exec-system-pwa-v20261021l"), "cache bump sw");
+mustInclude("版本 v20261021l</div>", "static version j");
 mustInclude("diag-panel-fallback-missing-early", "fallback if early missing");
 mustInclude("版本连点已绑定", "version tap meta when bound");
 
