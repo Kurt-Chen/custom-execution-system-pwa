@@ -21589,11 +21589,16 @@
     ):not(.is-title-editing) > .compact-manual-item-icons > .btn-save {
       display: none !important;
     }
-    /* 十二周年：归入选项 →封闭 紫色系（对齐原 →封闭 按钮） */
+    /* 十二周年 / 周计划：归入选项 →今天死磕 紫色系；已加入高亮 */
     .weekly-plan-assign-menu-panel .weekly-plan-assign-menu-item--closed {
       border: 1px solid #d8b4fe;
       background: #faf5ff;
       color: #7e22ce;
+    }
+    .weekly-plan-assign-menu-panel .weekly-plan-assign-menu-item--closed.is-on {
+      background: #f3e8ff;
+      border-color: #7e22ce;
+      color: #581c87;
     }
     /* 「···」操作菜单：紧凑列表（非胶囊），fixed 浮层紧贴触发钮 */
     .weekly-plan-task-ops-menu-panel {
@@ -107381,7 +107386,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261021n";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261022a";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -178643,7 +178648,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return changed;
     }
 
-    /** Closed List「自周计划」镜像 ↔ 周计划主任务：勾选任一侧，另一侧同步完成状态 */
+    /** Closed List「自周计划」镜像 ↔ 周计划主/子任务：勾选任一侧，另一侧同步完成状态 */
     function applyWeeklyPlanCompletionFromMirror(mirrorOf, complete, completedAtMs) {
       if (!mirrorOf || mirrorOf.kind !== "weeklyPlan") return;
       const resolved = resolveWeeklyPlanMirrorLocation(mirrorOf);
@@ -178655,6 +178660,24 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const tasks = getWeeklyPlanTasksForWeekKey(wk);
       const task = tasks.find((t) => t.id === mirrorOf.id);
       if (!task) return;
+      const microId = mirrorOf.microId ? String(mirrorOf.microId) : "";
+      if (microId) {
+        const micro = (task.microTasks || []).find(function (m) {
+          return m && String(m.id) === microId;
+        });
+        if (!micro) return;
+        if (complete) {
+          const atMs = normalizeWeeklyPlanCompletedAtMs(completedAtMs);
+          micro.done = true;
+          stampWeeklyPlanMicroDone(micro, true, atMs);
+        } else {
+          micro.done = false;
+          stampWeeklyPlanMicroDone(micro, false);
+        }
+        applyWeeklyPlanMainDoneFromMicros(task);
+        saveWeeklyPlanTasksForWeekWithPulse(tasks, wk);
+        return;
+      }
       if (complete) {
         const atMs = normalizeWeeklyPlanCompletedAtMs(completedAtMs);
         task.mainDone = true;
@@ -178688,6 +178711,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         const task = tasks.find((t) => t.id === mo.id);
         if (!task) return;
+        const microId = mo.microId ? String(mo.microId) : "";
         const dMirror = normalizeDeadlineAtMs(task.deadlineAt);
         if (dMirror != null) item.deadlineAt = dMirror;
         else delete item.deadlineAt;
@@ -178696,16 +178720,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           item.deadlineUpdatedAt = duMirror;
           item.updatedAt = Math.max(Number(item.updatedAt) || 0, duMirror);
         }
-        const want = isWeeklyPlanMainComplete(task);
+        let want;
+        let syncKey;
+        if (microId) {
+          const micro = (task.microTasks || []).find(function (m) {
+            return m && String(m.id) === microId;
+          });
+          if (!micro) return;
+          want = Boolean(micro.done);
+          syncKey = String(mo.id) + ":micro:" + microId;
+        } else {
+          want = isWeeklyPlanMainComplete(task);
+          syncKey = String(mo.id);
+        }
         if (Boolean(item.completed) === want) return;
         item.completed = want;
         if (want) {
-          const wpAt = getWeeklyPlanDoneSyncTimestampMs(task, null);
+          const wpAt = getWeeklyPlanDoneSyncTimestampMs(task, microId || null);
           item.completedAt = wpAt != null ? wpAt : Date.now();
           clearClosedListDoneMirrorDismiss(item);
-          const tid = String(mo.id);
-          if (!syncedDoneForTask.has(tid)) {
-            syncedDoneForTask.add(tid);
+          if (!syncedDoneForTask.has(syncKey)) {
+            syncedDoneForTask.add(syncKey);
             syncClosedListToDone(item);
           }
         } else {
@@ -179988,6 +180023,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     let weeklyPlanAssignMenuTriggerEl = null;
     let weeklyPlanAssignMenuTaskId = null;
     let weeklyPlanAssignMenuDismissBound = false;
+    /** Life/Work / micro 分类菜单 ctx（与 Open 归入共用 panel） */
+    let weeklyPlanClassifyMenuCtx = null;
 
     function closeWeeklyPlanAssignMenu() {
       if (weeklyPlanAssignMenuPanelEl) {
@@ -180001,6 +180038,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       weeklyPlanAssignMenuTriggerEl = null;
       weeklyPlanAssignMenuTaskId = null;
+      weeklyPlanClassifyMenuCtx = null;
     }
 
     function ensureWeeklyPlanAssignMenuDismiss() {
@@ -180055,6 +180093,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!trigger || !task || task.id == null) return;
       if (typeof closeWeeklyPlanTaskOpsMenu === "function") closeWeeklyPlanTaskOpsMenu();
       if (typeof closeAnniversaryAssignMenu === "function") closeAnniversaryAssignMenu();
+      if (typeof closeWeeklyPlanClassifyMenu === "function") closeWeeklyPlanClassifyMenu();
       ensureWeeklyPlanAssignMenuDismiss();
       const panel = ensureWeeklyPlanAssignMenuPanel();
       const todayKey = formatDateInputValue(new Date());
@@ -180065,6 +180104,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           : task;
       const otherOn =
         normalizeWeeklyPlanTodayPlanDate(rawForMark.todayPlanDate) === todayKey;
+      const closedOn =
+        typeof isWeeklyPlanJoinedClosedList === "function"
+          ? isWeeklyPlanJoinedClosedList(task.id, null)
+          : false;
       panel.replaceChildren();
 
       function mkItem(cls, label, action) {
@@ -180084,7 +180127,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           } else if (action === "work") {
             moveWeeklyPlanTaskToLane(tid, "work");
           } else if (action === "other") {
+            /* 分类互斥：切到其他任务前先离开今天死磕 */
+            if (typeof isWeeklyPlanJoinedClosedList === "function" && isWeeklyPlanJoinedClosedList(tid, null)) {
+              leaveWeeklyPlanClosedListMirror(tid, null);
+            }
             toggleWeeklyPlanTaskTodayPlan(tid, null);
+          } else if (action === "closed") {
+            const stillOther =
+              typeof findWeeklyPlanTaskRaw === "function" &&
+              normalizeWeeklyPlanTodayPlanDate(
+                (findWeeklyPlanTaskRaw(tid) || {}).todayPlanDate
+              ) === formatDateInputValue(new Date());
+            if (stillOther) forceLeaveWeeklyPlanTodayPlan(tid, null);
+            if (typeof isWeeklyPlanJoinedClosedList === "function" && isWeeklyPlanJoinedClosedList(tid, null)) {
+              leaveWeeklyPlanClosedListMirror(tid, null);
+            } else {
+              promoteWeeklyPlanTaskToClosedList(tid);
+            }
+            saveState({ skipUiPaintDirty: true });
+            try {
+              flushCloudSyncPulseImmediate();
+            } catch (_pulseErr) {}
           }
         });
         panel.appendChild(btn);
@@ -180099,6 +180162,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         "other"
       );
       if (otherOn) otherBtn.classList.add("is-on");
+      const closedBtn = mkItem(
+        "weekly-plan-assign-menu-item--closed",
+        closedOn ? "\u2713 今天死磕" : "\u2192今天死磕",
+        "closed"
+      );
+      if (closedOn) closedBtn.classList.add("is-on");
 
       if (weeklyPlanAssignMenuTriggerEl && weeklyPlanAssignMenuTriggerEl !== trigger) {
         weeklyPlanAssignMenuTriggerEl.setAttribute("aria-expanded", "false");
@@ -180135,7 +180204,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       openWeeklyPlanAssignMenu(trigger, task);
     }
 
-    /** Open List 主任务：归入 ▾（→ Life / → Work / ＋其他任务） */
+    /** Open List 主任务：归入 ▾（→ Life / → Work / 其他任务 / 今天死磕） */
     function appendWeeklyPlanOpenAssignDropdown(actIcons, task) {
       if (!actIcons || !task) return null;
       const trigger = document.createElement("button");
@@ -180152,6 +180221,188 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         ev.preventDefault();
         ev.stopPropagation();
         toggleWeeklyPlanAssignMenu(trigger, task);
+      });
+      actIcons.appendChild(trigger);
+      return trigger;
+    }
+
+    /**
+     * Life/Work 主任务与 micro 子任务：分类入口「归入 ▾」
+     * （今天死磕 / 其他任务；复用 assign 面板样式，独立 ctx 避免与 Open 菜单串台）
+     */
+    function closeWeeklyPlanClassifyMenu() {
+      closeWeeklyPlanAssignMenu();
+    }
+
+    function openWeeklyPlanClassifyMenu(trigger, ctx) {
+      if (!trigger || !ctx || ctx.taskId == null) return;
+      if (typeof closeWeeklyPlanTaskOpsMenu === "function") closeWeeklyPlanTaskOpsMenu();
+      if (typeof closeAnniversaryAssignMenu === "function") closeAnniversaryAssignMenu();
+      /* 先关 Open 归入菜单，再开分类菜单（共用 panel） */
+      if (weeklyPlanAssignMenuPanelEl) {
+        weeklyPlanAssignMenuPanelEl.hidden = true;
+      }
+      if (weeklyPlanAssignMenuTriggerEl && weeklyPlanAssignMenuTriggerEl !== trigger) {
+        weeklyPlanAssignMenuTriggerEl.setAttribute("aria-expanded", "false");
+        weeklyPlanAssignMenuTriggerEl.classList.remove("is-open");
+      }
+      weeklyPlanAssignMenuTriggerEl = null;
+      weeklyPlanAssignMenuTaskId = null;
+      weeklyPlanClassifyMenuCtx = null;
+      ensureWeeklyPlanAssignMenuDismiss();
+      const panel = ensureWeeklyPlanAssignMenuPanel();
+      const todayKey = formatDateInputValue(new Date());
+      const tid = ctx.taskId;
+      const mid = ctx.microId != null && String(ctx.microId) !== "" ? String(ctx.microId) : null;
+      let otherOn = false;
+      if (mid) {
+        const loc = findWeeklyPlanMicroRaw(mid);
+        otherOn =
+          !!(loc && loc.micro) &&
+          normalizeWeeklyPlanTodayPlanDate(loc.micro.todayPlanDate) === todayKey;
+      } else {
+        const raw =
+          typeof findWeeklyPlanTaskRaw === "function" ? findWeeklyPlanTaskRaw(tid) : null;
+        otherOn =
+          !!raw && normalizeWeeklyPlanTodayPlanDate(raw.todayPlanDate) === todayKey;
+      }
+      const closedOn =
+        typeof isWeeklyPlanJoinedClosedList === "function"
+          ? isWeeklyPlanJoinedClosedList(tid, mid)
+          : false;
+      panel.replaceChildren();
+
+      function mkItem(cls, label, action) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "weekly-plan-assign-menu-item " + cls;
+        btn.setAttribute("role", "menuitem");
+        btn.textContent = label;
+        btn.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const c = weeklyPlanClassifyMenuCtx;
+          closeWeeklyPlanClassifyMenu();
+          if (!c || c.taskId == null) return;
+          const cMid =
+            c.microId != null && String(c.microId) !== "" ? String(c.microId) : null;
+          if (action === "other") {
+            if (
+              typeof isWeeklyPlanJoinedClosedList === "function" &&
+              isWeeklyPlanJoinedClosedList(c.taskId, cMid)
+            ) {
+              leaveWeeklyPlanClosedListMirror(c.taskId, cMid);
+            }
+            if (cMid) toggleWeeklyPlanMicroTodayPlan(cMid, null);
+            else toggleWeeklyPlanTaskTodayPlan(c.taskId, null);
+          } else if (action === "closed") {
+            const stillOther = (function () {
+              if (cMid) {
+                const loc2 = findWeeklyPlanMicroRaw(cMid);
+                return (
+                  !!(loc2 && loc2.micro) &&
+                  normalizeWeeklyPlanTodayPlanDate(loc2.micro.todayPlanDate) ===
+                    formatDateInputValue(new Date())
+                );
+              }
+              const raw2 =
+                typeof findWeeklyPlanTaskRaw === "function"
+                  ? findWeeklyPlanTaskRaw(c.taskId)
+                  : null;
+              return (
+                !!raw2 &&
+                normalizeWeeklyPlanTodayPlanDate(raw2.todayPlanDate) ===
+                  formatDateInputValue(new Date())
+              );
+            })();
+            if (stillOther) forceLeaveWeeklyPlanTodayPlan(c.taskId, cMid);
+            if (
+              typeof isWeeklyPlanJoinedClosedList === "function" &&
+              isWeeklyPlanJoinedClosedList(c.taskId, cMid)
+            ) {
+              leaveWeeklyPlanClosedListMirror(c.taskId, cMid);
+            } else if (cMid) {
+              promoteWeeklyPlanMicroToClosedList(cMid);
+            } else {
+              promoteWeeklyPlanTaskToClosedList(c.taskId);
+            }
+            saveState({ skipUiPaintDirty: true });
+            try {
+              flushCloudSyncPulseImmediate();
+            } catch (_pulseErr) {}
+          }
+          if (typeof c.afterPick === "function") c.afterPick();
+        });
+        panel.appendChild(btn);
+        return btn;
+      }
+
+      const otherBtn = mkItem(
+        "weekly-plan-assign-menu-item--other",
+        otherOn ? "\u2713 其他任务" : "\uFF0B其他任务",
+        "other"
+      );
+      if (otherOn) otherBtn.classList.add("is-on");
+      const closedBtn = mkItem(
+        "weekly-plan-assign-menu-item--closed",
+        closedOn ? "\u2713 今天死磕" : "\u2192今天死磕",
+        "closed"
+      );
+      if (closedOn) closedBtn.classList.add("is-on");
+
+      if (weeklyPlanAssignMenuTriggerEl && weeklyPlanAssignMenuTriggerEl !== trigger) {
+        weeklyPlanAssignMenuTriggerEl.setAttribute("aria-expanded", "false");
+        weeklyPlanAssignMenuTriggerEl.classList.remove("is-open");
+      }
+      weeklyPlanAssignMenuTriggerEl = trigger;
+      weeklyPlanAssignMenuTaskId = tid;
+      weeklyPlanClassifyMenuCtx = ctx;
+      trigger.setAttribute("aria-expanded", "true");
+      trigger.classList.add("is-open");
+      panel.hidden = false;
+      placeWeeklyPlanAssignMenuPanel(panel, trigger);
+      window.requestAnimationFrame(function () {
+        if (weeklyPlanAssignMenuTriggerEl !== trigger) return;
+        if (!weeklyPlanAssignMenuPanelEl || weeklyPlanAssignMenuPanelEl.hidden) return;
+        placeWeeklyPlanAssignMenuPanel(panel, trigger);
+        window.requestAnimationFrame(function () {
+          if (weeklyPlanAssignMenuTriggerEl !== trigger) return;
+          if (!weeklyPlanAssignMenuPanelEl || weeklyPlanAssignMenuPanelEl.hidden) return;
+          placeWeeklyPlanAssignMenuPanel(panel, trigger);
+        });
+      });
+    }
+
+    function toggleWeeklyPlanClassifyMenu(trigger, ctx) {
+      if (
+        weeklyPlanAssignMenuTriggerEl === trigger &&
+        weeklyPlanClassifyMenuCtx &&
+        weeklyPlanAssignMenuPanelEl &&
+        !weeklyPlanAssignMenuPanelEl.hidden
+      ) {
+        closeWeeklyPlanClassifyMenu();
+        return;
+      }
+      openWeeklyPlanClassifyMenu(trigger, ctx);
+    }
+
+    /** Life/Work 主任务或 micro：归入 ▾（今天死磕 / 其他任务） */
+    function appendWeeklyPlanClassifyDropdown(actIcons, ctx) {
+      if (!actIcons || !ctx || ctx.taskId == null) return null;
+      const trigger = document.createElement("button");
+      trigger.type = "button";
+      trigger.className = "weekly-plan-assign-menu-btn";
+      trigger.textContent = "归入 \u25BE";
+      trigger.setAttribute("aria-label", "归入");
+      trigger.setAttribute("aria-haspopup", "menu");
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.addEventListener("pointerdown", function (ev) {
+        ev.stopPropagation();
+      });
+      trigger.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        toggleWeeklyPlanClassifyMenu(trigger, ctx);
       });
       actIcons.appendChild(trigger);
       return trigger;
@@ -180451,6 +180702,61 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return panel;
     }
 
+    function isAnniversaryJoinedClosedList(module, weekNum, taskId, subIdOpt) {
+      if (!Array.isArray(state.closedList)) return false;
+      for (let i = 0; i < state.closedList.length; i++) {
+        if (
+          anniversaryMirrorMatchesTarget(
+            state.closedList[i] && state.closedList[i].mirrorOf,
+            module,
+            taskId,
+            subIdOpt || null
+          )
+        ) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    /** 仅移出匹配的主/子封闭清单镜像（不误伤同父其它子任务） */
+    function leaveAnniversaryClosedListExact(module, weekNum, taskId, subIdOpt) {
+      if (!Array.isArray(state.closedList)) return;
+      const toRemove = state.closedList.filter(function (item) {
+        return anniversaryMirrorMatchesTarget(
+          item && item.mirrorOf,
+          module,
+          taskId,
+          subIdOpt || null
+        );
+      });
+      if (!toRemove.length) return;
+      toRemove.forEach(function (item) {
+        pushTrashEntry({
+          sourceList: "closedList",
+          originalId: item.id,
+          payload: deepCloneForTrash(item),
+          meta: {
+            removedFromTodayPlan: true,
+            module: module,
+            weekNum: weekNum,
+            taskId: taskId,
+            subId: subIdOpt || undefined
+          }
+        });
+        if (item.id != null) recordSyncTombstone(item.id);
+        removeClosedListDoneCopy(item.id);
+      });
+      const dropIds = Object.create(null);
+      toRemove.forEach(function (item) {
+        if (item.id != null) dropIds[String(item.id)] = 1;
+      });
+      state.closedList = state.closedList.filter(function (item) {
+        return !(item && item.id != null && dropIds[String(item.id)]);
+      });
+      persistCriticalLocalState(["closedList"]);
+    }
+
     function openAnniversaryAssignMenu(trigger, ctx) {
       if (!trigger || !ctx || !ctx.module || ctx.taskId == null) return;
       if (typeof closeWeeklyPlanAssignMenu === "function") closeWeeklyPlanAssignMenu();
@@ -180464,6 +180770,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         ctx.taskId,
         ctx.subId
       );
+      const closedOn = isAnniversaryJoinedClosedList(
+        ctx.module,
+        ctx.weekNum,
+        ctx.taskId,
+        ctx.subId
+      );
 
       function mkItem(cls, label, action) {
         const btn = document.createElement("button");
@@ -180472,6 +180784,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         btn.setAttribute("role", "menuitem");
         btn.textContent = label;
         if (action === "other" && otherOn) btn.classList.add("is-on");
+        if (action === "closed" && closedOn) btn.classList.add("is-on");
         btn.addEventListener("click", function (ev) {
           ev.preventDefault();
           ev.stopPropagation();
@@ -180479,6 +180792,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           closeAnniversaryAssignMenu();
           if (!c) return;
           if (action === "other") {
+            /* 分类互斥：切到其他任务前离开今天死磕 */
+            if (
+              isAnniversaryJoinedClosedList(c.module, c.weekNum, c.taskId, c.subId)
+            ) {
+              leaveAnniversaryClosedListExact(
+                c.module,
+                c.weekNum,
+                c.taskId,
+                c.subId
+              );
+              paintAfterClosedListPromoteLocal();
+            }
             toggleAnniversaryTaskTodayPlan(
               c.module,
               c.weekNum,
@@ -180487,12 +180812,33 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               null
             );
           } else if (action === "closed") {
-            promoteAnniversaryTaskToClosedList(
-              c.module,
-              c.weekNum,
-              c.taskId,
-              c.subId
-            );
+            if (isAnniversaryJoinedTodayPlan(c.module, c.weekNum, c.taskId, c.subId)) {
+              leaveAnniversaryTaskOtherTasks(c.module, c.weekNum, c.taskId, c.subId);
+            }
+            if (isAnniversaryJoinedClosedList(c.module, c.weekNum, c.taskId, c.subId)) {
+              leaveAnniversaryClosedListExact(
+                c.module,
+                c.weekNum,
+                c.taskId,
+                c.subId
+              );
+              paintAfterClosedListPromoteLocal();
+              saveState({ skipUiPaintDirty: true });
+              try {
+                flushCloudSyncPulseImmediate();
+              } catch (_pulseErr) {}
+            } else {
+              promoteAnniversaryTaskToClosedList(
+                c.module,
+                c.weekNum,
+                c.taskId,
+                c.subId
+              );
+              saveState({ skipUiPaintDirty: true });
+              try {
+                flushCloudSyncPulseImmediate();
+              } catch (_pulseErr) {}
+            }
           }
           if (typeof c.afterPick === "function") c.afterPick();
         });
@@ -180506,7 +180852,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       );
       mkItem(
         "weekly-plan-assign-menu-item--closed",
-        "\u2192今天死磕",
+        closedOn ? "\u2713 今天死磕" : "\u2192今天死磕",
         "closed"
       );
 
@@ -181919,6 +182265,113 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
+    /** 周计划封闭清单镜像是否匹配主任务 / 指定 micro（microId 空=仅主任务镜像） */
+    function weeklyPlanMirrorMatchesTarget(mo, taskId, microIdOpt) {
+      if (!mo || mo.kind !== "weeklyPlan" || String(mo.id) !== String(taskId || "")) {
+        return false;
+      }
+      const wantMicro = microIdOpt ? String(microIdOpt) : "";
+      const gotMicro = mo.microId ? String(mo.microId) : "";
+      return wantMicro === gotMicro;
+    }
+
+    function findWeeklyPlanClosedListMirror(taskId, microIdOpt) {
+      if (!Array.isArray(state.closedList)) return null;
+      for (let i = 0; i < state.closedList.length; i++) {
+        const it = state.closedList[i];
+        if (weeklyPlanMirrorMatchesTarget(it && it.mirrorOf, taskId, microIdOpt || null)) {
+          return it;
+        }
+      }
+      return null;
+    }
+
+    function isWeeklyPlanJoinedClosedList(taskId, microIdOpt) {
+      return Boolean(findWeeklyPlanClosedListMirror(taskId, microIdOpt));
+    }
+
+    /** 移出今天死磕（封闭清单镜像）；不改完成态；写 tomb 防复活 */
+    function leaveWeeklyPlanClosedListMirror(taskId, microIdOpt) {
+      const tid = String(taskId || "");
+      if (!tid || !Array.isArray(state.closedList)) return;
+      const mid = microIdOpt ? String(microIdOpt) : "";
+      const toRemove = state.closedList.filter(function (item) {
+        return weeklyPlanMirrorMatchesTarget(item && item.mirrorOf, tid, mid || null);
+      });
+      if (!toRemove.length) return;
+      toRemove.forEach(function (item) {
+        pushTrashEntry({
+          sourceList: "closedList",
+          originalId: item.id,
+          payload: deepCloneForTrash(item),
+          meta: {
+            removedFromTodayPlan: true,
+            weeklyPlanTaskId: tid,
+            weeklyPlanMicroId: mid || undefined
+          }
+        });
+        if (item.id != null) recordSyncTombstone(item.id);
+        removeClosedListDoneCopy(item.id);
+      });
+      const dropIds = Object.create(null);
+      toRemove.forEach(function (item) {
+        if (item.id != null) dropIds[String(item.id)] = 1;
+      });
+      state.closedList = state.closedList.filter(function (item) {
+        return !(item && item.id != null && dropIds[String(item.id)]);
+      });
+      persistCriticalLocalState(["closedList"]);
+      paintAfterClosedListPromoteLocal();
+    }
+
+    /** 仅移出「其他任务」挂牌（不清实体）；供分类切换复用 */
+    function forceLeaveWeeklyPlanTodayPlan(taskId, microIdOpt) {
+      const todayKey = formatDateInputValue(new Date());
+      if (microIdOpt) {
+        const loc = findWeeklyPlanMicroRaw(microIdOpt);
+        if (!loc || !loc.micro) return;
+        const raw = loc.micro;
+        if (normalizeWeeklyPlanTodayPlanDate(raw.todayPlanDate) !== todayKey) return;
+        raw.todayPlanDate = "";
+        touchWeeklyPlanTaskRevision(loc.parent);
+        stampTodayPlanDateRevision(raw);
+        if (typeof recordTodayPlanMarkRemoved === "function") {
+          recordTodayPlanMarkRemoved(raw.id);
+        }
+        noteCloudSyncTodayPlanPulseTaskId(raw.id);
+        try {
+          if (loc.weekKey) noteCloudSyncWeeklyPlanPulseWeekKey(loc.weekKey);
+        } catch (_wkNoteErr) {}
+        try {
+          if (typeof notifyAliyunSprintRealForTaskId === "function" && loc.parent && loc.parent.id) {
+            notifyAliyunSprintRealForTaskId(loc.parent.id, "today-plan-leave");
+          }
+        } catch (_sprintToday) {}
+        if (typeof paintTodayPlanPanel === "function") paintTodayPlanPanel();
+        return;
+      }
+      const raw = findWeeklyPlanTaskRaw(taskId);
+      if (!raw) return;
+      if (normalizeWeeklyPlanTodayPlanDate(raw.todayPlanDate) !== todayKey) return;
+      raw.todayPlanDate = "";
+      touchWeeklyPlanTaskRevision(raw);
+      stampTodayPlanDateRevision(raw);
+      if (typeof recordTodayPlanMarkRemoved === "function") {
+        recordTodayPlanMarkRemoved(raw.id);
+      }
+      noteCloudSyncTodayPlanPulseTaskId(raw.id);
+      try {
+        const located = findWeeklyPlanTaskInStorage(taskId);
+        if (located && located.weekKey) noteCloudSyncWeeklyPlanPulseWeekKey(located.weekKey);
+      } catch (_wkNoteErr) {}
+      try {
+        if (typeof notifyAliyunSprintRealForTaskId === "function") {
+          notifyAliyunSprintRealForTaskId(raw.id, "today-plan-leave");
+        }
+      } catch (_sprintToday) {}
+      if (typeof paintTodayPlanPanel === "function") paintTodayPlanPanel();
+    }
+
     function promoteWeeklyPlanTaskToClosedList(taskId) {
       const located = findWeeklyPlanTaskInStorage(taskId);
       if (!located) return;
@@ -181931,10 +182384,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         promoteDl != null
           ? formatDateInputValue(new Date(promoteDl))
           : selectedClosedListDate;
-      const existingMirror = state.closedList.find(function (it) {
-        const mo = it && it.mirrorOf;
-        return mo && mo.kind === "weeklyPlan" && mo.id === task.id;
-      });
+      const existingMirror = findWeeklyPlanClosedListMirror(task.id, null);
       if (existingMirror) {
         const curKey = getClosedListItemAssignmentDateKey(existingMirror);
         if (curKey !== dateStr) {
@@ -181964,6 +182414,65 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       li.mirrorOf = { kind: "weeklyPlan", id: task.id, weekKey: weekKey };
       if (promoteDl != null) li.deadlineAt = promoteDl;
       if (isWeeklyPlanMainComplete(task)) {
+        li.completed = true;
+        li.completedAt = Date.now();
+        syncClosedListToDone(li);
+      }
+      state.closedList.unshift(li);
+      persistCriticalLocalState(["closedList"]);
+      paintAfterClosedListPromoteLocal();
+    }
+
+    /** 周计划子任务（micro）→ 今天死磕；mirrorOf.microId 区分主/子，复用已有镜像不重复建 */
+    function promoteWeeklyPlanMicroToClosedList(microId) {
+      const loc = findWeeklyPlanMicroRaw(microId);
+      if (!loc || !loc.micro || !loc.parent) return;
+      const parent = loc.parent;
+      const micro = loc.micro;
+      const weekKey = loc.weekKey;
+      const mainT = String(parent.text || "").trim() || "（主任务）";
+      const subT = String(micro.text || "").trim() || "（子任务）";
+      const lineText = "【自周计划】" + mainT + " › " + subT;
+      const promoteDl = normalizeDeadlineAtMs(parent.deadlineAt);
+      const dateStr =
+        promoteDl != null
+          ? formatDateInputValue(new Date(promoteDl))
+          : selectedClosedListDate;
+      const existingMirror = findWeeklyPlanClosedListMirror(parent.id, micro.id);
+      if (existingMirror) {
+        const curKey = getClosedListItemAssignmentDateKey(existingMirror);
+        if (curKey !== dateStr) {
+          const sameDayMove = getClosedListItemsVisibleForViewDate(dateStr);
+          if (sameDayMove.length >= CLOSED_LIST_DAY_MAX_ITEMS) {
+            alert("Closed List 每天最多 " + CLOSED_LIST_DAY_MAX_ITEMS + " 条，请先删除一条再加入。");
+            return;
+          }
+        }
+        assignClosedListItemToDateKey(existingMirror, dateStr);
+        if (promoteDl != null) existingMirror.deadlineAt = promoteDl;
+        stampEntityRevision(existingMirror);
+        persistCriticalLocalState(["closedList"]);
+        paintAfterClosedListPromoteLocal();
+        return;
+      }
+      const sameDay = getClosedListItemsVisibleForViewDate(dateStr);
+      if (sameDay.length >= CLOSED_LIST_DAY_MAX_ITEMS) {
+        alert("Closed List 每天最多 " + CLOSED_LIST_DAY_MAX_ITEMS + " 条，请先删除一条再加入。");
+        return;
+      }
+      if (sameDay.some((it) => String(it.text || "").trim() === lineText)) {
+        paintAfterClosedListPromoteLocal();
+        return;
+      }
+      const li = createClosedListItem(lineText, dateStr, "");
+      li.mirrorOf = {
+        kind: "weeklyPlan",
+        id: parent.id,
+        weekKey: weekKey,
+        microId: micro.id
+      };
+      if (promoteDl != null) li.deadlineAt = promoteDl;
+      if (micro.done) {
         li.completed = true;
         li.completedAt = Date.now();
         syncClosedListToDone(li);
@@ -182064,6 +182573,31 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             child = mainT + " › " + subT;
           }
           return { parent: parent, child: child, flat: parent + " › " + child };
+        }
+      }
+      if (mo && mo.kind === "weeklyPlan") {
+        const resolved =
+          typeof resolveWeeklyPlanMirrorLocation === "function"
+            ? resolveWeeklyPlanMirrorLocation(mo)
+            : null;
+        if (resolved && resolved.task) {
+          const mainT = String(resolved.task.text || "").trim() || "（主任务）";
+          if (mo.microId) {
+            const micros = resolved.task.microTasks || [];
+            let subT = "（子任务）";
+            for (let mi = 0; mi < micros.length; mi++) {
+              if (micros[mi] && String(micros[mi].id) === String(mo.microId)) {
+                subT = String(micros[mi].text || "").trim() || "（子任务）";
+                break;
+              }
+            }
+            return {
+              parent: mainT,
+              child: subT,
+              flat: mainT + " › " + subT
+            };
+          }
+          return { parent: "", child: mainT, flat: mainT };
         }
       }
       const raw = String(rawText || "").trim();
@@ -183806,6 +184340,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             notifyAliyunSprintRealMetaAfterLocalChange("sprint-micro-delete-meta");
           }
         } catch (_metaErr) {}
+        /* 子任务删除：同步摘掉其今天死磕镜像，避免孤儿 closedList */
+        try {
+          if (typeof leaveWeeklyPlanClosedListMirror === "function") {
+            leaveWeeklyPlanClosedListMirror(tid, mid);
+          }
+        } catch (_leaveClosed) {}
         syncAllWeeklyPlanMirrorsForWeek(wk);
         if (!patchWeeklyPlanAfterMicroDeleted(tid, mid)) {
           refreshWeeklyPlanListAfterStructureChange();
@@ -184431,20 +184971,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         saveMain.hidden = true;
 
         const isOpenLane = getWeeklyPlanTaskLane(task) === "open";
-        let toClosedBtn = null;
-        if (!isOpenLane) {
-          toClosedBtn = document.createElement("button");
-          toClosedBtn.type = "button";
-          toClosedBtn.className = "weekly-plan-today-plan-btn";
-          syncWeeklyPlanTodayPlanButton(
-            toClosedBtn,
-            task.todayPlanDate === formatDateInputValue(new Date())
-          );
-          toClosedBtn.addEventListener("click", (ev) => {
-            ev.stopPropagation();
-            toggleWeeklyPlanTaskTodayPlan(task.id, toClosedBtn);
-          });
-        }
 
         const mainDoneNow = isWeeklyPlanMainComplete(task);
         const markDoneBtn = document.createElement("button");
@@ -184471,9 +184997,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         actMore.setAttribute("aria-expanded", "false");
         const actIcons = document.createElement("span");
         actIcons.className = "compact-manual-item-icons";
-        /* Open：Life / Work / 其他任务合并为「归入 ▾」；其它泳道仍单独显示其他任务钮 */
+        /* Open：Life/Work/其他任务/今天死磕；其它泳道：今天死磕/其他任务（归入 ▾） */
         if (isOpenLane) {
           appendWeeklyPlanOpenAssignDropdown(actIcons, task);
+        } else {
+          appendWeeklyPlanClassifyDropdown(actIcons, {
+            taskId: task.id,
+            afterPick: function () {
+              if (actWrap.classList.contains("is-expanded")) {
+                actWrap.classList.remove("is-expanded");
+                actMore.setAttribute("aria-expanded", "false");
+              }
+            }
+          });
         }
         actIcons.appendChild(markDoneBtn);
         /* 正常态：编辑/删除收进「···」；编辑态露出取消(编辑钮)+绿色保存；最右侧虚线 more 保留 */
@@ -184485,7 +185021,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const opsMenuBtn = appendWeeklyPlanMainTaskOpsMenu(actIcons, mainOpsMenuCtx);
         actIcons.appendChild(editMain);
         actIcons.appendChild(saveMain);
-        if (toClosedBtn) actIcons.appendChild(toClosedBtn);
         wireManualItemActionsWrap(actWrap, actMore);
         actWrap.appendChild(actIcons);
         actWrap.appendChild(actMore);
@@ -184641,17 +185176,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           txt.value = m.text;
           txt.title = String(m.text || "").trim();
           txt.readOnly = true;
-          const microTodayBtn = document.createElement("button");
-          microTodayBtn.type = "button";
-          microTodayBtn.className = "weekly-plan-today-plan-btn";
-          syncWeeklyPlanTodayPlanButton(
-            microTodayBtn,
-            m.todayPlanDate === formatDateInputValue(new Date())
-          );
-          microTodayBtn.addEventListener("click", (ev) => {
-            ev.stopPropagation();
-            toggleWeeklyPlanMicroTodayPlan(m.id, microTodayBtn);
-          });
           const delM = document.createElement("button");
           delM.type = "button";
           delM.className = "btn-delete btn-icon-action weekly-plan-micro-del-btn";
@@ -184681,16 +185205,25 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           microActWrap.className = "manual-item-actions-wrap weekly-plan-micro-actions-wrap";
           const microIcons = document.createElement("span");
           microIcons.className = "compact-manual-item-icons";
-          microIcons.appendChild(microEdit);
-          microIcons.appendChild(microSave);
-          microIcons.appendChild(microTodayBtn);
-          microIcons.appendChild(delM);
           const microMore = document.createElement("button");
           microMore.type = "button";
           microMore.className = "btn-icon-action manual-item-more-btn";
           microMore.textContent = "\u22EF";
           microMore.setAttribute("aria-label", "更多操作");
           microMore.setAttribute("aria-expanded", "false");
+          microIcons.appendChild(microEdit);
+          microIcons.appendChild(microSave);
+          appendWeeklyPlanClassifyDropdown(microIcons, {
+            taskId: task.id,
+            microId: m.id,
+            afterPick: function () {
+              if (microActWrap.classList.contains("is-expanded")) {
+                microActWrap.classList.remove("is-expanded");
+                microMore.setAttribute("aria-expanded", "false");
+              }
+            }
+          });
+          microIcons.appendChild(delM);
           ensureManualItemActionsGlobalDismiss();
           wireManualItemActionsWrap(microActWrap, microMore);
           microActWrap.appendChild(microIcons);
@@ -187773,17 +188306,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       txt.value = micro.text;
       txt.title = String(micro.text || "").trim();
       txt.readOnly = true;
-      const microTodayBtn = document.createElement("button");
-      microTodayBtn.type = "button";
-      microTodayBtn.className = "weekly-plan-today-plan-btn";
-      syncWeeklyPlanTodayPlanButton(
-        microTodayBtn,
-        micro.todayPlanDate === formatDateInputValue(new Date())
-      );
-      microTodayBtn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        toggleWeeklyPlanMicroTodayPlan(micro.id, microTodayBtn);
-      });
       const delM = document.createElement("button");
       delM.type = "button";
       delM.className = "btn-delete btn-icon-action weekly-plan-micro-del-btn";
@@ -187813,16 +188335,25 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       microActWrap.className = "manual-item-actions-wrap weekly-plan-micro-actions-wrap";
       const microIcons = document.createElement("span");
       microIcons.className = "compact-manual-item-icons";
-      microIcons.appendChild(microEdit);
-      microIcons.appendChild(microSave);
-      microIcons.appendChild(microTodayBtn);
-      microIcons.appendChild(delM);
       const microMore = document.createElement("button");
       microMore.type = "button";
       microMore.className = "btn-icon-action manual-item-more-btn";
       microMore.textContent = "\u22EF";
       microMore.setAttribute("aria-label", "更多操作");
       microMore.setAttribute("aria-expanded", "false");
+      microIcons.appendChild(microEdit);
+      microIcons.appendChild(microSave);
+      appendWeeklyPlanClassifyDropdown(microIcons, {
+        taskId: taskId,
+        microId: micro.id,
+        afterPick: function () {
+          if (microActWrap.classList.contains("is-expanded")) {
+            microActWrap.classList.remove("is-expanded");
+            microMore.setAttribute("aria-expanded", "false");
+          }
+        }
+      });
+      microIcons.appendChild(delM);
       ensureManualItemActionsGlobalDismiss();
       wireManualItemActionsWrap(microActWrap, microMore);
       microActWrap.appendChild(microIcons);
@@ -189149,7 +189680,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (item.completed) closedDone += 1;
         if (item.id) closedIdSet[String(item.id)] = 1;
         const mirror = item.mirrorOf;
-        if (mirror && mirror.id) closedIdSet[String(mirror.id)] = 1;
+        if (mirror && mirror.id) {
+          /* micro 镜像只挡该子任务；主任务镜像才挡父 id（避免误伤兄弟 micro） */
+          if (mirror.microId) closedIdSet[String(mirror.microId)] = 1;
+          else closedIdSet[String(mirror.id)] = 1;
+        }
       }
       const otherSource = collectRawWeeklyPlanTasksForTodayPlan(todayKey);
       const otherRows = [];
@@ -189712,7 +190247,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (!item) continue;
         if (item.id) closedIdSet[String(item.id)] = 1;
         const mirror = item.mirrorOf;
-        if (mirror && mirror.id) closedIdSet[String(mirror.id)] = 1;
+        if (mirror && mirror.id) {
+          if (mirror.microId) closedIdSet[String(mirror.microId)] = 1;
+          else closedIdSet[String(mirror.id)] = 1;
+        }
         const nameParts = buildTodayPlanClosedHierarchyParts(item.text, item);
         closedRows.push({
           id: item.id ? String(item.id) : "",
