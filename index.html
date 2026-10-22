@@ -103804,7 +103804,9 @@
                   <div class="mission-item-body">
                     <span class="mission-item-body__text"
                       ><span class="mission-num" aria-hidden="true">05</span
-                      >让与我相联系的一切都变得更好。</span
+                      >让与我相联系的一切都变得更好，成为一种贡献<span class="mission-en"
+                        >（Being a Contribution）。</span
+                      ></span
                     >
                   </div>
                 </li>
@@ -107386,7 +107388,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261022a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261022b";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -108565,7 +108567,12 @@
     /** My Done 任务行正文展开（仅内存） */
     let doneTextExpandedIds = new Set();
     /** Closed List 当日条目拖拽：{ dragId } */
+    /** 年岁目标：仅内存编辑态；默认 false=彩色胶囊展示（双端共用，勿桌面常驻表单） */
     let ageGoalsEditMode = false;
+    /** 进入编辑时聚焦的年岁；null 表示所有已展开年岁都进表单（仅「添加」无槽位时） */
+    let ageGoalsEditFocusAge = null;
+    /** 进入编辑后要聚焦的槽位下标（可选） */
+    let ageGoalsEditFocusSlot = null;
     let closedListCompleteAnimIds = new Set();
     /** Closed List 每日任务上限（与进度段 / quota 槽位数一致） */
     const CLOSED_LIST_DAY_MAX_ITEMS = 3;
@@ -151189,7 +151196,7 @@
       }
     }
 
-    const AGE_GOAL_SLOT_COUNT = 4;
+    const AGE_GOAL_SLOT_COUNT = 5;
     const DEFAULT_AGE_40_GOALS = [
       "净值达到300万",
       "体脂率降到22%以下",
@@ -151325,35 +151332,55 @@
       return arr;
     }
 
-    function commitAgeGoalsFromInputs() {
+    /**
+     * 把编辑态 DOM 草稿写回内存 state.ageGoals（不 saveState、不推云）。
+     * 用于「+ 添加目标」局部重建前保留未保存输入，避免被空槽覆盖。
+     */
+    function captureAgeGoalEditDraftsFromDom() {
       if (!ageGoalsCountdownList) return;
-      ageGoalsCountdownList.querySelectorAll(".age-goal-item").forEach((el) => {
+      ageGoalsCountdownList.querySelectorAll(".age-goal-item").forEach(function (el) {
         const age = el.dataset.age;
         if (!age) return;
-        const base = Array.from({ length: AGE_GOAL_SLOT_COUNT }, () => normalizeAgeGoalSlot(""));
-        el.querySelectorAll(".age-goal-edit-slot").forEach(function (wrap) {
+        const slots = el.querySelectorAll(".age-goal-edit-slot");
+        if (!slots.length) return;
+        const arr = getAgeGoalTargets(age).slice();
+        let touched = false;
+        slots.forEach(function (wrap) {
           const si = Number(wrap.dataset.slot);
           if (si !== si || si < 0 || si >= AGE_GOAL_SLOT_COUNT) return;
           const titleInp = wrap.querySelector(".age-goal-input");
           const detailTa = wrap.querySelector(".age-goal-field-detail");
           const giveTa = wrap.querySelector(".age-goal-field-giveup");
           const costTa = wrap.querySelector(".age-goal-field-cost");
-          /* Why 仅经查看态 WHY → 面板编辑，保存目标时保留槽位 why */
+          if (!titleInp && !detailTa && !giveTa && !costTa) return;
           const prevWhy = getAgeGoalSlotWhyText(age, si);
-          base[si] = normalizeAgeGoalSlot({
+          arr[si] = normalizeAgeGoalSlot({
             title: titleInp ? titleInp.value : "",
             detail: detailTa ? detailTa.value : "",
             why: prevWhy,
             giveUp: giveTa ? giveTa.value : "",
             cost: costTa ? costTa.value : ""
           });
+          touched = true;
         });
-        state.ageGoals[age] = base;
+        if (touched) state.ageGoals[age] = arr;
       });
+    }
+
+    function commitAgeGoalsFromInputs() {
+      if (!ageGoalsCountdownList) return;
+      captureAgeGoalEditDraftsFromDom();
       state.ageGoalsEditSlots = {};
       saveState();
-      ageGoalsEditMode = false;
+      exitAgeGoalsEditMode(false);
       render();
+    }
+
+    function exitAgeGoalsEditMode(doRender) {
+      ageGoalsEditMode = false;
+      ageGoalsEditFocusAge = null;
+      ageGoalsEditFocusSlot = null;
+      if (doRender) render();
     }
 
     function saveSingleAgeGoalSlot(age, slotIdx) {
@@ -151379,9 +151406,15 @@
         giveUp: giveTa ? giveTa.value : "",
         cost: costTa ? costTa.value : ""
       });
-      state.ageGoals[ageStr] = arr;
+      /* 先收其它槽位草稿，再强制写入本条（避免只存一条丢其它未点保存的输入） */
+      captureAgeGoalEditDraftsFromDom();
+      const merged = getAgeGoalTargets(age).slice();
+      merged[slotIdx] = arr[slotIdx];
+      state.ageGoals[ageStr] = merged;
       saveState();
       closeAllAgeGoalViewMenus();
+      /* 单条保存后回到彩色胶囊展示态 */
+      exitAgeGoalsEditMode(false);
       render();
     }
 
@@ -151396,8 +151429,49 @@
       return auto;
     }
 
-    function enterAgeGoalsEditMode() {
+    /**
+     * 编辑态局部刷新年岁目标列表：不走 render()。
+     * 因 ageGoalsEditMode 会让 render() 被 isAppUiEditingInProgress 永久推迟，
+     * 「+ 添加目标」若调 render() 则槽位数已写入但 DOM 永不更新。
+     */
+    function refreshAgeGoalsCountdownWhileEditing(focusAge, focusSlot) {
+      captureAgeGoalEditDraftsFromDom();
+      if (focusAge != null && focusAge !== "") {
+        const n = Number(focusAge);
+        if (n === n) ageGoalsEditFocusAge = n;
+      }
+      if (focusSlot != null && focusSlot !== "") {
+        const s = Number(focusSlot);
+        if (s === s) ageGoalsEditFocusSlot = s;
+      }
+      renderAgeGoalsCountdown({ force: true });
+      requestAnimationFrame(function () {
+        if (!ageGoalsCountdownList || ageGoalsEditFocusAge == null) return;
+        const det = ageGoalsCountdownList.querySelector(
+          'details.age-goal-item[data-age="' + String(ageGoalsEditFocusAge) + '"]'
+        );
+        if (!det) return;
+        det.open = true;
+        if (ageGoalsEditFocusSlot == null) return;
+        const inps = det.querySelectorAll(".age-goal-input");
+        const inp = inps[ageGoalsEditFocusSlot];
+        if (inp && inp.focus) {
+          inp.focus();
+          if (inp.select && !String(inp.value || "").trim()) inp.select();
+        }
+      });
+    }
+
+    /**
+     * 进入年岁目标编辑态。可选 age/slot：只对该年岁渲染表单并聚焦对应输入；
+     * 其它年岁仍保持胶囊展示，避免 40–60 岁全部建表单导致卡顿。
+     */
+    function enterAgeGoalsEditMode(ageOpt, slotOpt) {
       ageGoalsEditMode = true;
+      const ageNum = ageOpt == null || ageOpt === "" ? NaN : Number(ageOpt);
+      const slotNum = slotOpt == null || slotOpt === "" ? NaN : Number(slotOpt);
+      ageGoalsEditFocusAge = ageNum === ageNum ? ageNum : null;
+      ageGoalsEditFocusSlot = slotNum === slotNum ? slotNum : null;
       if (myGoalsModule && myGoalsModule.classList.contains("module-collapsed")) {
         myGoalsModule.classList.remove("module-collapsed");
         if (toggleMyGoalsModuleBtn) setDisclosureToggleState(toggleMyGoalsModuleBtn, true);
@@ -151406,11 +151480,29 @@
         ageGoalsSection.classList.remove("collapsed");
         if (toggleAgeGoalsBtn) setDisclosureToggleState(toggleAgeGoalsBtn, true);
       }
-      renderAgeGoalsCountdown();
+      renderAgeGoalsCountdown({ force: true });
       requestAnimationFrame(function () {
-        if (ageGoalsSection && typeof ageGoalsSection.scrollIntoView === "function") {
-          ageGoalsSection.scrollIntoView({ block: "nearest", behavior: "smooth" });
-        }
+        requestAnimationFrame(function () {
+          if (ageGoalsEditFocusAge != null && ageGoalsCountdownList) {
+            const det = ageGoalsCountdownList.querySelector(
+              'details.age-goal-item[data-age="' + String(ageGoalsEditFocusAge) + '"]'
+            );
+            if (det) {
+              det.open = true;
+              if (ageGoalsEditFocusSlot != null) {
+                const inps = det.querySelectorAll(".age-goal-input");
+                const inp = inps[ageGoalsEditFocusSlot];
+                if (inp && inp.focus) {
+                  inp.focus();
+                  if (inp.select) inp.select();
+                }
+              }
+            }
+          }
+          if (ageGoalsSection && typeof ageGoalsSection.scrollIntoView === "function") {
+            ageGoalsSection.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          }
+        });
       });
     }
 
@@ -152194,16 +152286,28 @@
       /* 人生使命已去掉文字版/海报版切换，仅保留列表正文 + 底部 Memento Mori */
     }
 
-    function renderAgeGoalsCountdown() {
+    function renderAgeGoalsCountdown(opts) {
       if (!ageGoalsCountdownList) return;
+      const force = !!(opts && opts.force);
       if (ensureDefaultAge40Goals()) {
         saveState();
       }
-      if (typeof isAppUiFieldEditingInProgress === "function" && isAppUiFieldEditingInProgress()) {
+      /* force：编辑态主动加槽/进编辑；勿被焦点守卫挡住，否则第二次「+ 添加目标」DOM 不更新 */
+      if (
+        !force &&
+        typeof isAppUiFieldEditingInProgress === "function" &&
+        isAppUiFieldEditingInProgress()
+      ) {
         renderDeferredWhileEditing = true;
         scheduleRenderWhenEditingEnds();
         return;
       }
+      const openAges = new Set();
+      try {
+        ageGoalsCountdownList.querySelectorAll("details.age-goal-item[open]").forEach(function (d) {
+          if (d && d.dataset && d.dataset.age) openAges.add(String(d.dataset.age));
+        });
+      } catch (_openAgesErr) {}
       ageGoalsCountdownList.innerHTML = "";
       const now = new Date();
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -152224,6 +152328,14 @@
         item.className = "age-goal-item";
         item.dataset.age = String(age);
         applyAgeGoalCapsuleTheme(item, age);
+        /* 仅聚焦年岁进表单；禁止 40–60 全开表单（卡顿主因） */
+        const editThisAge =
+          !!ageGoalsEditMode &&
+          ageGoalsEditFocusAge != null &&
+          Number(ageGoalsEditFocusAge) === Number(age);
+        if (openAges.has(String(age)) || editThisAge) {
+          item.open = true;
+        }
         const summary = document.createElement("summary");
         summary.className = "age-goal-summary";
         summary.setAttribute("aria-label", "我的" + age + "岁目标，点击展开或收起详情");
@@ -152275,7 +152387,7 @@
           ageGoalSlotHasAnyContent(targets[i])
         );
 
-        if (!ageGoalsEditMode) {
+        if (!editThisAge) {
           if (filledIdx.length === 0) {
             const empty = document.createElement("p");
             empty.className = "age-goal-empty";
@@ -152285,8 +152397,10 @@
             addBtn.type = "button";
             addBtn.className = "age-goal-add-btn";
             addBtn.textContent = "+ 添加目标";
-            addBtn.addEventListener("click", () => {
-              enterAgeGoalsEditMode();
+            addBtn.addEventListener("click", function (ev) {
+              ev.preventDefault();
+              ev.stopPropagation();
+              enterAgeGoalsEditMode(age, 0);
             });
             item.appendChild(addBtn);
           } else {
@@ -152371,24 +152485,7 @@
                 ev.preventDefault();
                 ev.stopPropagation();
                 closeAllAgeGoalViewMenus();
-                enterAgeGoalsEditMode();
-                const ageKey = String(age);
-                const slot = slotIdx;
-                requestAnimationFrame(function () {
-                  requestAnimationFrame(function () {
-                    const det = ageGoalsCountdownList.querySelector(
-                      'details.age-goal-item[data-age="' + ageKey + '"]'
-                    );
-                    if (det) {
-                      det.open = true;
-                      const inps = det.querySelectorAll(".age-goal-input");
-                      if (inps[slot] && inps[slot].focus) {
-                        inps[slot].focus();
-                        if (inps[slot].select) inps[slot].select();
-                      }
-                    }
-                  });
-                });
+                enterAgeGoalsEditMode(age, slotIdx);
               });
 
               const menuDel = document.createElement("button");
@@ -152446,6 +152543,24 @@
               ul.appendChild(rowShell);
             });
             item.appendChild(ul);
+            if (filledIdx.length < AGE_GOAL_SLOT_COUNT) {
+              const addBtn = document.createElement("button");
+              addBtn.type = "button";
+              addBtn.className = "age-goal-add-btn";
+              addBtn.textContent = "+ 添加目标";
+              addBtn.addEventListener("click", function (ev) {
+                ev.preventDefault();
+                ev.stopPropagation();
+                const nextSlot = filledIdx.length;
+                if (!state.ageGoalsEditSlots) state.ageGoalsEditSlots = {};
+                state.ageGoalsEditSlots[String(age)] = Math.min(
+                  AGE_GOAL_SLOT_COUNT,
+                  nextSlot + 1
+                );
+                enterAgeGoalsEditMode(age, nextSlot);
+              });
+              item.appendChild(addBtn);
+            }
           }
         } else {
           const slotCount = getAgeEditSlotCount(age, targets);
@@ -152509,12 +152624,14 @@
               ev.preventDefault();
               ev.stopPropagation();
               closeAllAgeGoalViewMenus();
+              captureAgeGoalEditDraftsFromDom();
               const k = String(age);
               const arr = getAgeGoalTargets(age).slice();
               arr[i] = normalizeAgeGoalSlot("");
               state.ageGoals[k] = arr;
               saveState();
-              render();
+              /* 编辑态禁止 render()：会被 ageGoalsEditMode 永久推迟 */
+              refreshAgeGoalsCountdownWhileEditing(age, Math.max(0, i - 1));
             });
 
             panel.appendChild(menuFocus);
@@ -152602,13 +152719,22 @@
             addBtn.type = "button";
             addBtn.className = "age-goal-add-btn";
             addBtn.textContent = "+ 添加目标";
-            addBtn.addEventListener("click", () => {
+            addBtn.addEventListener("click", function (ev) {
+              ev.preventDefault();
+              ev.stopPropagation();
+              /* 根因修复：编辑态 render() 会被 ageGoalsEditMode 永久推迟，导致第二次添加无响应；
+               * 且 saveState+全量 render 会卡顿。改为：草稿入内存 → 加槽 → 局部 force 刷新。 */
               if (!state.ageGoalsEditSlots) state.ageGoalsEditSlots = {};
               const key = String(age);
-              const next = Math.min(AGE_GOAL_SLOT_COUNT, slotCount + 1);
+              const curManual = state.ageGoalsEditSlots[key];
+              const cur =
+                typeof curManual === "number" && curManual >= 1
+                  ? curManual
+                  : slotCount;
+              const next = Math.min(AGE_GOAL_SLOT_COUNT, cur + 1);
+              if (next <= cur) return;
               state.ageGoalsEditSlots[key] = next;
-              saveState();
-              render();
+              refreshAgeGoalsCountdownWhileEditing(age, next - 1);
             });
             item.appendChild(addBtn);
           }
