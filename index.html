@@ -19046,6 +19046,36 @@
       align-self: flex-start;
     }
 
+    /* 书卡：编辑/删除收进 ⋯，与全局 manual-item-actions-wrap 一致 */
+    .reading-plan-item-toolbar .reading-plan-item-actions-wrap {
+      margin-left: 0;
+      gap: 4px;
+    }
+
+    .reading-plan-item-toolbar .reading-plan-item-actions-wrap .manual-item-more-btn {
+      width: 28px;
+      height: 28px;
+      min-width: 28px;
+      min-height: 28px;
+      max-height: 28px;
+      border-radius: 8px;
+      padding: 0;
+      box-sizing: border-box;
+      flex-shrink: 0;
+    }
+
+    .reading-plan-item-toolbar .reading-plan-item-actions-wrap .manual-item-more-btn[hidden] {
+      display: none !important;
+    }
+
+    .reading-plan-item-toolbar .compact-manual-item-icons .reading-plan-item-tool-btn {
+      width: 28px;
+      height: 28px;
+      min-width: 28px;
+      min-height: 28px;
+      max-height: 28px;
+    }
+
     /* 阅读设备胶囊：工具栏最左侧（列表/编辑按钮之前） */
     .reading-plan-device-capsule {
       box-sizing: border-box;
@@ -81759,8 +81789,9 @@
         -webkit-tap-highlight-color: transparent;
       }
 
-      /* 阅读计划书卡工具栏（列表/编辑）：固定 28px，避免全局 button min-height 撑大且折叠无效 */
-      .reading-plan-item-toolbar .reading-plan-item-tool-btn {
+      /* 阅读计划书卡工具栏（列表/⋯）：固定 28px，避免全局 button min-height 撑大且折叠无效 */
+      .reading-plan-item-toolbar .reading-plan-item-tool-btn,
+      .reading-plan-item-toolbar .reading-plan-item-actions-wrap .manual-item-more-btn {
         width: 28px;
         height: 28px;
         min-width: 28px;
@@ -107970,7 +108001,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261023a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261023b";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -186711,6 +186742,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return btn;
       }
 
+      ensureManualItemActionsGlobalDismiss();
+
       const toggleBtn = mkToolBtn(
         isReadingPlanBookExpanded(book.id) ? "reading-plan-item-tool-btn--toggle is-active" : "reading-plan-item-tool-btn--toggle",
         ICON_BTN_LIST_SVG,
@@ -186744,6 +186777,32 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (editing) return;
         updateReadingPlanBookReadOn(book.id, cycleReadingPlanReadOn(book.readOn));
       });
+
+      /** 编辑 / 删除收进 ⋯；编辑中保持展开以免保存钮被点空白收起 */
+      const actionsWrap = document.createElement("div");
+      actionsWrap.className = "manual-item-actions-wrap reading-plan-item-actions-wrap";
+      const iconGroup = document.createElement("span");
+      iconGroup.className = "compact-manual-item-icons";
+      const moreBtn = document.createElement("button");
+      moreBtn.type = "button";
+      moreBtn.className = "btn-icon-action manual-item-more-btn reading-plan-item-tool-btn";
+      moreBtn.textContent = "\u22EF";
+      moreBtn.setAttribute("aria-label", "更多操作");
+      moreBtn.setAttribute("aria-expanded", "false");
+      wireManualItemActionsWrap(actionsWrap, moreBtn);
+
+      function syncReadingPlanActionsChrome(isEditing) {
+        actionsWrap.classList.toggle("is-title-editing", !!isEditing);
+        if (isEditing) {
+          actionsWrap.classList.add("is-expanded");
+          moreBtn.setAttribute("aria-expanded", "true");
+          moreBtn.hidden = true;
+        } else {
+          moreBtn.hidden = false;
+          actionsWrap.classList.remove("is-expanded");
+          moreBtn.setAttribute("aria-expanded", "false");
+        }
+      }
 
       function finishEdit(save) {
         if (!editing || !titleInput) return;
@@ -186780,6 +186839,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         editBtn.hidden = false;
         saveBtn.hidden = true;
         saveBtn.disabled = true;
+        syncReadingPlanActionsChrome(false);
         if (authorEl) authorEl.hidden = false;
         if (!save) {
           const restored = parseReadingPlanBookDisplay(book.title);
@@ -186843,6 +186903,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         editBtn.hidden = true;
         saveBtn.hidden = false;
         saveBtn.disabled = false;
+        syncReadingPlanActionsChrome(true);
         titleInput.focus();
         titleInput.select();
         function onEditKeydown(event) {
@@ -186873,14 +186934,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         deleteReadingPlanBook(book.id);
       });
 
+      iconGroup.appendChild(editBtn);
+      iconGroup.appendChild(saveBtn);
+      iconGroup.appendChild(delBtn);
+      actionsWrap.appendChild(iconGroup);
+      actionsWrap.appendChild(moreBtn);
+
       toolbarEl.appendChild(deviceBtn);
       if (book.status === "completed") {
         appendReadingPlanCompletedDateRow(toolbarEl, book);
       }
       toolbarEl.appendChild(toggleBtn);
-      toolbarEl.appendChild(editBtn);
-      toolbarEl.appendChild(saveBtn);
-      toolbarEl.appendChild(delBtn);
+      toolbarEl.appendChild(actionsWrap);
     }
 
     /** 书卡片「针对的问题」展示文案 */
