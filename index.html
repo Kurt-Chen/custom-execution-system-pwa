@@ -108001,7 +108001,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261024a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261024b";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -134742,6 +134742,12 @@
           ) {
             changed = true;
           }
+          if (
+            typeof dedupeClosedListAnniversaryMirrorsInState === "function" &&
+            dedupeClosedListAnniversaryMirrorsInState()
+          ) {
+            changed = true;
+          }
         }
         if (aggressive) {
           if (pruneDoneHistoryByRetention(true)) changed = true;
@@ -148337,6 +148343,14 @@
     function syncClosedListToDone(item, opts) {
       if (!item || item.id == null) return null;
       const skipNotify = opts && opts.skipNotify;
+      /**
+       * 十二周年镜像：My Done 由 anniversaryTwMeta 承担（【十二周年#N】），
+       * 不再另写【Closed List】行，避免同一份打卡叠双。
+       */
+      if (item.mirrorOf && item.mirrorOf.kind === "anniversaryTw") {
+        removeClosedListDoneCopy(item.id, { skipNotify: skipNotify });
+        return null;
+      }
       removeClosedListDoneCopy(item.id, { skipNotify: skipNotify });
       const at =
         normalizeWeeklyPlanCompletedAtMs(item && item.completedAt) ||
@@ -148453,12 +148467,18 @@
       let changed = false;
       const closedKeep = Object.create(null);
       const closedDismissed = Object.create(null);
+      /* 十二周年镜像：禁止补/留【Closed List】Done，由 anniversaryTwMeta 独占展示 */
+      const closedAnniversarySkip = Object.create(null);
       (Array.isArray(state.closedList) ? state.closedList : []).forEach(function (item) {
         if (!item || item.id == null || !item.completed) return;
         const sid = String(item.id);
         /* 用户已从时间轴删除：不要因为封闭清单仍勾选就把 Done 行补回来 */
         if (item.doneMirrorDismissed) {
           closedDismissed[sid] = true;
+          return;
+        }
+        if (item.mirrorOf && item.mirrorOf.kind === "anniversaryTw") {
+          closedAnniversarySkip[sid] = true;
           return;
         }
         closedKeep[sid] = true;
@@ -148474,7 +148494,7 @@
       state.done = state.done.filter(function (d) {
         if (!d || !d.closedListMeta || d.closedListMeta.sourceId == null) return true;
         const sid = String(d.closedListMeta.sourceId);
-        if (closedDismissed[sid]) {
+        if (closedDismissed[sid] || closedAnniversarySkip[sid]) {
           removedDismissed.push(d);
           return false;
         }
@@ -174003,7 +174023,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               textEl.textContent =
                 variant === "weekly"
                   ? compactDoneWeeklyPlanDisplayRest(br.rest)
-                  : br.rest;
+                  : variant === "anniversary"
+                    ? compactDoneAnniversaryDisplayRest(br.rest)
+                    : br.rest;
             }
           }
           main.appendChild(textEl);
@@ -174045,7 +174067,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               textEl.textContent =
                 variant === "weekly"
                   ? compactDoneWeeklyPlanDisplayRest(br.rest)
-                  : br.rest;
+                  : variant === "anniversary"
+                    ? compactDoneAnniversaryDisplayRest(br.rest)
+                    : br.rest;
             }
           }
           taskLine.appendChild(textEl);
@@ -175278,7 +175302,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         "【自周计划】",
         "【其他任务】",
         "【周计划】",
-        "【备忘录】"
+        "【备忘录】",
+        "【12周年】"
       ];
       for (let guard = 0; guard < 8; guard++) {
         const before = s;
@@ -175288,14 +175313,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             s = s.slice(p.length).trim();
           }
         }
+        /* 【十二周年#20】/【十二周年#22】等动态周期前缀 */
+        const annivPref = s.match(/^【十二周年#\d+】/);
+        if (annivPref) {
+          s = s.slice(annivPref[0].length).trim();
+        }
         if (s === before) break;
       }
       const isoRangeDot =
         /^\d{4}-\d{2}-\d{2}\s*\([^)]+\)\s*(?:[~～\-\u2013\u2014]+|\s+--\s+)\s*\d{4}-\d{2}-\d{2}\s*\([^)]+\)\s*·\s*/;
       const compactRangeDot =
         /^\d{1,2}\/\d{1,2}(?:-\d{1,2}|\s*(?:[\u2013\u2014~～\-]+|\s+--\s+)\s*\d{1,2}\/\d{1,2})\s*·\s*/;
+      /* 十二周年 Done：「第N周（起～止）」→「第N周」便于与封闭清单【12周年】文案对齐去重 */
+      const annivWeekRangeDot =
+        /^(第\d+周)\s*[（(][^）)]*[）)]\s*(?:[·•]\s*)?/;
       for (let g = 0; g < 4; g++) {
-        const t = s.replace(isoRangeDot, "").replace(compactRangeDot, "").trim();
+        const t = s
+          .replace(isoRangeDot, "")
+          .replace(compactRangeDot, "")
+          .replace(annivWeekRangeDot, "$1 · ")
+          .replace(/\s*·\s*·\s*/g, " · ")
+          .trim();
         if (t === s) break;
         s = t;
       }
@@ -175388,6 +175426,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (task && task.memoMeta && task.memoMeta.sourceId) {
         return "memo:" + String(task.memoMeta.sourceId);
       }
+      /**
+       * 十二周年 Done：与封闭清单 anniversaryTw 镜像共用键，
+       * 只保留 anniversaryTwMeta 那条（【十二周年#N】），丢掉【Closed List】副本。
+       */
+      const annMeta = task && task.anniversaryTwMeta;
+      if (annMeta && annMeta.module && annMeta.taskId) {
+        const subPart = annMeta.subId ? ":sub:" + String(annMeta.subId) : ":main";
+        return "anniv:" + String(annMeta.module) + ":" + String(annMeta.taskId) + subPart;
+      }
       const stripped = stripDoneTextSourcePrefixesForDedupe(task && task.text != null ? task.text : "");
       if (!stripped) return "";
       const wpMeta = task && task.weeklyPlanMeta;
@@ -175403,6 +175450,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const mo = clItem && clItem.mirrorOf;
         if (mo && mo.kind === "weeklyPlan" && mo.id) {
           return "wp:" + String(mo.id) + ":main";
+        }
+        if (mo && mo.kind === "anniversaryTw" && mo.module && mo.taskId) {
+          const subPart = mo.subId ? ":sub:" + String(mo.subId) : ":main";
+          return "anniv:" + String(mo.module) + ":" + String(mo.taskId) + subPart;
         }
       }
       const textKey = stripped
@@ -175434,6 +175485,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return 5;
       }
       if (task && task.weeklyPlanMeta) return 4;
+      /* 十二周年正式镜像优先于封闭清单副本（用户要保留【十二周年#N】那条） */
+      if (task && task.anniversaryTwMeta) return 4;
       if (task && task.closedListMeta) return 2;
       if (task && task.memoMeta) return 1;
       return 0;
@@ -175573,6 +175626,97 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (removeIds.size) {
         state.closedList = state.closedList.filter(function (item) {
           return item && !removeIds.has(item.id);
+        });
+      }
+      return changed;
+    }
+
+    /**
+     * 同一十二周年主/子任务仅保留一条封闭清单镜像（今天死磕不叠双）。
+     * 完成态以十二周年源任务为准；并清掉误写的【Closed List】Done 行。
+     */
+    function dedupeClosedListAnniversaryMirrorsInState() {
+      if (!Array.isArray(state.closedList)) return false;
+      const byKey = new Map();
+      state.closedList.forEach(function (item) {
+        const mo = item && item.mirrorOf;
+        if (!mo || mo.kind !== "anniversaryTw" || !mo.module || mo.taskId == null) return;
+        const subPart = mo.subId ? ":sub:" + String(mo.subId) : ":main";
+        const key = String(mo.module) + ":" + String(mo.taskId) + subPart;
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key).push(item);
+      });
+      let changed = false;
+      const removeIds = new Set();
+      byKey.forEach(function (items) {
+        const mo0 = items[0] && items[0].mirrorOf;
+        const located =
+          mo0 && typeof findAnniversaryTaskInStorage === "function"
+            ? findAnniversaryTaskInStorage(mo0.module, mo0.taskId, mo0.weekNum)
+            : null;
+        let srcComplete = false;
+        if (located && located.task) {
+          if (mo0.subId) {
+            const sub = (located.task.subs || []).find(function (s) {
+              return s && String(s.id) === String(mo0.subId);
+            });
+            srcComplete = Boolean(sub && sub.done);
+          } else {
+            srcComplete = Boolean(located.task.done);
+          }
+        }
+        items.sort(function (a, b) {
+          return recordTieTimestampForSync(b) - recordTieTimestampForSync(a);
+        });
+        let winner;
+        if (srcComplete) {
+          winner =
+            items.find(function (it) {
+              return Boolean(it.completed);
+            }) || items[0];
+        } else {
+          winner =
+            items.find(function (it) {
+              return !it.completed;
+            }) || items[0];
+          if (winner && winner.completed) {
+            winner.completed = false;
+            delete winner.completedAt;
+            changed = true;
+          }
+        }
+        items.forEach(function (item) {
+          if (item === winner) return;
+          if (item && item.id != null) {
+            try {
+              recordSyncTombstone(item.id);
+            } catch (_annClTomb) {}
+            removeClosedListDoneCopy(item.id);
+            removeIds.add(item.id);
+          }
+          changed = true;
+        });
+        /* 胜出镜像也不再保留【Closed List】Done（改由十二周年 Done 独占） */
+        if (winner && winner.id != null) {
+          const beforeLen = Array.isArray(state.done) ? state.done.length : 0;
+          removeClosedListDoneCopy(winner.id);
+          if (Array.isArray(state.done) && state.done.length !== beforeLen) changed = true;
+        }
+      });
+      if (removeIds.size) {
+        state.closedList = state.closedList.filter(function (item) {
+          return item && !removeIds.has(item.id);
+        });
+      }
+      /* 单条镜像也清掉历史【Closed List】Done 副本 */
+      if (byKey.size) {
+        byKey.forEach(function (items) {
+          if (items.length !== 1) return;
+          const only = items[0];
+          if (!only || only.id == null) return;
+          const beforeLen = Array.isArray(state.done) ? state.done.length : 0;
+          removeClosedListDoneCopy(only.id);
+          if (Array.isArray(state.done) && state.done.length !== beforeLen) changed = true;
         });
       }
       return changed;
@@ -178381,6 +178525,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return (compact + s.slice(m[0].length)).trim();
     }
 
+    /**
+     * Done List 十二周年展示：去掉「第N周」后的日历区间。
+     * 例：第3周（2026-10-18～2026-10-24） · 任务 → 第3周 · 任务
+     */
+    function compactDoneAnniversaryDisplayRest(rest) {
+      let s = String(rest || "").trim();
+      s = s.replace(
+        /^(第\d+周)\s*[（(][^）)]*[）)]\s*(?:[·•]\s*)?/,
+        function (_m, weekLab) {
+          return weekLab + " · ";
+        }
+      );
+      s = s.replace(/\s*·\s*·\s*/g, " · ").replace(/^\s*·\s*/, "").trim();
+      return s;
+    }
+
     function isWeeklyPlanMainComplete(task) {
       const micros = Array.isArray(task.microTasks) ? task.microTasks : [];
       if (micros.length > 0) {
@@ -180668,31 +180828,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return changed;
     }
 
+    /** My Done 十二周年行：只写「第N周」，不带日历区间（区间在十二周年模块内可查） */
     function buildAnniversaryWeekLabelTw020(weekNum) {
-      const s = tw020WeekStartSunday(weekNum);
-      const e = tw020WeekEndSaturday(weekNum);
-      if (!s || !e) {
-        return "第" + weekNum + "周";
-      }
-      return "第" + weekNum + "周（" + formatIsoDate(s) + "～" + formatIsoDate(e) + "）";
+      return "第" + weekNum + "周";
     }
 
     function buildAnniversaryWeekLabelTw021(weekNum) {
-      const s = tw021WeekStartSunday(weekNum);
-      const e = tw021WeekEndSaturday(weekNum);
-      if (!s || !e) {
-        return "第" + weekNum + "周";
-      }
-      return "第" + weekNum + "周（" + formatIsoDate(s) + "～" + formatIsoDate(e) + "）";
+      return "第" + weekNum + "周";
     }
 
     function buildAnniversaryWeekLabelTw022(weekNum) {
-      const s = tw022WeekStartSunday(weekNum);
-      const e = tw022WeekEndSaturday(weekNum);
-      if (!s || !e) {
-        return "第" + weekNum + "周";
-      }
-      return "第" + weekNum + "周（" + formatIsoDate(s) + "～" + formatIsoDate(e) + "）";
+      return "第" + weekNum + "周";
     }
 
     function syncAnniversaryModuleDoneDesired(moduleId, items, desiredKeys, prefix, getTasks, weekLabelFn) {
@@ -183388,10 +183534,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (module === "tw020") return buildAnniversaryWeekLabelTw020(weekNum);
       if (module === "tw021") return buildAnniversaryWeekLabelTw021(weekNum);
       if (module === "tw022") return buildAnniversaryWeekLabelTw022(weekNum);
-      const s = anniversaryTwWeekStartSundayForModule(module, weekNum);
-      const e = anniversaryTwWeekEndSaturdayForModule(module, weekNum);
-      if (!s || !e) return "第" + weekNum + "周";
-      return "第" + weekNum + "周（" + formatIsoDate(s) + "～" + formatIsoDate(e) + "）";
+      return "第" + weekNum + "周";
     }
 
     function stripAnniversaryClosedListLineDecorations(rest) {
@@ -199525,6 +199668,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } catch (_fuelHyg) {}
       if (refreshLife4000DoneEntryTexts()) doneHygieneChanged = true;
       if (dedupeClosedListWeeklyPlanMirrorsInState()) doneHygieneChanged = true;
+      if (typeof dedupeClosedListAnniversaryMirrorsInState === "function" && dedupeClosedListAnniversaryMirrorsInState()) {
+        doneHygieneChanged = true;
+      }
       if (pruneRedundantDoneEntriesInState()) doneHygieneChanged = true;
       /* repair* / rolloverWeeklyPlan* 已移出 render 热路径，见 runStateRepairAndRolloverPass */
       syncAllWeeklyPlanDoneLists();
