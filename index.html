@@ -108001,7 +108001,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261023d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261024a";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -180312,6 +180312,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           markUiPaintSlicesDirty(["done"]);
         }
       } catch (_paint) {}
+      /* Done 列表正开着时立刻重绘；藏着则等切入 dynamic 时按脏切片 render */
+      try {
+        if (
+          typeof shouldPaintDoneListNow === "function" &&
+          shouldPaintDoneListNow() &&
+          typeof refreshDoneListVisibilityOnly === "function"
+        ) {
+          refreshDoneListVisibilityOnly();
+        }
+      } catch (_paintNow) {}
     }
 
     function ensureAnniversaryDoneModuleRef(moduleId) {
@@ -180366,27 +180376,82 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function anniversaryWeekStartForDoneMirror(moduleId, weekNum) {
       if (!(weekNum > 0)) return null;
-      if (moduleId === "tw020") return tw020WeekStartSunday(weekNum);
-      if (moduleId === "tw021") return tw021WeekStartSunday(weekNum);
-      if (moduleId === "tw022") return tw022WeekStartSunday(weekNum);
-      const suf = String(moduleId || "").replace(/^tw/, "");
-      if (typeof getAnniversaryTwWeekStartSundayForSuffix === "function") {
-        return getAnniversaryTwWeekStartSundayForSuffix(suf, weekNum);
+      /* tw023+ 没有 getAnniversaryTwWeekStartSundayForSuffix；统一走模块周日起算 */
+      if (typeof anniversaryTwWeekStartSundayForModule === "function") {
+        return anniversaryTwWeekStartSundayForModule(moduleId, weekNum);
+      }
+      if (moduleId === "tw020" && typeof tw020WeekStartSunday === "function") {
+        return tw020WeekStartSunday(weekNum);
+      }
+      if (moduleId === "tw021" && typeof tw021WeekStartSunday === "function") {
+        return tw021WeekStartSunday(weekNum);
+      }
+      if (moduleId === "tw022" && typeof tw022WeekStartSunday === "function") {
+        return tw022WeekStartSunday(weekNum);
       }
       return null;
     }
 
-    function completedAtForAnniversaryDoneMirror(task, sub, moduleId, weekNum) {
-      const src = sub || task || {};
-      const n = Number(src.completedAt) || Number(task && task.completedAt) || 0;
-      if (n > 0) return n;
+    /** 该周周日正午：无真实打卡时刻时的占位，不能当成用户「今天完成」 */
+    function anniversaryWeekNoonMsForDoneMirror(moduleId, weekNum) {
       const sun = anniversaryWeekStartForDoneMirror(moduleId, weekNum);
       if (!sun) return 0;
       const key = formatIsoDate(sun);
       if (typeof habitDateToNoonCompletedAt === "function") {
-        return habitDateToNoonCompletedAt(key);
+        return Number(habitDateToNoonCompletedAt(key)) || 0;
       }
-      return habitDateToCompletedAt(key);
+      if (typeof habitDateToCompletedAt === "function") {
+        return Number(habitDateToCompletedAt(key)) || 0;
+      }
+      return 0;
+    }
+
+    /**
+     * 子任务打卡时刻。
+     * 勾选只写 sub.updatedAt、不写 completedAt；若一律落到周日正午，今天的 Done 列表看不到。
+     * updatedAt 落在该周内才采用，避免云端批量改时间把旧周任务挤到今天（与 burst 回周日不打架）。
+     * 没有周界（动态周期未设锚点）时仍用 updatedAt，否则镜像根本建不出来。
+     */
+    function anniversarySubCompletionClockMs(sub, moduleId, weekNum) {
+      if (!sub) return 0;
+      const explicit = Number(sub.completedAt) || 0;
+      if (explicit > 0) return explicit;
+      const updated = Number(sub.updatedAt) || 0;
+      if (!(updated > 0)) return 0;
+      const noon = anniversaryWeekNoonMsForDoneMirror(moduleId, weekNum);
+      if (!(noon > 0)) return updated;
+      const weekEnd = noon + 8 * 86400000;
+      if (updated >= noon && updated <= weekEnd) return updated;
+      return 0;
+    }
+
+    function completedAtForAnniversaryDoneMirror(task, sub, moduleId, weekNum) {
+      if (sub) {
+        const subClock = anniversarySubCompletionClockMs(sub, moduleId, weekNum);
+        if (subClock > 0) return subClock;
+      } else {
+        const n = Number(task && task.completedAt) || 0;
+        if (n > 0) return n;
+      }
+      return anniversaryWeekNoonMsForDoneMirror(moduleId, weekNum);
+    }
+
+    /**
+     * 已有镜像若仍是「周日正午」占位，且现在能算出该周内的真实打卡时刻，则改到打卡当天。
+     * 非占位时刻不动，避免把用户手动/历史完成日往后推。
+     */
+    function touchAnniversaryDoneMirrorClockIfSyntheticWeekNoon(doneId, clock, moduleId, weekNum) {
+      if (!doneId || !(Number(clock) > 0)) return false;
+      const entry = (state.done || []).find(function (d) {
+        return d && d.id === doneId;
+      });
+      if (!entry) return false;
+      const noon = anniversaryWeekNoonMsForDoneMirror(moduleId, weekNum);
+      if (!(noon > 0) || Number(entry.completedAt) !== noon) return false;
+      if (Number(clock) === noon) return false;
+      entry.completedAt = clock;
+      entry.createdAt = clock;
+      return true;
     }
 
     function resolveAnniversaryDoneMirrorPayload(syncKey, prefix, getTasks, weekLabelFn) {
@@ -180425,17 +180490,26 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      * 无完成时刻时落到该周周日正午（与习惯补洞同一原则）。
      */
     function adoptOrCreateAnniversaryDoneMirror(moduleId, items, syncKey, text, weekNum, taskId, subId, kind, task, sub) {
+      const clock = completedAtForAnniversaryDoneMirror(task, sub, moduleId, weekNum);
       const refId = coerceAnniversaryDoneRefItemId(items[syncKey]);
       if (anniversaryDoneMirrorExists(refId)) {
-        return touchAnniversaryDoneMirrorText(refId, text);
+        const textChanged = touchAnniversaryDoneMirrorText(refId, text);
+        const timeChanged = touchAnniversaryDoneMirrorClockIfSyntheticWeekNoon(
+          refId,
+          clock,
+          moduleId,
+          weekNum
+        );
+        return textChanged || timeChanged;
       }
       const found = findDoneIdByAnniversarySyncKey(moduleId, syncKey);
       if (found) {
         items[syncKey] = found;
         touchAnniversaryDoneMirrorText(found, text);
+        touchAnniversaryDoneMirrorClockIfSyntheticWeekNoon(found, clock, moduleId, weekNum);
         return true;
       }
-      const ts = completedAtForAnniversaryDoneMirror(task, sub, moduleId, weekNum);
+      const ts = clock;
       if (!(ts > 0) || !text) return false;
       const newId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
       state.done.unshift({
