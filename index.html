@@ -74770,6 +74770,49 @@
       white-space: nowrap;
     }
 
+    /* 完成百分比从「5/15 · 33%」里拆出来：有进度用玫红强调，100% 转绿，0% 保持淡色 */
+    #anniversaryModule .tw020-week-completion-pct {
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.15;
+    }
+
+    #anniversaryModule .tw020-week-completion-pct[data-tw020-pct="active"] {
+      color: #db2777;
+    }
+
+    #anniversaryModule .tw020-week-completion-pct[data-tw020-pct="complete"] {
+      color: #047857;
+    }
+
+    #anniversaryModule .tw020-week-completion-pct[data-tw020-pct="zero"] {
+      color: #94a3b8;
+      font-weight: 700;
+    }
+
+    #anniversaryModule .tw020-week-capsule__stats .tw020-week-completion-pct[data-tw020-pct="active"],
+    #anniversaryModule .tw020-week-capsule__stats .tw020-week-completion-pct[data-tw020-pct="complete"] {
+      display: inline-block;
+      margin-left: 1px;
+      padding: 0 5px;
+      border-radius: 999px;
+      font-size: 12px;
+      vertical-align: baseline;
+    }
+
+    #anniversaryModule .tw020-week-capsule__stats .tw020-week-completion-pct[data-tw020-pct="active"] {
+      background: #fce7f3;
+    }
+
+    #anniversaryModule .tw020-week-capsule__stats .tw020-week-completion-pct[data-tw020-pct="complete"] {
+      background: #d1fae5;
+    }
+
+    #anniversaryModule .tw020-week-nav-summary__stats .tw020-week-completion-pct[data-tw020-pct="active"],
+    #anniversaryModule .tw020-week-nav-summary__stats .tw020-week-completion-pct[data-tw020-pct="complete"] {
+      font-size: 13px;
+    }
+
     #anniversaryModule .tw020-week-capsule__mobile-label {
       display: none;
       font-size: 12px;
@@ -74907,6 +74950,11 @@
 
       #anniversaryModule .tw020-week-nav-summary__range {
         max-width: 42%;
+      }
+
+      #anniversaryModule .tw020-week-nav-summary__stats .tw020-week-completion-pct[data-tw020-pct="active"],
+      #anniversaryModule .tw020-week-nav-summary__stats .tw020-week-completion-pct[data-tw020-pct="complete"] {
+        font-size: 12px;
       }
 
       #anniversaryModule .tw020-week-capsule-nav {
@@ -108001,7 +108049,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261024c";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261024d";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -193159,6 +193207,28 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return patched;
     }
 
+    /**
+     * 周导航「完成/计划 · 百分比」：分数保持中性，完成百分比单独用显眼色强调。
+     * 有进度（pct>0）玫红；100% 转绿，与摘要完成态一致；0% 保持淡色，避免空周抢眼。
+     */
+    function fillAnniversaryTwCompletionStats(el, progress) {
+      if (!el) return;
+      const p = progress || { done: 0, total: 0, pct: 0 };
+      const done = Number(p.done) || 0;
+      const total = Number(p.total) || 0;
+      const pct = Number(p.pct) || 0;
+      let tone = "zero";
+      if (total > 0 && pct >= 100) tone = "complete";
+      else if (total > 0 && pct > 0) tone = "active";
+      el.replaceChildren();
+      el.appendChild(document.createTextNode(String(done) + "/" + String(total) + " · "));
+      const pctEl = document.createElement("span");
+      pctEl.className = "tw020-week-completion-pct";
+      pctEl.dataset.tw020Pct = tone;
+      pctEl.textContent = String(pct) + "%";
+      el.appendChild(pctEl);
+    }
+
     /** 局部更新胶囊导航上的完成数/百分比与基础状态 class */
     function patchAnniversaryWeekCapsuleDom(moduleKey, weekNum, progress, bands) {
       const root = document.getElementById("anniversaryModule");
@@ -193178,7 +193248,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!cap) return false;
       const p = progress || { done: 0, total: 0, pct: 0 };
       const stats = cap.querySelector(".tw020-week-capsule__stats");
-      if (stats) stats.textContent = String(p.done) + "/" + String(p.total) + " · " + String(p.pct) + "%";
+      if (stats) fillAnniversaryTwCompletionStats(stats, p);
       const currentWk =
         typeof getAnniversaryTwWeekIndexForModule === "function"
           ? getAnniversaryTwWeekIndexForModule(wantModule)
@@ -193195,8 +193265,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const summaryStats =
           summaryEl && summaryEl.querySelector(".tw020-week-nav-summary__stats");
         if (summaryStats) {
-          summaryStats.textContent =
-            String(p.done) + "/" + String(p.total) + " · " + String(p.pct) + "%";
+          fillAnniversaryTwCompletionStats(summaryStats, p);
           summaryStats.classList.toggle(
             "is-complete",
             Number(p.total) > 0 && Number(p.pct) >= 100
@@ -194823,8 +194892,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       const statsEl = summaryEl.querySelector(".tw020-week-nav-summary__stats");
       if (statsEl) {
-        statsEl.textContent =
-          String(pW.done) + "/" + String(pW.total) + " · " + String(pW.pct) + "%";
+        fillAnniversaryTwCompletionStats(statsEl, pW);
         statsEl.classList.toggle(
           "is-complete",
           Number(pW.total) > 0 && Number(pW.pct) >= 100
@@ -194973,7 +195041,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       range.textContent = formatAnniversaryTwCapsuleDateRange(s, e);
       const stats = document.createElement("span");
       stats.className = "tw020-week-capsule__stats";
-      stats.textContent = String(pW.done) + "/" + String(pW.total) + " · " + String(pW.pct) + "%";
+      fillAnniversaryTwCompletionStats(stats, pW);
       body.appendChild(range);
       body.appendChild(stats);
       const mobileLab = document.createElement("span");
@@ -195120,7 +195188,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         range.textContent = formatAnniversaryTwCapsuleDateRange(s, e);
         const stats = document.createElement("span");
         stats.className = "tw020-week-capsule__stats";
-        stats.textContent = String(pW.done) + "/" + String(pW.total) + " · " + String(pW.pct) + "%";
+        fillAnniversaryTwCompletionStats(stats, pW);
         body.appendChild(range);
         body.appendChild(stats);
         const mobileLab = document.createElement("span");
