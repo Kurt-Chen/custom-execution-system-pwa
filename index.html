@@ -108001,7 +108001,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261024b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261024c";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -134748,6 +134748,12 @@
           ) {
             changed = true;
           }
+          if (
+            typeof pruneClosedListDoneCopiesForForeignMirrorsInState === "function" &&
+            pruneClosedListDoneCopiesForForeignMirrorsInState()
+          ) {
+            changed = true;
+          }
         }
         if (aggressive) {
           if (pruneDoneHistoryByRetention(true)) changed = true;
@@ -148340,14 +148346,20 @@
       return removed;
     }
 
+    /** 封闭清单是否镜像自其它清单（周计划 / 十二周年等）；此类只展示原清单 Done 样式 */
+    function closedListItemMirrorsForeignList(item) {
+      const mo = item && item.mirrorOf;
+      return Boolean(mo && mo.kind);
+    }
+
     function syncClosedListToDone(item, opts) {
       if (!item || item.id == null) return null;
       const skipNotify = opts && opts.skipNotify;
       /**
-       * 十二周年镜像：My Done 由 anniversaryTwMeta 承担（【十二周年#N】），
-       * 不再另写【Closed List】行，避免同一份打卡叠双。
+       * 来自其它清单的镜像：My Done 由原清单（weeklyPlanMeta / anniversaryTwMeta 等）承担，
+       * 不再另写【Closed List】行，避免同一份打卡叠双、样式重复。
        */
-      if (item.mirrorOf && item.mirrorOf.kind === "anniversaryTw") {
+      if (closedListItemMirrorsForeignList(item)) {
         removeClosedListDoneCopy(item.id, { skipNotify: skipNotify });
         return null;
       }
@@ -148467,8 +148479,8 @@
       let changed = false;
       const closedKeep = Object.create(null);
       const closedDismissed = Object.create(null);
-      /* 十二周年镜像：禁止补/留【Closed List】Done，由 anniversaryTwMeta 独占展示 */
-      const closedAnniversarySkip = Object.create(null);
+      /* 镜像自其它清单：禁止补/留【Closed List】Done，由原清单 Done 独占展示 */
+      const closedForeignMirrorSkip = Object.create(null);
       (Array.isArray(state.closedList) ? state.closedList : []).forEach(function (item) {
         if (!item || item.id == null || !item.completed) return;
         const sid = String(item.id);
@@ -148477,8 +148489,8 @@
           closedDismissed[sid] = true;
           return;
         }
-        if (item.mirrorOf && item.mirrorOf.kind === "anniversaryTw") {
-          closedAnniversarySkip[sid] = true;
+        if (closedListItemMirrorsForeignList(item)) {
+          closedForeignMirrorSkip[sid] = true;
           return;
         }
         closedKeep[sid] = true;
@@ -148494,7 +148506,7 @@
       state.done = state.done.filter(function (d) {
         if (!d || !d.closedListMeta || d.closedListMeta.sourceId == null) return true;
         const sid = String(d.closedListMeta.sourceId);
-        if (closedDismissed[sid] || closedAnniversarySkip[sid]) {
+        if (closedDismissed[sid] || closedForeignMirrorSkip[sid]) {
           removedDismissed.push(d);
           return false;
         }
@@ -148746,6 +148758,11 @@
         if (moEarly && moEarly.kind === "weeklyPlan") {
           applyWeeklyPlanCompletionFromMirror(moEarly, Boolean(item.completed), item.completedAt);
           syncAllWeeklyPlanMirrorsForWeek(moEarly.weekKey);
+          try {
+            if (typeof syncWeeklyPlanDoneMirrorAfterLocalToggle === "function") {
+              syncWeeklyPlanDoneMirrorAfterLocalToggle(moEarly.weekKey);
+            }
+          } catch (_wpDoneEarly) {}
           saveStateWithCloudPulseImmediate({ lists: ["closedList", "done", "weeklyPlan"] });
           refreshClosedListAndTodayPlanAfterMirrorSync();
           try {
@@ -148788,6 +148805,12 @@
       if (mo && mo.kind === "weeklyPlan") {
         applyWeeklyPlanCompletionFromMirror(mo, Boolean(checked), item.completedAt);
         syncAllWeeklyPlanMirrorsForWeek(mo.weekKey);
+        /* 不再写【Closed List】Done，须立刻补周计划原清单 Done */
+        try {
+          if (typeof syncWeeklyPlanDoneMirrorAfterLocalToggle === "function") {
+            syncWeeklyPlanDoneMirrorAfterLocalToggle(mo.weekKey);
+          }
+        } catch (_wpDoneToggle) {}
       } else if (mo && mo.kind === "anniversaryTw") {
         const located = applyAnniversaryCompletionFromMirror(mo, Boolean(checked));
         afterAnniversaryCompletionAppliedFromMirror(mo, located);
@@ -149010,6 +149033,11 @@
       if (mo && mo.kind === "weeklyPlan") {
         applyWeeklyPlanCompletionFromMirror(mo, want, item.completedAt);
         syncAllWeeklyPlanMirrorsForWeek(mo.weekKey);
+        try {
+          if (typeof syncWeeklyPlanDoneMirrorAfterLocalToggle === "function") {
+            syncWeeklyPlanDoneMirrorAfterLocalToggle(mo.weekKey);
+          }
+        } catch (_wpDoneSub) {}
       } else if (mo && mo.kind === "anniversaryTw") {
         ensureAnniversaryClosedListMirrorSubId(item);
         const located = applyAnniversaryCompletionFromMirror(mo, want);
@@ -175449,7 +175477,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         });
         const mo = clItem && clItem.mirrorOf;
         if (mo && mo.kind === "weeklyPlan" && mo.id) {
-          return "wp:" + String(mo.id) + ":main";
+          const microPart = mo.microId ? ":micro:" + String(mo.microId) : ":main";
+          return "wp:" + String(mo.id) + microPart;
         }
         if (mo && mo.kind === "anniversaryTw" && mo.module && mo.taskId) {
           const subPart = mo.subId ? ":sub:" + String(mo.subId) : ":main";
@@ -175576,8 +175605,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * 同一周计划 taskId 仅保留一条封闭清单镜像，避免联动完成时批量写入 My Done。
-     * 若周计划侧未完成，则保留/恢复为未完成镜像，撤销误同步的 Done 行。
+     * 同一周计划 taskId(+microId) 仅保留一条封闭清单镜像。
+     * 若周计划侧未完成，则保留/恢复为未完成镜像；并清掉【Closed List】Done（改由周计划 Done 独占）。
      */
     function dedupeClosedListWeeklyPlanMirrorsInState() {
       if (!Array.isArray(state.closedList)) return false;
@@ -175585,43 +175614,62 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       state.closedList.forEach(function (item) {
         const mo = item && item.mirrorOf;
         if (!mo || mo.kind !== "weeklyPlan" || mo.id == null) return;
-        const key = String(mo.id);
+        const key = String(mo.id) + (mo.microId ? ":micro:" + String(mo.microId) : ":main");
         if (!byTaskId.has(key)) byTaskId.set(key, []);
         byTaskId.get(key).push(item);
       });
       let changed = false;
       const removeIds = new Set();
       byTaskId.forEach(function (items) {
-        if (items.length < 2) return;
-        const located = findWeeklyPlanTaskInStorage(items[0].mirrorOf.id);
-        const wpComplete = located ? isWeeklyPlanMainComplete(located.task) : false;
+        const mo0 = items[0] && items[0].mirrorOf;
+        const located = mo0 ? findWeeklyPlanTaskInStorage(mo0.id) : null;
+        let wpComplete = false;
+        if (located) {
+          if (mo0.microId) {
+            const micro = (located.task.microTasks || []).find(function (m) {
+              return m && String(m.id) === String(mo0.microId);
+            });
+            wpComplete = Boolean(micro && micro.done);
+          } else {
+            wpComplete = isWeeklyPlanMainComplete(located.task);
+          }
+        }
         items.sort(function (a, b) {
           return recordTieTimestampForSync(b) - recordTieTimestampForSync(a);
         });
         let winner;
-        if (wpComplete) {
-          winner = items.find(function (it) {
-            return Boolean(it.completed);
-          }) || items[0];
-        } else {
-          winner =
-            items.find(function (it) {
-              return !it.completed;
+        if (items.length >= 2) {
+          if (wpComplete) {
+            winner = items.find(function (it) {
+              return Boolean(it.completed);
             }) || items[0];
-          if (winner.completed) {
-            winner.completed = false;
-            delete winner.completedAt;
-            removeClosedListDoneCopy(winner.id);
-            changed = true;
+          } else {
+            winner =
+              items.find(function (it) {
+                return !it.completed;
+              }) || items[0];
+            if (winner.completed) {
+              winner.completed = false;
+              delete winner.completedAt;
+              changed = true;
+            }
           }
+          items.forEach(function (item) {
+            if (item === winner) return;
+            if (item && item.id != null) recordSyncTombstone(item.id);
+            removeClosedListDoneCopy(item.id);
+            removeIds.add(item.id);
+            changed = true;
+          });
+        } else {
+          winner = items[0];
         }
-        items.forEach(function (item) {
-          if (item === winner) return;
-          if (item && item.id != null) recordSyncTombstone(item.id);
-          removeClosedListDoneCopy(item.id);
-          removeIds.add(item.id);
-          changed = true;
-        });
+        /* 胜出/单条镜像均不保留【Closed List】Done */
+        if (winner && winner.id != null) {
+          const beforeLen = Array.isArray(state.done) ? state.done.length : 0;
+          removeClosedListDoneCopy(winner.id);
+          if (Array.isArray(state.done) && state.done.length !== beforeLen) changed = true;
+        }
       });
       if (removeIds.size) {
         state.closedList = state.closedList.filter(function (item) {
@@ -175629,6 +175677,39 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         });
       }
       return changed;
+    }
+
+    /**
+     * 扫一遍：凡封闭清单带 mirrorOf 的，删掉其【Closed List】Done 副本（原清单 Done 已承担展示）。
+     */
+    function pruneClosedListDoneCopiesForForeignMirrorsInState() {
+      if (!Array.isArray(state.done) || !Array.isArray(state.closedList)) return false;
+      const foreignSids = Object.create(null);
+      state.closedList.forEach(function (item) {
+        if (item && item.id != null && closedListItemMirrorsForeignList(item)) {
+          foreignSids[String(item.id)] = true;
+        }
+      });
+      const removed = [];
+      state.done = state.done.filter(function (d) {
+        if (!d || !d.closedListMeta || d.closedListMeta.sourceId == null) return true;
+        if (!foreignSids[String(d.closedListMeta.sourceId)]) return true;
+        removed.push(d);
+        return false;
+      });
+      if (!removed.length) return false;
+      removed.forEach(function (it) {
+        if (!it || it.id == null) return;
+        try {
+          recordSyncTombstone(it.id);
+        } catch (_tomb) {}
+        try {
+          if (typeof notifyAliyunDoneRealTombstone === "function") {
+            notifyAliyunDoneRealTombstone("closedList-foreign-mirror", it.id, it);
+          }
+        } catch (_nt) {}
+      });
+      return true;
     }
 
     /**
@@ -199669,6 +199750,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (refreshLife4000DoneEntryTexts()) doneHygieneChanged = true;
       if (dedupeClosedListWeeklyPlanMirrorsInState()) doneHygieneChanged = true;
       if (typeof dedupeClosedListAnniversaryMirrorsInState === "function" && dedupeClosedListAnniversaryMirrorsInState()) {
+        doneHygieneChanged = true;
+      }
+      if (
+        typeof pruneClosedListDoneCopiesForForeignMirrorsInState === "function" &&
+        pruneClosedListDoneCopiesForForeignMirrorsInState()
+      ) {
         doneHygieneChanged = true;
       }
       if (pruneRedundantDoneEntriesInState()) doneHygieneChanged = true;
