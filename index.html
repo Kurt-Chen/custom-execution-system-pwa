@@ -34764,29 +34764,40 @@
     }
 
     /* Done List Victory FX 2.0：视口中央短庆祝（仅 Hard；pointer-events 全关） */
-    .done-victory-fx {
+    /* 全局 Victory FX：外层只负责视口正中定位，动画仅在内层 stage，避免 transform 互抢 */
+    .victory-celebration.done-victory-fx,
+    .done-victory-fx.victory-celebration {
       --dvfx-size: 76px;
       position: fixed;
       left: 50%;
       top: 50%;
+      transform: translate(-50%, -50%);
       width: var(--dvfx-size);
       height: var(--dvfx-size);
       margin: 0;
       padding: 0;
-      transform: translate3d(-50%, -50%, 0);
       pointer-events: none;
-      z-index: 10050;
+      z-index: 9999;
       overflow: visible;
       contain: layout style;
-      opacity: 0;
+      opacity: 1;
     }
     @media (max-width: 1366px) and (pointer: coarse) {
-      .done-victory-fx { --dvfx-size: 72px; }
+      .victory-celebration.done-victory-fx,
+      .done-victory-fx.victory-celebration { --dvfx-size: 72px; }
     }
     @media (max-width: 767px) {
-      .done-victory-fx { --dvfx-size: 64px; }
+      .victory-celebration.done-victory-fx,
+      .done-victory-fx.victory-celebration { --dvfx-size: 64px; }
     }
-    .done-victory-fx.is-playing {
+    .done-victory-fx__stage {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .done-victory-fx.is-playing .done-victory-fx__stage {
       animation: done-victory-fx-host 1.55s ease-out both;
     }
     @keyframes done-victory-fx-host {
@@ -35060,6 +35071,7 @@
     @media (prefers-reduced-motion: reduce) {
       .done-victory-fx,
       .done-victory-fx.is-playing,
+      .done-victory-fx.is-playing .done-victory-fx__stage,
       .done-victory-fx.is-playing .done-victory-fx__core,
       .done-victory-fx.is-playing .done-victory-fx__ring,
       .done-victory-fx.is-playing .done-victory-fx__bit,
@@ -108448,7 +108460,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261025d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261025e";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -173475,19 +173487,62 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return true;
     }
 
-    /** 本地真实写入 Done 后排队；skipNotify 安全网 / 同步补齐不庆祝 */
+    /** 本地真实写入 Done 后排队右侧图标动效；skipNotify 安全网 / 同步补齐不庆祝 */
     function maybeQueueDoneCelebrateAfterLocalUnshift(item, opts) {
       if (!item || item.id == null) return;
       if (item.kind === "timeReflection") return;
       if (opts && opts.skipNotify) return;
       if (opts && opts.skipCelebrate) return;
       queueDoneCelebrateFx(item.id);
+      /* 默认力量（Habits/Forge 等）或已确认 +1/+2：立即全局庆祝，不依赖 Done List 渲染 */
+      if (shouldPlayVictoryCelebrationForItem(item)) {
+        playVictoryCelebration(item.id);
+      }
     }
 
     /** 用户打卡路径：刚 unshift 的条目通常在 state.done[0] */
     function queueDoneCelebrateForLatestDoneEntry() {
       const head = Array.isArray(state.done) && state.done.length ? state.done[0] : null;
       if (head && head.id != null) maybeQueueDoneCelebrateAfterLocalUnshift(head, null);
+    }
+
+    /** 是否应立即播放全局烟花（力量选择；分数权重 +1/+2） */
+    function shouldPlayVictoryCelebrationForItem(item) {
+      if (!item || typeof item !== "object") return false;
+      if (item.kind === "timeReflection") return false;
+      if (typeof doneTaskUsesPowerBadgeOnly === "function" && doneTaskUsesPowerBadgeOnly(item)) {
+        return true;
+      }
+      const tone = resolveDoneCelebrateTone(item);
+      if (tone !== "power") return false;
+      let score = NaN;
+      if (typeof getDoneOutcomeVdScore === "function") {
+        score = Number(getDoneOutcomeVdScore(item));
+      }
+      if (!Number.isFinite(score)) score = 1;
+      return score === 1 || score === 2;
+    }
+
+    /** 同一次打卡 id 只播一次中央烟花（防 render 再触发） */
+    const doneVictoryFxPlayedIds = new Set();
+
+    /**
+     * 全局胜利庆祝入口：挂载于 document.body，视口正中央；
+     * 与 Done List 渲染解耦。连续调用会取消上一段，不积压。
+     */
+    function playVictoryCelebration(idOpt) {
+      const sid = String(idOpt || "");
+      if (sid) {
+        if (doneVictoryFxPlayedIds.has(sid)) return;
+        doneVictoryFxPlayedIds.add(sid);
+        if (doneVictoryFxPlayedIds.size > 400) {
+          doneVictoryFxPlayedIds.clear();
+          doneVictoryFxPlayedIds.add(sid);
+        }
+      }
+      try {
+        playDoneVictoryFx();
+      } catch (_pv) {}
     }
 
     /**
@@ -173689,7 +173744,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       appendDoneVictoryFxBits(root, 6, null);
     }
 
-    /** Hard Choice 本机新打卡成功时播放；连续打卡取消上一段，不积压队列 */
+    /** 内部：构建视口居中壳 + 动画舞台；由 playVictoryCelebration 调用 */
     function playDoneVictoryFx() {
       let reduceMotion = false;
       try {
@@ -173703,9 +173758,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const kind = pickDoneVictoryFxKind();
       const token = ++doneVictoryFxToken;
       const root = document.createElement("div");
-      root.className = "done-victory-fx done-victory-fx--" + kind;
+      /* victory-celebration：固定视口居中；动画只在 __stage，不覆盖居中 transform */
+      root.className =
+        "victory-celebration done-victory-fx done-victory-fx--" + kind;
       root.setAttribute("aria-hidden", "true");
-      mountDoneVictoryFxContent(root, kind);
+      const stage = document.createElement("div");
+      stage.className = "done-victory-fx__stage";
+      mountDoneVictoryFxContent(stage, kind);
+      root.appendChild(stage);
       document.body.appendChild(root);
       doneVictoryFxActiveEl = root;
       try {
@@ -173750,10 +173810,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               spark.setAttribute("aria-hidden", "true");
               el.appendChild(spark);
             }
-            /* Hard Choice：右侧状态符动效 + 视口中央 Victory FX（同一次 consume） */
-            try {
-              playDoneVictoryFx();
-            } catch (_dvfx) {}
+            /* 中央烟花已在打卡成功时由 playVictoryCelebration 触发；此处仅右侧状态符动效 */
           }
           let cleaned = false;
           function cleanupCelebrateAnim() {
@@ -173931,6 +173988,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } else {
         doneOutcomeScorePickOpenIds.add(sid);
         queueDoneOutcomeScoreFx(sid, item.outcomeScore);
+        if (kind === "power") {
+          const ps = Number(item.outcomeScore);
+          if (ps === 1 || ps === 2) {
+            queueDoneCelebrateFx(sid);
+            playVictoryCelebration(sid);
+          }
+        }
       }
       item.updatedAt = Date.now();
       const patchedOk = patchDoneOutcomeUiImmediate(item);
@@ -173952,6 +174016,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       item.updatedAt = Date.now();
       doneOutcomeScorePickOpenIds.delete(sid);
       queueDoneOutcomeScoreFx(sid, n);
+      if (kind === "power" && (n === 1 || n === 2)) {
+        queueDoneCelebrateFx(sid);
+        playVictoryCelebration(sid);
+      }
       const patchedOk = patchDoneOutcomeUiImmediate(item);
       scheduleDoneOutcomeClickFollowUp(item, "outcome-score", patchedOk);
     }
