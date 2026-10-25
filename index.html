@@ -34662,15 +34662,13 @@
       flex-shrink: 0;
     }
 
-    /* Done List 右侧自动庆祝图标：固定槽位，不改行高；动效仅会话态触发 */
+    /* Done List 右侧统一状态符号：Power 绿勾 / Neutral 灰蓝勾 / Treason 红三角叹号 */
     .done-celebrate {
       position: relative;
-      width: 18px;
-      min-width: 18px;
-      height: 18px;
+      width: 16px;
+      min-width: 16px;
+      height: 16px;
       margin-inline-end: 2px; /* 与 .done-compact-row gap≈10px 合计约 12px 至 ⋯ */
-      font-size: 16px;
-      line-height: 1;
       flex-shrink: 0;
       display: inline-flex;
       align-items: center;
@@ -34679,17 +34677,25 @@
       pointer-events: none;
       overflow: visible;
       z-index: 1;
+      box-sizing: border-box;
     }
-    .done-celebrate--neutral {
-      filter: grayscale(0.35) saturate(0.4) brightness(0.98) hue-rotate(185deg);
-      opacity: 0.9;
-      color: #64748b;
+    .done-celebrate__mark {
+      width: 16px;
+      height: 16px;
+      display: block;
+      flex-shrink: 0;
     }
-    .done-celebrate--treason {
-      color: #dc2626;
-      filter: none;
-      opacity: 1;
-      font-size: 15px;
+    .done-celebrate--power .done-celebrate__mark-bg {
+      fill: #22c55e;
+    }
+    .done-celebrate--neutral .done-celebrate__mark-bg {
+      fill: #7b93a8;
+    }
+    .done-celebrate--treason .done-celebrate__mark-bg {
+      fill: #ef4444;
+    }
+    .done-celebrate__mark-fg {
+      fill: #ffffff;
     }
     .done-celebrate__spark {
       position: absolute;
@@ -34744,7 +34750,7 @@
     }
     @keyframes done-celebrate-fade {
       0% { opacity: 0; }
-      100% { opacity: 0.88; }
+      100% { opacity: 1; }
     }
     @keyframes done-celebrate-pulse {
       0% { transform: scale(0.9); opacity: 0.7; }
@@ -108447,7 +108453,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261025b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261025c";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -173489,154 +173495,35 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (head && head.id != null) maybeQueueDoneCelebrateAfterLocalUnshift(head, null);
     }
 
-    const DONE_CELEBRATE_ICON_LIB = {
-      fitness: ["💪", "🏋️", "🥊", "🔥"],
-      health: ["💧", "☀️", "🌙", "❤️"],
-      learning: ["📚", "🧠", "💡", "✍️"],
-      work: ["🚀", "💻", "⚙️", "🎯"],
-      income: ["💰", "💎", "📈", "🤝"],
-      growth: ["⭐", "🏆", "🏔️", "👑"],
-      habit: ["🌱", "✅", "⏰", "🧹"],
-      fallback: "✨",
-      treason: "⚠"
-    };
-
-    /** 具体行为优先；同一规则稳定映射，刷新不随机 */
-    const DONE_CELEBRATE_ICON_RULES = [
-      /* 具体任务优先（先于笼统类别） */
-      { re: /充值\s*gpt\s*plus|gpt\s*plus|chatgpt\s*plus|openai\s*plus/i, icon: "⚙️", cat: "work" },
-      { re: /出门|go\s*out(?:ing)?|leave\s*home|step\s*outside/i, icon: "👣", cat: "habit" },
-      { re: /3\s*分钟未来预演|未来预演|three\s*min(?:ute)?s?\s*future|future\s*rehearsal/i, icon: "🎯", cat: "growth" },
-      { re: /vibe\s*coding/i, icon: "💻", cat: "work" },
-      { re: /壶铃|kettlebell|摆荡|棒铃|clubbell/i, icon: "🏋️", cat: "fitness" },
-      { re: /引体|pull[\s-]?up|深蹲|squat|力量训练|举铁|卧推|硬拉/i, icon: "💪", cat: "fitness" },
-      { re: /拳击|搏击|boxing|mma|sparring/i, icon: "🥊", cat: "fitness" },
-      { re: /跑步|run(ning)?\b|hiit|冲刺训练|燃脂|有氧/i, icon: "🔥", cat: "fitness" },
-      { re: /冷水澡|冷水浴|cold\s*shower|饮水|喝水|hydrate|毫升|足量饮水/i, icon: "💧", cat: "health" },
-      { re: /日晒|日光|阳光|sunlight|防晒|晨间.*光|醒后.*光|接触日光/i, icon: "☀️", cat: "health" },
-      { re: /早睡|按时睡觉|睡眠|sleep|nsdr|小睡|打盹|非睡眠深度休息/i, icon: "🌙", cat: "health" },
-      { re: /体重|体脂|心率|健康|保湿|牙线|断食|蛋白|鸡蛋|eggs|理想燃料/i, icon: "❤️", cat: "health" },
-      { re: /微场景单词|单词卡|vocab|造句|跟读|shadow/i, icon: "✍️", cat: "learning" },
-      { re: /同步听读|听读|阅读|读书|reading|audible|有声书|notebook|flomo|学习|英语|english/i, icon: "📚", cat: "learning" },
-      { re: /冥想|meditation|心理|cybernetic|silva|可视化|愿景|journal|日志|写作|写信/i, icon: "🧠", cat: "learning" },
-      { re: /灵感|idea|头脑风暴|brainstorm|思考|提问|问题风暴/i, icon: "💡", cat: "learning" },
-      { re: /开发|编程|coding|vibe\s*coding|程序|代码|ai\s*agent|workflow/i, icon: "💻", cat: "work" },
-      { re: /客户方案|方案|交付|ship|发布|content\s*publish|lead|画布|报价|闭环|closed\s*list/i, icon: "🎯", cat: "work" },
-      { re: /forge|训练打卡|囚徒|器械/i, icon: "⚙️", cat: "work" },
-      { re: /启动|上线|launch|突破项目/i, icon: "🚀", cat: "work" },
-      { re: /第二收入|收入|赚钱|储蓄|存下|定投|净值|银行|基金|现金|freedom\s*fighter|应急资金/i, icon: "💰", cat: "income" },
-      { re: /钻石级|高价值客户|成交|closing/i, icon: "💎", cat: "income" },
-      { re: /增长曲线|kpi|指标上涨|营收增长/i, icon: "📈", cat: "income" },
-      { re: /合作|合伙人|客户关系|networking|商务/i, icon: "🤝", cat: "income" },
-      { re: /复盘|每日复盘|三赢|high\s*5|信念|身份|使命|目标|what\s*i\s*want/i, icon: "⭐", cat: "growth" },
-      { re: /冠军|胜利|赢得|trophy|成就/i, icon: "🏆", cat: "growth" },
-      { re: /攀登|登山|挑战|害怕的事|艰难的对话|go\s*for\s*no/i, icon: "🏔️", cat: "growth" },
-      { re: /领导|领袖|国王|主控|sovereign/i, icon: "👑", cat: "growth" },
-      { re: /早起|习惯打卡|routine|zen|禅定|锁进|自律盒/i, icon: "🌱", cat: "habit" },
-      { re: /完成打卡|check\s*in/i, icon: "✅", cat: "habit" },
-      { re: /闹钟|提醒|按时|倒计时|deadline/i, icon: "⏰", cat: "habit" },
-      { re: /打扫|家务|清理桌面/i, icon: "🧹", cat: "habit" }
-    ];
-
-    function stableDoneCelebrateIconPick(key, icons) {
-      const list = Array.isArray(icons) && icons.length ? icons : DONE_CELEBRATE_ICON_LIB.habit;
-      const s = String(key || "");
-      let h = 2166136261;
-      for (let i = 0; i < s.length; i++) {
-        h ^= s.charCodeAt(i);
-        h = Math.imul(h, 16777619);
-      }
-      return list[Math.abs(h) % list.length];
-    }
-
-    function doneCelebrateStableKey(task) {
-      if (!task || typeof task !== "object") return "";
-      if (task.habitMeta && task.habitMeta.key) return "habit:" + String(task.habitMeta.key);
-      if (task.forgeBodyMeta && task.forgeBodyMeta.rowKey) return "forgeB:" + String(task.forgeBodyMeta.rowKey);
-      if (task.forgeMindMeta && task.forgeMindMeta.rowKey) return "forgeM:" + String(task.forgeMindMeta.rowKey);
-      if (task.rule100Meta && task.rule100Meta.key) return "r100:" + String(task.rule100Meta.key);
-      if (task.weeklyPlanMeta && task.weeklyPlanMeta.syncKey) return "wp:" + String(task.weeklyPlanMeta.syncKey);
-      if (task.anniversaryTwMeta && task.anniversaryTwMeta.syncKey) {
-        return "ann:" + String(task.anniversaryTwMeta.module || "") + ":" + String(task.anniversaryTwMeta.syncKey);
-      }
-      if (task.closedListMeta && task.closedListMeta.sourceId != null) {
-        return "cl:" + String(task.closedListMeta.sourceId);
-      }
-      if (task.fuelMeta && task.fuelMeta.date) return "fuel:" + String(task.fuelMeta.date);
-      if (task.backwardMeasureMeta) {
-        return (
-          "amb:" +
-          String(task.backwardMeasureMeta.kind || "") +
-          ":" +
-          String(task.backwardMeasureMeta.periodKey || "")
-        );
-      }
-      const t = String(task.text || "")
-        .replace(/^【[^】]*】/, "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .toLowerCase();
-      return "txt:" + t;
-    }
-
-    function inferDoneCelebrateCategory(task, text) {
-      const raw = String(text || "");
-      const key = task && task.habitMeta ? String(task.habitMeta.key || "") : "";
-      if (/forge|body|mind|囚徒|kb|器械/i.test(raw) || (task && (task.forgeBodyMeta || task.forgeMindMeta))) {
-        return "fitness";
-      }
-      if (/rule\s*of\s*100|百单位|hours/i.test(raw) || (task && task.rule100Meta)) return "growth";
-      if (/清空油箱|fuel/i.test(raw) || (task && task.fuelMeta)) return "growth";
-      if (/closed\s*list|封闭清单|周计划|其他任务|十二周年|anniversary/i.test(raw)) return "work";
-      if (/amb|backward|衡量/i.test(raw) || (task && task.backwardMeasureMeta)) return "growth";
-      if (/squat|kettle|club|run|cold|water|sleep|sun|egg|fast|weight|bodyFat|protocol/i.test(key)) {
-        if (/squat|kettle|club|run/i.test(key)) return "fitness";
-        return "health";
-      }
-      if (/read|listen|vocab|miraa|audible|notebook|flomo|write|letter|journal|learning/i.test(key)) {
-        return "learning";
-      }
-      if (/vibe|coding|ai|ship|workflow|deepResearch|forge/i.test(key)) return "work";
-      if (/save|fund|bank|netWorth|cash|debit|invest/i.test(key)) return "income";
-      if (/entrepreneur|lead|canvas|offer|fastlane|contentPublish/i.test(key)) return "income";
-      if (/alphaMale|tenX|scary|difficult|highFive|belief|mission|identity/i.test(key)) return "growth";
-      return "habit";
-    }
-
-    function resolveDoneCelebrateIcon(task, forcedGlyph) {
+    /**
+     * Done 右侧统一状态符号：仅按既有 outcome 分类（getDoneStatsOutcomeBucket）。
+     * 不再按任务名称语义匹配 emoji。
+     */
+    function resolveDoneCelebrateTone(task) {
       const bucket =
         typeof getDoneStatsOutcomeBucket === "function" ? getDoneStatsOutcomeBucket(task) : "neutral";
-      if (bucket === "treason") {
-        return { icon: DONE_CELEBRATE_ICON_LIB.treason, tone: "treason", cat: "treason" };
-      }
-      if (forcedGlyph) {
-        return {
-          icon: String(forcedGlyph),
-          tone: bucket === "neutral" ? "neutral" : "power",
-          cat: "forced"
-        };
-      }
-      const text = String((task && task.text) || "");
-      for (let i = 0; i < DONE_CELEBRATE_ICON_RULES.length; i++) {
-        const rule = DONE_CELEBRATE_ICON_RULES[i];
-        if (rule.re.test(text)) {
-          return {
-            icon: rule.icon,
-            tone: bucket === "neutral" ? "neutral" : "power",
-            cat: rule.cat
-          };
-        }
-      }
-      const cat = inferDoneCelebrateCategory(task, text);
-      const icons = DONE_CELEBRATE_ICON_LIB[cat] || DONE_CELEBRATE_ICON_LIB.habit;
-      const icon = stableDoneCelebrateIconPick(doneCelebrateStableKey(task), icons);
-      return {
-        icon: icon || DONE_CELEBRATE_ICON_LIB.fallback,
-        tone: bucket === "neutral" ? "neutral" : "power",
-        cat: cat
-      };
+      if (bucket === "treason") return "treason";
+      if (bucket === "neutral") return "neutral";
+      return "power";
     }
 
+    const DONE_CELEBRATE_CHECK_SVG =
+      '<svg class="done-celebrate__mark" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">' +
+      '<rect class="done-celebrate__mark-bg" x="0.5" y="0.5" width="15" height="15" rx="3.5" ry="3.5"/>' +
+      '<path class="done-celebrate__mark-fg" d="M4.2 8.2l2.4 2.4 5.2-5.4" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>' +
+      "</svg>";
+
+    const DONE_CELEBRATE_TREASON_SVG =
+      '<svg class="done-celebrate__mark" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">' +
+      '<path class="done-celebrate__mark-bg" d="M8 1.4L14.6 13.6H1.4L8 1.4z"/>' +
+      '<path class="done-celebrate__mark-fg" d="M8 5.2v4.2" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round"/>' +
+      '<circle class="done-celebrate__mark-fg" cx="8" cy="11.6" r="0.95"/>' +
+      "</svg>";
+
+    function mountDoneCelebrateMark(el, tone) {
+      if (!el) return;
+      el.innerHTML = tone === "treason" ? DONE_CELEBRATE_TREASON_SVG : DONE_CELEBRATE_CHECK_SVG;
+    }
 
     /** Done Victory FX 2.0：视口中央短庆祝（仅 Hard；复用 doneCelebrateFxPending） */
     const DONE_VICTORY_FX_KINDS = [
@@ -173813,13 +173700,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function appendDoneCelebrateIcon(row, task, forcedGlyph) {
       if (!row || !task) return;
       if (task.kind === "timeReflection") return;
-      const matched = resolveDoneCelebrateIcon(task, forcedGlyph);
+      const tone = resolveDoneCelebrateTone(task);
       const el = document.createElement("span");
-      el.className = "done-celebrate";
-      if (matched.tone === "neutral") el.classList.add("done-celebrate--neutral");
-      if (matched.tone === "treason") el.classList.add("done-celebrate--treason");
+      el.className = "done-celebrate done-celebrate--" + tone;
       el.setAttribute("aria-hidden", "true");
-      el.textContent = matched.icon;
+      mountDoneCelebrateMark(el, tone);
       const play = consumeDoneCelebrateFx(task.id);
       if (play) {
         let reduceMotion = false;
@@ -173829,21 +173714,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             matchMedia("(prefers-reduced-motion: reduce)").matches;
         } catch (_rm) {}
         const animClass =
-          matched.tone === "treason"
+          tone === "treason"
             ? "is-celebrate-treason"
-            : matched.tone === "neutral"
+            : tone === "neutral"
               ? "is-celebrate-neutral"
               : "is-celebrate-hard";
         if (!reduceMotion) {
           el.classList.add(animClass);
-          if (matched.tone === "power") {
+          if (tone === "power") {
             for (let i = 0; i < 4; i++) {
               const spark = document.createElement("span");
               spark.className = "done-celebrate__spark done-celebrate__spark--" + String(i);
               spark.setAttribute("aria-hidden", "true");
               el.appendChild(spark);
             }
-            /* Hard Choice：右侧小图标动效 + 视口中央 Victory FX（同一次 consume） */
+            /* Hard Choice：右侧状态符动效 + 视口中央 Victory FX（同一次 consume） */
             try {
               playDoneVictoryFx();
             } catch (_dvfx) {}
