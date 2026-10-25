@@ -108572,7 +108572,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261025p";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261025r";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -146182,7 +146182,21 @@
           habitMeta: meta
         };
         state.done.unshift(newItem);
-        maybeQueueDoneCelebrateAfterLocalUnshift(newItem, { skipNotify: skipNotify });
+        /*
+         * 当天首次写入每天三赢 Done 镜像才庆祝；已有行就地更新（上方 return）不播。
+         * 中央 FX 延后到 save/render 之后（scheduleAmb），避免埋在 hygiene/render 同步栈里闪没。
+         * skipNotify（同步补齐）不庆祝。不改数据结构 / 同步语义。
+         */
+        if (!skipNotify) {
+          try {
+            queueDoneCelebrateFx(newItem.id);
+          } catch (_dwQ) {}
+          if (typeof scheduleAmbVictoryCelebration === "function") {
+            scheduleAmbVictoryCelebration(newItem);
+          } else {
+            maybeQueueDoneCelebrateAfterLocalUnshift(newItem, null);
+          }
+        }
         if (!skipNotify && typeof notifyAliyunDoneRealUpsert === "function") {
           try {
             notifyAliyunDoneRealUpsert("dailyThreeWins", newItem);
@@ -146833,7 +146847,17 @@
         }
       };
       state.done.unshift(newItem);
-      maybeQueueDoneCelebrateAfterLocalUnshift(newItem, { skipNotify: skipNotify });
+      /* 预设明天三赢：仅首次新建 Done 庆祝；改已有不播。延后到 render 后。 */
+      if (!skipNotify) {
+        try {
+          queueDoneCelebrateFx(newItem.id);
+        } catch (_dwTmrQ) {}
+        if (typeof scheduleAmbVictoryCelebration === "function") {
+          scheduleAmbVictoryCelebration(newItem);
+        } else {
+          maybeQueueDoneCelebrateAfterLocalUnshift(newItem, null);
+        }
+      }
       changed = true;
       logDailyWinTomorrowDoneChain(
         "step4-5 create-stable",
@@ -148577,6 +148601,14 @@
       }
       if (forTomorrow) {
         syncDailyWinTomorrowPresetToDone(targetDateKey, { focusDone: true });
+      } else if (typeof refreshDailyWinCheckin === "function") {
+        /*
+         * 写满 3 条后立刻入 Done（与 hygiene 同契约），庆祝在 syncHabitToDone 内调度；
+         * 勿只依赖 render→hygiene，否则动画触发埋在重渲中。不改保存/同步语义。
+         */
+        try {
+          refreshDailyWinCheckin(targetDateKey);
+        } catch (_dwRefresh) {}
       }
       if (dailyWinInput) dailyWinInput.value = "";
       saveState({ lists: ["dailyWin", "habit", "done"] });
@@ -173670,17 +173702,25 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return true;
     }
 
+    /**
+     * 全局胜利庆祝：必须延后到当前调用栈（Habits/Forge finalize→render）结束之后再挂载。
+     * 若在 syncHabitToDone / appendForge* 内同步 playDoneVictoryFx，重渲占满主线程时
+     * WebP 已在不可见阶段播完或 hold 已到期，表现为「完全没有烟花」。
+     * 仅调度；不改打卡写入 / saveState / 同步。
+     */
     function playVictoryCelebration(idOpt) {
       if (!claimDoneFxPlayOnce(idOpt)) return;
-      try {
-        preloadDoneFxWebps();
-        playDoneVictoryFx({ mode: "power" });
-      } catch (_pv) {}
+      setTimeout(function () {
+        try {
+          preloadDoneFxWebps();
+          playDoneVictoryFx({ mode: "power" });
+        } catch (_pv) {}
+      }, 0);
     }
 
     /**
-     * A.M.B.「始终向后衡量」真实新打卡：setTimeout(0) 排到调用栈内 saveState+render 之后再播，
-     * 避免中央 WebP 被重渲占满主线程「闪没」。仅动画调度；不改保存 / 统计 / 同步。
+     * A.M.B. 真实新打卡：再排一拍（与 playVictoryCelebration 内 setTimeout 叠加仍安全），
+     * 确保落在 saveState+render 之后。仅动画调度。
      */
     function scheduleAmbVictoryCelebration(item) {
       if (!item || item.id == null) return;
@@ -173691,15 +173731,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }, 0);
     }
 
-    /** 背叛 -1/-2/-10 中央警告；无 -5；与胜利共用一次打卡去重 */
+    /** 背叛 -1/-2/-10 中央警告；无 -5；与胜利共用一次打卡去重 + 同样延后挂载 */
     function playTreasonCelebration(idOpt, score) {
       const n = Number(score);
       if (n !== -1 && n !== -2 && n !== -10) return;
       if (!claimDoneFxPlayOnce(idOpt)) return;
-      try {
-        preloadDoneFxWebps();
-        playDoneVictoryFx({ mode: "treason", score: n });
-      } catch (_pt) {}
+      setTimeout(function () {
+        try {
+          preloadDoneFxWebps();
+          playDoneVictoryFx({ mode: "treason", score: n });
+        } catch (_pt) {}
+      }, 0);
     }
 
     function shouldPlayTreasonCelebrationForItem(item) {
