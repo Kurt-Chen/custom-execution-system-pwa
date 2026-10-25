@@ -34771,12 +34771,16 @@
       --dvfx-glow: rgba(251, 191, 36, 0.16);
       /* V5 力量 ANMF：20×100ms = 2000ms */
       --dvfx-dur: 2s;
+      /* 轻微等比放大裁透明边；禁止非等比拉伸。竖条硬裁边是 V5 素材问题，勿靠拉伸“修圆” */
+      --dvfx-media-zoom: 1.2;
       position: fixed;
       left: 50%;
       top: 50%;
       transform: translate(-50%, -50%);
       width: var(--dvfx-size);
       height: var(--dvfx-size);
+      aspect-ratio: 1 / 1;
+      box-sizing: border-box;
       margin: 0;
       padding: 0;
       pointer-events: none;
@@ -34803,12 +34807,15 @@
     }
     /*
      * 舞台不得用 opacity 0→1→0 盖住 WebP：绽放/淡出已写入素材帧时长。
-     * 外层仅轻微缩放；容器存活时长由 JS 对齐素材总时长（力量 2s）。
+     * 外层仅轻微等比缩放；容器必须保持正方形，overflow 裁掉素材透明边。
      */
     .done-victory-fx__stage {
       position: relative;
       width: 100%;
       height: 100%;
+      aspect-ratio: 1 / 1;
+      box-sizing: border-box;
+      overflow: hidden;
       opacity: 1;
       pointer-events: none;
       transform: scale(1);
@@ -34818,7 +34825,7 @@
       animation: done-victory-fx-host-scale var(--dvfx-dur, 2s) ease-out both;
     }
     @keyframes done-victory-fx-host-scale {
-      /* 前 0.3s（15%）快速绽放，其后稳定展示 */
+      /* 前 0.3s（15%）快速绽放，其后稳定展示；始终等比 scale，禁止 scaleX/scaleY 分拆 */
       0% { transform: scale(0.92); }
       15% { transform: scale(1.05); }
       40% { transform: scale(1); }
@@ -34851,12 +34858,24 @@
       75% { opacity: 0.4; transform: scale(1.08); }
       100% { opacity: 0; transform: scale(1.12); }
     }
-    /* 设计素材 WebP：充满舞台，不再用 emoji/圆点顶替 */
+    /*
+     * WebP 画布 512²；部分 V5 主体偏竖条。用等比 zoom 裁透明边填满正方形舞台，
+     * 不改 width/height 比例、不用 scaleX/scaleY 分拆。
+     */
     .done-victory-fx__media {
       position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
+      left: 50%;
+      top: 50%;
+      width: calc(100% * var(--dvfx-media-zoom, 1.55));
+      height: calc(100% * var(--dvfx-media-zoom, 1.55));
+      max-width: none;
+      max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      aspect-ratio: 1 / 1;
+      box-sizing: border-box;
+      transform: translate(-50%, -50%);
       object-fit: contain;
       object-position: center;
       pointer-events: none;
@@ -108572,7 +108591,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261025t";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261025u";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -173905,7 +173924,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       el.innerHTML = tone === "treason" ? DONE_CELEBRATE_TREASON_SVG : DONE_CELEBRATE_CHECK_SVG;
     }
 
-    /** Done Victory / Treason FX：视口中央 WebP 素材（icons/fx） */
+    /**
+     * Done Victory / Treason FX：视口中央 WebP 素材（icons/fx）。
+     * 注意：V5 的 energy-burst（fx-power-burst.webp）画布虽 512²，但主体为竖向硬裁条带，
+     * 显示成「又窄又长」；今晚不改素材，故移出随机池（映射仍保留，调试可指定 kind）。
+     */
     const DONE_VICTORY_FX_KINDS = [
       "fireworks",
       "hearts",
@@ -173914,8 +173937,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       "confetti",
       "victory",
       "energy-ring",
-      "blossom",
-      "energy-burst"
+      "blossom"
     ];
     /* V5 文件名映射（业务 kind 不变；ring/blossoms/burst/warning-* 为 V5 新名） */
     const DONE_VICTORY_FX_WEBP = {
@@ -174006,6 +174028,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       img.setAttribute("aria-hidden", "true");
       img.draggable = false;
       img.decoding = "sync";
+      /* 显式正方形固有尺寸，避免浏览器把 ANMF 固有比算歪 */
+      img.width = 512;
+      img.height = 512;
+      img.style.aspectRatio = "1 / 1";
       /* 先挂节点；src 可延后到舞台可见后再赋，避免不可见阶段把 ANMF 播完 */
       root.appendChild(img);
       if (src) img.src = src;
