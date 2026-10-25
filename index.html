@@ -121339,7 +121339,7 @@
         if (window.__EARLY_BOOT_DIAG && typeof window.__EARLY_BOOT_DIAG.setVersionTapMeta === "function") {
           window.__EARLY_BOOT_DIAG.setVersionTapMeta({
             bound: true,
-            note: "版本连点已绑定：连点版本号 5 次打开诊断"
+            note: "版本连点：3 次测烟花；5 次打开诊断面板"
           });
         }
       } catch (_meta) {}
@@ -121388,6 +121388,19 @@
             bootHealthTapCount = 0;
             bootHealthTapTimer = null;
           }, 2500);
+          /* 连点 3 次：不改数据，直接播 V5 测试烟花并显示版本/诊断条 */
+          if (bootHealthTapCount === 3) {
+            try {
+              ev.preventDefault();
+              ev.stopPropagation();
+            } catch (_e3) {}
+            try {
+              if (typeof runVictoryFxSelfTest === "function") runVictoryFxSelfTest();
+              else if (typeof window.__debugPlayVictoryFx === "function") {
+                window.__debugPlayVictoryFx("fireworks");
+              }
+            } catch (_fxTap) {}
+          }
           if (bootHealthTapCount >= 5) {
             bootHealthTapCount = 0;
             if (bootHealthTapTimer) {
@@ -174125,16 +174138,67 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
+    /**
+     * 轻量自测：不改 state / 不打卡。直接播 V5 烟花，并短暂显示版本+诊断。
+     * 入口：版本号连点 3 次；或控制台 window.__testVictoryFx() / __debugPlayVictoryFx。
+     */
+    function showVictoryFxSelfTestBanner(msg) {
+      try {
+        let bar = document.getElementById("victoryFxSelfTestBanner");
+        if (!bar) {
+          bar = document.createElement("div");
+          bar.id = "victoryFxSelfTestBanner";
+          bar.setAttribute("role", "status");
+          bar.style.cssText =
+            "position:fixed;left:50%;bottom:88px;transform:translateX(-50%);z-index:10060;" +
+            "max-width:92vw;padding:8px 12px;border-radius:10px;font:12px/1.4 system-ui,sans-serif;" +
+            "background:rgba(15,23,42,0.88);color:#f8fafc;pointer-events:none;text-align:center;";
+          document.body.appendChild(bar);
+        }
+        bar.textContent = String(msg || "");
+        bar.style.display = "block";
+        if (bar._hideTimer) clearTimeout(bar._hideTimer);
+        bar._hideTimer = setTimeout(function () {
+          bar.style.display = "none";
+        }, 3200);
+      } catch (_ban) {}
+    }
+
+    function runVictoryFxSelfTest(kindOrOpts) {
+      const ver =
+        typeof APP_CACHE_NAME_FOR_BADGE !== "undefined"
+          ? String(APP_CACHE_NAME_FOR_BADGE).replace(/^exec-system-pwa-/, "")
+          : "unknown";
+      let reduceMotion = false;
+      try {
+        reduceMotion =
+          typeof matchMedia === "function" &&
+          matchMedia("(prefers-reduced-motion: reduce)").matches;
+      } catch (_rm) {}
+      fxDiagPush("self_test", { ver: ver, reduceMotion: !!reduceMotion });
+      showVictoryFxSelfTestBanner(
+        "测试烟花 · " +
+          ver +
+          (reduceMotion ? " · 系统「减少动态效果」已开，动画会跳过" : " · 中央应出现约 2 秒")
+      );
+      if (reduceMotion) return { ok: false, reason: "reduced-motion", ver: ver };
+      const opts =
+        kindOrOpts && typeof kindOrOpts === "object"
+          ? kindOrOpts
+          : { mode: "power", kind: String(kindOrOpts || "fireworks") };
+      if (!opts.mode) opts.mode = "power";
+      /* 自测绕过 claim / afterpaint 排队，直接挂载，用于确认全局显示层 */
+      playDoneVictoryFx(opts);
+      return { ok: true, ver: ver };
+    }
+
     /** 开发调试：控制台 __debugPlayVictoryFx('fireworks'|{mode:'treason',score:-1}) */
     try {
       window.__debugPlayVictoryFx = function (kindOrOpts) {
-        const opts =
-          kindOrOpts && typeof kindOrOpts === "object"
-            ? kindOrOpts
-            : { mode: "power", kind: String(kindOrOpts || "fireworks") };
-        if (!opts.mode) opts.mode = "power";
-        playDoneVictoryFx(opts);
-        return true;
+        return runVictoryFxSelfTest(kindOrOpts);
+      };
+      window.__testVictoryFx = function () {
+        return runVictoryFxSelfTest("fireworks");
       };
     } catch (_dbgFx) {}
 
