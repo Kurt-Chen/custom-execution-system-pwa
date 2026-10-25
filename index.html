@@ -108572,7 +108572,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261025r";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261025s";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -173703,23 +173703,98 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * 全局胜利庆祝：必须延后到当前调用栈（Habits/Forge finalize→render）结束之后再挂载。
-     * 若在 syncHabitToDone / appendForge* 内同步 playDoneVictoryFx，重渲占满主线程时
-     * WebP 已在不可见阶段播完或 hold 已到期，表现为「完全没有烟花」。
+     * 庆祝动画轻量诊断（环形缓冲；非整帧日志、无轮询）。
+     * 控制台：window.__FX_DIAG_DUMP()；回滚调度：window.__VICTORY_FX_SCHEDULE_MODE = "timeout0"
+     */
+    const FX_DIAG_MAX = 40;
+    const fxDiagEvents = [];
+    function fxDiagPush(ev, extra) {
+      try {
+        const row = Object.assign(
+          {
+            ev: String(ev || ""),
+            t: Date.now(),
+            perf:
+              typeof performance !== "undefined" && performance.now
+                ? Math.round(performance.now())
+                : 0,
+            cache:
+              typeof APP_CACHE_NAME_FOR_BADGE !== "undefined" ? APP_CACHE_NAME_FOR_BADGE : ""
+          },
+          extra && typeof extra === "object" ? extra : {}
+        );
+        fxDiagEvents.push(row);
+        if (fxDiagEvents.length > FX_DIAG_MAX) fxDiagEvents.shift();
+        if (typeof window !== "undefined") window.__FX_DIAG = fxDiagEvents;
+      } catch (_fxDiag) {}
+    }
+    try {
+      if (typeof window !== "undefined") {
+        window.__FX_DIAG_DUMP = function () {
+          return fxDiagEvents.slice();
+        };
+      }
+    } catch (_fxDump) {}
+
+    /**
+     * 挂载时机：打卡栈（finalize→render）结束后，再等两帧绘制，再挂 WebP。
+     * 默认 afterpaint；回滚 window.__VICTORY_FX_SCHEDULE_MODE = "timeout0"（仅 #382 的 setTimeout(0)）。
      * 仅调度；不改打卡写入 / saveState / 同步。
      */
-    function playVictoryCelebration(idOpt) {
-      if (!claimDoneFxPlayOnce(idOpt)) return;
-      setTimeout(function () {
+    function scheduleVictoryFxMount(run) {
+      if (typeof run !== "function") return;
+      let mode = "afterpaint";
+      try {
+        if (typeof window !== "undefined" && window.__VICTORY_FX_SCHEDULE_MODE) {
+          mode = String(window.__VICTORY_FX_SCHEDULE_MODE);
+        }
+      } catch (_mode) {}
+      fxDiagPush("schedule", { mode: mode });
+      function start() {
         try {
-          preloadDoneFxWebps();
-          playDoneVictoryFx({ mode: "power" });
-        } catch (_pv) {}
+          run();
+        } catch (_run) {
+          fxDiagPush("run_error", { message: String((_run && _run.message) || _run || "") });
+        }
+      }
+      if (mode === "timeout0") {
+        setTimeout(start, 0);
+        return;
+      }
+      setTimeout(function () {
+        if (typeof requestAnimationFrame !== "function") {
+          start();
+          return;
+        }
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            start();
+          });
+        });
       }, 0);
     }
 
     /**
-     * A.M.B. 真实新打卡：再排一拍（与 playVictoryCelebration 内 setTimeout 叠加仍安全），
+     * 全局胜利庆祝：必须延后到当前调用栈（Habits/Forge finalize→render）结束并完成绘制后再挂载。
+     * 若在 syncHabitToDone / appendForge* 内同步 playDoneVictoryFx，重渲占满主线程时
+     * WebP 已在不可见阶段播完或 hold 已到期，表现为「完全没有烟花」。
+     * #382 的 setTimeout(0) 仍可能在首帧绘制前挂载；默认再等双 rAF。
+     * 仅调度；不改打卡写入 / saveState / 同步。
+     */
+    function playVictoryCelebration(idOpt) {
+      if (!claimDoneFxPlayOnce(idOpt)) {
+        fxDiagPush("claim_skip", { id: String(idOpt || ""), mode: "power" });
+        return;
+      }
+      fxDiagPush("call", { id: String(idOpt || ""), mode: "power" });
+      scheduleVictoryFxMount(function () {
+        preloadDoneFxWebps();
+        playDoneVictoryFx({ mode: "power" });
+      });
+    }
+
+    /**
+     * A.M.B. 真实新打卡：再排一拍（与 playVictoryCelebration 内调度叠加仍安全），
      * 确保落在 saveState+render 之后。仅动画调度。
      */
     function scheduleAmbVictoryCelebration(item) {
@@ -173735,13 +173810,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     function playTreasonCelebration(idOpt, score) {
       const n = Number(score);
       if (n !== -1 && n !== -2 && n !== -10) return;
-      if (!claimDoneFxPlayOnce(idOpt)) return;
-      setTimeout(function () {
-        try {
-          preloadDoneFxWebps();
-          playDoneVictoryFx({ mode: "treason", score: n });
-        } catch (_pt) {}
-      }, 0);
+      if (!claimDoneFxPlayOnce(idOpt)) {
+        fxDiagPush("claim_skip", { id: String(idOpt || ""), mode: "treason", score: n });
+        return;
+      }
+      fxDiagPush("call", { id: String(idOpt || ""), mode: "treason", score: n });
+      scheduleVictoryFxMount(function () {
+        preloadDoneFxWebps();
+        playDoneVictoryFx({ mode: "treason", score: n });
+      });
     }
 
     function shouldPlayTreasonCelebrationForItem(item) {
@@ -173916,9 +173993,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       img.setAttribute("aria-hidden", "true");
       img.draggable = false;
       img.decoding = "sync";
-      /* 先挂节点再赋 src，避免不可见阶段把动画播完 */
+      /* 先挂节点；src 可延后到舞台可见后再赋，避免不可见阶段把 ANMF 播完 */
       root.appendChild(img);
-      img.src = src;
+      if (src) img.src = src;
       return img;
     }
 
@@ -173933,12 +174010,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           typeof matchMedia === "function" &&
           matchMedia("(prefers-reduced-motion: reduce)").matches;
       } catch (_rm) {}
-      if (reduceMotion) return;
+      if (reduceMotion) {
+        fxDiagPush("skip_reduced_motion", {});
+        return;
+      }
 
       const mode = opts && opts.mode === "treason" ? "treason" : "power";
       let src = "";
       let classExtra = "";
-      /* 容器存活略长于素材 ANMF；力量 2s 素材 + 短尾，背叛 hold 不变 */
+      /* 容器存活对齐素材 ANMF；力量 2s / 背叛 1s；hold 从图片可见加载完成起算，避免不可见阶段空转 */
       let durationMs = mode === "treason" ? DONE_FX_TREASON_HOLD_MS : DONE_FX_POWER_HOLD_MS;
       if (mode === "treason") {
         const scoreKey = String((opts && opts.score) || "");
@@ -173971,18 +174051,78 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       doneVictoryFxActiveEl = root;
       /* 先显示舞台再挂载/启动 WebP，避免不可见时把动画播掉 */
       root.classList.add("is-playing");
-      const img = mountDoneFxWebpMedia(stage, src);
+      const img = mountDoneFxWebpMedia(stage, "");
+      let holdArmed = false;
+      function armHoldFromVisible() {
+        if (holdArmed || token !== doneVictoryFxToken) return;
+        holdArmed = true;
+        let displayW = 0;
+        let displayH = 0;
+        let naturalW = 0;
+        let naturalH = 0;
+        try {
+          if (img) {
+            const ir = img.getBoundingClientRect();
+            displayW = Math.round(ir.width);
+            displayH = Math.round(ir.height);
+            naturalW = img.naturalWidth || 0;
+            naturalH = img.naturalHeight || 0;
+          }
+        } catch (_sz) {}
+        fxDiagPush("img_ready", {
+          mode: mode,
+          src: src,
+          naturalWidth: naturalW,
+          naturalHeight: naturalH,
+          displayW: displayW,
+          displayH: displayH,
+          holdMs: durationMs
+        });
+        doneVictoryFxCleanupTimer = setTimeout(function () {
+          if (token !== doneVictoryFxToken) return;
+          fxDiagPush("dom_remove", { mode: mode, reason: "hold_elapsed" });
+          clearDoneVictoryFx();
+        }, durationMs);
+      }
       try {
         void root.offsetWidth;
+        const rr = root.getBoundingClientRect();
+        fxDiagPush("dom_mount", {
+          mode: mode,
+          src: src,
+          w: Math.round(rr.width),
+          h: Math.round(rr.height),
+          top: Math.round(rr.top),
+          left: Math.round(rr.left)
+        });
         if (img) {
           const bust = src + (src.indexOf("?") >= 0 ? "&" : "?") + "t=" + String(Date.now());
+          /* 舞台已在 DOM 且完成一次布局后再赋 src，ANMF 从可见时刻起播 */
+          img.addEventListener(
+            "load",
+            function () {
+              armHoldFromVisible();
+            },
+            { once: true }
+          );
+          img.addEventListener(
+            "error",
+            function () {
+              fxDiagPush("img_error", { src: bust });
+              armHoldFromVisible();
+            },
+            { once: true }
+          );
           img.src = bust;
+          if (img.complete && img.naturalWidth > 0) {
+            armHoldFromVisible();
+          }
+        } else {
+          armHoldFromVisible();
         }
-      } catch (_reflow) {}
-      doneVictoryFxCleanupTimer = setTimeout(function () {
-        if (token !== doneVictoryFxToken) return;
-        clearDoneVictoryFx();
-      }, durationMs);
+      } catch (_reflow) {
+        armHoldFromVisible();
+      }
     }
 
     /** 开发调试：控制台 __debugPlayVictoryFx('fireworks'|{mode:'treason',score:-1}) */
