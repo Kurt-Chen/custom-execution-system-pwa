@@ -1,5 +1,5 @@
 ﻿/* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261025m";
+const CACHE_NAME = "exec-system-pwa-v20261025p";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -14,7 +14,20 @@ const APP_SHELL = [
   "./icons/done-focus-badge.png",
   "./assets/obsession-reminder-card.png",
   "./assets/maniacal-urgency-card.png",
-  "./assets/today-plan-win-banner.png"
+  "./assets/today-plan-win-banner.png",
+  /* V5 庆祝/警告 WebP：预缓存避免首打卡空白 */
+  "./icons/fx/fx-power-fireworks.webp",
+  "./icons/fx/fx-power-hearts.webp",
+  "./icons/fx/fx-power-trophy.webp",
+  "./icons/fx/fx-power-stars.webp",
+  "./icons/fx/fx-power-confetti.webp",
+  "./icons/fx/fx-power-done.webp",
+  "./icons/fx/fx-power-ring.webp",
+  "./icons/fx/fx-power-blossoms.webp",
+  "./icons/fx/fx-power-burst.webp",
+  "./icons/fx/fx-warning-minus1.webp",
+  "./icons/fx/fx-warning-minus2.webp",
+  "./icons/fx/fx-warning-minus10.webp"
 ];
 
 self.addEventListener("install", (event) => {
