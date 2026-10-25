@@ -1,5 +1,5 @@
 ﻿/* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261025m";
+const CACHE_NAME = "exec-system-pwa-v20261025n";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -12,6 +12,18 @@ const APP_SHELL = [
   "./icons/psycho-cybernetics-core-practices.png",
   "./icons/psycho-cybernetics-core-practices-full.png",
   "./icons/done-focus-badge.png",
+  "./icons/fx/fx-power-fireworks.webp",
+  "./icons/fx/fx-power-hearts.webp",
+  "./icons/fx/fx-power-trophy.webp",
+  "./icons/fx/fx-power-stars.webp",
+  "./icons/fx/fx-power-confetti.webp",
+  "./icons/fx/fx-power-done.webp",
+  "./icons/fx/fx-power-energy-ring.webp",
+  "./icons/fx/fx-power-blossom.webp",
+  "./icons/fx/fx-power-energy-burst.webp",
+  "./icons/fx/fx-treason-1.webp",
+  "./icons/fx/fx-treason-2.webp",
+  "./icons/fx/fx-treason-10.webp",
   "./assets/obsession-reminder-card.png",
   "./assets/maniacal-urgency-card.png",
   "./assets/today-plan-win-banner.png"
