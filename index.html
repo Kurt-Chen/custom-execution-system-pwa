@@ -76376,10 +76376,11 @@
       position: fixed;
       z-index: 12100;
       box-sizing: border-box;
-      width: min(420px, calc(100vw - 32px));
-      max-width: calc(100vw - 32px);
+      /* 按文案自适应；上限 360，避免 100vw 造成横向滚动 */
+      width: max-content;
+      max-width: min(360px, calc(100% - 32px));
       margin: 0;
-      padding: 22px 24px 20px;
+      padding: 16px 16px 14px;
       border-radius: 16px;
       border: 1px solid #f3c1d4;
       background: #ffffff;
@@ -76446,17 +76447,18 @@
       padding: 0;
       display: flex;
       flex-direction: column;
-      gap: 0.35em;
+      gap: 0.2em;
     }
 
     .tw020-ai-remind-tip__line {
       margin: 0;
       padding: 0;
-      font-size: 20px;
+      font-size: 17.5px;
       font-weight: 600;
-      line-height: 1.55;
-      letter-spacing: 0.01em;
+      line-height: 1.6;
+      letter-spacing: 0;
       color: #1e293b;
+      white-space: nowrap;
     }
 
     .tw020-ai-remind-tip__em--me {
@@ -108908,7 +108910,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261026q";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261026r";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -117783,9 +117785,8 @@
      */
     function flushCloudSyncUiRenderPending() {
       if (!cloudSyncUiRenderPending) return;
-      cloudSyncUiRenderPending = false;
       if (renderDepth > 0) {
-        cloudSyncUiRenderPending = true;
+        /* 保持 pending，勿清掉：编辑解锁后仍须知道云端 UI 待刷 */
         return;
       }
       if (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) {
@@ -117799,14 +117800,17 @@
         markBackgroundUiRenderDeferred();
         return;
       }
+      cloudSyncUiRenderPending = false;
       /* Syncing≠Blocking：最终 render 前让出一帧，避免与 hash/persist 粘在同一长任务 */
       void (async function () {
         await yieldToMainThread();
         if (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) {
+          cloudSyncUiRenderPending = true;
           markBackgroundUiRenderDeferred();
           return;
         }
         if (typeof isAppUiBusyForBackgroundRefresh === "function" && isAppUiBusyForBackgroundRefresh()) {
+          cloudSyncUiRenderPending = true;
           markBackgroundUiRenderDeferred();
           return;
         }
@@ -142703,16 +142707,20 @@
         if (
           !cloudSyncSuppressPush &&
           !opts.fromHygiene &&
+          !opts.skipAliyunGoalsNotify &&
           typeof notifyAliyunGoalsRealAfterLocalChange === "function" &&
           typeof isAliyunGoalsRealSyncEnabled === "function" &&
           isAliyunGoalsRealSyncEnabled()
         ) {
           const gLists = Array.isArray(opts.lists) ? opts.lists : null;
+          /*
+           * Goals 域信封不含 weeklyPlan 任务（Sprint 走阿里云独立域）。
+           * 周计划增删改若误触发 Goals GET+merge+PUT，会在标题保存/新增时造成主线程卡顿。
+           */
           const touchGoals =
             !gLists ||
             gLists.indexOf("goals") >= 0 ||
             gLists.indexOf("kinetic") >= 0 ||
-            gLists.indexOf("weeklyPlan") >= 0 ||
             gLists.indexOf("purpose") >= 0;
           if (touchGoals) {
             try {
@@ -159470,6 +159478,8 @@
 
     /** 第二阶段 · Editing Shield：Edit/Create 期间 draft 为唯一真相，render/merge 不得覆盖 */
     let taskTitleIxAllowRenderOnce = false;
+    /** 标题已局部 patch：解锁时若无云端 pending，跳过整页 render */
+    let taskTitleIxSkipUnlockFullRender = false;
     let taskTitleIxPendingRemote = null;
     let taskTitleIxDiagSession = null;
     let taskTitleIxDiagRenderCount = 0;
@@ -159642,13 +159652,35 @@
         deferRenderForTaskTitleIx("flush-while-busy");
         return;
       }
-      const need =
-        renderDeferredWhileEditing ||
-        (typeof cloudSyncUiRenderPending !== "undefined" && cloudSyncUiRenderPending);
+      const cloudPending =
+        typeof cloudSyncUiRenderPending !== "undefined" && cloudSyncUiRenderPending;
+      const need = renderDeferredWhileEditing || cloudPending;
       if (!need) {
         taskTitleIxDiagLog("flush-pending-render-skip", { reason: reason || "unlock" });
+        taskTitleIxSkipUnlockFullRender = false;
         return;
       }
+      /*
+       * 周计划标题已局部 patch 且无云端积压：清掉编辑期误积压的 render，
+       * 避免保存瞬间整页 render(true) 卡顿。有 cloudPending 时仍必须刷。
+       */
+      if (
+        (reason === "save-edit" || reason === "cancel-edit") &&
+        taskTitleIxSkipUnlockFullRender &&
+        !cloudPending
+      ) {
+        taskTitleIxSkipUnlockFullRender = false;
+        renderDeferredWhileEditing = false;
+        if (renderWhenEditingEndsTimer) {
+          clearTimeout(renderWhenEditingEndsTimer);
+          renderWhenEditingEndsTimer = null;
+        }
+        taskTitleIxDiagLog("flush-pending-render-skip-title-patched", {
+          reason: reason || "unlock"
+        });
+        return;
+      }
+      taskTitleIxSkipUnlockFullRender = false;
       renderDeferredWhileEditing = false;
       if (renderWhenEditingEndsTimer) {
         clearTimeout(renderWhenEditingEndsTimer);
@@ -185248,6 +185280,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /**
      * @param {object} [opts]
      * @param {boolean} [opts.textOnly] 纯标题文案：落盘+同步，不脏 Done/封闭清单、不标 UI paint
+     * @param {string} [opts.aliyunUpsertTaskId] 仅 upsert 该任务；缺省仍整周 upsert（结构/完成态变更）
      */
     function saveWeeklyPlanTasksForWeek(tasks, weekKeyOverride, opts) {
       const k = weekKeyOverride != null ? weekKeyOverride : getWeeklyPlanViewSprintStartKey();
@@ -185294,7 +185327,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       /* 阿里云 3-Day Sprint：默认随主路径；不阻塞 UI */
       try {
-        if (typeof notifyAliyunSprintRealWeekUpsert === "function") {
+        const singleId = o.aliyunUpsertTaskId != null ? String(o.aliyunUpsertTaskId) : "";
+        if (singleId && typeof notifyAliyunSprintRealUpsert === "function") {
+          const one = (Array.isArray(tasks) ? tasks : []).find(function (t) {
+            return t && String(t.id) === singleId;
+          });
+          if (one) {
+            notifyAliyunSprintRealUpsert(
+              o.textOnly ? "weekly-plan-task-text" : "weekly-plan-task-change",
+              k,
+              one
+            );
+          }
+        } else if (typeof notifyAliyunSprintRealWeekUpsert === "function") {
           notifyAliyunSprintRealWeekUpsert(k, "weekly-plan-week-change");
         }
       } catch (_sprintPush) {}
@@ -185464,6 +185509,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return;
       }
       const lane = isWeeklyPlanTaskShell(shell) ? shell : getWeeklyPlanAddLane();
+      const weekKey = getWeeklyPlanViewSprintStartKey();
       const tasks = getWeeklyPlanTasksForViewSprint();
       const newTask = {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
@@ -185473,10 +185519,35 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         microTasks: []
       };
       touchWeeklyPlanTaskRevision(newTask);
-      saveWeeklyPlanTasksForWeekWithPulse(insertWeeklyPlanTaskForLane(tasks, newTask, lane));
+      /*
+       * 本地优先（对齐 deleteWeeklyPlanTask）：
+       * - 禁止 saveWeeklyPlanTasksForWeekWithPulse（整周 upsert + 同步 Firebase pulse）
+       * - 先改 state / 局部刷列表，云端单任务 upsert 与落盘放到下一 macrotask
+       */
+      if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
+        state.weeklyPlan = {};
+      }
+      state.weeklyPlan[weekKey] = insertWeeklyPlanTaskForLane(tasks, newTask, lane);
+      noteCloudSyncWeeklyPlanPulseWeekKey(weekKey);
       weeklyPlanTaskInput.value = "";
-      refreshWeeklyPlanListAfterStructureChange();
+      if (!patchWeeklyPlanAfterTaskAdded(newTask)) {
+        refreshWeeklyPlanListAfterStructureChange();
+      }
       focusWeeklyPlanComposerInput();
+      try {
+        if (typeof notifyAliyunSprintRealUpsert === "function") {
+          notifyAliyunSprintRealUpsert("weekly-plan-task-add", weekKey, newTask);
+        }
+      } catch (_sprintAdd) {}
+      saveState({ lists: ["weeklyPlan"] });
+      setTimeout(function () {
+        try {
+          flushLocalPersistedState("force");
+        } catch (_persistErr) {}
+        try {
+          flushCloudSyncPulseImmediate();
+        } catch (_pulseErr) {}
+      }, 0);
     }
 
     /**
@@ -187508,13 +187579,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const tasks = getWeeklyPlanTasksForViewSprint();
       const task = tasks.find((t) => t.id === taskId);
       if (!task) return;
+      if (String(task.text || "") === text) {
+        /* 未改文案：只同步 DOM，避免落盘/整周同步 */
+        patchWeeklyPlanTaskTitleDom(taskId, text);
+        return;
+      }
       task.text = text;
       touchWeeklyPlanTaskRevision(task);
-      saveWeeklyPlanTasksForWeek(tasks, null, { textOnly: true });
+      saveWeeklyPlanTasksForWeek(tasks, null, {
+        textOnly: true,
+        aliyunUpsertTaskId: taskId
+      });
       /* 仅 patch 当前标题 DOM；勿整表 renderWeeklyPlanList / 勿刷 Done·Closed */
       if (!patchWeeklyPlanTaskTitleDom(taskId, text)) {
         /* DOM 找不到时才回退整表（罕见：壳未挂载） */
         refreshWeeklyPlanListAfterStructureChange();
+      } else {
+        taskTitleIxSkipUnlockFullRender = true;
       }
     }
 
@@ -187718,12 +187799,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!task) return;
       const m = task.microTasks.find((x) => x.id === microId);
       if (!m) return;
-      m.text = String(newText || "").trim();
+      const text = String(newText || "").trim();
+      if (String(m.text || "") === text) {
+        patchWeeklyPlanMicroTitleDom(taskId, microId, text);
+        return;
+      }
+      m.text = text;
       m.updatedAt = Date.now();
       touchWeeklyPlanTaskRevision(task);
-      saveWeeklyPlanTasksForWeek(tasks, null, { textOnly: true });
+      saveWeeklyPlanTasksForWeek(tasks, null, {
+        textOnly: true,
+        aliyunUpsertTaskId: taskId
+      });
       if (!patchWeeklyPlanMicroTitleDom(taskId, microId, m.text)) {
         refreshWeeklyPlanListAfterStructureChange();
+      } else {
+        taskTitleIxSkipUnlockFullRender = true;
       }
     }
 
@@ -191842,6 +191933,44 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return mLi;
     }
 
+    /**
+     * 新增主任务后刷新列表。
+     * 相对 refreshWeeklyPlanListAfterStructureChange：跳过跨周 dedupe（刚新增不会产生重复），
+     * 避免额外 saveState；看板模式返回 false 走原路径。
+     */
+    function patchWeeklyPlanAfterTaskAdded(task) {
+      if (!task || task.id == null) return false;
+      const shell = getWeeklyPlanShell();
+      if (
+        isWeeklyPlanTaskShell(shell) &&
+        typeof isSprintKanbanDesktopEnabled === "function" &&
+        isSprintKanbanDesktopEnabled() &&
+        typeof getSprintViewMode === "function" &&
+        getSprintViewMode(shell) === "kanban"
+      ) {
+        return false;
+      }
+      if (
+        (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) ||
+        appUiImeComposing ||
+        (typeof isAppUiBusyForBackgroundRefresh === "function" && isAppUiBusyForBackgroundRefresh())
+      ) {
+        return false;
+      }
+      try {
+        renderWeeklyPlanChrome();
+      } catch (_chromeErr) {}
+      try {
+        renderWeeklyPlanList();
+      } catch (_listErr) {
+        return false;
+      }
+      try {
+        clearUiPaintSlice("weeklyPlan");
+      } catch (_sliceErr) {}
+      return true;
+    }
+
     /** 三天冲刺主任务标题：只改当前卡片 display/input，不重建列表 */
     function patchWeeklyPlanTaskTitleDom(taskId, text) {
       const li = document.getElementById("weeklyPlanTask-" + String(taskId));
@@ -195455,7 +195584,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }, 160);
     }
 
-    /** 相对触发胶囊居中，钳制在视口内，并校正三角箭头水平位置 */
+    /**
+     * 相对触发胶囊水平居中；用 layout viewport（clientWidth）钳制，避免右侧溢出与横向滚动。
+     * 浮窗左移后仍用 --tip-arrow-x 对准胶囊中心。
+     */
     function syncAnniversaryAiRemindTipPosition() {
       const tip = tw020AiRemindTipEl;
       const anchor = tw020AiRemindTipAnchorEl;
@@ -195464,17 +195596,24 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         hideAnniversaryAiRemindTip(true);
         return;
       }
-      const margin = 16;
-      const gap = 10;
-      const vw = window.innerWidth || document.documentElement.clientWidth || 0;
-      const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+      const margin = 12;
+      const gap = 8;
+      const docEl = document.documentElement;
+      /* 优先 clientWidth：不含滚动条，避免 100vw/innerWidth 把浮窗挤出可视区 */
+      const vw = docEl.clientWidth || window.innerWidth || 0;
+      const vh = docEl.clientHeight || window.innerHeight || 0;
       if (!(vw > 0) || !(vh > 0)) return;
       const br = anchor.getBoundingClientRect();
-      const maxW = Math.max(0, vw - margin * 2);
-      const width = Math.min(420, maxW);
-      tip.style.width = width + "px";
+      const maxW = Math.max(0, Math.min(360, vw - margin * 2));
+      tip.style.right = "auto";
+      tip.style.width = "max-content";
       tip.style.maxWidth = maxW + "px";
-      const ph = tip.offsetHeight || 0;
+      /* 先落到近似位置再量实测宽，供水平钳制 */
+      tip.style.top = "0px";
+      tip.style.left = margin + "px";
+      const tipRect = tip.getBoundingClientRect();
+      const width = Math.min(maxW, Math.ceil(tipRect.width) || maxW);
+      const ph = Math.ceil(tipRect.height) || 0;
       let top = br.bottom + gap;
       if (top + ph + margin > vh) {
         top = Math.max(margin, Math.min(top, vh - ph - margin));
@@ -195482,11 +195621,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (top < margin) top = margin;
       const pillCenterX = br.left + br.width / 2;
       let left = pillCenterX - width / 2;
-      if (left < margin) left = margin;
-      if (left + width > vw - margin) left = Math.max(margin, vw - margin - width);
+      const minLeft = margin;
+      const maxLeft = Math.max(minLeft, vw - margin - width);
+      if (left < minLeft) left = minLeft;
+      if (left > maxLeft) left = maxLeft;
       tip.style.top = Math.round(top) + "px";
       tip.style.left = Math.round(left) + "px";
-      const arrowX = Math.max(18, Math.min(width - 18, pillCenterX - left));
+      const arrowPad = 14;
+      const arrowX = Math.max(arrowPad, Math.min(width - arrowPad, pillCenterX - left));
       tip.style.setProperty("--tip-arrow-x", Math.round(arrowX) + "px");
     }
 
