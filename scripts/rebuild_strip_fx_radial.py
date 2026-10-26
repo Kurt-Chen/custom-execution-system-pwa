@@ -17,7 +17,7 @@ import fx_v8_lib as L
 SIZE = 512
 OUT_DIR = Path("/workspace/icons/fx")
 QA = Path("/opt/cursor/artifacts/fx-strip-rebuild")
-BACKUP = Path("/workspace/icons/fx/_backup_pre_strip_fix_20261026")
+BACKUP = Path("/workspace/icons/fx/_backup_pre_duration_strip_20261026")
 
 SPECS = {
     "wings": {
@@ -77,10 +77,11 @@ def add_core_glow(
     """中心柔光（圆形，非矩形）；强度可控，避免大块半透明圆盘盖住 UI。"""
     layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    expand = L.ease_out_quart(min(1.0, t / 0.55))
-    fade = 1.0 if t < 0.55 else max(0.0, 1 - ((t - 0.55) / 0.45) ** 1.35)
+    # 爆发→巡航→末段消散；消散从 ~0.86 起，保证可见内容铺满约 2s
+    expand = L.ease_out_quart(min(1.0, t / 0.45))
+    fade = 1.0 if t < 0.86 else max(0.0, 1 - ((t - 0.86) / 0.14) ** 1.2)
     r = 14 + 48 * expand
-    a = int(160 * strength * fade * (0.5 + 0.5 * (1 - t)))
+    a = int(160 * strength * fade * (0.55 + 0.45 * (1 - t * 0.85)))
     cx = cy = SIZE / 2
     for mul, amul in ((1.0, 1.0), (1.45, 0.38), (2.0, 0.14)):
         rr = r * mul
@@ -89,6 +90,47 @@ def add_core_glow(
         d.ellipse([cx - rr, cy - rr, cx + rr, cy + rr], fill=col)
     layer = layer.filter(ImageFilter.GaussianBlur(radius=2.4))
     return Image.alpha_composite(base, layer)
+
+
+def add_radial_particles_sustained(
+    base: Image.Image,
+    t: float,
+    rng: random.Random,
+    colors: list[tuple[int, int, int]],
+    count: int,
+    speed: float,
+) -> Image.Image:
+    """
+    与 fx_v8_lib.add_radial_particles 同形，但淡出起点推迟到 0.78，
+    避免旧版 t≥0.5 即开始消散导致「爆发后半段空窗」。
+    """
+    import math
+
+    img = base.copy()
+    layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    cx = cy = SIZE / 2
+    expand = L.ease_out_quart(min(1.0, t / 0.55))
+    fade = 1.0 if t < 0.86 else max(0.0, 1 - ((t - 0.86) / 0.14) ** 1.15)
+    for i in range(count):
+        ang = (i / count) * math.tau + rng.uniform(-0.05, 0.05)
+        dist = speed * (0.5 + 0.5 * ((i % 5) / 4)) * expand
+        x = cx + math.cos(ang) * dist
+        y = cy + math.sin(ang) * dist + 18 * (t**1.5)
+        # 中后段保持可读亮度，仅最后 ~14% 收束
+        a = int(255 * fade * (0.72 + 0.28 * (1 - t * 0.75)))
+        if a < 10:
+            continue
+        trail = 0.12
+        back = max(0.0, t - trail)
+        be = L.ease_out_quart(min(1.0, back / 0.55))
+        bx = cx + math.cos(ang) * (speed * (0.5 + 0.5 * ((i % 5) / 4)) * be)
+        by = cy + math.sin(ang) * (speed * (0.5 + 0.5 * ((i % 5) / 4)) * be) + 18 * (back**1.5)
+        col = colors[i % len(colors)]
+        d.line([(bx, by), (x, y)], fill=(*col, int(a * 0.55)), width=max(1, 2 + (i % 2)))
+        r = 1.7 + (i % 4) * 0.6
+        d.ellipse([x - r, y - r, x + r, y + r], fill=(*col, a))
+    return Image.alpha_composite(img, layer)
 
 
 def build_kind(name: str) -> dict:
@@ -102,25 +144,24 @@ def build_kind(name: str) -> dict:
     colors = cfg["colors"]
     frames: list[Image.Image] = []
     for i in range(n):
+        # 全局 t 线性铺满 0→1（约 2s）；粒子参数与 t 同步，禁止分段映射把寿命压到前 1s
         t = i / (n - 1)
         fr = empty.copy()
         fr = add_core_glow(fr, t, cfg["core"], strength=float(cfg.get("core_alpha", 0.5)))
-        if t < 0.12:
-            u = t / 0.12
-            fr = L.add_radial_particles(fr, u * 0.35, rng, colors, count=c0, speed=s0)
-        elif t < 0.42:
-            u = (t - 0.12) / 0.3
-            fr = L.add_radial_particles(fr, 0.25 + 0.45 * u, rng, colors, count=c1, speed=s1)
-        elif t < 0.72:
-            u = (t - 0.42) / 0.3
-            fr = L.add_radial_particles(fr, 0.5 + 0.35 * u, rng, colors, count=c2, speed=s2)
+        if t < 0.18:
+            count, speed = c0, s0
+        elif t < 0.5:
+            count, speed = c1, s1
+        elif t < 0.86:
+            count, speed = c2, s2
         else:
-            u = (t - 0.72) / 0.28
-            fr = L.add_radial_particles(fr, 0.7 + 0.3 * u, rng, colors, count=c3, speed=s3)
-            # 末段再叠一层淡化：降低整体 alpha
+            count, speed = c3, s3
+        # 每帧用确定性角向抖动，避免 rng 消耗导致后半段角度漂到看不见
+        frame_rng = random.Random(cfg["seed"] + i * 997)
+        fr = add_radial_particles_sustained(fr, t, frame_rng, colors, count=count, speed=speed)
+        if t > 0.92:
             arr = __import__("numpy").array(fr)
-            fade_t = max(0.0, (u - 0.2) / 0.8)
-            fade = max(0.0, 1.0 - fade_t**1.2)
+            fade = max(0.0, 1.0 - ((t - 0.92) / 0.08) ** 1.1)
             arr[:, :, 3] = (arr[:, :, 3].astype("float32") * fade).astype("uint8")
             fr = Image.fromarray(arr, "RGBA")
         frames.append(fr)

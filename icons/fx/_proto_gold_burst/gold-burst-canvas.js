@@ -133,7 +133,8 @@
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         life: -birth,
-        maxLife: rand(0.7, 1.15),
+        /* 寿命铺满约 2s 墙钟；由全局 fadeOut 收尾，避免前 1s 粒子已灭 */
+        maxLife: rand(1.35, 1.95),
         size: rand(3.2, 5.2) * Math.min(1.15, s),
         length: rand(12, 22) * s,
         r: c[0],
@@ -158,7 +159,7 @@
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         life: -birth,
-        maxLife: rand(1.05, 1.7),
+        maxLife: rand(1.55, 2.05),
         size: rand(2.0, 3.6) * Math.min(1.1, s),
         r: c[0],
         g: c[1],
@@ -182,7 +183,7 @@
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         life: -birth,
-        maxLife: rand(1.25, 1.9),
+        maxLife: rand(1.7, 2.15),
         size: rand(1.6, 2.8) * Math.min(1.1, s),
         r: c[0],
         g: c[1],
@@ -358,7 +359,8 @@
       /* 前段爆发快，中后段明显减速 */
       var drag = tNorm < 0.35 ? 0.988 : 0.972;
       var gravity = 12;
-      var fadeOut = tNorm < 0.72 ? 1 : 1 - (tNorm - 0.72) / 0.28;
+      /* 全局淡出推迟到后段，保证触发后完整可见 ≥2s，而非中段已空 */
+      var fadeOut = tNorm < 0.82 ? 1 : 1 - (tNorm - 0.82) / 0.18;
       var i;
       var p;
       for (i = 0; i < particles.length; i++) {
