@@ -76351,6 +76351,136 @@
       }
     }
 
+    /*
+     * AI规划 / AI复盘 悬停说明浮窗：仅精细指针桌面启用命中。
+     * 挂 document.body + position:fixed，避免周卡 overflow:auto 裁切。
+     * 手机/粗指针平板不开放 pointer-events，不影响触控。
+     */
+    @media (min-width: 768px) and (pointer: fine) {
+      #anniversaryModule .tw020-ai-remind--pair .tw020-ai-remind__pill {
+        pointer-events: auto;
+        cursor: pointer;
+      }
+
+      #anniversaryModule .tw020-ai-remind--pair .tw020-ai-remind__pill:focus {
+        outline: none;
+      }
+
+      #anniversaryModule .tw020-ai-remind--pair .tw020-ai-remind__pill:focus-visible {
+        outline: 2px solid rgba(37, 99, 235, 0.55);
+        outline-offset: 2px;
+      }
+    }
+
+    .tw020-ai-remind-tip {
+      position: fixed;
+      z-index: 12100;
+      box-sizing: border-box;
+      width: min(420px, calc(100vw - 32px));
+      max-width: calc(100vw - 32px);
+      margin: 0;
+      padding: 22px 24px 20px;
+      border-radius: 16px;
+      border: 1px solid #f3c1d4;
+      background: #ffffff;
+      box-shadow:
+        0 12px 28px rgba(190, 64, 120, 0.12),
+        0 2px 8px rgba(15, 23, 42, 0.06);
+      color: #1e293b;
+      text-align: left;
+      opacity: 0;
+      transform: translateY(4px);
+      pointer-events: none;
+      transition: opacity 150ms ease, transform 150ms ease;
+    }
+
+    .tw020-ai-remind-tip.is-open {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+
+    .tw020-ai-remind-tip[hidden] {
+      display: none !important;
+    }
+
+    /* 胶囊与浮窗之间的透明桥，避免移入过程中 mouseleave 闪退 */
+    .tw020-ai-remind-tip::after {
+      content: "";
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      top: -12px;
+      height: 12px;
+      background: transparent;
+    }
+
+    /* 顶部小三角：水平位置由 --tip-arrow-x 对准胶囊中心 */
+    .tw020-ai-remind-tip__arrow {
+      position: absolute;
+      top: -7px;
+      left: var(--tip-arrow-x, 50%);
+      width: 14px;
+      height: 14px;
+      margin: 0;
+      padding: 0;
+      border: none;
+      background: transparent;
+      transform: translateX(-50%) rotate(45deg);
+      pointer-events: none;
+    }
+
+    .tw020-ai-remind-tip__arrow::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: 2px;
+      background: #ffffff;
+      border-left: 1px solid #f3c1d4;
+      border-top: 1px solid #f3c1d4;
+      box-shadow: -2px -2px 6px rgba(190, 64, 120, 0.04);
+    }
+
+    .tw020-ai-remind-tip__body {
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35em;
+    }
+
+    .tw020-ai-remind-tip__line {
+      margin: 0;
+      padding: 0;
+      font-size: 20px;
+      font-weight: 600;
+      line-height: 1.55;
+      letter-spacing: 0.01em;
+      color: #1e293b;
+    }
+
+    .tw020-ai-remind-tip__em--me {
+      color: #1e3a8a;
+      font-weight: 800;
+    }
+
+    .tw020-ai-remind-tip__em--pink {
+      color: #db2777;
+      font-weight: 800;
+    }
+
+    .tw020-ai-remind-tip__em--blue {
+      color: #2563eb;
+      font-weight: 800;
+    }
+
+    /* 手机 / 粗指针：不展示悬停浮窗（即便 JS 误开也隐藏） */
+    @media (max-width: 767px), (pointer: coarse) {
+      .tw020-ai-remind-tip {
+        display: none !important;
+      }
+    }
+
     /* 查询周卡自身宽度，才能改顶栏换行（容器不能查询自己） */
     #anniversaryModule .tw020-week-detail-host > li.tw020-week-item {
       container-type: inline-size;
@@ -108778,7 +108908,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261026p";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261026q";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -195150,8 +195280,25 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /**
      * 周卡静态提醒胶囊（原「疯狂使用AI」）。
      * 顶栏同时挂电脑/平板双胶囊与手机单胶囊，由 CSS 按端侧断点只显示其一。
-     * 顶栏只放提醒胶囊，无点击、不写 state。
+     * 顶栏只放提醒胶囊，无点击业务、不写 state；桌面精细指针可悬停看说明浮窗。
      */
+    const TW020_AI_REMIND_TIP_ID = "tw020AiRemindTip";
+    const TW020_AI_REMIND_TIP_HIDE_MS = 120;
+    const TW020_AI_REMIND_TIP_DESKTOP_MQ = "(min-width: 768px) and (pointer: fine)";
+    let tw020AiRemindTipEl = null;
+    let tw020AiRemindTipKind = null;
+    let tw020AiRemindTipAnchorEl = null;
+    let tw020AiRemindTipHideTimer = 0;
+    let tw020AiRemindTipDocBound = false;
+
+    function canUseAnniversaryAiRemindHoverTip() {
+      try {
+        return window.matchMedia(TW020_AI_REMIND_TIP_DESKTOP_MQ).matches;
+      } catch (_mqErr) {
+        return false;
+      }
+    }
+
     function createAnniversaryAiRemindPill(nameText, timeText) {
       const pill = document.createElement("span");
       pill.className = "tw020-ai-remind__pill";
@@ -195172,6 +195319,238 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return pill;
     }
 
+    /** 追加带强调色的文案片段（静态文案，不用 innerHTML） */
+    function appendAnniversaryAiRemindTipEm(lineEl, text, emClass) {
+      const em = document.createElement("span");
+      em.className = "tw020-ai-remind-tip__em " + emClass;
+      em.textContent = text;
+      lineEl.appendChild(em);
+    }
+
+    function appendAnniversaryAiRemindTipText(lineEl, text) {
+      lineEl.appendChild(document.createTextNode(text));
+    }
+
+    /** 按 kind 填充分享浮窗正文（plan / review） */
+    function fillAnniversaryAiRemindTipBody(bodyEl, kind) {
+      bodyEl.textContent = "";
+      const line1 = document.createElement("p");
+      line1.className = "tw020-ai-remind-tip__line";
+      const line2 = document.createElement("p");
+      line2.className = "tw020-ai-remind-tip__line";
+      const line3 = document.createElement("p");
+      line3.className = "tw020-ai-remind-tip__line";
+      if (kind === "review") {
+        appendAnniversaryAiRemindTipText(line1, "我反馈结果与问题，");
+        appendAnniversaryAiRemindTipEm(line2, "AI", "tw020-ai-remind-tip__em--blue");
+        appendAnniversaryAiRemindTipText(line2, " 帮我");
+        appendAnniversaryAiRemindTipEm(line2, "复盘、纠偏优化", "tw020-ai-remind-tip__em--pink");
+        appendAnniversaryAiRemindTipText(line2, "，");
+        appendAnniversaryAiRemindTipText(line3, "形成");
+        appendAnniversaryAiRemindTipEm(line3, "下一步行动", "tw020-ai-remind-tip__em--blue");
+        appendAnniversaryAiRemindTipText(line3, "。");
+      } else {
+        appendAnniversaryAiRemindTipEm(line1, "我定", "tw020-ai-remind-tip__em--me");
+        appendAnniversaryAiRemindTipEm(line1, "目标与标准", "tw020-ai-remind-tip__em--pink");
+        appendAnniversaryAiRemindTipText(line1, "，");
+        appendAnniversaryAiRemindTipEm(line2, "AI", "tw020-ai-remind-tip__em--blue");
+        appendAnniversaryAiRemindTipText(line2, " 制定计划、分解任务，");
+        appendAnniversaryAiRemindTipText(line3, "生成 ");
+        appendAnniversaryAiRemindTipEm(line3, "PDF", "tw020-ai-remind-tip__em--blue");
+        appendAnniversaryAiRemindTipText(line3, "，打印执行。");
+      }
+      bodyEl.appendChild(line1);
+      bodyEl.appendChild(line2);
+      bodyEl.appendChild(line3);
+    }
+
+    function ensureAnniversaryAiRemindTip() {
+      if (tw020AiRemindTipEl && tw020AiRemindTipEl.isConnected) {
+        return tw020AiRemindTipEl;
+      }
+      const existing = document.getElementById(TW020_AI_REMIND_TIP_ID);
+      if (existing) {
+        tw020AiRemindTipEl = existing;
+        return existing;
+      }
+      const tip = document.createElement("div");
+      tip.id = TW020_AI_REMIND_TIP_ID;
+      tip.className = "tw020-ai-remind-tip";
+      tip.setAttribute("role", "tooltip");
+      tip.hidden = true;
+      const arrow = document.createElement("span");
+      arrow.className = "tw020-ai-remind-tip__arrow";
+      arrow.setAttribute("aria-hidden", "true");
+      const body = document.createElement("div");
+      body.className = "tw020-ai-remind-tip__body";
+      tip.appendChild(arrow);
+      tip.appendChild(body);
+      tip.addEventListener("mouseenter", function () {
+        clearAnniversaryAiRemindTipHideTimer();
+      });
+      tip.addEventListener("mouseleave", function () {
+        scheduleHideAnniversaryAiRemindTip();
+      });
+      document.body.appendChild(tip);
+      tw020AiRemindTipEl = tip;
+      bindAnniversaryAiRemindTipDocListenersOnce();
+      return tip;
+    }
+
+    function bindAnniversaryAiRemindTipDocListenersOnce() {
+      if (tw020AiRemindTipDocBound) return;
+      tw020AiRemindTipDocBound = true;
+      document.addEventListener("keydown", function (ev) {
+        if (!tw020AiRemindTipKind) return;
+        if (ev.key === "Escape" || ev.key === "Esc") {
+          hideAnniversaryAiRemindTip(true);
+        }
+      });
+      window.addEventListener(
+        "resize",
+        function () {
+          if (tw020AiRemindTipKind) syncAnniversaryAiRemindTipPosition();
+        },
+        { passive: true }
+      );
+      document.addEventListener(
+        "scroll",
+        function () {
+          if (tw020AiRemindTipKind) syncAnniversaryAiRemindTipPosition();
+        },
+        true
+      );
+    }
+
+    function clearAnniversaryAiRemindTipHideTimer() {
+      if (tw020AiRemindTipHideTimer) {
+        clearTimeout(tw020AiRemindTipHideTimer);
+        tw020AiRemindTipHideTimer = 0;
+      }
+    }
+
+    function scheduleHideAnniversaryAiRemindTip() {
+      clearAnniversaryAiRemindTipHideTimer();
+      tw020AiRemindTipHideTimer = setTimeout(function () {
+        tw020AiRemindTipHideTimer = 0;
+        hideAnniversaryAiRemindTip(false);
+      }, TW020_AI_REMIND_TIP_HIDE_MS);
+    }
+
+    function hideAnniversaryAiRemindTip(immediate) {
+      clearAnniversaryAiRemindTipHideTimer();
+      tw020AiRemindTipKind = null;
+      tw020AiRemindTipAnchorEl = null;
+      const tip = tw020AiRemindTipEl;
+      if (!tip) return;
+      tip.classList.remove("is-open");
+      if (immediate) {
+        tip.hidden = true;
+        return;
+      }
+      /* 等淡出结束再 hidden，避免突然消失 */
+      setTimeout(function () {
+        if (tw020AiRemindTipKind) return;
+        tip.hidden = true;
+      }, 160);
+    }
+
+    /** 相对触发胶囊居中，钳制在视口内，并校正三角箭头水平位置 */
+    function syncAnniversaryAiRemindTipPosition() {
+      const tip = tw020AiRemindTipEl;
+      const anchor = tw020AiRemindTipAnchorEl;
+      if (!tip || !anchor || !tw020AiRemindTipKind || tip.hidden) return;
+      if (!anchor.isConnected) {
+        hideAnniversaryAiRemindTip(true);
+        return;
+      }
+      const margin = 16;
+      const gap = 10;
+      const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+      if (!(vw > 0) || !(vh > 0)) return;
+      const br = anchor.getBoundingClientRect();
+      const maxW = Math.max(0, vw - margin * 2);
+      const width = Math.min(420, maxW);
+      tip.style.width = width + "px";
+      tip.style.maxWidth = maxW + "px";
+      const ph = tip.offsetHeight || 0;
+      let top = br.bottom + gap;
+      if (top + ph + margin > vh) {
+        top = Math.max(margin, Math.min(top, vh - ph - margin));
+      }
+      if (top < margin) top = margin;
+      const pillCenterX = br.left + br.width / 2;
+      let left = pillCenterX - width / 2;
+      if (left < margin) left = margin;
+      if (left + width > vw - margin) left = Math.max(margin, vw - margin - width);
+      tip.style.top = Math.round(top) + "px";
+      tip.style.left = Math.round(left) + "px";
+      const arrowX = Math.max(18, Math.min(width - 18, pillCenterX - left));
+      tip.style.setProperty("--tip-arrow-x", Math.round(arrowX) + "px");
+    }
+
+    /**
+     * 显示共享说明浮窗；切换胶囊时直接换文案与定位，不同时叠两个。
+     * 仅桌面精细指针；不写 state / 不 render。
+     */
+    function showAnniversaryAiRemindTip(kind, anchorEl) {
+      if (!canUseAnniversaryAiRemindHoverTip()) return;
+      if (!anchorEl || !kind) return;
+      clearAnniversaryAiRemindTipHideTimer();
+      const tip = ensureAnniversaryAiRemindTip();
+      const body = tip.querySelector(".tw020-ai-remind-tip__body");
+      if (!body) return;
+      const nextKind = kind === "review" ? "review" : "plan";
+      const kindChanged = tw020AiRemindTipKind !== nextKind;
+      tw020AiRemindTipKind = nextKind;
+      tw020AiRemindTipAnchorEl = anchorEl;
+      if (kindChanged || !tip.querySelector(".tw020-ai-remind-tip__line")) {
+        fillAnniversaryAiRemindTipBody(body, nextKind);
+      }
+      tip.setAttribute(
+        "aria-label",
+        nextKind === "review" ? "AI复盘说明" : "AI规划说明"
+      );
+      tip.hidden = false;
+      syncAnniversaryAiRemindTipPosition();
+      requestAnimationFrame(function () {
+        if (tw020AiRemindTipKind !== nextKind) return;
+        tip.classList.add("is-open");
+        syncAnniversaryAiRemindTipPosition();
+      });
+    }
+
+    /** 桌面双胶囊：悬停 / 焦点显示对应说明；离开整体区域后短延迟隐藏 */
+    function wireAnniversaryAiRemindHoverPill(pill, kind) {
+      if (!pill || pill.dataset.tw020AiTipWired === "1") return;
+      pill.dataset.tw020AiTipWired = "1";
+      pill.dataset.tw020AiTipKind = kind;
+      /* 手机端 pair 为 display:none，不进 Tab；桌面可聚焦。展示仍受 canUse 守卫 */
+      pill.setAttribute("tabindex", "0");
+      pill.setAttribute(
+        "aria-label",
+        kind === "review"
+          ? "AI复盘，21点30分提醒；悬停或聚焦查看说明"
+          : "AI规划，7点30分提醒；悬停或聚焦查看说明"
+      );
+      const onEnter = function () {
+        if (!canUseAnniversaryAiRemindHoverTip()) return;
+        showAnniversaryAiRemindTip(kind, pill);
+      };
+      const onLeave = function () {
+        scheduleHideAnniversaryAiRemindTip();
+      };
+      pill.addEventListener("mouseenter", onEnter);
+      pill.addEventListener("mouseleave", onLeave);
+      pill.addEventListener("focus", onEnter);
+      pill.addEventListener("blur", function () {
+        /* 焦点切到另一胶囊时由对方 focus 立刻重开；否则短延迟关闭 */
+        scheduleHideAnniversaryAiRemindTip();
+      });
+      /* 不拦截 click：保持原「无业务点击」行为 */
+    }
+
     function createAnniversaryWeekAiSloganElement(rootClass) {
       const slogan = document.createElement("span");
       slogan.className = rootClass;
@@ -195179,11 +195558,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (rootClass === "tw020-week-head-slogan") {
         const pair = document.createElement("span");
         pair.className = "tw020-ai-remind tw020-ai-remind--pair";
-        pair.appendChild(createAnniversaryAiRemindPill("AI规划", "7:30"));
-        pair.appendChild(createAnniversaryAiRemindPill("AI复盘", "21:30"));
+        const planPill = createAnniversaryAiRemindPill("AI规划", "7:30");
+        const reviewPill = createAnniversaryAiRemindPill("AI复盘", "21:30");
+        wireAnniversaryAiRemindHoverPill(planPill, "plan");
+        wireAnniversaryAiRemindHoverPill(reviewPill, "review");
+        /* 交互胶囊对辅助技术可见；外层 slogan 仍 aria-hidden，需去掉以免整组被忽略 */
+        slogan.removeAttribute("aria-hidden");
+        pair.appendChild(planPill);
+        pair.appendChild(reviewPill);
         slogan.appendChild(pair);
         const single = document.createElement("span");
         single.className = "tw020-ai-remind tw020-ai-remind--single";
+        single.setAttribute("aria-hidden", "true");
         single.appendChild(createAnniversaryAiRemindPill("AI 规划·复盘", ""));
         slogan.appendChild(single);
         return slogan;
