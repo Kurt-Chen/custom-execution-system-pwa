@@ -108597,8 +108597,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261026b";
-    try {
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261026b";    try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
     try {
@@ -119157,6 +119156,49 @@
     /** 今日可见面仍空时，会话内最多安排一次 manual-full / today-surface-retry（防 poll 刷全文） */
     let aliyunSyncPrimaryTodaySurfaceRetryScheduled = false;
     /**
+     * 其他任务双域：marks 先到、Sprint 正文未到（skippedMissing）时，
+     * 禁止推进 todayPlan lastSeen，并强制后续几轮仍拉 sprint+todayPlan，
+     * 否则会卡到 ~12 分钟 safety-full 才再合。
+     */
+    let aliyunSyncPrimaryTodayPlanMissingCatchupLeft = 0;
+    let aliyunSyncPrimaryTodayPlanMissingRetryScheduled = false;
+
+    function aliyunSyncPrimaryArmTodayPlanMissingCatchup(skippedN) {
+      const n = Number(skippedN) || 0;
+      if (!(n > 0)) return;
+      aliyunSyncPrimaryTodayPlanMissingCatchupLeft = Math.max(
+        aliyunSyncPrimaryTodayPlanMissingCatchupLeft,
+        3
+      );
+      if (aliyunSyncPrimaryTodayPlanMissingRetryScheduled) return;
+      aliyunSyncPrimaryTodayPlanMissingRetryScheduled = true;
+      try {
+        console.warn(
+          "[aliyun-sync-primary] todayPlan skippedMissing=" +
+            n +
+            " → arm sprint+todayPlan catchup"
+        );
+      } catch (_cArm) {}
+      try {
+        window.setTimeout(function () {
+          aliyunSyncPrimaryTodayPlanMissingRetryScheduled = false;
+          if (typeof scheduleAliyunSyncPrimaryNearRealtimePull === "function") {
+            scheduleAliyunSyncPrimaryNearRealtimePull("today-plan-missing-catchup");
+          } else if (typeof runAliyunSyncPrimaryNearRealtimePull === "function") {
+            Promise.resolve(
+              runAliyunSyncPrimaryNearRealtimePull("today-plan-missing-catchup")
+            ).catch(function () {});
+          }
+        }, 400);
+      } catch (_schArm) {
+        aliyunSyncPrimaryTodayPlanMissingRetryScheduled = false;
+      }
+    }
+
+    function aliyunSyncPrimaryClearTodayPlanMissingCatchup() {
+      aliyunSyncPrimaryTodayPlanMissingCatchupLeft = 0;
+    }
+    /**
      * 首拉完成前禁止把未核对的本机快照 flush 回阿里云（防旧缓存「其他任务」挂牌盖掉对端删除）。
      * 队列仍可入队；门闩打开后再 flush。主路径关闭时门闩视为常开。
      */
@@ -119841,58 +119883,81 @@
                   )
                 : { overridden: false };
             if (!(habitOv && habitOv.overridden)) {
-              skippedFullPull = true;
-              savedEstimatedKB =
-                typeof aliyunDomainsMetaEstimateSavedKB === "function"
-                  ? aliyunDomainsMetaEstimateSavedKB(domainIds)
-                  : 0;
-              if (typeof aliyunDomainsMetaLogSyncCheck === "function") {
-                aliyunDomainsMetaLogSyncCheck({
-                  metaKB: metaKB,
-                  changedDomains: [],
-                  bodyDownloadKB: 0,
-                  skippedFullPull: true,
-                  savedEstimatedKB: savedEstimatedKB,
-                  reason: pullReason
+              /*
+               * 其他任务 marks 曾 skippedMissing：即使 domains meta 全未变，
+               * 也不得零正文早退，否则会等到 safety-full（约 12 分钟）。
+               */
+              if (aliyunSyncPrimaryTodayPlanMissingCatchupLeft > 0) {
+                skippedFullPull = false;
+                changedDomains = ["sprint", "todayPlan"];
+                domainsGate = Object.assign({}, domainsGate, {
+                  skipAll: false,
+                  pullIds: ["sprint", "todayPlan"],
+                  skipIds: domainIds.filter(function (id) {
+                    return id !== "sprint" && id !== "todayPlan";
+                  }),
+                  reason: "today-plan-missing-catchup"
                 });
-              }
-              /* domains+habit meta 均未变：仍做本机 Habit→Done 轻量补镜像（无额外正文 GET） */
-              try {
-                if (typeof repairHabitDoneMirrorsAfterAliyunHabitPull === "function") {
-                  const localRepaired = !!repairHabitDoneMirrorsAfterAliyunHabitPull();
-                  results.habit = {
-                    ok: true,
-                    skippedMeta: true,
-                    reason: "domains-meta-unchanged",
-                    habitMetaReason: (habitOv && habitOv.reason) || "meta-unchanged",
-                    doneRepaired: localRepaired
-                  };
-                  if (localRepaired) {
-                    if (typeof markUiPaintSlicesDirty === "function") {
-                      markUiPaintSlicesDirty(["habit", "done"]);
-                    }
-                    saveState({ lists: ["habit", "done"] });
-                    if (typeof paintHabitUiAfterCloudMerge === "function") {
-                      paintHabitUiAfterCloudMerge();
+                try {
+                  console.log(
+                    "[aliyun-sync-primary] skipAll overridden by today-plan-missing-catchup left=" +
+                      aliyunSyncPrimaryTodayPlanMissingCatchupLeft
+                  );
+                } catch (_cSkipOv) {}
+              } else {
+                skippedFullPull = true;
+                savedEstimatedKB =
+                  typeof aliyunDomainsMetaEstimateSavedKB === "function"
+                    ? aliyunDomainsMetaEstimateSavedKB(domainIds)
+                    : 0;
+                if (typeof aliyunDomainsMetaLogSyncCheck === "function") {
+                  aliyunDomainsMetaLogSyncCheck({
+                    metaKB: metaKB,
+                    changedDomains: [],
+                    bodyDownloadKB: 0,
+                    skippedFullPull: true,
+                    savedEstimatedKB: savedEstimatedKB,
+                    reason: pullReason
+                  });
+                }
+                /* domains+habit meta 均未变：仍做本机 Habit→Done 轻量补镜像（无额外正文 GET） */
+                try {
+                  if (typeof repairHabitDoneMirrorsAfterAliyunHabitPull === "function") {
+                    const localRepaired = !!repairHabitDoneMirrorsAfterAliyunHabitPull();
+                    results.habit = {
+                      ok: true,
+                      skippedMeta: true,
+                      reason: "domains-meta-unchanged",
+                      habitMetaReason: (habitOv && habitOv.reason) || "meta-unchanged",
+                      doneRepaired: localRepaired
+                    };
+                    if (localRepaired) {
+                      if (typeof markUiPaintSlicesDirty === "function") {
+                        markUiPaintSlicesDirty(["habit", "done"]);
+                      }
+                      saveState({ lists: ["habit", "done"] });
+                      if (typeof paintHabitUiAfterCloudMerge === "function") {
+                        paintHabitUiAfterCloudMerge();
+                      }
                     }
                   }
-                }
-              } catch (_habitSkipAllRepair) {}
-              if (typeof aliyunSyncCheckEndRound === "function") aliyunSyncCheckEndRound();
-              const reportSkip = {
-                ok: true,
-                results: results,
-                skippedAll: true,
-                skippedFullPull: true,
-                metaKB: metaKB,
-                bodyDownloadKB: 0,
-                changedDomains: [],
-                reason: pullReason
-              };
-              try {
-                window.__aliyunSyncPrimaryBootPullReport = reportSkip;
-              } catch (_w0) {}
-              return reportSkip;
+                } catch (_habitSkipAllRepair) {}
+                if (typeof aliyunSyncCheckEndRound === "function") aliyunSyncCheckEndRound();
+                const reportSkip = {
+                  ok: true,
+                  results: results,
+                  skippedAll: true,
+                  skippedFullPull: true,
+                  metaKB: metaKB,
+                  bodyDownloadKB: 0,
+                  changedDomains: [],
+                  reason: pullReason
+                };
+                try {
+                  window.__aliyunSyncPrimaryBootPullReport = reportSkip;
+                } catch (_w0) {}
+                return reportSkip;
+              }
             }
             /* Habit 独立 meta 要求拉正文：仅开放 habit，其它域仍跳过 */
             skippedFullPull = false;
@@ -119931,6 +119996,30 @@
           : domainIds;
       for (let pi = 0; pi < idsToPull.length; pi++) {
         pullIdSet[idsToPull[pi]] = true;
+      }
+      /*
+       * 其他任务：上次 marks 缺 Sprint 正文时，强制本轮仍拉 sprint+todayPlan
+       *（即使 domains meta 版本未变），避免卡到 safety-full。
+       */
+      if (!forceAllBodies && aliyunSyncPrimaryTodayPlanMissingCatchupLeft > 0) {
+        pullIdSet.sprint = true;
+        pullIdSet.todayPlan = true;
+        if (changedDomains.indexOf("sprint") < 0) changedDomains.push("sprint");
+        if (changedDomains.indexOf("todayPlan") < 0) changedDomains.push("todayPlan");
+        try {
+          if (typeof aliyunSyncPrimaryLastPullFp === "object" && aliyunSyncPrimaryLastPullFp) {
+            delete aliyunSyncPrimaryLastPullFp.sprint;
+            delete aliyunSyncPrimaryLastPullFp.todayPlan;
+          }
+        } catch (_fpForce) {}
+        aliyunSyncPrimaryTodayPlanMissingCatchupLeft -= 1;
+        try {
+          console.log(
+            "[aliyun-sync-primary] force sprint+todayPlan body (missing-catchup left=" +
+              aliyunSyncPrimaryTodayPlanMissingCatchupLeft +
+              ")"
+          );
+        } catch (_cForce) {}
       }
       /*
        * P0-B：domains 只跳过 Habit（其它域仍拉）时，同样用 Habit 独立 meta 纠偏。
@@ -120040,9 +120129,86 @@
             allOk = false;
             break;
           }
-          const packed = r && typeof r === "object" ? r : { ok: true, raw: r };
+          let packed = r && typeof r === "object" ? r : { ok: true, raw: r };
           results[d.id] = packed;
           if (r && r.ok === false) allOk = false;
+          if (
+            d.id === "todayPlan" &&
+            packed &&
+            packed.ok !== false &&
+            !(Number(packed.skippedMissing) > 0) &&
+            typeof aliyunSyncPrimaryClearTodayPlanMissingCatchup === "function"
+          ) {
+            aliyunSyncPrimaryClearTodayPlanMissingCatchup();
+          }
+          /*
+           * 其他任务双推：本轮 todayPlan 仍 skippedMissing 时，同轮清指纹再拉 Sprint→marks，
+           * 避免「只合到挂牌、正文未到」却把 lastSeen 推进后卡 12 分钟。
+           */
+          if (
+            d.id === "todayPlan" &&
+            packed &&
+            packed.ok !== false &&
+            Number(packed.skippedMissing) > 0 &&
+            !(pullGen && !isAliyunSyncPrimaryPullGenerationCurrent(pullGen))
+          ) {
+            try {
+              console.warn(
+                "[aliyun-sync-primary] todayPlan skippedMissing=" +
+                  packed.skippedMissing +
+                  " → same-round sprint+todayPlan catchup"
+              );
+            } catch (_cSm) {}
+            try {
+              if (typeof aliyunSyncPrimaryLastPullFp === "object" && aliyunSyncPrimaryLastPullFp) {
+                delete aliyunSyncPrimaryLastPullFp.sprint;
+                delete aliyunSyncPrimaryLastPullFp.todayPlan;
+              }
+            } catch (_fpSm) {}
+            try {
+              if (typeof runAliyunSprintRealPullAndMerge === "function") {
+                const sprintCatch = await runAliyunSprintRealPullAndMerge();
+                if (pullGen && !isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
+                  superseded = true;
+                } else {
+                  results.sprint =
+                    sprintCatch && typeof sprintCatch === "object"
+                      ? sprintCatch
+                      : { ok: true, raw: sprintCatch };
+                  if (typeof runAliyunTodayPlanRealPullAndMerge === "function") {
+                    const todayCatch = await runAliyunTodayPlanRealPullAndMerge();
+                    if (pullGen && !isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
+                      superseded = true;
+                    } else {
+                      packed =
+                        todayCatch && typeof todayCatch === "object"
+                          ? todayCatch
+                          : { ok: true, raw: todayCatch };
+                      results.todayPlan = packed;
+                      if (packed && packed.ok === false) allOk = false;
+                    }
+                  }
+                }
+              }
+            } catch (_sameCatch) {
+              try {
+                console.warn(
+                  "[aliyun-sync-primary] todayPlan missing catchup failed",
+                  _sameCatch && _sameCatch.message ? _sameCatch.message : _sameCatch
+                );
+              } catch (_cCatch) {}
+            }
+            if (!superseded && Number((results.todayPlan && results.todayPlan.skippedMissing) || 0) > 0) {
+              if (typeof aliyunSyncPrimaryArmTodayPlanMissingCatchup === "function") {
+                aliyunSyncPrimaryArmTodayPlanMissingCatchup(results.todayPlan.skippedMissing);
+              }
+            } else if (
+              !superseded &&
+              typeof aliyunSyncPrimaryClearTodayPlanMissingCatchup === "function"
+            ) {
+              aliyunSyncPrimaryClearTodayPlanMissingCatchup();
+            }
+          }
           const kbFromResult = Number(packed.payloadKB) || Number(packed.bodyKB) || 0;
           if (kbFromResult > 0 && typeof aliyunDomainsMetaNoteBodyKB === "function") {
             aliyunDomainsMetaNoteBodyKB(d.id, kbFromResult);
@@ -120052,12 +120218,14 @@
            * ok:false 仍标记会导致 Habit 版本卡住后永久 skip（domains habit 滞后于 habit-meta）。
            * skippedBody：Habit 独立 meta 未变、未下正文——仍可标记（避免每 5s 空转），
            * 因其内部已跑本地 Done mirror repair。
+           * skippedMissing：其他任务 marks 缺 Sprint 正文——禁止推进，否则 peer 卡到 safety-full。
            */
           if (
             typeof aliyunDomainsMetaMarkDomainPulled === "function" &&
             domainsGate &&
             domainsGate.remoteVersions &&
-            !(packed && packed.ok === false)
+            !(packed && packed.ok === false) &&
+            !(Number(packed && packed.skippedMissing) > 0)
           ) {
             aliyunDomainsMetaMarkDomainPulled(d.id, domainsGate.remoteVersions[d.id]);
           }
@@ -123995,8 +124163,10 @@
             /*
              * 未真正拉到正文（skippedMeta）或 ok:false：禁止推进 lastSeen，
              * 否则会永久 meta-unchanged 跳过（Done 手动拉有变更、自动却漏拉的根因之一）。
+             * skippedMissing：今日计划 marks 缺 Sprint 任务正文，同样禁止推进。
              */
             if (!packed || packed.ok === false || packed.skippedMeta) continue;
+            if (Number(packed.skippedMissing) > 0) continue;
           }
           aliyunDomainsMetaLastSeen[id] = rv;
         }
@@ -124039,6 +124209,7 @@
               if (results) {
                 const packed = results[id];
                 if (!packed || packed.ok === false || packed.skippedMeta) continue;
+                if (Number(packed.skippedMissing) > 0) continue;
               }
               aliyunDomainsMetaLastSeen[id] = rv;
             }
@@ -128591,7 +128762,19 @@
         ok = true;
         try {
           if (typeof aliyunDomainsMetaBumpDomain === "function") {
-            await aliyunDomainsMetaBumpDomain("sprint");
+            let br = await aliyunDomainsMetaBumpDomain("sprint");
+            /* bump 失败则对端 meta 不亮 → 其他任务可卡到 safety-full；轻量再试一次 */
+            if (!(br && br.ok) && !(br && br.skipped)) {
+              await new Promise(function (resolve) {
+                window.setTimeout(resolve, 200);
+              });
+              br = await aliyunDomainsMetaBumpDomain("sprint");
+            }
+            if (!(br && br.ok) && !(br && br.skipped)) {
+              aliyunSprintRealAppendLog(
+                "domains-meta bump sprint FAIL: " + ((br && br.error) || "unknown")
+              );
+            }
           }
         } catch (_domBump) {}
       } catch (err) {
@@ -129912,7 +130095,18 @@
         ok = true;
         try {
           if (typeof aliyunDomainsMetaBumpDomain === "function") {
-            await aliyunDomainsMetaBumpDomain("todayPlan");
+            let br = await aliyunDomainsMetaBumpDomain("todayPlan");
+            if (!(br && br.ok) && !(br && br.skipped)) {
+              await new Promise(function (resolve) {
+                window.setTimeout(resolve, 200);
+              });
+              br = await aliyunDomainsMetaBumpDomain("todayPlan");
+            }
+            if (!(br && br.ok) && !(br && br.skipped)) {
+              aliyunTodayPlanRealAppendLog(
+                "domains-meta bump todayPlan FAIL: " + ((br && br.error) || "unknown")
+              );
+            }
           }
         } catch (_domBump) {}
       } catch (err) {
