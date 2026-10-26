@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261026f";
+const CACHE_NAME = "exec-system-pwa-v20261026h";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -15,7 +15,7 @@ const APP_SHELL = [
   "./assets/obsession-reminder-card.png",
   "./assets/maniacal-urgency-card.png",
   "./assets/today-plan-win-banner.png",
-  /* V5 庆祝/警告 WebP：预缓存避免首打卡空白 */
+  /* 庆祝/警告 WebP：预缓存避免首打卡空白（含三包新接入） */
   "./icons/fx/fx-power-fireworks.webp",
   "./icons/fx/fx-power-hearts.webp",
   "./icons/fx/fx-power-trophy.webp",
@@ -25,6 +25,15 @@ const APP_SHELL = [
   "./icons/fx/fx-power-ring.webp",
   "./icons/fx/fx-power-blossoms.webp",
   "./icons/fx/fx-power-burst.webp",
+  "./icons/fx/fx-power-meteor.webp",
+  "./icons/fx/fx-power-phoenix.webp",
+  "./icons/fx/fx-power-galaxy.webp",
+  "./icons/fx/fx-power-thunder.webp",
+  "./icons/fx/fx-power-crystal.webp",
+  "./icons/fx/fx-power-wings.webp",
+  "./icons/fx/fx-power-prism.webp",
+  "./icons/fx/fx-power-sigil.webp",
+  "./icons/fx/fx-power-solar-flare.webp",
   "./icons/fx/fx-warning-minus1.webp",
   "./icons/fx/fx-warning-minus2.webp",
   "./icons/fx/fx-warning-minus10.webp"
