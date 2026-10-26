@@ -9,10 +9,10 @@
     durationMs: 2000,
     /* 逻辑画布边长（CSS px）；实际缓冲按 devicePixelRatio 放大 */
     sizeCss: 512,
-    rayCount: 140,
-    sparkCount: 220,
-    starCount: 28,
-    emberCount: 90
+    rayCount: 170,
+    sparkCount: 260,
+    starCount: 36,
+    emberCount: 110
   };
 
   function clamp(n, a, b) {
@@ -82,7 +82,9 @@
     }
 
     function makeRay(angle, speedBoost) {
-      var speed = rand(95, 210) * (speedBoost || 1);
+      /* 速度按画布比例，确保主体吃满正方形且不贴边裁切 */
+      var scale = Math.max(0.55, sizeCss / 512);
+      var speed = rand(120, 260) * (speedBoost || 1) * scale;
       var c = pick(GOLD);
       return {
         kind: "ray",
@@ -91,9 +93,9 @@
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         life: 0,
-        maxLife: rand(0.85, 1.55),
-        size: rand(1.1, 2.4),
-        length: rand(18, 42),
+        maxLife: rand(0.9, 1.65),
+        size: rand(1.35, 2.8) * Math.min(1.25, scale + 0.15),
+        length: rand(28, 64) * scale,
         r: c[0],
         g: c[1],
         b: c[2],
@@ -102,8 +104,9 @@
     }
 
     function makeSpark(angle) {
-      var speed = rand(40, 160);
-      var c = Math.random() < 0.25 ? WHITE_HOT : pick(GOLD);
+      var scale = Math.max(0.55, sizeCss / 512);
+      var speed = rand(55, 190) * scale;
+      var c = Math.random() < 0.28 ? WHITE_HOT : pick(GOLD);
       return {
         kind: "spark",
         x: cx + rand(-2, 2),
@@ -111,8 +114,8 @@
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         life: 0,
-        maxLife: rand(0.7, 1.7),
-        size: rand(0.7, 1.8),
+        maxLife: rand(0.75, 1.75),
+        size: rand(0.9, 2.1) * Math.min(1.2, scale + 0.1),
         r: c[0],
         g: c[1],
         b: c[2],
@@ -121,7 +124,8 @@
     }
 
     function makeStar(angle) {
-      var speed = rand(55, 130);
+      var scale = Math.max(0.55, sizeCss / 512);
+      var speed = rand(70, 155) * scale;
       var c = pick(GOLD);
       return {
         kind: "star",
@@ -130,8 +134,8 @@
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         life: 0,
-        maxLife: rand(1.0, 1.8),
-        size: rand(3.2, 6.5),
+        maxLife: rand(1.05, 1.85),
+        size: rand(3.6, 7.2) * Math.min(1.15, scale + 0.1),
         spin: rand(-4, 4),
         rot: rand(0, Math.PI * 2),
         r: c[0],
@@ -142,7 +146,8 @@
     }
 
     function makeEmber(angle) {
-      var speed = rand(20, 70);
+      var scale = Math.max(0.55, sizeCss / 512);
+      var speed = rand(28, 85) * scale;
       var c = pick(GOLD);
       return {
         kind: "ember",
@@ -151,8 +156,8 @@
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         life: 0,
-        maxLife: rand(1.1, 1.95),
-        size: rand(1.4, 3.2),
+        maxLife: rand(1.15, 1.95),
+        size: rand(1.6, 3.6) * Math.min(1.15, scale + 0.1),
         r: c[0],
         g: c[1],
         b: c[2],
@@ -225,16 +230,31 @@
       else if (tNorm < 0.22) intensity = 1;
       else intensity = Math.max(0, 1 - (tNorm - 0.22) / 0.55);
       intensity *= 1 - flashT * 0.35;
+      var scale = Math.max(0.55, sizeCss / 512);
 
-      var r0 = 10 + intensity * 28;
-      var r1 = 36 + intensity * 70;
-      var r2 = 70 + intensity * 120;
+      var r0 = (12 + intensity * 32) * scale;
+      var r1 = (40 + intensity * 78) * scale;
+      var r2 = (85 + intensity * 140) * scale;
+
+      /*
+       * 浅色 UI 上先铺一层极软暗晕（非方框），再 additive 叠金色，
+       * 避免粒子在白底上被冲掉；暗晕随消散一起淡出。
+       */
+      ctx.globalCompositeOperation = "source-over";
+      var veil = ctx.createRadialGradient(cx, cy, 0, cx, cy, r2 * 1.05);
+      veil.addColorStop(0, "rgba(15, 23, 42," + (0.42 * intensity).toFixed(3) + ")");
+      veil.addColorStop(0.45, "rgba(15, 23, 42," + (0.16 * intensity).toFixed(3) + ")");
+      veil.addColorStop(1, "rgba(15, 23, 42, 0)");
+      ctx.fillStyle = veil;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r2 * 1.05, 0, Math.PI * 2);
+      ctx.fill();
 
       var g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r2);
-      g.addColorStop(0, "rgba(255,255,250," + (0.95 * intensity).toFixed(3) + ")");
-      g.addColorStop(0.12, "rgba(255,240,160," + (0.85 * intensity).toFixed(3) + ")");
-      g.addColorStop(0.35, "rgba(251,191,36," + (0.45 * intensity).toFixed(3) + ")");
-      g.addColorStop(0.65, "rgba(245,158,11," + (0.18 * intensity).toFixed(3) + ")");
+      g.addColorStop(0, "rgba(255,255,250," + (0.98 * intensity).toFixed(3) + ")");
+      g.addColorStop(0.12, "rgba(255,240,160," + (0.9 * intensity).toFixed(3) + ")");
+      g.addColorStop(0.35, "rgba(251,191,36," + (0.55 * intensity).toFixed(3) + ")");
+      g.addColorStop(0.65, "rgba(245,158,11," + (0.22 * intensity).toFixed(3) + ")");
       g.addColorStop(1, "rgba(245,158,11,0)");
       ctx.globalCompositeOperation = "lighter";
       ctx.fillStyle = g;
@@ -245,7 +265,7 @@
       /* 白热内核 */
       var g2 = ctx.createRadialGradient(cx, cy, 0, cx, cy, r0);
       g2.addColorStop(0, "rgba(255,255,255," + (1 * intensity).toFixed(3) + ")");
-      g2.addColorStop(0.5, "rgba(255,250,220," + (0.9 * intensity).toFixed(3) + ")");
+      g2.addColorStop(0.5, "rgba(255,250,220," + (0.92 * intensity).toFixed(3) + ")");
       g2.addColorStop(1, "rgba(255,214,72,0)");
       ctx.fillStyle = g2;
       ctx.beginPath();
