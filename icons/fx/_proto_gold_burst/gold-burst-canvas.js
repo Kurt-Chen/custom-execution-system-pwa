@@ -10,12 +10,12 @@
   var DEFAULTS = {
     durationMs: 2000,
     sizeCss: 512,
-    /* 层1：较粗短光束（数量刻意少，避免细线堆中心） */
-    beamCount: 42,
+    /* 层1：较粗短光束（再减数量，拉开间距） */
+    beamCount: 28,
     /* 层2：外扩独立亮点 */
-    sparkCount: 96,
+    sparkCount: 88,
     /* 层3：带彩色拖尾的慢粒子 */
-    trailCount: 64
+    trailCount: 56
   };
 
   function clamp(n, a, b) {
@@ -60,9 +60,9 @@
 
   function pickSaturated() {
     var roll = Math.random();
-    if (roll < 0.42) return pick(PALETTE.gold);
-    if (roll < 0.68) return pick(PALETTE.orange);
-    if (roll < 0.85) return pick(PALETTE.violet);
+    if (roll < 0.34) return pick(PALETTE.gold);
+    if (roll < 0.58) return pick(PALETTE.orange);
+    if (roll < 0.78) return pick(PALETTE.violet);
     return pick(PALETTE.rose);
   }
 
@@ -119,13 +119,13 @@
       return Math.max(0.5, sizeCss / 260);
     }
 
-    /** 层1：较粗短光束 — 从中心附近起步，避免细线堆核 */
+    /** 层1：较粗短光束 — 明显离开中心再起步，避免核区细线堆叠 */
     function makeBeam(angle) {
       var s = scale();
       var c = pickSaturated();
-      var speed = rand(70, 140) * s;
-      var birth = rand(0, 0.08);
-      var startR = rand(4, 14) * s;
+      var speed = rand(85, 155) * s;
+      var birth = rand(0.02, 0.12);
+      var startR = rand(12, 22) * s;
       return {
         kind: "beam",
         x: cx + Math.cos(angle) * startR,
@@ -133,9 +133,9 @@
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         life: -birth,
-        maxLife: rand(0.55, 0.95),
-        size: rand(2.6, 4.4) * Math.min(1.15, s),
-        length: rand(14, 28) * s,
+        maxLife: rand(0.7, 1.15),
+        size: rand(3.2, 5.2) * Math.min(1.15, s),
+        length: rand(12, 22) * s,
         r: c[0],
         g: c[1],
         b: c[2],
@@ -144,13 +144,13 @@
       };
     }
 
-    /** 层2：外扩独立亮点 */
+    /** 层2：外扩独立亮点（饱和色头点，几乎无白核） */
     function makeSpark(angle) {
       var s = scale();
       var c = pickSaturated();
-      var speed = rand(90, 200) * s;
-      var birth = rand(0.02, 0.16);
-      var startR = rand(2, 10) * s;
+      var speed = rand(100, 210) * s;
+      var birth = rand(0.06, 0.22);
+      var startR = rand(10, 20) * s;
       return {
         kind: "spark",
         x: cx + Math.cos(angle) * startR,
@@ -158,8 +158,8 @@
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         life: -birth,
-        maxLife: rand(0.85, 1.55),
-        size: rand(1.6, 3.2) * Math.min(1.1, s),
+        maxLife: rand(1.05, 1.7),
+        size: rand(2.0, 3.6) * Math.min(1.1, s),
         r: c[0],
         g: c[1],
         b: c[2],
@@ -168,13 +168,13 @@
       };
     }
 
-    /** 层3：彩色拖尾粒子（更慢、拖尾更长） */
+    /** 层3：彩色拖尾粒子（更慢、拖尾更长，贯穿中后段） */
     function makeTrailDot(angle) {
       var s = scale();
       var c = pickSaturated();
-      var speed = rand(50, 130) * s;
-      var birth = rand(0.05, 0.22);
-      var startR = rand(6, 18) * s;
+      var speed = rand(55, 140) * s;
+      var birth = rand(0.1, 0.3);
+      var startR = rand(14, 26) * s;
       return {
         kind: "trail",
         x: cx + Math.cos(angle) * startR,
@@ -182,8 +182,8 @@
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         life: -birth,
-        maxLife: rand(1.05, 1.75),
-        size: rand(1.4, 2.6) * Math.min(1.1, s),
+        maxLife: rand(1.25, 1.9),
+        size: rand(1.6, 2.8) * Math.min(1.1, s),
         r: c[0],
         g: c[1],
         b: c[2],
@@ -207,7 +207,7 @@
       for (i = 0; i < trailCount; i++) {
         particles.push(makeTrailDot(rand(0, Math.PI * 2)));
       }
-      coreFlash = { life: 0, maxLife: 0.32 };
+      coreFlash = { life: 0, maxLife: 0.22 };
     }
 
     function pushTrail(p) {
@@ -225,46 +225,33 @@
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
-    /** 小而亮的核心：面积与不透明度都压低，不吞掉周围色 */
+    /** 点状核心：短促、小半径、低不透明度，只点亮一瞬间 */
     function drawCore(tNorm) {
       if (!coreFlash) return;
       var intensity;
-      if (tNorm < 0.05) intensity = tNorm / 0.05;
-      else if (tNorm < 0.12) intensity = 1;
-      else intensity = Math.max(0, 1 - (tNorm - 0.12) / 0.38);
+      if (tNorm < 0.03) intensity = tNorm / 0.03;
+      else if (tNorm < 0.07) intensity = 1;
+      else intensity = Math.max(0, 1 - (tNorm - 0.07) / 0.2);
       if (intensity <= 0.01) return;
 
       var s = scale();
-      var rCore = (5 + intensity * 10) * s;
-      var rMid = (14 + intensity * 22) * s;
-      var rOuter = (28 + intensity * 36) * s;
+      var rCore = (3.5 + intensity * 5.5) * s;
+      var rMid = (8 + intensity * 12) * s;
 
-      /* 极轻暗晕，只托一点对比，远小于旧版 */
       ctx.globalCompositeOperation = "source-over";
-      var veil = ctx.createRadialGradient(cx, cy, 0, cx, cy, rOuter);
-      veil.addColorStop(0, "rgba(15,23,42," + (0.18 * intensity).toFixed(3) + ")");
-      veil.addColorStop(0.55, "rgba(15,23,42," + (0.06 * intensity).toFixed(3) + ")");
-      veil.addColorStop(1, "rgba(15,23,42,0)");
-      ctx.fillStyle = veil;
-      ctx.beginPath();
-      ctx.arc(cx, cy, rOuter, 0, Math.PI * 2);
-      ctx.fill();
-
-      /* 金色外晕（非大片白） */
       var gGold = ctx.createRadialGradient(cx, cy, 0, cx, cy, rMid);
-      gGold.addColorStop(0, "rgba(255,196,36," + (0.55 * intensity).toFixed(3) + ")");
-      gGold.addColorStop(0.55, "rgba(249,115,22," + (0.22 * intensity).toFixed(3) + ")");
+      gGold.addColorStop(0, "rgba(255,180,40," + (0.4 * intensity).toFixed(3) + ")");
+      gGold.addColorStop(0.6, "rgba(249,115,22," + (0.14 * intensity).toFixed(3) + ")");
       gGold.addColorStop(1, "rgba(249,115,22,0)");
       ctx.fillStyle = gGold;
       ctx.beginPath();
       ctx.arc(cx, cy, rMid, 0, Math.PI * 2);
       ctx.fill();
 
-      /* 小白热核：高亮但半径小 */
       var gCore = ctx.createRadialGradient(cx, cy, 0, cx, cy, rCore);
-      gCore.addColorStop(0, "rgba(255,255,255," + (0.85 * intensity).toFixed(3) + ")");
-      gCore.addColorStop(0.45, "rgba(255,236,140," + (0.55 * intensity).toFixed(3) + ")");
-      gCore.addColorStop(1, "rgba(255,196,36,0)");
+      gCore.addColorStop(0, "rgba(255,255,255," + (0.55 * intensity).toFixed(3) + ")");
+      gCore.addColorStop(0.55, "rgba(255,200,80," + (0.35 * intensity).toFixed(3) + ")");
+      gCore.addColorStop(1, "rgba(255,180,40,0)");
       ctx.fillStyle = gCore;
       ctx.beginPath();
       ctx.arc(cx, cy, rCore, 0, Math.PI * 2);
