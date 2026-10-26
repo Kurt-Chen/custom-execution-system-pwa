@@ -23,63 +23,71 @@ SPECS = {
     "wings": {
         "file": "fx-power-wings.webp",
         "colors": [
-            (255, 210, 120),
-            (255, 180, 70),
-            (255, 230, 170),
-            (240, 150, 60),
-            (255, 200, 90),
+            (255, 196, 72),
+            (255, 160, 40),
+            (255, 230, 120),
+            (255, 120, 50),
+            (255, 210, 80),
+            (255, 140, 70),
         ],
         "seed": 7101,
-        "counts": (52, 78, 68, 38),
-        "speeds": (130, 200, 230, 250),
-        "core": (255, 220, 140),
+        "counts": (64, 96, 80, 44),
+        "speeds": (150, 220, 250, 270),
+        "core": (255, 200, 90),
+        "core_alpha": 0.55,
     },
     "galaxy": {
         "file": "fx-power-galaxy.webp",
         "colors": [
-            (120, 200, 255),
-            (160, 120, 255),
-            (90, 230, 220),
-            (200, 140, 255),
-            (100, 170, 255),
+            (80, 190, 255),
+            (150, 100, 255),
+            (60, 230, 210),
+            (200, 120, 255),
+            (100, 160, 255),
+            (255, 120, 220),
         ],
         "seed": 7102,
-        "counts": (56, 84, 72, 40),
-        "speeds": (140, 210, 240, 260),
-        "core": (180, 160, 255),
+        "counts": (68, 100, 84, 46),
+        "speeds": (155, 230, 255, 275),
+        "core": (150, 130, 255),
+        "core_alpha": 0.5,
     },
     "phoenix": {
         "file": "fx-power-phoenix.webp",
         "colors": [
-            (255, 120, 60),
-            (255, 80, 40),
-            (255, 180, 70),
-            (255, 90, 70),
-            (255, 150, 50),
+            (255, 90, 40),
+            (255, 60, 30),
+            (255, 170, 50),
+            (255, 110, 70),
+            (255, 140, 40),
+            (255, 200, 80),
         ],
         "seed": 7103,
-        "counts": (54, 80, 70, 38),
-        "speeds": (135, 205, 235, 255),
-        "core": (255, 160, 80),
+        "counts": (66, 98, 82, 46),
+        "speeds": (150, 225, 250, 270),
+        "core": (255, 120, 50),
+        "core_alpha": 0.5,
     },
 }
 
 
-def add_core_glow(base: Image.Image, t: float, rgb: tuple[int, int, int]) -> Image.Image:
-    """中心柔光（圆形，非矩形）。"""
+def add_core_glow(
+    base: Image.Image, t: float, rgb: tuple[int, int, int], strength: float = 0.5
+) -> Image.Image:
+    """中心柔光（圆形，非矩形）；强度可控，避免大块半透明圆盘盖住 UI。"""
     layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     expand = L.ease_out_quart(min(1.0, t / 0.55))
     fade = 1.0 if t < 0.55 else max(0.0, 1 - ((t - 0.55) / 0.45) ** 1.35)
-    r = 18 + 70 * expand
-    a = int(210 * fade * (0.55 + 0.45 * (1 - t)))
+    r = 14 + 48 * expand
+    a = int(160 * strength * fade * (0.5 + 0.5 * (1 - t)))
     cx = cy = SIZE / 2
-    for mul, amul in ((1.0, 1.0), (1.55, 0.42), (2.25, 0.16)):
+    for mul, amul in ((1.0, 1.0), (1.45, 0.38), (2.0, 0.14)):
         rr = r * mul
         aa = int(a * amul)
         col = (*rgb, max(0, min(255, aa)))
         d.ellipse([cx - rr, cy - rr, cx + rr, cy + rr], fill=col)
-    layer = layer.filter(ImageFilter.GaussianBlur(radius=3.2))
+    layer = layer.filter(ImageFilter.GaussianBlur(radius=2.4))
     return Image.alpha_composite(base, layer)
 
 
@@ -96,7 +104,7 @@ def build_kind(name: str) -> dict:
     for i in range(n):
         t = i / (n - 1)
         fr = empty.copy()
-        fr = add_core_glow(fr, t, cfg["core"])
+        fr = add_core_glow(fr, t, cfg["core"], strength=float(cfg.get("core_alpha", 0.5)))
         if t < 0.12:
             u = t / 0.12
             fr = L.add_radial_particles(fr, u * 0.35, rng, colors, count=c0, speed=s0)
