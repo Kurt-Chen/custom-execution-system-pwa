@@ -11,11 +11,11 @@
     durationMs: 2000,
     sizeCss: 512,
     /* 层1：较粗短光束（再减数量，拉开间距） */
-    beamCount: 28,
+    beamCount: 18,
     /* 层2：外扩独立亮点 */
-    sparkCount: 88,
+    sparkCount: 80,
     /* 层3：带彩色拖尾的慢粒子 */
-    trailCount: 56
+    trailCount: 52
   };
 
   function clamp(n, a, b) {
@@ -391,9 +391,20 @@
       var fadeOut = step(dt, tNorm);
       clearFrame();
       drawCore(tNorm);
+      /* 先拖尾、再亮点、最后短光束，避免核区细线叠成白团 */
       var i;
+      var p;
       for (i = 0; i < particles.length; i++) {
-        drawParticle(particles[i], fadeOut);
+        p = particles[i];
+        if (p.kind === "trail") drawParticle(p, fadeOut);
+      }
+      for (i = 0; i < particles.length; i++) {
+        p = particles[i];
+        if (p.kind === "spark") drawParticle(p, fadeOut);
+      }
+      for (i = 0; i < particles.length; i++) {
+        p = particles[i];
+        if (p.kind === "beam") drawParticle(p, fadeOut);
       }
       ctx.globalCompositeOperation = "source-over";
 
