@@ -34849,6 +34849,39 @@
       background: transparent !important;
     }
 
+    /*
+     * Canvas 飘带彩带原型：正方形透明舞台；禁用 host-scale。
+     * 桌面/平板/手机尺寸对齐金色烟花起点，避免裁切长丝带。
+     */
+    .done-victory-fx.done-victory-fx--canvas-ribbon-confetti {
+      --dvfx-size: 260px;
+      --dvfx-media-zoom: 1;
+      --dvfx-glow: rgba(251, 191, 36, 0.1);
+    }
+    @media (max-width: 1366px) and (pointer: coarse) {
+      .done-victory-fx.done-victory-fx--canvas-ribbon-confetti { --dvfx-size: 210px; }
+    }
+    @media (max-width: 767px) {
+      .done-victory-fx.done-victory-fx--canvas-ribbon-confetti { --dvfx-size: 168px; }
+    }
+    .done-victory-fx.done-victory-fx--canvas-ribbon-confetti .done-victory-fx__stage {
+      overflow: visible;
+      background: transparent;
+    }
+    .done-victory-fx.done-victory-fx--canvas-ribbon-confetti.is-playing .done-victory-fx__stage {
+      animation: none;
+      transform: none;
+    }
+    .done-victory-fx.done-victory-fx--canvas-ribbon-confetti .fx-proto-ribbon-confetti-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      max-width: none;
+      max-height: none;
+      aspect-ratio: 1 / 1;
+      background: transparent !important;
+    }
+
     /* 奖杯画布内主体偏小：略放大舞台，避免「只有光不见杯」 */
     .done-victory-fx.done-victory-fx--trophy { --dvfx-size: 220px; }
     @media (max-width: 1366px) and (pointer: coarse) {
@@ -108506,6 +108539,8 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
   <!-- 金色烟花 Canvas 原型（独立模块；不进正式随机池、不覆盖 WebP） -->
   <script src="./icons/fx/_proto_gold_burst/gold-burst-canvas.js?v=20261026p"></script>
+  <!-- 飘带彩带 Canvas 原型（独立模块；验收前不进随机池、不覆盖正式 WebP） -->
+  <script src="./icons/fx/_proto_ribbon_confetti/ribbon-confetti-canvas.js?v=20261026r"></script>
   <script>
     const STORAGE_KEY = "todo-app-data-v1";
     /** 最近一次成功落盘的全量备份（仅 localStorage，用于主存储损坏/被空云端覆盖时自救） */
@@ -108908,7 +108943,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261026q";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261026r";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -175166,6 +175201,130 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       };
     }
 
+    /**
+     * Canvas 飘带彩带原型：正式定位壳（排除今日计划），不改 WebP/随机池/打卡。
+     * 控制台：__debugPlayCanvasRibbonConfetti()
+     */
+    function playCanvasRibbonConfettiProto() {
+      let reduceMotion = false;
+      try {
+        reduceMotion =
+          typeof matchMedia === "function" &&
+          matchMedia("(prefers-reduced-motion: reduce)").matches;
+      } catch (_rm) {}
+      if (reduceMotion) {
+        fxDiagPush("skip_reduced_motion", { proto: "canvas-ribbon-confetti" });
+        showVictoryFxSelfTestBanner("Canvas 飘带彩带 · 系统「减少动态效果」已开，已跳过");
+        return { ok: false, reason: "reduced-motion" };
+      }
+      if (
+        !window.FxProtoRibbonConfetti ||
+        typeof window.FxProtoRibbonConfetti.mount !== "function"
+      ) {
+        showVictoryFxSelfTestBanner("Canvas 飘带彩带模块未加载");
+        return { ok: false, reason: "module-missing" };
+      }
+
+      clearDoneVictoryFx();
+      const token = ++doneVictoryFxToken;
+      const root = document.createElement("div");
+      root.className =
+        "victory-celebration done-victory-fx done-victory-fx--canvas-ribbon-confetti done-victory-fx--confetti";
+      root.setAttribute("aria-hidden", "true");
+      const stage = document.createElement("div");
+      stage.className = "done-victory-fx__stage";
+      root.appendChild(stage);
+      document.body.appendChild(root);
+      doneVictoryFxActiveEl = root;
+      const mainBox = applyDoneVictoryFxPosition(root);
+      bindDoneVictoryFxReposition();
+      root.classList.add("is-playing");
+
+      let sizeCss = 260;
+      try {
+        const raw = getComputedStyle(root).getPropertyValue("--dvfx-size") || "260px";
+        const n = parseFloat(raw);
+        if (Number.isFinite(n) && n >= 80) sizeCss = n;
+      } catch (_sz) {}
+      try {
+        const coarse =
+          typeof matchMedia === "function" &&
+          matchMedia("(max-width: 1366px) and (pointer: coarse)").matches;
+        const mobile =
+          typeof matchMedia === "function" && matchMedia("(max-width: 767px)").matches;
+        if (coarse && !mobile && mainBox && mainBox.width > 0) {
+          sizeCss = Math.round(Math.max(180, Math.min(280, mainBox.width * 0.28)));
+          root.style.setProperty("--dvfx-size", sizeCss + "px");
+          void root.offsetWidth;
+        }
+      } catch (_adapt) {}
+
+      const canvasHoldMs = Math.max(DONE_FX_POWER_HOLD_MS, DONE_FX_POWER_ASSET_MS);
+      const ctl = window.FxProtoRibbonConfetti.mount(stage, {
+        sizeCss: sizeCss,
+        fillHost: true,
+        durationMs: canvasHoldMs,
+        ribbonCount: 11,
+        starCount: 8,
+        sparkCount: 14
+      });
+      doneVictoryFxCanvasCtl = ctl;
+
+      try {
+        void root.offsetWidth;
+        const rr = root.getBoundingClientRect();
+        fxDiagPush("dom_mount", {
+          mode: "power",
+          src: "canvas:ribbon-confetti-proto",
+          w: Math.round(rr.width),
+          h: Math.round(rr.height),
+          top: Math.round(rr.top),
+          left: Math.round(rr.left),
+          mainCx: mainBox ? Math.round(mainBox.cx) : null,
+          mainCy: mainBox ? Math.round(mainBox.cy) : null,
+          mainW: mainBox ? Math.round(mainBox.width) : null,
+          mainH: mainBox ? Math.round(mainBox.height) : null
+        });
+      } catch (_diag) {}
+
+      showVictoryFxSelfTestBanner(
+        "Canvas 飘带彩带原型 · " +
+          Math.round(sizeCss) +
+          "px · 主内容中心（已排除今日计划）"
+      );
+
+      armDoneVictoryFxHold(token, canvasHoldMs + 80, {
+        mode: "power",
+        kind: "canvas-ribbon-confetti",
+        reason: "canvas_hold_fallback",
+        src: "canvas:ribbon-confetti-proto"
+      });
+      ctl
+        .play()
+        .then(function () {
+          if (token !== doneVictoryFxToken) return;
+          fxDiagPush("dom_remove", { mode: "power", reason: "canvas_ribbon_proto_done" });
+          clearDoneVictoryFx();
+        })
+        .catch(function () {
+          if (token !== doneVictoryFxToken) return;
+          clearDoneVictoryFx();
+        });
+
+      return {
+        ok: true,
+        sizeCss: sizeCss,
+        mainBox: mainBox
+          ? {
+              cx: Math.round(mainBox.cx),
+              cy: Math.round(mainBox.cy),
+              width: Math.round(mainBox.width),
+              height: Math.round(mainBox.height)
+            }
+          : null
+      };
+    }
+
     /** 开发调试：控制台 __debugPlayVictoryFx('fireworks'|{mode:'treason',score:-1}) */
     try {
       window.__debugPlayVictoryFx = function (kindOrOpts) {
@@ -175178,6 +175337,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return playCanvasGoldFireworksProto();
       };
       window.__protoGoldFireworks = window.__debugPlayCanvasGoldFireworks;
+      window.__debugPlayCanvasRibbonConfetti = function () {
+        return playCanvasRibbonConfettiProto();
+      };
+      window.__protoRibbonConfetti = window.__debugPlayCanvasRibbonConfetti;
       window.__getVictoryFxMainContentRect = getVictoryFxMainContentRect;
     } catch (_dbgFx) {}
 
