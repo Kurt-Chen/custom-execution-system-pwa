@@ -1,10 +1,12 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261026j";
+const CACHE_NAME = "exec-system-pwa-v20261026o";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./index - 2026.3.31.html",
   "./manifest.webmanifest",
+  "./fx-proto-gold-burst.html",
+  "./icons/fx/_proto_gold_burst/gold-burst-canvas.js",
   "./icons/icon-192.svg",
   "./icons/icon-512.svg",
   "./icons/forge-heaven-hell.png",
