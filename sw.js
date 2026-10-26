@@ -1,5 +1,5 @@
-/* bump æ—¶è¯·åŒæ­¥ä¿®æ”¹ index.html å†… APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261026s";
+/* bump Ê±ÇëÍ¬²½ĞŞ¸Ä index.html ÄÚ APP_CACHE_NAME_FOR_BADGE */
+const CACHE_NAME = "exec-system-pwa-v20261026t";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -17,7 +17,7 @@ const APP_SHELL = [
   "./assets/obsession-reminder-card.png",
   "./assets/maniacal-urgency-card.png",
   "./assets/today-plan-win-banner.png",
-  /* åº†ç¥/è­¦å‘Š WebPï¼šé¢„ç¼“å­˜é¿å…é¦–æ‰“å¡ç©ºç™½ï¼ˆå½©å¸¦ confetti å·²åœç”¨ï¼Œä¸é¢„ç¼“å­˜ï¼‰ */
+  /* Çì×£/¾¯¸æ WebP£ºÔ¤»º´æ±ÜÃâÊ×´ò¿¨¿Õ°×£¨²Ê´ø confetti ÒÑÍ£ÓÃ£¬²»Ô¤»º´æ£© */
   "./icons/fx/fx-power-fireworks.webp",
   "./icons/fx/fx-power-hearts.webp",
   "./icons/fx/fx-power-trophy.webp",
@@ -41,7 +41,7 @@ const APP_SHELL = [
 ];
 
 self.addEventListener("install", (event) => {
-  /* å•é¡¹ precacheï¼šé¿å… addAll å› æŸä¸€èµ„æºå¤±è´¥å¯¼è‡´æ•´æ¬¡ install å¤±è´¥ã€æ‰‹æœºæ°¸è¿œè£…ä¸ä¸Šæ–° SW */
+  /* µ¥Ïî precache£º±ÜÃâ addAll ÒòÄ³Ò»×ÊÔ´Ê§°Üµ¼ÖÂÕû´Î install Ê§°Ü¡¢ÊÖ»úÓÀÔ¶×°²»ÉÏĞÂ SW */
   event.waitUntil(
     caches
       .open(CACHE_NAME)
@@ -88,13 +88,13 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  /* sw.js æ°¸ä¸è¿› Cache Storageï¼Œé¿å…æ‰‹æœºç«¯é•¿æœŸå‘½ä¸­æ—§è„šæœ¬ã€è£…ä¸ä¸Šæ–°ç‰ˆæœ¬ */
+  /* sw.js ÓÀ²»½ø Cache Storage£¬±ÜÃâÊÖ»ú¶Ë³¤ÆÚÃüÖĞ¾É½Å±¾¡¢×°²»ÉÏĞÂ°æ±¾ */
   if (/\/sw\.js$/i.test(url.pathname)) {
     event.respondWith(fetch(new Request(req, { cache: "reload" })));
     return;
   }
 
-  /** HTML / å¯¼èˆªè¯·æ±‚ç»•è¿‡ HTTP ç¼“å­˜ï¼Œé¿å…çº¿ä¸Šé•¿æœŸçœ‹åˆ°æ—§ç‰ˆ index */
+  /** HTML / µ¼º½ÇëÇóÈÆ¹ı HTTP »º´æ£¬±ÜÃâÏßÉÏ³¤ÆÚ¿´µ½¾É°æ index */
   const isHtmlShell =
     req.mode === "navigate" ||
     req.destination === "document" ||
