@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>金色烟花 Canvas 原型 · 独立测试</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #111827;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --accent: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    header {
+      padding: 16px 18px 8px;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 1.25rem;
+      font-weight: 750;
+      letter-spacing: -0.02em;
+    }
+    p { margin: 0 0 8px; color: var(--muted); }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin: 12px 0 4px;
+    }
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 16px;
+      font-weight: 700;
+      cursor: pointer;
+      background: linear-gradient(180deg, #fcd34d, #f59e0b);
+      color: #111827;
+    }
+    button.secondary {
+      background: #1f2937;
+      color: var(--text);
+      border: 1px solid #334155;
+    }
+    .meta {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .stage-wrap {
+      position: relative;
+      width: min(92vw, 560px);
+      height: min(92vw, 560px);
+      margin: 12px auto 24px;
+      border-radius: 16px;
+      background:
+        linear-gradient(45deg, #1e293b 25%, transparent 25%) 0 0 / 20px 20px,
+        linear-gradient(-45deg, #1e293b 25%, transparent 25%) 0 10px / 20px 20px,
+        linear-gradient(45deg, transparent 75%, #1e293b 75%) 10px -10px / 20px 20px,
+        linear-gradient(-45deg, transparent 75%, #1e293b 75%) -10px 0 / 20px 20px,
+        #0f172a;
+      overflow: hidden;
+      box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.2), 0 20px 50px rgba(0,0,0,0.45);
+    }
+    /* 棋盘格仅用于测试页验收透明；动画本身画布透明，无棋盘输出 */
+    .stage-wrap .label {
+      position: absolute;
+      left: 10px;
+      top: 10px;
+      z-index: 2;
+      font-size: 11px;
+      color: #cbd5e1;
+      background: rgba(15, 23, 42, 0.65);
+      padding: 3px 8px;
+      border-radius: 999px;
+      pointer-events: none;
+    }
+    #host {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+    }
+    .note {
+      max-width: 960px;
+      margin: 0 auto 32px;
+      padding: 0 18px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .ref {
+      max-width: 960px;
+      margin: 0 auto 40px;
+      padding: 0 18px;
+    }
+    .ref img {
+      width: 100%;
+      max-width: 720px;
+      height: auto;
+      border-radius: 12px;
+      display: block;
+    }
+    #log {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+      white-space: pre-wrap;
+      color: #a7f3d0;
+      background: #052e1a;
+      border-radius: 8px;
+      padding: 8px 10px;
+      margin-top: 8px;
+      min-height: 2.5em;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>金色中心爆发 · Canvas 粒子原型</h1>
+    <p>真正的坐标/速度/生命周期粒子动画（约 2s）。正式 WebP 素材未被覆盖。棋盘格仅测试页用于验透明。</p>
+    <div class="toolbar">
+      <button type="button" id="playBtn">播放金色爆发</button>
+      <button type="button" class="secondary" id="replayBtn">再播一次</button>
+      <span class="meta" id="sizeMeta"></span>
+    </div>
+    <div id="log"></div>
+  </header>
+
+  <div class="stage-wrap" id="stageWrap">
+    <span class="label">透明验收区（非动画内容）</span>
+    <div id="host"></div>
+  </div>
+
+  <div class="note">
+    视觉标准：白热中心 → 金色针状光束外爆 → 星形亮点与火花扩散 → 拖尾消散。正方形画布、主体居中。
+    完成后在主站用 <code>__debugPlayCanvasGoldFireworks()</code> 按正式定位壳实播（排除今日计划边栏）。
+  </div>
+
+  <div class="ref">
+    <p style="margin:0 0 8px;color:#94a3b8;font-size:12px">参考：12 款中的左上角金色爆发</p>
+    <img src="./icons/fx/_proto_gold_burst/ref-12-fireworks.png" alt="12 款烟花设计参考" />
+  </div>
+
+  <script src="./icons/fx/_proto_gold_burst/gold-burst-canvas.js"></script>
+  <script>
+    (function () {
+      var host = document.getElementById("host");
+      var logEl = document.getElementById("log");
+      var sizeMeta = document.getElementById("sizeMeta");
+      var stageWrap = document.getElementById("stageWrap");
+      var size = Math.min(512, Math.floor(Math.min(window.innerWidth, window.innerHeight) * 0.72));
+      size = Math.max(280, size);
+      sizeMeta.textContent = "画布 " + size + "×" + size + " · dpr " + (window.devicePixelRatio || 1).toFixed(2);
+
+      var ctl = window.FxProtoGoldBurst.mount(host, {
+        sizeCss: size,
+        durationMs: 2000,
+        rayCount: 160,
+        sparkCount: 260,
+        starCount: 32,
+        emberCount: 100
+      });
+
+      function log(msg) {
+        var t = new Date().toISOString().slice(11, 23);
+        logEl.textContent = "[" + t + "] " + msg;
+      }
+
+      async function play() {
+        log("开始播放 · particles≈" + (160 + Math.floor(160 * 0.45) + 260 + 32 + 100));
+        var t0 = performance.now();
+        await ctl.play();
+        log("播放结束 · " + Math.round(performance.now() - t0) + "ms · 画布已清空（透明）");
+      }
+
+      document.getElementById("playBtn").addEventListener("click", play);
+      document.getElementById("replayBtn").addEventListener("click", play);
+
+      /* 自动首播一次，便于截图抓峰值 */
+      play();
+    })();
+  </script>
+</body>
+</html>
