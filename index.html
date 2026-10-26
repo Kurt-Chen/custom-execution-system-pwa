@@ -12263,6 +12263,35 @@
       cursor: text;
       caret-color: auto;
       user-select: text;
+      /* 编辑态占满行内剩余宽度；勿用 content/size 固有宽度（约 20ch）把框挤窄 */
+      flex: 1 1 0%;
+      min-width: 0;
+      width: auto;
+      max-width: 100%;
+      box-sizing: border-box;
+      overflow-x: auto;
+      overflow-y: hidden;
+      text-overflow: clip;
+    }
+
+    /* 周计划子任务编辑：强制吃掉 step/勾选/操作钮之外的全部剩余宽，便于点按句首与横向滑动光标 */
+    #weeklyPlanSection .weekly-plan-micro-item .weekly-plan-micro-text.weekly-plan-main-title-editing,
+    #weeklyPlanSection .weekly-plan-micro-item .weekly-plan-micro-text.weekly-plan-main-title-editing:focus {
+      flex: 1 1 0% !important;
+      min-width: 0 !important;
+      width: 0 !important;
+      max-width: none !important;
+      align-self: stretch;
+      overflow-x: auto !important;
+      overflow-y: hidden !important;
+      white-space: nowrap !important;
+      text-overflow: clip !important;
+      field-sizing: fixed;
+    }
+
+    #weeklyPlanSection .weekly-plan-micro-item .weekly-plan-micro-text-display:not(.weekly-plan-main-title-display--view-hidden) {
+      flex: 1 1 0%;
+      min-width: 0;
     }
 
     .weekly-plan-item-head {
@@ -87715,7 +87744,11 @@
 
     :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2) .weekly-plan-main-title-input.weekly-plan-main-title-editing,
     :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2) .weekly-plan-main-title-input.weekly-plan-main-title-editing:focus {
-      flex: 0 1 auto !important;
+      /* 原 flex:0 1 auto 会让 input 按 ~20ch 固有宽收缩，长文难点句首 */
+      flex: 1 1 0% !important;
+      min-width: 0 !important;
+      width: auto !important;
+      max-width: 100% !important;
       min-height: 0 !important;
       height: auto !important;
       background: #ffffff !important;
@@ -87725,9 +87758,22 @@
       box-shadow: none !important;
       outline: 2px solid rgba(37, 99, 235, 0.35) !important;
       outline-offset: 2px !important;
-      white-space: normal !important;
-      overflow: auto !important;
+      white-space: nowrap !important;
+      overflow-x: auto !important;
+      overflow-y: hidden !important;
       text-overflow: clip !important;
+    }
+
+    :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2)
+      .weekly-plan-micro-item
+      .weekly-plan-micro-text.weekly-plan-main-title-editing,
+    :is(#weeklyPlanSection.weekly-plan-ui-v2, body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2)
+      .weekly-plan-micro-item
+      .weekly-plan-micro-text.weekly-plan-main-title-editing:focus {
+      flex: 1 1 0% !important;
+      min-width: 0 !important;
+      width: 0 !important;
+      max-width: none !important;
     }
 
     body.primary-module-fullscreen #dynamicModule.module-focus-active #weeklyPlanSection.weekly-plan-ui-v2 .weekly-plan-main-title-input,
@@ -159707,6 +159753,20 @@
       const onEnterEdit =
         typeof opts.onEnterEdit === "function" ? opts.onEnterEdit : null;
       const onExitEdit = typeof opts.onExitEdit === "function" ? opts.onExitEdit : null;
+      /* end=句末（默认）；start=句首（子任务长文易改开头）；none=不强制（保留浏览器焦点行为） */
+      const caretOnEnter = String(opts.caretOnEnter || "end");
+
+      function placeCaretAfterEnterEdit() {
+        try {
+          if (caretOnEnter === "none") return;
+          if (caretOnEnter === "start") {
+            inputEl.setSelectionRange(0, 0);
+            return;
+          }
+          const caretAt = String(inputEl.value || "").length;
+          inputEl.setSelectionRange(caretAt, caretAt);
+        } catch (_selErr) {}
+      }
 
       function syncDisplayFromInput() {
         const v = String(inputEl.value || "");
@@ -159828,10 +159888,7 @@
           inputEl.value = taskTitleIx.draftValue;
           setEditChrome();
           inputEl.focus();
-          try {
-            const caret = inputEl.value.length;
-            inputEl.setSelectionRange(caret, caret);
-          } catch (_selErr) {}
+          placeCaretAfterEnterEdit();
           return;
         }
         taskTitleIxBegin(
@@ -159848,10 +159905,7 @@
         inputEl.value = taskTitleIx.draftValue;
         setEditChrome();
         inputEl.focus();
-        try {
-          const caretAt = inputEl.value.length;
-          inputEl.setSelectionRange(caretAt, caretAt);
-        } catch (_selErr2) {}
+        placeCaretAfterEnterEdit();
       }
 
       if (enterViaDisplay) {
@@ -188742,6 +188796,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             actionsWrap: microActWrap,
             enterViaDisplay: false,
             dismissOnOutside: false,
+            caretOnEnter: "start",
             editAriaLabel: "编辑",
             cancelAriaLabel: "取消",
             onCommit: function (v) {
@@ -191907,6 +191962,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         actionsWrap: microActWrap,
         enterViaDisplay: false,
         dismissOnOutside: false,
+        caretOnEnter: "start",
         editAriaLabel: "编辑",
         cancelAriaLabel: "取消",
         onCommit: function (v) {
