@@ -37480,23 +37480,18 @@
     }
 
 
-    /* 两分钟浮层父级定位上下文；不改卡片布局 */
-    #dynamicModule.card {
-      position: relative;
-    }
-
     /*
      * 两分钟行动提醒（可整段回滚）
-     * 挂在 #dynamicModule 内 absolute 左上（Kinetic Execution 红框）；不挡交互。
+     * 全应用全局：挂 document.body + position:fixed 视口左上；与模块切换无关。
      */
     .two-minute-action-overlay {
-      position: absolute;
-      top: 8px;
-      left: 8px;
-      z-index: 40;
+      position: fixed;
+      top: max(12px, env(safe-area-inset-top, 0px));
+      left: max(12px, env(safe-area-inset-left, 0px));
+      z-index: 12050;
       display: block;
       width: max-content;
-      max-width: min(420px, calc(100% - 16px));
+      max-width: min(420px, calc(100vw - 24px));
       margin: 0;
       padding: 0;
       box-sizing: border-box;
@@ -37673,6 +37668,8 @@
 
     @media (min-width: 768px) and (max-width: 1366px) and (pointer: coarse) {
       .two-minute-action-overlay {
+        top: max(14px, env(safe-area-inset-top, 0px));
+        left: max(14px, env(safe-area-inset-left, 0px));
         max-width: min(440px, calc(100vw - 28px));
       }
 
@@ -37687,6 +37684,8 @@
 
     @media (max-width: 767px) {
       .two-minute-action-overlay {
+        top: max(10px, env(safe-area-inset-top, 0px));
+        left: max(10px, env(safe-area-inset-left, 0px));
         max-width: calc(100vw - 20px);
         width: auto;
       }
@@ -56097,18 +56096,6 @@
         )
         > .habit-en-week-bar {
         grid-row: 3 !important;
-      }
-
-      /* 早晚槽习惯：手机隐藏累计总数胶囊 */
-      #habitRoutineModule .habit-en-row[data-habit-key="coldShower"] .habit-title-lifetime-num,
-      #habitRoutineModule .habit-en-row[data-habit-key="aiChat"] .habit-title-lifetime-num,
-      #habitRoutineModule .habit-en-row[data-habit-key="zhanZhuang"] .habit-title-lifetime-num,
-      #habitRoutineModule .habit-en-row[data-habit-key="zhanZhuang"] .habit-title-lifetime-minutes,
-      #habitRoutineModule .habit-en-row[data-habit-key="exmindVocab"] .habit-title-lifetime-num,
-      #habitRoutineModule .habit-en-row[data-habit-key="miraaShadowing"] .habit-title-lifetime-num,
-      #habitRoutineModule .habit-en-row[data-habit-key="exploratoryWriting"] .habit-title-lifetime-num,
-      #habitRoutineModule .habit-en-row[data-habit-key="syncListenRead"] .habit-title-lifetime-num {
-        display: none !important;
       }
 
       #habitRoutineModule #habitHabitsBundle .habit-en-row.habit-health-weight-row:not(.habit-en-row--long-title) .habit-title-text-wrap {
@@ -109369,7 +109356,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261028h";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261028j";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -145083,15 +145070,8 @@
       return "";
     }
 
-    /** 周格当天累计：鸡蛋 / 三个问题用「N个」，其余「N次」；站桩今日格也走次数 */
+    /** 周格当天累计：鸡蛋 / 三个问题用「N个」，其余「N次」；站桩今日格也走次数（不写早晚） */
     function formatHabitWeekBarPunchCountLabel(habitKey, dateKey) {
-      if (isHabitAmPmSlotKey(habitKey)) {
-        const day = state.habitCheckins && state.habitCheckins[dateKey];
-        const slotNote = formatHabitAmPmSlotNote(
-          getHabitAmPmSlotFlags(habitKey, day ? day[habitKey] : null, dateKey)
-        );
-        if (slotNote) return slotNote;
-      }
       if (isHabitEggsKey(habitKey) || isHabitQuestionsKey(habitKey)) {
         const n = getHabitNumericDayTotal(habitKey, dateKey);
         if (!Number.isFinite(n) || n <= 0) return "";
@@ -205074,10 +205054,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             cell.textContent = cellLabel || (done ? "✓" : "今");
           }
         } else if (done) {
-          if (isHabitAmPmSlotKey(habitKey) && !cellLabel) {
-            /* 早晚槽习惯：周格与洗冷水澡同款显示 早/晚/早晚 */
-            cell.textContent = formatHabitWeekBarPunchCountLabel(habitKey, dk) || "✓";
-          } else if (isEnglishHabitKey(habitKey) && !cellLabel) {
+          if (isEnglishHabitKey(habitKey) && !cellLabel) {
             cell.textContent =
               formatHabitEnglishWeekCellLabel(habitKey, dk) ||
               formatHabitWeekBarPunchCountLabel(habitKey, dk) ||
@@ -206940,10 +206917,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           } else if (todayNote && !card.classList.contains("habit-health-weight-row")) {
             if (isHabitWeekMetricKey(key)) {
               todayNote.textContent = "";
-            } else if (isHabitAmPmSlotKey(key)) {
-              todayNote.textContent = formatHabitAmPmSlotNote(
-                getHabitAmPmSlotFlags(key, dayData[key], todayKey)
-              );
             } else if (checked) {
               const sv = dayData[key];
               const tc = getSimpleHabitStampTimes(sv);
@@ -216147,7 +216120,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       scheduleNextStrategyAutoReminder(STRATEGY_AUTO_INTERVAL_MS);
     })();
 
-    /* 两分钟行动提醒：全局唯一 scheduler；锚定 Kinetic Execution；与紧迫感互斥错开 */
+    /* 两分钟行动提醒：全局唯一 scheduler；document.body + fixed 视口左上；与紧迫感互斥错开 */
     (function initTwoMinuteActionReminder() {
       const TWO_MINUTE_COUNTDOWN_MS = 10000;
       const TWO_MINUTE_FADE_MS = 220;
@@ -216166,54 +216139,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       let listenersBound = false;
       let session = 0;
       let nextShowAt = 0;
-      let dockRafId = 0;
 
-      function getTwoMinuteAnchorEl() {
-        return document.getElementById("dynamicModule");
-      }
-
-      /** 挂到 #dynamicModule 内 absolute 左上，随主工作区移动，不受侧栏/zoom 误伤。 */
-      function syncTwoMinuteDock() {
-        const root = overlayEl || document.getElementById("twoMinuteActionOverlay");
-        const anchor = getTwoMinuteAnchorEl();
-        if (!root || !anchor) return false;
-        if (root.parentElement !== anchor) {
-          anchor.appendChild(root);
+      /** 始终挂在 document.body，避免落在会被模块切换藏起的容器里。 */
+      function ensureGlobalHost(root) {
+        const el = root || overlayEl || document.getElementById("twoMinuteActionOverlay");
+        if (!el || !document.body) return el;
+        if (el.parentElement !== document.body) {
+          document.body.appendChild(el);
         }
-        const pad = 8;
-        const width = anchor.clientWidth || 0;
-        if (!(width > 0)) return false;
-        root.style.left = pad + "px";
-        root.style.top = pad + "px";
-        root.style.maxWidth = Math.max(160, Math.min(420, width - pad * 2)) + "px";
-        return true;
-      }
-
-      function clearTwoMinuteDock() {
-        const root = overlayEl || document.getElementById("twoMinuteActionOverlay");
-        if (!root) return;
-        root.style.left = "";
-        root.style.top = "";
-        root.style.maxWidth = "";
-      }
-
-      function scheduleSyncTwoMinuteDock() {
-        if (!(isOpen || isClosing)) return;
-        if (dockRafId) return;
-        dockRafId = requestAnimationFrame(function () {
-          dockRafId = 0;
-          if (!(isOpen || isClosing)) return;
-          syncTwoMinuteDock();
-        });
-      }
-
-      function isTwoMinuteAnchorReady() {
-        const anchor = getTwoMinuteAnchorEl();
-        if (!anchor) return false;
-        if (!(anchor.clientWidth > 0) || !(anchor.clientHeight > 0)) return false;
-        const rect = anchor.getBoundingClientRect();
-        if (rect.bottom < 8 || rect.top > (window.innerHeight || 0) - 8) return false;
-        return true;
+        el.style.left = "";
+        el.style.top = "";
+        el.style.maxWidth = "";
+        return el;
       }
 
       function clearAutoTimer() {
@@ -216264,7 +216201,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         if (isPeerReminderOpen()) return true;
         if (isOpen || isClosing) return true;
-        if (!isTwoMinuteAnchorReady()) return true;
         const busySelectors = [
           ".cloud-sync-panel-overlay:not(.hidden)",
           ".forge-body-checkin-overlay:not(.hidden)",
@@ -216281,12 +216217,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
 
       function ensureOverlay() {
-        if (overlayEl && overlayEl.isConnected) return overlayEl;
+        if (overlayEl && overlayEl.isConnected) {
+          return ensureGlobalHost(overlayEl);
+        }
         const existing = document.getElementById("twoMinuteActionOverlay");
         if (existing) {
-          overlayEl = existing;
+          overlayEl = ensureGlobalHost(existing);
           closeBtnEl = existing.querySelector(".two-minute-action-close");
-          return existing;
+          return overlayEl;
         }
 
         const root = document.createElement("div");
@@ -216350,9 +216288,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         card.appendChild(icon);
         card.appendChild(body);
         root.appendChild(card);
-        const anchorMount = getTwoMinuteAnchorEl();
-        if (anchorMount) anchorMount.appendChild(root);
-        else document.body.appendChild(root);
+        document.body.appendChild(root);
 
         overlayEl = root;
         closeBtnEl = closeBtn;
@@ -216367,7 +216303,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         isOpen = false;
         isClosing = false;
         clearShowTimers();
-        clearTwoMinuteDock();
         if (autoTimerId == null) {
           scheduleNextTwoMinuteReminder(TWO_MINUTE_AUTO_INTERVAL_MS);
         }
@@ -216402,10 +216337,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         root.classList.add("is-open");
         root.removeAttribute("hidden");
         root.setAttribute("aria-hidden", "false");
-        syncTwoMinuteDock();
-        try {
-          requestAnimationFrame(syncTwoMinuteDock);
-        } catch (_dockRafErr) {}
+        ensureGlobalHost(root);
         hideTimerId = setTimeout(function () {
           hideTimerId = null;
           if (current !== session) return;
@@ -216472,15 +216404,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         window.addEventListener("pagehide", function () {
           clearAutoTimer();
           clearShowTimers();
-          if (dockRafId) {
-            try {
-              cancelAnimationFrame(dockRafId);
-            } catch (_c) {}
-            dockRafId = 0;
-          }
         });
-        window.addEventListener("resize", scheduleSyncTwoMinuteDock);
-        window.addEventListener("scroll", scheduleSyncTwoMinuteDock, true);
       }
 
       try {
