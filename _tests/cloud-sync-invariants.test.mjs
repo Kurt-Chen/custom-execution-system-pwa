@@ -277,6 +277,63 @@ test("habit：cleared+revisedAt 不得盖掉来自 Done 回补的无修订戳勾
   assertEq(out.times, 1);
 });
 
+test("habit 并发打卡：较新 LWW 不得丢掉对端独立 stamps", function () {
+  const morning = 1_700_000_000_000;
+  const evening = 1_700_010_000_000;
+  const a = {
+    minutes: 30,
+    times: 1,
+    batches: [30],
+    stamps: [morning],
+    stampAt: morning,
+    revisedAt: morning
+  };
+  const b = {
+    minutes: 30,
+    times: 1,
+    batches: [30],
+    stamps: [evening],
+    stampAt: evening,
+    revisedAt: evening
+  };
+  const ab = ctx.mergeHabitCheckinValueForSync(a, b);
+  const ba = ctx.mergeHabitCheckinValueForSync(b, a);
+  assertEq(ab.stamps, [morning, evening]);
+  assertEq(ba.stamps, [morning, evening]);
+  assertEq(ab.times, 2);
+  assertEq(ba.times, 2);
+  assertEq(ab.minutes, 60);
+  assertEq(ba.minutes, 60);
+  assertEq(ab.batches, [30, 30]);
+  assertEq(ba.batches, [30, 30]);
+});
+
+test("habit 主动减次：较新前缀 stamps 仍可 LWW 盖掉旧完整槽", function () {
+  const morning = 1_700_000_000_000;
+  const evening = 1_700_010_000_000;
+  const full = {
+    minutes: 60,
+    times: 2,
+    batches: [30, 30],
+    stamps: [morning, evening],
+    stampAt: morning,
+    revisedAt: morning
+  };
+  const reduced = {
+    minutes: 30,
+    times: 1,
+    batches: [30],
+    stamps: [morning],
+    stampAt: morning,
+    revisedAt: evening + 1
+  };
+  const out = ctx.mergeHabitCheckinValueForSync(full, reduced);
+  assertEq(out.times, 1);
+  assertEq(out.minutes, 30);
+  assertEq(out.stamps, [morning]);
+  assertEq(out.batches, [30]);
+});
+
 test("habit Done 去重键按 id 独立，同文案不合并", function () {
   const a = {
     id: "h1",

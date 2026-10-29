@@ -109649,7 +109649,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261029g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261029h";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -125381,8 +125381,22 @@
       const prevTs = aliyunHabitRealSlotTs(prev);
       if (nextTs < prevTs) return env;
       if (!env.items) env.items = {};
-      env.items[id] = next;
-      env.envelopeUpdatedAt = Math.max(Number(env.envelopeUpdatedAt) || 0, nextTs);
+      /*
+       * 禁止整槽覆盖：云端已有上午打卡、本机晚间并发写入时，须按 id/stamps 并集，
+       * 否则他端只会看到较新侧，两次独立打卡被「合并」成一条时间。
+       */
+      let toWrite = next;
+      if (prev && typeof mergeHabitCheckinValueForSync === "function") {
+        toWrite = mergeHabitCheckinValueForSync(prev, next);
+        if (!toWrite || typeof toWrite !== "object") toWrite = next;
+        const mergedTs = Math.max(aliyunHabitRealSlotTs(toWrite), nextTs);
+        if (mergedTs > 0) toWrite.revisedAt = mergedTs;
+      }
+      env.items[id] = toWrite;
+      env.envelopeUpdatedAt = Math.max(
+        Number(env.envelopeUpdatedAt) || 0,
+        aliyunHabitRealSlotTs(toWrite) || nextTs
+      );
       env.kind = ALIYUN_HABIT_REAL_KIND;
       return env;
     }
@@ -137669,6 +137683,192 @@
       return out;
     }
 
+    /** 数值型 batches：只保留正数 */
+    function normalizeHabitCheckinBatchesList(list) {
+      return (Array.isArray(list) ? list : [])
+        .map(function (n) {
+          return Number(n);
+        })
+        .filter(function (n) {
+          return Number.isFinite(n) && n > 0;
+        });
+    }
+
+    /**
+     * 较新侧是否为「主动减次」：次数更少，且 stamps/batches 是旧侧的前缀。
+     * 并发「仅有晚间一刻」不是前缀，不得当成减次而丢掉上午打卡。
+     */
+    function isHabitCheckinIntentionalReduce(newer, older) {
+      if (!newer || !older || typeof newer !== "object" || typeof older !== "object") return false;
+      if (isHabitCheckinClearedMarker(newer) || isHabitCheckinClearedMarker(older)) return false;
+      const nStamps = normalizeHabitCheckinStampsList(newer.stamps);
+      const oStamps = normalizeHabitCheckinStampsList(older.stamps);
+      const nBatches = normalizeHabitCheckinBatchesList(newer.batches);
+      const oBatches = normalizeHabitCheckinBatchesList(older.batches);
+      const nTimes = Math.max(Number(newer.times) || 0, nBatches.length, nStamps.length);
+      const oTimes = Math.max(Number(older.times) || 0, oBatches.length, oStamps.length);
+      if (!(nTimes < oTimes)) return false;
+      if (nStamps.length && oStamps.length) {
+        if (nStamps.length > oStamps.length) return false;
+        for (let i = 0; i < nStamps.length; i++) {
+          if (nStamps[i] !== oStamps[i]) return false;
+        }
+        return true;
+      }
+      if (nBatches.length && oBatches.length && nBatches.length <= oBatches.length) {
+        for (let j = 0; j < nBatches.length; j++) {
+          if (nBatches[j] !== oBatches[j]) return false;
+        }
+        return true;
+      }
+      /* 无 stamps/batches 可对账：次数变少视为减次（产品「减一次」） */
+      return true;
+    }
+
+    /** 推断数值字段名（minutes / wordCount / ml …） */
+    function detectHabitCheckinNumericValueKey(a, b) {
+      const sides = [a, b];
+      for (let i = 0; i < sides.length; i++) {
+        const s = sides[i];
+        if (!s || typeof s !== "object") continue;
+        if (s.wordCount != null || Number.isFinite(Number(s.wordCount))) return "wordCount";
+        if (s.ml != null || Number.isFinite(Number(s.ml))) return "ml";
+        if (s.eggs != null || Number.isFinite(Number(s.eggs))) return "eggs";
+        if (s.questions != null || Number.isFinite(Number(s.questions))) return "questions";
+        if (s.yuan != null || Number.isFinite(Number(s.yuan))) return "yuan";
+        if (s.experiments != null || Number.isFinite(Number(s.experiments))) return "experiments";
+        if (s.minutes != null || Number.isFinite(Number(s.minutes))) return "minutes";
+      }
+      return "minutes";
+    }
+
+    /**
+     * 两侧均已打卡：按 stamps 并集保留每一次真实打卡；禁止 LWW 用晚间槽盖掉上午槽。
+     * revisedAt 取较大，保证后续云端信封比较仍前进。
+     */
+    function mergeHabitCheckinCheckedSidesKeepingAllPunches(a, b) {
+      if (!a || typeof a !== "object") return b;
+      if (!b || typeof b !== "object") return a;
+      const stampsA = normalizeHabitCheckinStampsList(a.stamps);
+      const stampsB = normalizeHabitCheckinStampsList(b.stamps);
+      const stamps = normalizeHabitCheckinStampsList(stampsA.concat(stampsB));
+      const batchesA = normalizeHabitCheckinBatchesList(a.batches);
+      const batchesB = normalizeHabitCheckinBatchesList(b.batches);
+      const valueKey = detectHabitCheckinNumericValueKey(a, b);
+      const scoreA = mergeHabitCheckinEntrySyncScore(a);
+      const scoreB = mergeHabitCheckinEntrySyncScore(b);
+      const primary = scoreA >= scoreB ? a : b;
+      const secondary = primary === a ? b : a;
+      const out = Object.assign({}, secondary, primary);
+      let batches = batchesA.length || batchesB.length ? batchesA.slice() : [];
+
+      if (stampsA.length && stampsB.length) {
+        const aPrefixOfB =
+          stampsA.length <= stampsB.length &&
+          stampsA.every(function (t, i) {
+            return t === stampsB[i];
+          });
+        const bPrefixOfA =
+          stampsB.length <= stampsA.length &&
+          stampsB.every(function (t, i) {
+            return t === stampsA[i];
+          });
+        if (aPrefixOfB && !bPrefixOfA) {
+          batches = batchesB.length ? batchesB.slice() : batchesA.slice();
+        } else if (bPrefixOfA && !aPrefixOfB) {
+          batches = batchesA.length ? batchesA.slice() : batchesB.slice();
+        } else if (aPrefixOfB && bPrefixOfA) {
+          const sumA = sumSanitizedHabitNumericBatches(batchesA, 999999);
+          const sumB = sumSanitizedHabitNumericBatches(batchesB, 999999);
+          batches = sumB > sumA ? batchesB.slice() : batchesA.slice();
+        } else if (stamps.length === stampsA.length + stampsB.length) {
+          /* 完全不相交：按 stamp 时刻交错拼接各次 batch */
+          const events = [];
+          stampsA.forEach(function (t, i) {
+            events.push({ t: t, batch: batchesA[i] });
+          });
+          stampsB.forEach(function (t, i) {
+            events.push({ t: t, batch: batchesB[i] });
+          });
+          events.sort(function (x, y) {
+            return x.t - y.t;
+          });
+          batches = events
+            .map(function (e) {
+              return e.batch;
+            })
+            .filter(function (n) {
+              return Number.isFinite(n) && n > 0;
+            });
+        } else {
+          /* 部分重叠：取更长 batches，再按 stamps 长度补齐 times */
+          batches =
+            batchesB.length > batchesA.length
+              ? batchesB.slice()
+              : batchesA.length > batchesB.length
+                ? batchesA.slice()
+                : sumSanitizedHabitNumericBatches(batchesB, 999999) >
+                    sumSanitizedHabitNumericBatches(batchesA, 999999)
+                  ? batchesB.slice()
+                  : batchesA.slice();
+        }
+      } else if (batchesA.length || batchesB.length) {
+        const sumA = sumSanitizedHabitNumericBatches(batchesA, 999999);
+        const sumB = sumSanitizedHabitNumericBatches(batchesB, 999999);
+        if (batchesA.length && batchesB.length && stamps.length === 0) {
+          /*
+           * 无 stamps 时无法判断是否同批：次数都为 1 且 batches 等长时取 max 总量；
+           * 次数之和暗示两端各有独立打卡则拼接。
+           */
+          const tA = Math.max(Number(a.times) || 0, batchesA.length);
+          const tB = Math.max(Number(b.times) || 0, batchesB.length);
+          if (tA === 1 && tB === 1 && batchesA.length === 1 && batchesB.length === 1 && sumA === sumB) {
+            batches = batchesA.slice();
+          } else if (tA >= 1 && tB >= 1 && !(batchesA.length === batchesB.length && sumA === sumB)) {
+            /* 保守：总量与次数取能覆盖两端的并集近似——拼接后按 times 截断风险高，改取更长/更大 */
+            batches =
+              batchesA.length + batchesB.length === tA + tB && sumA !== sumB
+                ? batchesA.concat(batchesB)
+                : sumB > sumA || batchesB.length > batchesA.length
+                  ? batchesB.slice()
+                  : batchesA.slice();
+          } else {
+            batches = sumB > sumA || batchesB.length > batchesA.length ? batchesB.slice() : batchesA.slice();
+          }
+        } else {
+          batches = batchesA.length ? batchesA.slice() : batchesB.slice();
+          if (batchesB.length > batches.length || sumB > sumSanitizedHabitNumericBatches(batches, 999999)) {
+            if (batchesB.length >= batches.length) batches = batchesB.slice();
+          }
+        }
+      }
+
+      if (stamps.length) {
+        out.stamps = stamps;
+        out.stampAt = stamps[0];
+      } else {
+        const stampPick = pickRealHabitClockMs([Number(a.stampAt), Number(b.stampAt)]);
+        if (stampPick) out.stampAt = stampPick;
+      }
+      if (batches.length) {
+        out.batches = batches;
+        const total = sumSanitizedHabitNumericBatches(batches, 999999);
+        if (total > 0) out[valueKey] = total;
+      }
+      out.times = Math.max(
+        Number(a.times) || 0,
+        Number(b.times) || 0,
+        batches.length,
+        stamps.length
+      );
+      const rev = Math.max(getHabitCheckinRevisionTime(a), getHabitCheckinRevisionTime(b));
+      if (rev > 0) out.revisedAt = rev;
+      const rmA = typeof a.remark === "string" ? a.remark.trim() : "";
+      const rmB = typeof b.remark === "string" ? b.remark.trim() : "";
+      if (rmA || rmB) out.remark = rmA.length >= rmB.length ? rmA : rmB;
+      return out;
+    }
+
     /** 习惯打卡数值条目：从 batches 重算当日累计，过滤异常大单次量 */
     function sanitizeHabitNumericCheckinValue(val, opts) {
       if (val === true) return true;
@@ -137760,6 +137960,7 @@
     /**
      * 同一习惯、同一日：
      * - 任一侧有 revisedAt：按修订戳 LWW（缺省视为 0；避免「仅一侧有戳时落入分数并集、本机伪赢」）。
+     * - 两侧都已打卡且非主动减次：并集 stamps/batches（禁止晚间 LWW 盖掉上午独立打卡）。
      * - 两侧都无修订戳：已打卡优先；两端都已打卡则取较大累计。
      * - cleared + revisedAt 可覆盖对端勾选（支持跨设备减次/取消）。
      */
@@ -137775,8 +137976,26 @@
         const newer = revL > revR ? localVal : remoteVal;
         const older = revL > revR ? remoteVal : localVal;
         if (newer == null) return false;
-        /* cleared 仍可盖勾选；较新瘦完成态不得抹掉较旧完整附加输入 */
-        if (isHabitCheckinClearedMarker(newer)) return newer;
+        /*
+         * cleared：仅当对侧也有 revisedAt（真用户减次/清空），或对侧未打卡时生效。
+         * Done 回补的无修订戳勾选不得被旧 cleared 盖掉。
+         */
+        if (isHabitCheckinClearedMarker(newer)) {
+          const olderRev = getHabitCheckinRevisionTime(older);
+          if (olderRev > 0 || !isHabitCheckinValueChecked(older)) return newer;
+          return older;
+        }
+        /*
+         * 两端都已打卡：默认并集每一次真实打卡（跨设备并发）。
+         * 仅当较新侧是「减次前缀」时才走纯 LWW，避免把合法减次抬回。
+         */
+        if (
+          isHabitCheckinValueChecked(newer) &&
+          isHabitCheckinValueChecked(older) &&
+          !isHabitCheckinIntentionalReduce(newer, older)
+        ) {
+          return mergeHabitCheckinCheckedSidesKeepingAllPunches(newer, older);
+        }
         return preserveHabitCheckinMeasurementFields(newer, older);
       }
       if (!localChecked && !remoteChecked) {
@@ -137868,67 +138087,32 @@
       });
       const stampPick = pickRealHabitClockMs(stampCandidates);
       if (stampPick) out.stampAt = stampPick;
-      const stampsA = Array.isArray(a.stamps) ? a.stamps : [];
-      const stampsB = Array.isArray(b.stamps) ? b.stamps : [];
-      if (stampsA.length || stampsB.length) {
-        const seen = {};
-        const mergedStamps = [];
-        stampsA.concat(stampsB).forEach(function (t) {
-          const n = Number(t);
-          if (!Number.isFinite(n) || n <= 0 || seen[n]) return;
-          seen[n] = true;
-          mergedStamps.push(n);
-        });
-        if (mergedStamps.length) out.stamps = mergedStamps;
-      }
-      if (Array.isArray(a.batches) || Array.isArray(b.batches)) {
-        const batchesA = Array.isArray(a.batches) ? a.batches : [];
-        const batchesB = Array.isArray(b.batches) ? b.batches : [];
-        let maxBatch = 999;
-        let maxDaily = 99999;
-        let valueKey = "minutes";
-        if (Number.isFinite(out.wordCount) || a.wordCount != null || b.wordCount != null) {
-          valueKey = "wordCount";
-          maxBatch = 9999;
-          maxDaily = 999999;
-        } else if (Number.isFinite(out.ml) || a.ml != null || b.ml != null) {
-          valueKey = "ml";
-          maxBatch = 2000;
-          maxDaily = 15000;
-        } else if (Number.isFinite(out.eggs) || a.eggs != null || b.eggs != null) {
-          valueKey = "eggs";
-          maxBatch = 10;
-          maxDaily = 99;
-        } else if (Number.isFinite(out.questions) || a.questions != null || b.questions != null) {
-          valueKey = "questions";
-          maxBatch = 20;
-          maxDaily = 99;
-        } else if (Number.isFinite(out.yuan) || a.yuan != null || b.yuan != null) {
-          valueKey = "yuan";
-          maxBatch = 99999;
-          maxDaily = 999999;
-        } else if (Number.isFinite(out.experiments) || a.experiments != null || b.experiments != null) {
-          valueKey = "experiments";
-          maxBatch = 999;
-          maxDaily = 99999;
-        }
-        const totalA = sumSanitizedHabitNumericBatches(batchesA, maxBatch);
-        const totalB = sumSanitizedHabitNumericBatches(batchesB, maxBatch);
-        const pickA = totalA >= totalB;
-        const picked = pickA ? a : b;
-        const sanitized = sanitizeHabitNumericCheckinValue(picked, {
-          valueKey: valueKey,
-          maxBatch: maxBatch,
-          maxDaily: maxDaily
-        });
-        if (sanitized && typeof sanitized === "object") {
-          Object.assign(out, sanitized);
-        } else {
-          delete out.batches;
-          delete out.wordCount;
-          delete out.minutes;
-          delete out.experiments;
-          out.times = Math.max(Number(a.times) || 0, Number(b.times) || 0);
+      /*
+       * stamps/batches：与 LWW 并集路径同一套「保留每一次打卡」，
+       * 禁止只取总量较大侧而丢掉另一端独立 stamp。
+       */
+      if (
+        (Array.isArray(a.stamps) && a.stamps.length) ||
+        (Array.isArray(b.stamps) && b.stamps.length) ||
+        (Array.isArray(a.batches) && a.batches.length) ||
+        (Array.isArray(b.batches) && b.batches.length)
+      ) {
+        const punchMerged = mergeHabitCheckinCheckedSidesKeepingAllPunches(a, b);
+        if (punchMerged && typeof punchMerged === "object") {
+          if (Array.isArray(punchMerged.stamps) && punchMerged.stamps.length) {
+            out.stamps = punchMerged.stamps;
+          }
+          if (Number(punchMerged.stampAt) > 0) out.stampAt = punchMerged.stampAt;
+          if (Array.isArray(punchMerged.batches) && punchMerged.batches.length) {
+            out.batches = punchMerged.batches.slice();
+          }
+          if (Number(punchMerged.times) > 0) {
+            out.times = Math.max(Number(out.times) || 0, Number(punchMerged.times) || 0);
+          }
+          const vk = detectHabitCheckinNumericValueKey(a, b);
+          if (Number.isFinite(Number(punchMerged[vk])) && Number(punchMerged[vk]) > 0) {
+            out[vk] = punchMerged[vk];
+          }
         }
       }
       const rmA = typeof a.remark === "string" ? a.remark.trim() : "";
@@ -208761,7 +208945,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           : Number.isFinite(fieldTotal) && fieldTotal > 0
             ? fieldTotal
             : batch;
-        const atMs = stampList[n - 1] || stampList[stampList.length - 1] || fallbackAt;
+        /*
+         * 只使用 stamps[n-1]。禁止用末次 stamp / 中午占位伪造更早打卡时间。
+         * stamps 不足时跳过该下标（保留已有真实行）；完全无 stamps 的旧数据仅允许补最后一次。
+         */
+        let atMs = stampList[n - 1];
+        if (!(atMs > 0)) {
+          if (stampList.length > 0) continue;
+          if (n !== expect || !(fallbackAt > 0)) continue;
+          atMs = fallbackAt;
+        }
         syncOne(batch, runningTotal, n, atMs);
         changed = true;
       }
@@ -208949,15 +209142,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               : [];
           const remark = getHabitRemarkFromCheckinValue(v);
           for (let n = 1; n <= expectTimes; n++) {
-            const stampMs =
-              stampList[n - 1] ||
-              stampList[stampList.length - 1] ||
-              atMs;
+            /* 禁止用末次 stamp / 中午占位伪造更早次数 */
+            let stampMs = stampList[n - 1];
+            if (!(stampMs > 0)) {
+              if (stampList.length > 0) {
+                /* 有 stamps 但缺本下标：不新建、不改已有行时刻 */
+                continue;
+              }
+              if (n !== expectTimes || !(atMs > 0)) continue;
+              stampMs = atMs;
+            }
             if (haveN.has(n)) {
               const row = rowByN[n];
-              if (row && stampMs > 0) {
+              /* 仅当该次确有独立 stamp 时校正时刻；缺 stamp 不把已有行拖到晚间 */
+              if (row && stampList[n - 1] > 0) {
                 const curAt = Number(row.completedAt) || 0;
-                const wantAt = completedAtForHabitDoneRow(dateStr, stampMs);
+                const wantAt = completedAtForHabitDoneRow(dateStr, stampList[n - 1]);
                 if (wantAt > 0 && Math.abs(curAt - wantAt) > 60000) {
                   row.completedAt = wantAt;
                   if (!row.habitMeta || typeof row.habitMeta !== "object") {
@@ -208992,10 +209192,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
                 })
             : [];
         for (let n = existingRows.length + 1; n <= expectTimes; n++) {
-          const stampMs =
-            stampList[n - 1] ||
-            stampList[stampList.length - 1] ||
-            atMs;
+          let stampMs = stampList[n - 1];
+          if (!(stampMs > 0)) {
+            if (stampList.length > 0) continue;
+            if (n !== expectTimes || !(atMs > 0)) continue;
+            stampMs = atMs;
+          }
           syncHabitToDone(habitKey, dateStr, n, stampMs);
           changed = true;
         }
