@@ -16814,6 +16814,33 @@
       }
     }
 
+    /*
+     * Desktop only（精细指针）：其他任务底卡三提醒按本地自然日轮换，每天只显示一项。
+     * 隐藏用 display:none，不占位；平板/手机 focus-zone 仍走既有隐藏规则，不进此条。
+     * slot 0 = needle；1 = 恐惧→好奇心；2 = SMG 公式。
+     */
+    @media (min-width: 768px) and (pointer: fine) {
+      #todayPlanPanel:not(.is-collapsed).today-plan-desktop-remind-slot--0
+        .today-plan-panel__hourly-rate,
+      #todayPlanPanel:not(.is-collapsed).today-plan-desktop-remind-slot--0
+        .today-plan-panel__footer {
+        display: none !important;
+      }
+
+      #todayPlanPanel:not(.is-collapsed).today-plan-desktop-remind-slot--1
+        .today-plan-panel__needle-principle,
+      #todayPlanPanel:not(.is-collapsed).today-plan-desktop-remind-slot--1
+        .today-plan-panel__footer {
+        display: none !important;
+      }
+
+      /* 第 3 槽只留 SMG：收起 blank-decor，避免空 flex + gap 占位 */
+      #todayPlanPanel:not(.is-collapsed).today-plan-desktop-remind-slot--2
+        .today-plan-panel__blank-decor {
+        display: none !important;
+      }
+    }
+
     /* 桌面较窄：优先缩小胶囊间距与左右内边距，保留 +10% 字号 */
     @media (min-width: 768px) and (max-width: 1180px) {
       #todayPlanPanel:not(.is-collapsed) .today-plan-panel__smg-formula {
@@ -109555,7 +109582,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261028z";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261029a";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -194602,9 +194629,39 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      * 迷你日期卡片：按系统当前本地日期写入 OCT / 01。
      * 仅 UI 展示；折叠时随 body 隐藏，不落盘、不同步。
      */
+    /**
+     * Desktop only：底卡三提醒按本地自然日确定性轮换（0/1/2 循环）。
+     * 只给 #todayPlanPanel 打 class；真正隐藏在 (min-width:768) and (pointer:fine) CSS 内。
+     * 平板/手机不读这些 class 的显示规则，行为与改前一致。
+     */
+    const TODAY_PLAN_DESKTOP_REMIND_SLOT_PREFIX = "today-plan-desktop-remind-slot--";
+    const TODAY_PLAN_DESKTOP_REMIND_SLOT_COUNT = 3;
+
+    function getTodayPlanDesktopRemindSlotIndex(dateOpt) {
+      const d = dateOpt instanceof Date ? dateOpt : new Date();
+      const dayOrdinal = Math.floor(
+        Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000
+      );
+      return (
+        ((dayOrdinal % TODAY_PLAN_DESKTOP_REMIND_SLOT_COUNT) +
+          TODAY_PLAN_DESKTOP_REMIND_SLOT_COUNT) %
+        TODAY_PLAN_DESKTOP_REMIND_SLOT_COUNT
+      );
+    }
+
+    function syncTodayPlanDesktopRemindDailySlot(dateOpt) {
+      const panel = todayPlanPanel || document.getElementById("todayPlanPanel");
+      if (!panel) return;
+      const slot = getTodayPlanDesktopRemindSlotIndex(dateOpt);
+      for (let i = 0; i < TODAY_PLAN_DESKTOP_REMIND_SLOT_COUNT; i += 1) {
+        panel.classList.toggle(TODAY_PLAN_DESKTOP_REMIND_SLOT_PREFIX + i, i === slot);
+      }
+    }
+
     function updateTodayPlanPanelDateCard() {
-      if (!todayPlanPanelDateMonth && !todayPlanPanelDateDay) return;
       const now = new Date();
+      syncTodayPlanDesktopRemindDailySlot(now);
+      if (!todayPlanPanelDateMonth && !todayPlanPanelDateDay) return;
       const monthIdx = now.getMonth();
       const month =
         TODAY_PLAN_DATE_CARD_MONTHS[monthIdx] ||
@@ -194620,6 +194677,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         );
       }
     }
+
+    syncTodayPlanDesktopRemindDailySlot();
 
     /**
      * 顶部 Problem / Approach 胶囊：按「当天」真实 habitCheckins 切换 --pending。
