@@ -109918,7 +109918,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261030i";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261030j";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -120598,6 +120598,15 @@
           "[aliyun-sync-primary] upload gate open after " + String(reason || "pull")
         );
       } catch (_cGate) {}
+      /*
+       * 庆祝 boot 屏障与上传门闩对齐：首拉（或超时/关闭主路径）结算后才放开，
+       * 避免 hydrate 后、Habit/Done 域延迟到达时再误播历史烟花。
+       */
+      try {
+        if (typeof releaseVictoryFxBootBarrier === "function") {
+          releaseVictoryFxBootBarrier("aliyun-initial-pull:" + String(reason || ""));
+        }
+      } catch (_fxGate) {}
       aliyunSyncPrimaryKickDeferredFlushesAfterGateOpen();
     }
 
@@ -175854,11 +175863,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     /**
      * 烟花/庆祝 · 数据同步屏障（与素材无关）。
-     * 首次 hydrate、云端 pull/merge、Habit Done 镜像补齐、pulse reconcile 期间禁止庆祝；
-     * 仅本机用户主动打卡路径可播。深度计数支持嵌套。
+     * - hard：云端 merge / Habit 镜像补齐 / pulse reconcile（绝对禁止）
+     * - boot：首屏 hydrate → 阿里云首拉结算前（防延迟同步误播；用户主动路径可放行）
      */
     let victoryFxDataSyncBarrierDepth = 0;
-    /** 启动 loadState / 本地 restore 完成前也禁止（防历史补行误播） */
     let victoryFxBootBarrierActive = true;
 
     function beginVictoryFxDataSyncBarrier() {
@@ -175878,13 +175886,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
-    function releaseVictoryFxBootBarrier() {
+    function releaseVictoryFxBootBarrier(reason) {
+      if (!victoryFxBootBarrierActive) return;
       victoryFxBootBarrierActive = false;
+      try {
+        fxDiagPush("boot_barrier_release", { reason: String(reason || "") });
+      } catch (_fxBootRel) {}
     }
 
-    /** 同步/启动/云合并期间：禁止任何庆祝（用户主动路径不进屏障） */
-    function isVictoryCelebrationBlockedByDataSync() {
-      if (victoryFxBootBarrierActive) return true;
+    /** 硬同步屏障：merge/repair 进行中（含阿里云 Habit suppress） */
+    function isVictoryCelebrationHardSyncBlocked() {
       if (victoryFxDataSyncBarrierDepth > 0) return true;
       if (typeof cloudSyncApplyingRemote !== "undefined" && cloudSyncApplyingRemote) return true;
       if (typeof aliyunHabitRealSuppressPush !== "undefined" && aliyunHabitRealSuppressPush) {
@@ -175893,10 +175904,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return false;
     }
 
-    function queueDoneCelebrateFx(id) {
+    /**
+     * 是否禁止庆祝。
+     * opts.userInitiated：本机主动打卡 — 仅硬同步屏障拦截，boot 首拉窗口仍可播。
+     * 无 userInitiated：boot + 硬同步一律拦截（同步补齐 / 延迟入队）。
+     */
+    function isVictoryCelebrationBlockedByDataSync(opts) {
+      if (isVictoryCelebrationHardSyncBlocked()) return true;
+      if (victoryFxBootBarrierActive && !(opts && opts.userInitiated)) return true;
+      return false;
+    }
+
+    function queueDoneCelebrateFx(id, opts) {
       const sid = String(id || "");
       if (!sid) return;
-      if (isVictoryCelebrationBlockedByDataSync()) return;
+      if (isVictoryCelebrationBlockedByDataSync(opts)) return;
       doneCelebrateFxPending.add(sid);
     }
 
@@ -175909,43 +175931,35 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     /**
      * 本地真实写入 Done 后排队右侧图标动效。
-     * skipNotify / skipCelebrate / 同步屏障 → 不庆祝（云端补齐、历史 restore 勿播）。
+     * skipNotify / skipCelebrate / 硬同步屏障 → 不庆祝。
+     * 本函数只服务本机写入路径，故对 boot 窗口按 userInitiated 放行。
      */
     function maybeQueueDoneCelebrateAfterLocalUnshift(item, opts) {
       if (!item || item.id == null) return;
       if (item.kind === "timeReflection") return;
       if (opts && opts.skipNotify) return;
       if (opts && opts.skipCelebrate) return;
-      if (isVictoryCelebrationBlockedByDataSync()) {
-        /*
-         * 仅同步屏障（非单纯 boot）写入的 id 记入幂等集；
-         * boot 窗口内的用户打卡不预标记，避免放开后同 id 无法庆祝。
-         */
-        if (
-          victoryFxDataSyncBarrierDepth > 0 ||
-          (typeof cloudSyncApplyingRemote !== "undefined" && cloudSyncApplyingRemote) ||
-          (typeof aliyunHabitRealSuppressPush !== "undefined" && aliyunHabitRealSuppressPush)
-        ) {
-          try {
-            rememberDoneFxAlreadyCelebrated(item.id);
-          } catch (_rem) {}
-        }
+      const userFxOpts = { userInitiated: true };
+      if (isVictoryCelebrationHardSyncBlocked()) {
+        try {
+          rememberDoneFxAlreadyCelebrated(item.id);
+        } catch (_rem) {}
         return;
       }
-      queueDoneCelebrateFx(item.id);
+      queueDoneCelebrateFx(item.id, userFxOpts);
       /* 力量 +1/+2 或背叛 -1/-2/-10：立即全局 FX，不依赖 Done List 渲染 */
       if (shouldPlayVictoryCelebrationForItem(item)) {
-        playVictoryCelebration(item.id);
+        playVictoryCelebration(item.id, userFxOpts);
       } else if (shouldPlayTreasonCelebrationForItem(item)) {
         let ts = NaN;
         if (typeof getDoneOutcomeVdScore === "function") ts = Number(getDoneOutcomeVdScore(item));
-        playTreasonCelebration(item.id, ts);
+        playTreasonCelebration(item.id, ts, userFxOpts);
       }
     }
 
     /** 用户打卡路径：刚 unshift 的条目通常在 state.done[0] */
     function queueDoneCelebrateForLatestDoneEntry() {
-      if (isVictoryCelebrationBlockedByDataSync()) return;
+      if (isVictoryCelebrationHardSyncBlocked()) return;
       const head = Array.isArray(state.done) && state.done.length ? state.done[0] : null;
       if (head && head.id != null) maybeQueueDoneCelebrateAfterLocalUnshift(head, null);
     }
@@ -176079,12 +176093,20 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      * #382 的 setTimeout(0) 仍可能在首帧绘制前挂载；默认再等双 rAF。
      * 仅调度；不改打卡写入 / saveState / 同步。
      */
-    function playVictoryCelebration(idOpt) {
-      if (isVictoryCelebrationBlockedByDataSync()) {
-        fxDiagPush("sync_barrier_skip", { id: String(idOpt || ""), mode: "power" });
-        try {
-          rememberDoneFxAlreadyCelebrated(idOpt);
-        } catch (_remV) {}
+    function playVictoryCelebration(idOpt, opts) {
+      const fxOpts = opts && typeof opts === "object" ? opts : null;
+      if (isVictoryCelebrationBlockedByDataSync(fxOpts)) {
+        fxDiagPush("sync_barrier_skip", {
+          id: String(idOpt || ""),
+          mode: "power",
+          boot: !!victoryFxBootBarrierActive,
+          hard: isVictoryCelebrationHardSyncBlocked()
+        });
+        if (isVictoryCelebrationHardSyncBlocked()) {
+          try {
+            rememberDoneFxAlreadyCelebrated(idOpt);
+          } catch (_remV) {}
+        }
         return;
       }
       if (!claimDoneFxPlayOnce(idOpt)) {
@@ -176093,6 +176115,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       fxDiagPush("call", { id: String(idOpt || ""), mode: "power" });
       scheduleVictoryFxMount(function () {
+        /* 延迟挂载窗口：首拉/merge 若已开始，取消历史入队，避免加载后才炸烟花 */
+        if (isVictoryCelebrationBlockedByDataSync(fxOpts)) {
+          fxDiagPush("sync_barrier_skip_delayed", {
+            id: String(idOpt || ""),
+            mode: "power"
+          });
+          return;
+        }
         preloadDoneFxWebps();
         playDoneVictoryFx({ mode: "power" });
       });
@@ -176104,7 +176134,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      */
     function scheduleAmbVictoryCelebration(item) {
       if (!item || item.id == null) return;
-      if (isVictoryCelebrationBlockedByDataSync()) {
+      const fxOpts = { userInitiated: true };
+      if (isVictoryCelebrationHardSyncBlocked()) {
         try {
           rememberDoneFxAlreadyCelebrated(item.id);
         } catch (_remA) {}
@@ -176112,24 +176143,29 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       setTimeout(function () {
         try {
-          playVictoryCelebration(item.id);
+          playVictoryCelebration(item.id, fxOpts);
         } catch (_ambFx) {}
       }, 0);
     }
 
     /** 背叛 -1/-2/-10 中央警告；无 -5；与胜利共用一次打卡去重 + 同样延后挂载 */
-    function playTreasonCelebration(idOpt, score) {
+    function playTreasonCelebration(idOpt, score, opts) {
       const n = Number(score);
       if (n !== -1 && n !== -2 && n !== -10) return;
-      if (isVictoryCelebrationBlockedByDataSync()) {
+      const fxOpts = opts && typeof opts === "object" ? opts : null;
+      if (isVictoryCelebrationBlockedByDataSync(fxOpts)) {
         fxDiagPush("sync_barrier_skip", {
           id: String(idOpt || ""),
           mode: "treason",
-          score: n
+          score: n,
+          boot: !!victoryFxBootBarrierActive,
+          hard: isVictoryCelebrationHardSyncBlocked()
         });
-        try {
-          rememberDoneFxAlreadyCelebrated(idOpt);
-        } catch (_remT) {}
+        if (isVictoryCelebrationHardSyncBlocked()) {
+          try {
+            rememberDoneFxAlreadyCelebrated(idOpt);
+          } catch (_remT) {}
+        }
         return;
       }
       if (!claimDoneFxPlayOnce(idOpt)) {
@@ -176138,6 +176174,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       fxDiagPush("call", { id: String(idOpt || ""), mode: "treason", score: n });
       scheduleVictoryFxMount(function () {
+        if (isVictoryCelebrationBlockedByDataSync(fxOpts)) {
+          fxDiagPush("sync_barrier_skip_delayed", {
+            id: String(idOpt || ""),
+            mode: "treason",
+            score: n
+          });
+          return;
+        }
         preloadDoneFxWebps();
         playDoneVictoryFx({ mode: "treason", score: n });
       });
@@ -177179,8 +177223,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
          * 不改计分默认值（此处不写入 outcomeScore）。背叛需分值才知警告素材，仍等选分。
          */
         if (kind === "power") {
-          queueDoneCelebrateFx(sid);
-          playVictoryCelebration(sid);
+          queueDoneCelebrateFx(sid, { userInitiated: true });
+          playVictoryCelebration(sid, { userInitiated: true });
         }
       } else {
         doneOutcomeScorePickOpenIds.add(sid);
@@ -177188,14 +177232,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (kind === "power") {
           const ps = Number(item.outcomeScore);
           if (ps === 1 || ps === 2) {
-            queueDoneCelebrateFx(sid);
-            playVictoryCelebration(sid);
+            queueDoneCelebrateFx(sid, { userInitiated: true });
+            playVictoryCelebration(sid, { userInitiated: true });
           }
         } else if (kind === "treason") {
           const ts = Number(item.outcomeScore);
           if (ts === -1 || ts === -2 || ts === -10) {
-            queueDoneCelebrateFx(sid);
-            playTreasonCelebration(sid, ts);
+            queueDoneCelebrateFx(sid, { userInitiated: true });
+            playTreasonCelebration(sid, ts, { userInitiated: true });
           }
         }
       }
@@ -177220,11 +177264,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       doneOutcomeScorePickOpenIds.delete(sid);
       queueDoneOutcomeScoreFx(sid, n);
       if (kind === "power" && (n === 1 || n === 2)) {
-        queueDoneCelebrateFx(sid);
-        playVictoryCelebration(sid);
+        queueDoneCelebrateFx(sid, { userInitiated: true });
+        playVictoryCelebration(sid, { userInitiated: true });
       } else if (kind === "treason" && (n === -1 || n === -2 || n === -10)) {
-        queueDoneCelebrateFx(sid);
-        playTreasonCelebration(sid, n);
+        queueDoneCelebrateFx(sid, { userInitiated: true });
+        playTreasonCelebration(sid, n, { userInitiated: true });
       }
       const patchedOk = patchDoneOutcomeUiImmediate(item);
       scheduleDoneOutcomeClickFollowUp(item, "outcome-score", patchedOk);
@@ -208713,13 +208757,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         } catch (_bootRepairErr) {}
       }
       /*
-       * 本地 hydrate / 历史补镜像结束：放开庆祝屏障。
-       * 不把全部 Done id 预标记为已庆祝——否则用户稍后点「力量选择」会被幂等误拦。
-       * 历史烟花防重播靠：userInitiated / skipNotify / 同步屏障 / 云端 accept 记入。
+       * 庆祝 boot 屏障不在此处放开：等阿里云首拉结算（markAliyunSyncPrimaryInitialPullSettled）。
+       * 主路径关闭 / 超时 / boot-error 也会走该入口；避免 hydrate 后延迟同步再炸历史烟花。
        */
-      try {
-        if (typeof releaseVictoryFxBootBarrier === "function") releaseVictoryFxBootBarrier();
-      } catch (_bootFxRelease) {}
       /* Forge 日/周最低整理改到启动落盘，避免首屏 render 路径裸 saveState */
       try {
         if (typeof persistForgeMinsAndRelatedHygieneIfNeeded === "function") {
