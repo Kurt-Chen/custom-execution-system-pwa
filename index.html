@@ -109918,7 +109918,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261030j";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261030k";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -176331,9 +176331,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * 庆祝动画定位基准：排除「今日计划」边栏后的主内容区几何矩形（视口坐标）。
-     * 主列优先取 .container > .module-stack；若边栏与主列水平重叠则按左右侧裁出边栏。
-     * 桌面/平板/手机共用，禁止写死 left/top 偏移。
+     * 庆祝动画定位基准：可视主页内容区几何矩形（视口坐标）。
+     * 几何原则（各端共用）：主列 module-stack ∩ 可见视口；只裁「侧栏」重叠，不裁浮层；
+     * 手机/平板再裁固定底栏上沿。电脑 ≥1366 底栏裁切保持关闭以保留已验收中心。
+     * 禁止写死 left/top 偏移。
      */
     function getVictoryFxMainContentRect() {
       const vv = window.visualViewport;
@@ -176371,7 +176372,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       bottom = Math.min(bottom, viewB);
 
       const panel = document.getElementById("todayPlanPanel");
-      if (panel) {
+      /* 浮层入口/全屏遮罩不是侧栏：跳过水平裁切，保持主列几何中心 */
+      const panelIsFloatOverlay =
+        typeof isTodayPlanMobileFloatLayout === "function" && isTodayPlanMobileFloatLayout();
+      if (panel && !panelIsFloatOverlay) {
         const pr = panel.getBoundingClientRect();
         const overlapL = Math.max(left, pr.left);
         const overlapR = Math.min(right, pr.right);
@@ -176379,7 +176383,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const overlapB = Math.min(bottom, pr.bottom);
         const overlapW = overlapR - overlapL;
         const overlapH = overlapB - overlapT;
-        /* 折叠细条/浮层/网格列：只要与主内容有实质重叠就裁掉，左右侧自适应 */
+        /* 侧栏细条/网格列：与主内容有实质重叠则按左右侧裁掉 */
         if (overlapW >= 8 && overlapH >= 8) {
           const contentMidX = (left + right) / 2;
           const panelMidX = (pr.left + pr.right) / 2;
@@ -176387,6 +176391,42 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             left = Math.max(left, overlapR);
           } else {
             right = Math.min(right, overlapL);
+          }
+        }
+      }
+
+      /*
+       * 手机/平板：固定底栏盖住主列底部时，下沿收到底栏上沿，避免垂直中心偏下。
+       * 电脑 ≥1366 保持既有「module-stack∩视口」中心（已验收），不在此裁底栏。
+       */
+      let isDesktopFixedLayout = false;
+      try {
+        isDesktopFixedLayout =
+          typeof TODAY_PLAN_DESKTOP_FIXED_MQ === "string" &&
+          window.matchMedia(TODAY_PLAN_DESKTOP_FIXED_MQ).matches;
+      } catch (_deskMq) {
+        isDesktopFixedLayout = false;
+      }
+      if (!isDesktopFixedLayout) {
+        const navChrome =
+          document.querySelector(".primary-bottom-nav-chrome") ||
+          document.getElementById("primaryModuleBottomNav") ||
+          document.getElementById("morePageSkeleton");
+        if (navChrome) {
+          let nr = null;
+          try {
+            nr = navChrome.getBoundingClientRect();
+          } catch (_nr) {
+            nr = null;
+          }
+          if (nr && nr.width >= 8 && nr.height >= 8) {
+            const overlapL = Math.max(left, nr.left);
+            const overlapR = Math.min(right, nr.right);
+            const overlapT = Math.max(top, nr.top);
+            const overlapB = Math.min(bottom, nr.bottom);
+            if (overlapR - overlapL >= 8 && overlapB - overlapT >= 8) {
+              bottom = Math.min(bottom, nr.top);
+            }
           }
         }
       }
