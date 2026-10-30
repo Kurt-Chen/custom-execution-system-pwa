@@ -109903,7 +109903,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261030a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261030b";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -185796,33 +185796,52 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return panel;
     }
 
-    function isAnniversaryJoinedClosedList(module, weekNum, taskId, subIdOpt) {
+    /** 是否已归入「今天死磕」(周年)：默认看今日；可传 dateKeyOpt 查指定日 */
+    function isAnniversaryJoinedClosedList(module, weekNum, taskId, subIdOpt, dateKeyOpt) {
       if (!Array.isArray(state.closedList)) return false;
+      const wantDate =
+        dateKeyOpt != null && String(dateKeyOpt) !== ""
+          ? normalizeWeeklyPlanTodayPlanDate(dateKeyOpt)
+          : formatDateInputValue(new Date());
       for (let i = 0; i < state.closedList.length; i++) {
+        const it = state.closedList[i];
         if (
-          anniversaryMirrorMatchesTarget(
-            state.closedList[i] && state.closedList[i].mirrorOf,
+          !anniversaryMirrorMatchesTarget(
+            it && it.mirrorOf,
             module,
             taskId,
             subIdOpt || null
           )
         ) {
-          return true;
+          continue;
         }
+        if (getClosedListItemAssignmentDateKey(it) === wantDate) return true;
       }
       return false;
     }
 
-    /** 仅移出匹配的主/子封闭清单镜像（不误伤同父其它子任务） */
-    function leaveAnniversaryClosedListExact(module, weekNum, taskId, subIdOpt) {
+    /**
+     * 仅移出匹配的主/子封闭清单镜像（不误伤同父其它子任务）。
+     * dateKeyOpt 有值时只摘该日；缺省摘全部匹配（删源等场景）。
+     */
+    function leaveAnniversaryClosedListExact(module, weekNum, taskId, subIdOpt, dateKeyOpt) {
       if (!Array.isArray(state.closedList)) return;
+      const wantDate = dateKeyOpt ? normalizeWeeklyPlanTodayPlanDate(dateKeyOpt) : "";
       const toRemove = state.closedList.filter(function (item) {
-        return anniversaryMirrorMatchesTarget(
-          item && item.mirrorOf,
-          module,
-          taskId,
-          subIdOpt || null
-        );
+        if (
+          !anniversaryMirrorMatchesTarget(
+            item && item.mirrorOf,
+            module,
+            taskId,
+            subIdOpt || null
+          )
+        ) {
+          return false;
+        }
+        if (wantDate) {
+          return getClosedListItemAssignmentDateKey(item) === wantDate;
+        }
+        return true;
       });
       if (!toRemove.length) return;
       toRemove.forEach(function (item) {
@@ -187436,28 +187455,53 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return wantMicro === gotMicro;
     }
 
-    function findWeeklyPlanClosedListMirror(taskId, microIdOpt) {
+    /**
+     * 查找周计划封闭清单镜像。
+     * dateKeyOpt 有值时只匹配该归属日（同日不叠双）；缺省匹配任意日（删除源任务时清全部）。
+     */
+    function findWeeklyPlanClosedListMirror(taskId, microIdOpt, dateKeyOpt) {
       if (!Array.isArray(state.closedList)) return null;
+      const wantDate = dateKeyOpt ? normalizeWeeklyPlanTodayPlanDate(dateKeyOpt) : "";
       for (let i = 0; i < state.closedList.length; i++) {
         const it = state.closedList[i];
-        if (weeklyPlanMirrorMatchesTarget(it && it.mirrorOf, taskId, microIdOpt || null)) {
-          return it;
+        if (!weeklyPlanMirrorMatchesTarget(it && it.mirrorOf, taskId, microIdOpt || null)) {
+          continue;
         }
+        if (wantDate) {
+          const got = getClosedListItemAssignmentDateKey(it);
+          if (got !== wantDate) continue;
+        }
+        return it;
       }
       return null;
     }
 
-    function isWeeklyPlanJoinedClosedList(taskId, microIdOpt) {
-      return Boolean(findWeeklyPlanClosedListMirror(taskId, microIdOpt));
+    /** 是否已归入「今天死磕」：默认看今日；可传 dateKeyOpt 查指定日 */
+    function isWeeklyPlanJoinedClosedList(taskId, microIdOpt, dateKeyOpt) {
+      const dk =
+        dateKeyOpt != null && String(dateKeyOpt) !== ""
+          ? normalizeWeeklyPlanTodayPlanDate(dateKeyOpt)
+          : formatDateInputValue(new Date());
+      return Boolean(findWeeklyPlanClosedListMirror(taskId, microIdOpt, dk));
     }
 
-    /** 移出今天死磕（封闭清单镜像）；不改完成态；写 tomb 防复活 */
-    function leaveWeeklyPlanClosedListMirror(taskId, microIdOpt) {
+    /**
+     * 移出今天死磕（封闭清单镜像）；不改完成态；写 tomb 防复活。
+     * dateKeyOpt 有值时只摘该日（菜单取消今日）；缺省摘全部匹配镜像（删源任务）。
+     */
+    function leaveWeeklyPlanClosedListMirror(taskId, microIdOpt, dateKeyOpt) {
       const tid = String(taskId || "");
       if (!tid || !Array.isArray(state.closedList)) return;
       const mid = microIdOpt ? String(microIdOpt) : "";
+      const wantDate = dateKeyOpt ? normalizeWeeklyPlanTodayPlanDate(dateKeyOpt) : "";
       const toRemove = state.closedList.filter(function (item) {
-        return weeklyPlanMirrorMatchesTarget(item && item.mirrorOf, tid, mid || null);
+        if (!weeklyPlanMirrorMatchesTarget(item && item.mirrorOf, tid, mid || null)) {
+          return false;
+        }
+        if (wantDate) {
+          return getClosedListItemAssignmentDateKey(item) === wantDate;
+        }
+        return true;
       });
       if (!toRemove.length) return;
       toRemove.forEach(function (item) {
@@ -187533,6 +187577,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (typeof paintTodayPlanPanel === "function") paintTodayPlanPanel();
     }
 
+    /**
+     * 周计划主任务 → 今天死磕。
+     * 同日已有镜像则不重复建；跨日新建独立今日记录，不搬迁/不覆盖历史日。
+     */
     function promoteWeeklyPlanTaskToClosedList(taskId) {
       const located = findWeeklyPlanTaskInStorage(taskId);
       if (!located) return;
@@ -187541,24 +187589,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const mainT = String(task.text || "").trim() || "（主任务）";
       const lineText = "【自周计划】" + mainT;
       const promoteDl = normalizeDeadlineAtMs(task.deadlineAt);
-      const dateStr =
-        promoteDl != null
-          ? formatDateInputValue(new Date(promoteDl))
-          : selectedClosedListDate;
-      const existingMirror = findWeeklyPlanClosedListMirror(task.id, null);
+      const dateStr = formatDateInputValue(new Date());
+      const existingMirror = findWeeklyPlanClosedListMirror(task.id, null, dateStr);
       if (existingMirror) {
-        const curKey = getClosedListItemAssignmentDateKey(existingMirror);
-        if (curKey !== dateStr) {
-          const sameDayMove = getClosedListItemsVisibleForViewDate(dateStr);
-          if (sameDayMove.length >= CLOSED_LIST_DAY_MAX_ITEMS) {
-            alert("Closed List 每天最多 " + CLOSED_LIST_DAY_MAX_ITEMS + " 条，请先删除一条再加入。");
-            return;
-          }
-        }
-        assignClosedListItemToDateKey(existingMirror, dateStr);
-        if (promoteDl != null) existingMirror.deadlineAt = promoteDl;
-        stampEntityRevision(existingMirror);
-        persistCriticalLocalState(["closedList"]);
+        /* 同日已加入：不重复；不改历史日记录 */
         paintAfterClosedListPromoteLocal();
         return;
       }
@@ -187584,7 +187618,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       paintAfterClosedListPromoteLocal();
     }
 
-    /** 周计划子任务（micro）→ 今天死磕；mirrorOf.microId 区分主/子，复用已有镜像不重复建 */
+    /**
+     * 周计划子任务（micro）→ 今天死磕；mirrorOf.microId 区分主/子。
+     * 同日不重复；跨日新建独立记录，保留昨日完成态/历史。
+     */
     function promoteWeeklyPlanMicroToClosedList(microId) {
       const loc = findWeeklyPlanMicroRaw(microId);
       if (!loc || !loc.micro || !loc.parent) return;
@@ -187595,24 +187632,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const subT = String(micro.text || "").trim() || "（子任务）";
       const lineText = "【自周计划】" + mainT + " › " + subT;
       const promoteDl = normalizeDeadlineAtMs(parent.deadlineAt);
-      const dateStr =
-        promoteDl != null
-          ? formatDateInputValue(new Date(promoteDl))
-          : selectedClosedListDate;
-      const existingMirror = findWeeklyPlanClosedListMirror(parent.id, micro.id);
+      const dateStr = formatDateInputValue(new Date());
+      const existingMirror = findWeeklyPlanClosedListMirror(parent.id, micro.id, dateStr);
       if (existingMirror) {
-        const curKey = getClosedListItemAssignmentDateKey(existingMirror);
-        if (curKey !== dateStr) {
-          const sameDayMove = getClosedListItemsVisibleForViewDate(dateStr);
-          if (sameDayMove.length >= CLOSED_LIST_DAY_MAX_ITEMS) {
-            alert("Closed List 每天最多 " + CLOSED_LIST_DAY_MAX_ITEMS + " 条，请先删除一条再加入。");
-            return;
-          }
-        }
-        assignClosedListItemToDateKey(existingMirror, dateStr);
-        if (promoteDl != null) existingMirror.deadlineAt = promoteDl;
-        stampEntityRevision(existingMirror);
-        persistCriticalLocalState(["closedList"]);
         paintAfterClosedListPromoteLocal();
         return;
       }
@@ -187954,6 +187976,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const task = located.task;
       const weekNum = located.weekNum;
       const dMirror = normalizeDeadlineAtMs(task.deadlineAt);
+      const todayKey = formatDateInputValue(new Date());
       state.closedList.forEach(function (item) {
         const mo = item.mirrorOf;
         if (!mo || mo.kind !== "anniversaryTw" || mo.module !== module || String(mo.taskId) !== String(taskId)) {
@@ -187979,6 +188002,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           item.deadlineUpdatedAt = duMirror;
           item.updatedAt = Math.max(Number(item.updatedAt) || 0, duMirror);
         }
+        /* 历史日镜像：只同步文案/截止，不改完成态（今天完成不影响昨天） */
+        const assignKey = getClosedListItemAssignmentDateKey(item);
+        if (assignKey && assignKey !== todayKey) return;
         if (Boolean(item.completed) === want) return;
         item.completed = want;
         if (want) {
@@ -188245,7 +188271,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } catch (_tp) {}
     }
 
-    /** 十二周年主/子任务 → 封闭清单（前缀【12周年】，mirrorOf 联动完成） */
+    /**
+     * 十二周年主/子任务 → 封闭清单（前缀【12周年】，mirrorOf 联动完成）。
+     * 同日不重复；跨日新建独立今日记录，不搬迁昨日镜像。
+     */
     function promoteAnniversaryTaskToClosedList(module, weekNum, taskId, subIdOpt, dateKeyOpt) {
       const located = findAnniversaryTaskInStorage(module, taskId, weekNum);
       if (!located) return;
@@ -188265,28 +188294,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       const promoteDl = normalizeDeadlineAtMs(task.deadlineAt);
       const forcedDate = normalizeWeeklyPlanTodayPlanDate(dateKeyOpt);
-      const dateStr = forcedDate
-        ? forcedDate
-        : promoteDl != null
-          ? formatDateInputValue(new Date(promoteDl))
-          : selectedClosedListDate;
-      const existingAnnMirror = state.closedList.find(function (it) {
-        return anniversaryMirrorMatchesTarget(it && it.mirrorOf, module, task.id, subId || null);
+      const dateStr = forcedDate || formatDateInputValue(new Date());
+      const existingAnnMirror = (state.closedList || []).find(function (it) {
+        return (
+          anniversaryMirrorMatchesTarget(it && it.mirrorOf, module, task.id, subId || null) &&
+          getClosedListItemAssignmentDateKey(it) === dateStr
+        );
       });
       if (existingAnnMirror) {
-        const curAnnKey = getClosedListItemAssignmentDateKey(existingAnnMirror);
-        if (curAnnKey !== dateStr) {
-          const sameDayAnnMove = getClosedListItemsVisibleForViewDate(dateStr);
-          if (sameDayAnnMove.length >= CLOSED_LIST_DAY_MAX_ITEMS) {
-            alert("Closed List 每天最多 " + CLOSED_LIST_DAY_MAX_ITEMS + " 条，请先删除一条再加入。");
-            return;
-          }
-        }
-        assignClosedListItemToDateKey(existingAnnMirror, dateStr);
-        if (promoteDl != null) existingAnnMirror.deadlineAt = promoteDl;
-        stampEntityRevision(existingAnnMirror);
-        persistCriticalLocalState(["closedList"]);
-        /* 留在十二周年：局部刷封闭/今日计划，禁止切 Tab + full render */
+        /* 同日已加入：不重复；不改历史日 */
         paintAfterClosedListPromoteLocal();
         return;
       }
