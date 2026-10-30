@@ -109918,7 +109918,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261030h";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261030j";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -120598,6 +120598,15 @@
           "[aliyun-sync-primary] upload gate open after " + String(reason || "pull")
         );
       } catch (_cGate) {}
+      /*
+       * 庆祝 boot 屏障与上传门闩对齐：首拉（或超时/关闭主路径）结算后才放开，
+       * 避免 hydrate 后、Habit/Done 域延迟到达时再误播历史烟花。
+       */
+      try {
+        if (typeof releaseVictoryFxBootBarrier === "function") {
+          releaseVictoryFxBootBarrier("aliyun-initial-pull:" + String(reason || ""));
+        }
+      } catch (_fxGate) {}
       aliyunSyncPrimaryKickDeferredFlushesAfterGateOpen();
     }
 
@@ -124092,6 +124101,19 @@
               state.done.unshift(accept);
               localById[rid] = accept;
               mergedCount += 1;
+              /*
+               * 云端历史行只更新 UI。仅对「入账即力量标、无性质点选」的条目记入幂等集
+               * （Habit/Forge/AMB 等），避免误播；普通 Done 仍可稍后点力量选择庆祝。
+               */
+              try {
+                if (
+                  typeof rememberDoneFxAlreadyCelebrated === "function" &&
+                  typeof doneTaskUsesPowerBadgeOnly === "function" &&
+                  doneTaskUsesPowerBadgeOnly(accept)
+                ) {
+                  rememberDoneFxAlreadyCelebrated(accept.id);
+                }
+              } catch (_fxRemCloud) {}
               /* 每天三赢从云端回来：清掉本机 tombstone/suppressed，允许显示 */
               if (
                 accept.habitMeta &&
@@ -138841,40 +138863,47 @@
 
     /** pulse 合并后：先补 Done 再 reconcile；habitCheckins 已在 mergeCloudSyncPulseIntoState 合并，勿再 Math.max 覆盖 */
     function reconcileCloudSyncPulseDerivedState(pulseState) {
-      repairDoneListCompletedAtFromHabitMeta();
-      const dates = new Set([formatDateInputValue(new Date())]);
-      if (pulseState && pulseState.habitCheckins && typeof pulseState.habitCheckins === "object") {
-        Object.keys(pulseState.habitCheckins).forEach(function (d) {
-          dates.add(d);
+      function reconcileInner() {
+        repairDoneListCompletedAtFromHabitMeta();
+        const dates = new Set([formatDateInputValue(new Date())]);
+        if (pulseState && pulseState.habitCheckins && typeof pulseState.habitCheckins === "object") {
+          Object.keys(pulseState.habitCheckins).forEach(function (d) {
+            dates.add(d);
+          });
+        }
+        if (state.habitCheckins && typeof state.habitCheckins === "object") {
+          Object.keys(state.habitCheckins).forEach(function (d) {
+            dates.add(d);
+          });
+        }
+        dates.forEach(function (d) {
+          if (typeof isCashGap30dMetaDateKey === "function" && isCashGap30dMetaDateKey(d)) return;
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d || ""))) return;
+          try {
+            rebuildMissingHabitDoneRowsForDate(d);
+          } catch (_preDoneErr) {}
         });
-      }
-      if (state.habitCheckins && typeof state.habitCheckins === "object") {
-        Object.keys(state.habitCheckins).forEach(function (d) {
-          dates.add(d);
-        });
-      }
-      dates.forEach(function (d) {
-        if (typeof isCashGap30dMetaDateKey === "function" && isCashGap30dMetaDateKey(d)) return;
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d || ""))) return;
         try {
-          rebuildMissingHabitDoneRowsForDate(d);
-        } catch (_preDoneErr) {}
-      });
-      try {
-        reconcileDerivedCheckinsFromDoneAfterLoad();
-      } catch (_recErr) {}
-      if (
-        (pulseState && pulseState.weeklyPlan) ||
-        (pulseState && pulseState.weeklyPlanDoneSuppress) ||
-        (pulseState && Array.isArray(pulseState.closedList) && pulseState.closedList.length) ||
-        (pulseState &&
-          Object.keys(pulseState).some(function (sk) {
-            return /^anniversaryTw\d+$/i.test(sk) && pulseState[sk];
-          }))
-      ) {
-        try {
-          reconcileMirrorDeadlinesAfterCloudMerge();
-        } catch (_dlMirErr) {}
+          reconcileDerivedCheckinsFromDoneAfterLoad();
+        } catch (_recErr) {}
+        if (
+          (pulseState && pulseState.weeklyPlan) ||
+          (pulseState && pulseState.weeklyPlanDoneSuppress) ||
+          (pulseState && Array.isArray(pulseState.closedList) && pulseState.closedList.length) ||
+          (pulseState &&
+            Object.keys(pulseState).some(function (sk) {
+              return /^anniversaryTw\d+$/i.test(sk) && pulseState[sk];
+            }))
+        ) {
+          try {
+            reconcileMirrorDeadlinesAfterCloudMerge();
+          } catch (_dlMirErr) {}
+        }
+      }
+      if (typeof runWithVictoryFxDataSyncBarrier === "function") {
+        runWithVictoryFxDataSyncBarrier(reconcileInner);
+      } else {
+        reconcileInner();
       }
     }
 
@@ -148233,6 +148262,12 @@
       if (isHabitOptionalRemarkKey(habitKey)) return;
       if (isScheduledLetterKey(habitKey)) return;
       const skipNotify = !!(opts && opts.skipNotify);
+      /*
+       * 庆祝仅当本机用户主动打卡（opts.userInitiated）。
+       * 云端 pull / restore / rebuild 补镜像不得播烟花——即使漏传 skipNotify。
+       */
+      const userInitiated = !!(opts && opts.userInitiated);
+      const skipCelebrate = !userInitiated || skipNotify || !!(opts && opts.skipCelebrate);
       const label = HABIT_LABELS[habitKey] || habitKey;
       const tc = Number.isFinite(stampTimesOpt) && stampTimesOpt > 0 ? stampTimesOpt : null;
       let text =
@@ -148317,9 +148352,9 @@
         /*
          * 当天首次写入每天三赢 Done 镜像才庆祝；已有行就地更新（上方 return）不播。
          * 中央 FX 延后到 save/render 之后（scheduleAmb），避免埋在 hygiene/render 同步栈里闪没。
-         * skipNotify（同步补齐）不庆祝。不改数据结构 / 同步语义。
+         * 仅 userInitiated；skipNotify / 同步补齐不庆祝。不改数据结构 / 同步语义。
          */
-        if (!skipNotify) {
+        if (!skipCelebrate) {
           try {
             queueDoneCelebrateFx(newItem.id);
           } catch (_dwQ) {}
@@ -148328,6 +148363,12 @@
           } else {
             maybeQueueDoneCelebrateAfterLocalUnshift(newItem, null);
           }
+        } else if (newItem && newItem.id != null) {
+          try {
+            if (typeof rememberDoneFxAlreadyCelebrated === "function") {
+              rememberDoneFxAlreadyCelebrated(newItem.id);
+            }
+          } catch (_dwRem) {}
         }
         if (!skipNotify && typeof notifyAliyunDoneRealUpsert === "function") {
           try {
@@ -148346,7 +148387,7 @@
       });
       maybeQueueDoneCelebrateAfterLocalUnshift(
         { id: _flowDoneId, habitMeta: meta },
-        { skipNotify: skipNotify }
+        { skipNotify: skipNotify, skipCelebrate: skipCelebrate }
       );
       try {
         if (typeof flowDiagNoteCheckinLocalWrite === "function") {
@@ -148529,7 +148570,7 @@
       if (!state.habitCheckins[dk]) state.habitCheckins[dk] = {};
       delete state.habitCheckins[dk].dailyThreeWinsDoneSuppressed;
       state.habitCheckins[dk].dailyThreeWins = true;
-      syncHabitToDone("dailyThreeWins", dk);
+      syncHabitToDone("dailyThreeWins", dk, null, null, { userInitiated: true });
       saveStateAfterHabitCheckin();
       return true;
     }
@@ -148571,7 +148612,11 @@
         const todayKey = formatDateInputValue(new Date());
         /* 只在「今天刚写满 3 条」时自动入 Done；历史日补记走 stampDailyThreeWinsToDone，避免 Date.now 错落到今日时间线 */
         if (dateStr === todayKey) {
-          syncHabitToDone("dailyThreeWins", dateStr, null, null, { skipNotify: skipNotify });
+          syncHabitToDone("dailyThreeWins", dateStr, null, null, {
+            skipNotify: skipNotify,
+            /* 仅用户写满三赢路径传 userInitiated；hygiene/同步补齐不庆祝 */
+            userInitiated: !!(opts && opts.userInitiated)
+          });
         }
       } else if (!should && hadEntry) {
         if (!allowRemove) {
@@ -150452,7 +150497,13 @@
         next.stampAt = next.stamps[0];
       }
       state.habitCheckins[dateKey][habitKey] = stampHabitCheckinRevision(next);
-      syncHabitToDone(habitKey, dateKey, nextTimes, isHabitWeekClockKey(habitKey) ? next.stampAt : nowStamp);
+      syncHabitToDone(
+        habitKey,
+        dateKey,
+        nextTimes,
+        isHabitWeekClockKey(habitKey) ? next.stampAt : nowStamp,
+        { userInitiated: true }
+      );
       bumpRule100LinkedForEntrepreneurHabitIfNeeded(habitKey);
       /* 可能联动 Rule100 的创业习惯仍全量 hygiene，避免误伤；其余普通简单勾选走 habitDone */
       if (ENTREPRENEUR_HABIT_RULE100_NAME_HINTS[habitKey]) {
@@ -150739,7 +150790,7 @@
          * 勿只依赖 render→hygiene，否则动画触发埋在重渲中。不改保存/同步语义。
          */
         try {
-          refreshDailyWinCheckin(targetDateKey);
+          refreshDailyWinCheckin(targetDateKey, { userInitiated: true });
         } catch (_dwRefresh) {}
       }
       if (dailyWinInput) dailyWinInput.value = "";
@@ -175810,9 +175861,64 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      */
     const doneCelebrateFxPending = new Set();
 
-    function queueDoneCelebrateFx(id) {
+    /**
+     * 烟花/庆祝 · 数据同步屏障（与素材无关）。
+     * - hard：云端 merge / Habit 镜像补齐 / pulse reconcile（绝对禁止）
+     * - boot：首屏 hydrate → 阿里云首拉结算前（防延迟同步误播；用户主动路径可放行）
+     */
+    let victoryFxDataSyncBarrierDepth = 0;
+    let victoryFxBootBarrierActive = true;
+
+    function beginVictoryFxDataSyncBarrier() {
+      victoryFxDataSyncBarrierDepth += 1;
+    }
+
+    function endVictoryFxDataSyncBarrier() {
+      victoryFxDataSyncBarrierDepth = Math.max(0, victoryFxDataSyncBarrierDepth - 1);
+    }
+
+    function runWithVictoryFxDataSyncBarrier(fn) {
+      beginVictoryFxDataSyncBarrier();
+      try {
+        return typeof fn === "function" ? fn() : undefined;
+      } finally {
+        endVictoryFxDataSyncBarrier();
+      }
+    }
+
+    function releaseVictoryFxBootBarrier(reason) {
+      if (!victoryFxBootBarrierActive) return;
+      victoryFxBootBarrierActive = false;
+      try {
+        fxDiagPush("boot_barrier_release", { reason: String(reason || "") });
+      } catch (_fxBootRel) {}
+    }
+
+    /** 硬同步屏障：merge/repair 进行中（含阿里云 Habit suppress） */
+    function isVictoryCelebrationHardSyncBlocked() {
+      if (victoryFxDataSyncBarrierDepth > 0) return true;
+      if (typeof cloudSyncApplyingRemote !== "undefined" && cloudSyncApplyingRemote) return true;
+      if (typeof aliyunHabitRealSuppressPush !== "undefined" && aliyunHabitRealSuppressPush) {
+        return true;
+      }
+      return false;
+    }
+
+    /**
+     * 是否禁止庆祝。
+     * opts.userInitiated：本机主动打卡 — 仅硬同步屏障拦截，boot 首拉窗口仍可播。
+     * 无 userInitiated：boot + 硬同步一律拦截（同步补齐 / 延迟入队）。
+     */
+    function isVictoryCelebrationBlockedByDataSync(opts) {
+      if (isVictoryCelebrationHardSyncBlocked()) return true;
+      if (victoryFxBootBarrierActive && !(opts && opts.userInitiated)) return true;
+      return false;
+    }
+
+    function queueDoneCelebrateFx(id, opts) {
       const sid = String(id || "");
       if (!sid) return;
+      if (isVictoryCelebrationBlockedByDataSync(opts)) return;
       doneCelebrateFxPending.add(sid);
     }
 
@@ -175823,25 +175929,37 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return true;
     }
 
-    /** 本地真实写入 Done 后排队右侧图标动效；skipNotify 安全网 / 同步补齐不庆祝 */
+    /**
+     * 本地真实写入 Done 后排队右侧图标动效。
+     * skipNotify / skipCelebrate / 硬同步屏障 → 不庆祝。
+     * 本函数只服务本机写入路径，故对 boot 窗口按 userInitiated 放行。
+     */
     function maybeQueueDoneCelebrateAfterLocalUnshift(item, opts) {
       if (!item || item.id == null) return;
       if (item.kind === "timeReflection") return;
       if (opts && opts.skipNotify) return;
       if (opts && opts.skipCelebrate) return;
-      queueDoneCelebrateFx(item.id);
+      const userFxOpts = { userInitiated: true };
+      if (isVictoryCelebrationHardSyncBlocked()) {
+        try {
+          rememberDoneFxAlreadyCelebrated(item.id);
+        } catch (_rem) {}
+        return;
+      }
+      queueDoneCelebrateFx(item.id, userFxOpts);
       /* 力量 +1/+2 或背叛 -1/-2/-10：立即全局 FX，不依赖 Done List 渲染 */
       if (shouldPlayVictoryCelebrationForItem(item)) {
-        playVictoryCelebration(item.id);
+        playVictoryCelebration(item.id, userFxOpts);
       } else if (shouldPlayTreasonCelebrationForItem(item)) {
         let ts = NaN;
         if (typeof getDoneOutcomeVdScore === "function") ts = Number(getDoneOutcomeVdScore(item));
-        playTreasonCelebration(item.id, ts);
+        playTreasonCelebration(item.id, ts, userFxOpts);
       }
     }
 
     /** 用户打卡路径：刚 unshift 的条目通常在 state.done[0] */
     function queueDoneCelebrateForLatestDoneEntry() {
+      if (isVictoryCelebrationHardSyncBlocked()) return;
       const head = Array.isArray(state.done) && state.done.length ? state.done[0] : null;
       if (head && head.id != null) maybeQueueDoneCelebrateAfterLocalUnshift(head, null);
     }
@@ -175863,7 +175981,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return score === 1 || score === 2;
     }
 
-    /** 同一次打卡 id 只播一次中央烟花（防 render 再触发） */
+    /** 同一次打卡 id 只播一次中央烟花（防 render 再触发 / 重复同步） */
     const doneVictoryFxPlayedIds = new Set();
 
     /**
@@ -175880,6 +175998,20 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         doneVictoryFxPlayedIds.add(sid);
       }
       return true;
+    }
+
+    /**
+     * 将打卡 id 记为「已庆祝过」但不播放（云端历史行 / 同步补镜像幂等）。
+     * 同一事件之后即使误入庆祝入口也只处理一次。
+     */
+    function rememberDoneFxAlreadyCelebrated(idOpt) {
+      const sid = String(idOpt || "");
+      if (!sid) return;
+      doneVictoryFxPlayedIds.add(sid);
+      if (doneVictoryFxPlayedIds.size > 400) {
+        doneVictoryFxPlayedIds.clear();
+        doneVictoryFxPlayedIds.add(sid);
+      }
     }
 
     /**
@@ -175961,13 +176093,36 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      * #382 的 setTimeout(0) 仍可能在首帧绘制前挂载；默认再等双 rAF。
      * 仅调度；不改打卡写入 / saveState / 同步。
      */
-    function playVictoryCelebration(idOpt) {
+    function playVictoryCelebration(idOpt, opts) {
+      const fxOpts = opts && typeof opts === "object" ? opts : null;
+      if (isVictoryCelebrationBlockedByDataSync(fxOpts)) {
+        fxDiagPush("sync_barrier_skip", {
+          id: String(idOpt || ""),
+          mode: "power",
+          boot: !!victoryFxBootBarrierActive,
+          hard: isVictoryCelebrationHardSyncBlocked()
+        });
+        if (isVictoryCelebrationHardSyncBlocked()) {
+          try {
+            rememberDoneFxAlreadyCelebrated(idOpt);
+          } catch (_remV) {}
+        }
+        return;
+      }
       if (!claimDoneFxPlayOnce(idOpt)) {
         fxDiagPush("claim_skip", { id: String(idOpt || ""), mode: "power" });
         return;
       }
       fxDiagPush("call", { id: String(idOpt || ""), mode: "power" });
       scheduleVictoryFxMount(function () {
+        /* 延迟挂载窗口：首拉/merge 若已开始，取消历史入队，避免加载后才炸烟花 */
+        if (isVictoryCelebrationBlockedByDataSync(fxOpts)) {
+          fxDiagPush("sync_barrier_skip_delayed", {
+            id: String(idOpt || ""),
+            mode: "power"
+          });
+          return;
+        }
         preloadDoneFxWebps();
         playDoneVictoryFx({ mode: "power" });
       });
@@ -175979,23 +176134,54 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      */
     function scheduleAmbVictoryCelebration(item) {
       if (!item || item.id == null) return;
+      const fxOpts = { userInitiated: true };
+      if (isVictoryCelebrationHardSyncBlocked()) {
+        try {
+          rememberDoneFxAlreadyCelebrated(item.id);
+        } catch (_remA) {}
+        return;
+      }
       setTimeout(function () {
         try {
-          playVictoryCelebration(item.id);
+          playVictoryCelebration(item.id, fxOpts);
         } catch (_ambFx) {}
       }, 0);
     }
 
     /** 背叛 -1/-2/-10 中央警告；无 -5；与胜利共用一次打卡去重 + 同样延后挂载 */
-    function playTreasonCelebration(idOpt, score) {
+    function playTreasonCelebration(idOpt, score, opts) {
       const n = Number(score);
       if (n !== -1 && n !== -2 && n !== -10) return;
+      const fxOpts = opts && typeof opts === "object" ? opts : null;
+      if (isVictoryCelebrationBlockedByDataSync(fxOpts)) {
+        fxDiagPush("sync_barrier_skip", {
+          id: String(idOpt || ""),
+          mode: "treason",
+          score: n,
+          boot: !!victoryFxBootBarrierActive,
+          hard: isVictoryCelebrationHardSyncBlocked()
+        });
+        if (isVictoryCelebrationHardSyncBlocked()) {
+          try {
+            rememberDoneFxAlreadyCelebrated(idOpt);
+          } catch (_remT) {}
+        }
+        return;
+      }
       if (!claimDoneFxPlayOnce(idOpt)) {
         fxDiagPush("claim_skip", { id: String(idOpt || ""), mode: "treason", score: n });
         return;
       }
       fxDiagPush("call", { id: String(idOpt || ""), mode: "treason", score: n });
       scheduleVictoryFxMount(function () {
+        if (isVictoryCelebrationBlockedByDataSync(fxOpts)) {
+          fxDiagPush("sync_barrier_skip_delayed", {
+            id: String(idOpt || ""),
+            mode: "treason",
+            score: n
+          });
+          return;
+        }
         preloadDoneFxWebps();
         playDoneVictoryFx({ mode: "treason", score: n });
       });
@@ -177037,8 +177223,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
          * 不改计分默认值（此处不写入 outcomeScore）。背叛需分值才知警告素材，仍等选分。
          */
         if (kind === "power") {
-          queueDoneCelebrateFx(sid);
-          playVictoryCelebration(sid);
+          queueDoneCelebrateFx(sid, { userInitiated: true });
+          playVictoryCelebration(sid, { userInitiated: true });
         }
       } else {
         doneOutcomeScorePickOpenIds.add(sid);
@@ -177046,14 +177232,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (kind === "power") {
           const ps = Number(item.outcomeScore);
           if (ps === 1 || ps === 2) {
-            queueDoneCelebrateFx(sid);
-            playVictoryCelebration(sid);
+            queueDoneCelebrateFx(sid, { userInitiated: true });
+            playVictoryCelebration(sid, { userInitiated: true });
           }
         } else if (kind === "treason") {
           const ts = Number(item.outcomeScore);
           if (ts === -1 || ts === -2 || ts === -10) {
-            queueDoneCelebrateFx(sid);
-            playTreasonCelebration(sid, ts);
+            queueDoneCelebrateFx(sid, { userInitiated: true });
+            playTreasonCelebration(sid, ts, { userInitiated: true });
           }
         }
       }
@@ -177078,11 +177264,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       doneOutcomeScorePickOpenIds.delete(sid);
       queueDoneOutcomeScoreFx(sid, n);
       if (kind === "power" && (n === 1 || n === 2)) {
-        queueDoneCelebrateFx(sid);
-        playVictoryCelebration(sid);
+        queueDoneCelebrateFx(sid, { userInitiated: true });
+        playVictoryCelebration(sid, { userInitiated: true });
       } else if (kind === "treason" && (n === -1 || n === -2 || n === -10)) {
-        queueDoneCelebrateFx(sid);
-        playTreasonCelebration(sid, n);
+        queueDoneCelebrateFx(sid, { userInitiated: true });
+        playTreasonCelebration(sid, n, { userInitiated: true });
       }
       const patchedOk = patchDoneOutcomeUiImmediate(item);
       scheduleDoneOutcomeClickFollowUp(item, "outcome-score", patchedOk);
@@ -208570,6 +208756,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           persistStateToLocalStorage();
         } catch (_bootRepairErr) {}
       }
+      /*
+       * 庆祝 boot 屏障不在此处放开：等阿里云首拉结算（markAliyunSyncPrimaryInitialPullSettled）。
+       * 主路径关闭 / 超时 / boot-error 也会走该入口；避免 hydrate 后延迟同步再炸历史烟花。
+       */
       /* Forge 日/周最低整理改到启动落盘，避免首屏 render 路径裸 saveState */
       try {
         if (typeof persistForgeMinsAndRelatedHygieneIfNeeded === "function") {
@@ -208815,6 +209005,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           name: bootErr && bootErr.name,
           message: bootErr && bootErr.message
         });
+        try {
+          if (typeof releaseVictoryFxBootBarrier === "function") releaseVictoryFxBootBarrier();
+        } catch (_bootFxReleaseErr) {}
         try {
           if (window.__EARLY_BOOT_DIAG) {
             window.__EARLY_BOOT_DIAG.setBusinessFlag(
@@ -209572,7 +209765,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             if (n !== expectTimes || !(atMs > 0)) continue;
             stampMs = atMs;
           }
-          syncHabitToDone(habitKey, dateStr, n, stampMs);
+          /* skipNotify：同步补镜像，禁止烟花 / 禁止再推云 */
+          syncHabitToDone(habitKey, dateStr, n, stampMs, { skipNotify: true });
           changed = true;
         }
       });
@@ -209583,8 +209777,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      * 阿里云 Habit pull 之后：按 habitCheckins 补齐/校正 My Done 镜像。
      * 不改 revisedAt；不触碰阿里云 Done（habitMeta 行本来就不走 manualDone 上传）。
      * 解决：内容发布等槽云端已合并但 Done 缺行；Audible 等次数一致但 completedAt 错位。
+     * 全程胜利 FX 同步屏障：历史补行不得触发烟花。
      */
     function repairHabitDoneMirrorsAfterAliyunHabitPull(dateKeys) {
+      if (typeof runWithVictoryFxDataSyncBarrier === "function") {
+        return runWithVictoryFxDataSyncBarrier(function () {
+          return repairHabitDoneMirrorsAfterAliyunHabitPullInner(dateKeys);
+        });
+      }
+      return repairHabitDoneMirrorsAfterAliyunHabitPullInner(dateKeys);
+    }
+
+    function repairHabitDoneMirrorsAfterAliyunHabitPullInner(dateKeys) {
       const dates = Array.isArray(dateKeys) && dateKeys.length
         ? dateKeys.slice()
         : state.habitCheckins && typeof state.habitCheckins === "object"
@@ -209725,21 +209929,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function restoreDoneListFromHabitCheckinsIfMissing(opts) {
-      let changed = false;
-      const today = formatDateInputValue(new Date());
-      const dateSet = new Set([today]);
-      if (selectedDoneDate) {
-        dateSet.add(selectedDoneDate);
-      }
-      if (opts && opts.allDates && state.habitCheckins && typeof state.habitCheckins === "object") {
-        Object.keys(state.habitCheckins).forEach(function (d) {
-          dateSet.add(d);
+      function restoreInner() {
+        let changed = false;
+        const today = formatDateInputValue(new Date());
+        const dateSet = new Set([today]);
+        if (selectedDoneDate) {
+          dateSet.add(selectedDoneDate);
+        }
+        if (opts && opts.allDates && state.habitCheckins && typeof state.habitCheckins === "object") {
+          Object.keys(state.habitCheckins).forEach(function (d) {
+            dateSet.add(d);
+          });
+        }
+        dateSet.forEach(function (d) {
+          if (rebuildMissingHabitDoneRowsForDate(d)) changed = true;
         });
+        return changed;
       }
-      dateSet.forEach(function (d) {
-        if (rebuildMissingHabitDoneRowsForDate(d)) changed = true;
-      });
-      return changed;
+      if (typeof runWithVictoryFxDataSyncBarrier === "function") {
+        return runWithVictoryFxDataSyncBarrier(restoreInner);
+      }
+      return restoreInner();
     }
 
     /** 完成清单按「当前筛选日」过滤；打卡写入 Done 后若正在看别的日期，则切到该条目的日历日，否则列表里像「没同步」 */
