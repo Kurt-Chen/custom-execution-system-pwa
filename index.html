@@ -40193,9 +40193,15 @@
     ul.app-done-time-timeline .done-time-block-body.done-time-block-body--flex-axis .done-time-content::before {
       content: "";
       position: absolute;
-      /* 时间列 44px + 轴线列水平中心 − 竖线宽度一半，使线穿过圆心 */
+      /*
+       * 默认（border-box 时间列）：时间列宽含其 padding-right，故不再加 gap。
+       * 桌面/平板（content-box）：padLeft + timeW + gapTimeAxis + axis/2 − line/2。
+       * 手机触控竖屏另用 --done-flex-* 整式覆盖。
+       */
       left: calc(
-        44px + var(--done-axis-col-w-row, 16px) / 2 - var(--done-axis-line-w, 2px) / 2
+        var(--done-desk-row-pad-left, 0px) + var(--done-desk-time-w, 44px) +
+          var(--done-desk-gap-time-axis, 0px) + var(--done-axis-col-w-row, 16px) / 2 -
+          var(--done-axis-line-w, 2px) / 2
       );
       top: 0;
       bottom: 0;
@@ -40393,6 +40399,72 @@
       align-items: stretch;
       gap: 4px;
       overflow: visible;
+    }
+
+    /*
+     * 电脑 / 平板（≥768）：收紧时间数字左右留白，回收宽度给任务卡。
+     * 时间列 content-box：--done-desk-time-w 仅为数字区（44→30，约 −32%）；
+     * 左缘 4px + 数字 30 + 时→轴 8 + 轴 12 + 轴→卡 8 = 62（原 68，约 −9% 总左栈）。
+     * 字号/颜色/右对齐/圆点尺寸不变。手机端由 ≤767 MQ 覆盖，不受本块影响。
+     */
+    @media (min-width: 768px) {
+      ul.app-done-time-timeline.done-time-block-list {
+        --done-time-col-max: 2.25rem;
+        --done-axis-col-w: 14px;
+        --done-axis-col-w-row: 12px;
+        --done-desk-row-pad-left: 4px;
+        --done-desk-time-w: 1.875rem; /* 30px 数字区（10px 等宽 HH:MM） */
+        --done-desk-gap-time-axis: 8px;
+        --done-desk-gap-axis-task: 8px;
+      }
+
+      ul.app-done-time-timeline .done-time-block-item--flex-row .done-time-block-row {
+        padding-left: var(--done-desk-row-pad-left, 4px);
+        box-sizing: border-box;
+      }
+
+      ul.app-done-time-timeline .done-time-block-item--flex-row .done-time-block-row__time {
+        box-sizing: content-box;
+        width: var(--done-desk-time-w, 1.875rem);
+        min-width: var(--done-desk-time-w, 1.875rem);
+        max-width: var(--done-desk-time-w, 1.875rem);
+        flex: 0 0 auto;
+        padding-right: var(--done-desk-gap-time-axis, 8px);
+      }
+
+      ul.app-done-time-timeline .done-time-block-item--flex-row .done-time-block-row__axis {
+        flex: 0 0 var(--done-axis-col-w-row, 12px);
+        width: var(--done-axis-col-w-row, 12px);
+        min-width: var(--done-axis-col-w-row, 12px);
+        max-width: var(--done-axis-col-w-row, 12px);
+      }
+
+      ul.app-done-time-timeline .done-time-block-item--flex-row .done-time-block-row__task {
+        padding-left: var(--done-desk-gap-axis-task, 8px);
+        padding-right: 12px;
+      }
+
+      ul.app-done-time-timeline .done-time-block-body:has(.done-time-block-time-col) {
+        grid-template-columns: minmax(0, var(--done-time-col-max, 2.25rem))
+          minmax(12px, var(--done-axis-col-w, 14px)) minmax(0, 1fr);
+      }
+
+      ul.app-done-time-timeline .done-time-block-body:not(:has(.done-time-block-time-col)) {
+        grid-template-columns: minmax(12px, var(--done-axis-col-w, 14px)) minmax(0, 1fr);
+      }
+
+      /* Sprint 时间列与行数字区同宽并对齐；栏样式/高度不变 */
+      ul.app-done-time-timeline .done-time-sprint-finish {
+        padding-left: var(--done-desk-row-pad-left, 4px);
+        box-sizing: border-box;
+      }
+      ul.app-done-time-timeline .done-time-sprint-finish__time {
+        box-sizing: content-box;
+        flex: 0 0 auto;
+        width: var(--done-desk-time-w, 1.875rem);
+        min-width: var(--done-desk-time-w, 1.875rem);
+        padding-right: var(--done-desk-gap-time-axis, 8px);
+      }
     }
 
     /* My Done：间隙日志 — 卡片三行（色点标签 | 内容），任务名仅在 Act 行展示 */
@@ -87479,11 +87551,13 @@
 
       ul.app-done-time-timeline .done-time-block-item--flex-row .done-time-block-row {
         gap: var(--done-flex-gap, 8px);
+        padding-left: 0; /* 压过 ≥768 桌面 row-pad，避免横屏手机叠留白 */
         align-items: center;
         min-height: 12px;
       }
 
       ul.app-done-time-timeline .done-time-block-item--flex-row .done-time-block-row__time {
+        box-sizing: border-box;
         width: var(--done-flex-time-w, 2.05rem);
         min-width: var(--done-flex-time-w, 2.05rem);
         max-width: var(--done-flex-time-w, 2.05rem);
@@ -87522,10 +87596,15 @@
       }
 
       /* Sprint 时间列与行时间列同宽，避免收窄后标签错位；栏样式本身不变 */
+      ul.app-done-time-timeline .done-time-sprint-finish {
+        padding-left: 0;
+      }
       ul.app-done-time-timeline .done-time-sprint-finish__time {
+        box-sizing: border-box;
         flex: 0 0 var(--done-flex-time-w, 2.05rem);
         width: var(--done-flex-time-w, 2.05rem);
         min-width: var(--done-flex-time-w, 2.05rem);
+        padding-right: 0;
       }
 
       /*
@@ -110746,7 +110825,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261031as";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261031at";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
