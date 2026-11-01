@@ -15628,7 +15628,7 @@
       text-overflow: ellipsis;
     }
 
-    /* 数字主体包裹层：承载弧形手写感强调下划线（非 text-decoration） */
+    /* 数字主体包裹层：真实 SVG 单条二次贝塞尔浅弧（非 text-decoration / 非多段拼接） */
     .today-sikao-anniv-goals-overlay__metric {
       position: relative;
       flex: 0 0 auto;
@@ -15636,31 +15636,38 @@
       flex-wrap: nowrap;
       align-items: baseline;
       gap: 1px;
-      padding: 0 1px 4px;
+      /* 文字底到下划线约 3～5px，不触碰字形 */
+      padding: 0 1px 6px;
       line-height: 1;
       max-width: 100%;
     }
 
-    .today-sikao-anniv-goals-overlay__metric::after {
-      content: "";
+    .today-sikao-anniv-goals-overlay__underline {
       position: absolute;
-      left: 3%;
-      right: 3%;
+      /* 线长约为数字主体宽度的 85%～90%；left 由 layout 按居中写入 */
+      left: 6%;
       bottom: 0;
-      height: 5px;
+      width: 88%;
+      height: 8px;
+      display: block;
+      overflow: visible;
       pointer-events: none;
-      background-repeat: no-repeat;
-      background-position: center bottom;
-      background-size: 100% 100%;
-      opacity: 0.92;
+      opacity: 0.95;
     }
 
-    .today-sikao-anniv-goals-overlay__row--income .today-sikao-anniv-goals-overlay__metric::after {
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 8' preserveAspectRatio='none'%3E%3Cpath d='M2.5 5.2 C 28 1.6, 52 6.8, 78 3.4 S 110 2.2, 117.5 4.8' fill='none' stroke='%232563eb' stroke-width='1.7' stroke-linecap='round'/%3E%3C/svg%3E");
+    .today-sikao-anniv-goals-overlay__underline path {
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
     }
 
-    .today-sikao-anniv-goals-overlay__row--bodyfat .today-sikao-anniv-goals-overlay__metric::after {
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 8' preserveAspectRatio='none'%3E%3Cpath d='M2.5 5.2 C 28 1.6, 52 6.8, 78 3.4 S 110 2.2, 117.5 4.8' fill='none' stroke='%23ea580c' stroke-width='1.7' stroke-linecap='round'/%3E%3C/svg%3E");
+    .today-sikao-anniv-goals-overlay__row--income .today-sikao-anniv-goals-overlay__underline {
+      color: #2563eb;
+    }
+
+    .today-sikao-anniv-goals-overlay__row--bodyfat .today-sikao-anniv-goals-overlay__underline {
+      color: #ea580c;
     }
 
     .today-sikao-anniv-goals-overlay__value {
@@ -15844,7 +15851,7 @@
     }
 
     .today-sikao-anniv-goals-overlay.is-prune-font .today-sikao-anniv-goals-overlay__metric {
-      padding-bottom: 3px;
+      padding-bottom: 5px;
     }
 
     .today-sikao-anniv-goals-overlay.is-prune-font .today-sikao-anniv-goals-overlay__remain-num {
@@ -111341,7 +111348,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261101d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261101e";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -197080,7 +197087,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         body.appendChild(label);
       }
       if (parts.value) {
-        /* value(+suffix) 包进 metric，便于弧形强调下划线贴数字主体宽度 */
+        /* value(+suffix) 包进 metric；下划线为单条二次贝塞尔 SVG，蓝/橙仅改 stroke 色 */
         const metric = document.createElement("span");
         metric.className = "today-sikao-anniv-goals-overlay__metric";
         const value = document.createElement("span");
@@ -197093,6 +197100,30 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           suffix.textContent = parts.suffix;
           metric.appendChild(suffix);
         }
+        const underline = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "svg"
+        );
+        underline.setAttribute(
+          "class",
+          "today-sikao-anniv-goals-overlay__underline"
+        );
+        /* viewBox 在 layout 时与渲染宽度严格 1:1，保证单条 Q 不被挤出折感 */
+        underline.setAttribute("viewBox", "0 0 40 8");
+        underline.setAttribute("width", "100%");
+        underline.setAttribute("height", "8");
+        underline.setAttribute("aria-hidden", "true");
+        underline.setAttribute("focusable", "false");
+        const path = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "path"
+        );
+        /* 单条二次贝塞尔：中央略上拱；具体坐标由 layout 按宽度写入 */
+        path.setAttribute("d", "M1 5.5 Q20 2.8 39 5.5");
+        path.setAttribute("stroke-width", "2");
+        path.setAttribute("stroke-linecap", "round");
+        underline.appendChild(path);
+        metric.appendChild(underline);
         body.appendChild(metric);
       } else if (parts.suffix) {
         const suffix = document.createElement("span");
@@ -197231,6 +197262,41 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return overlay;
     }
 
+    /**
+     * 按实测宽度重写数字下划线：viewBox 1:1 + 单条 Q 曲线，
+     * 避免 preserveAspectRatio=none 非等比拉伸造成折弯/拼接感。
+     */
+    function layoutTodaySikaoAnnivGoalsOverlayUnderlines(overlay) {
+      if (!overlay) return;
+      const svgs = overlay.querySelectorAll(
+        ".today-sikao-anniv-goals-overlay__underline"
+      );
+      for (let i = 0; i < svgs.length; i++) {
+        const svg = svgs[i];
+        const path = svg.querySelector("path");
+        if (!path) continue;
+        const parent = svg.parentElement;
+        const parentW = parent ? parent.getBoundingClientRect().width : 0;
+        /* 与 CSS width:88% 对齐，并写回明确像素宽，避免 viewBox/渲染宽不一致 */
+        const w = Math.max(12, Math.round(parentW * 0.88 * 100) / 100);
+        const h = 8;
+        svg.style.left = Math.max(0, (parentW - w) / 2) + "px";
+        svg.style.width = w + "px";
+        svg.setAttribute("width", String(w));
+        svg.setAttribute("height", String(h));
+        svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+        /* 浅弧：端点同高、控制点略上移（反向微笑），单条 Q，无折点 */
+        const y = 5.5;
+        const ctrlY = 2.8;
+        path.setAttribute(
+          "d",
+          "M1 " + y + " Q" + w / 2 + " " + ctrlY + " " + (w - 1) + " " + y
+        );
+        path.setAttribute("stroke-width", "2");
+        path.setAttribute("stroke-linecap", "round");
+      }
+    }
+
     function positionTodaySikaoAnnivGoalsOverlay(section, overlay) {
       if (!section || !overlay) return;
       const head = section.querySelector(":scope > .today-plan-panel__section-head");
@@ -197265,6 +197331,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       overlay.classList.toggle("is-prune-icon", w > 0 && w < 290);
       overlay.classList.toggle("is-prune-pad", w > 0 && w < 270);
       overlay.classList.toggle("is-prune-font", w > 0 && w < 245);
+      layoutTodaySikaoAnnivGoalsOverlayUnderlines(overlay);
     }
 
     function syncTodaySikaoAnnivGoalsOverlayLabelAria(visible) {
