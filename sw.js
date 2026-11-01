@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261101f";
+const CACHE_NAME = "exec-system-pwa-v20261101h";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -17,8 +17,6 @@ const APP_SHELL = [
   "./assets/obsession-reminder-card.png",
   "./assets/maniacal-urgency-card.png",
   "./assets/today-plan-win-banner.png",
-  /* 十二周年目标浮窗：目标名称隶书子集（本地，非 CDN） */
-  "./fonts/lishu/exec-lishu-subset.woff2",
   /* 庆祝/警告 WebP：预缓存避免首打卡空白（彩带 confetti 已停用，不预缓存） */
   "./icons/fx/fx-power-fireworks.webp",
   "./icons/fx/fx-power-hearts.webp",

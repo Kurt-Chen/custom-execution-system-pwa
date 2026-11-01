@@ -19,16 +19,6 @@
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,500;1,600&family=Ma+Shan+Zheng&family=Permanent+Marker&display=swap" rel="stylesheet" />
   <!-- 手机无系统楷体时兜底：霞鹜文楷（失败时不得抢在系统中文字体之前） -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/style.css" />
-  <!-- 十二周年目标浮窗目标名：本地隶书子集（缺字回退系统隶书/楷体，见 fonts/lishu/README.md） -->
-  <style>
-    @font-face {
-      font-family: "ExecLishuSubset";
-      src: url("./fonts/lishu/exec-lishu-subset.woff2") format("woff2");
-      font-weight: 400 700;
-      font-style: normal;
-      font-display: swap;
-    }
-  </style>
   <title>Brute Force</title>
   <style>
     :root {
@@ -41,8 +31,6 @@
       --font-kaiti: KaiTi, "楷体", "STKaiti", "华文楷体", "Kaiti SC", "BiauKai", "LXGW WenKai", var(--font-sans-zh);
       --font-xingkai: "Ma Shan Zheng", "STXingkai", "华文行楷", "Xingkai SC", "行楷", KaiTi, "楷体", var(--font-sans-zh);
       --font-fangsong: FangSong, "仿宋", STFangsong, "华文仿宋", "Fang Song", "Noto Serif SC", var(--font-sans-zh);
-      /* 十二周年目标浮窗 · 仅目标名称：本地隶书子集 → 系统隶书 → 楷体 → 无衬线（防乱码） */
-      --font-lishu: "ExecLishuSubset", "LiSu", "隶书", SimLi, "STLiti", "华文隶书", "Baoli SC", var(--font-kaiti), var(--font-sans-zh);
       --card: #ffffff;
       --text: #1f2937;
       --muted: #6b7280;
@@ -15458,35 +15446,27 @@
       pointer-events: auto;
       -webkit-user-select: none;
       user-select: none;
+      /* 禁止整层 opacity 动画：半透明期间底层任务必然穿透 */
+      opacity: 1;
     }
 
     .today-sikao-anniv-goals-overlay[hidden] {
       display: none !important;
     }
 
-    /* 淡入 150～200ms；系统减少动态效果时关闭 */
-    .today-sikao-anniv-goals-overlay:not([hidden]) {
-      animation: today-sikao-anniv-goals-overlay-in 180ms ease-out;
-    }
-
-    @keyframes today-sikao-anniv-goals-overlay-in {
-      from {
-        opacity: 0;
-      }
-      to {
-        opacity: 1;
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .today-sikao-anniv-goals-overlay:not([hidden]) {
-        animation: none;
-      }
-    }
-
     .today-plan-panel__section--closed.has-sikao-anniv-goals-overlay {
       overflow: visible;
       z-index: 5;
+    }
+
+    /*
+     * 浮窗盖住列表时，隐藏同级任务 DOM（不改数据）。
+     * 根因兜底：即使背景层合成异常，任务字/圆圈也不会再与目标重叠。
+     */
+    .today-plan-panel__section--closed.has-sikao-anniv-goals-overlay > .today-plan-panel__list,
+    .today-plan-panel__section--closed.has-sikao-anniv-goals-overlay > .today-plan-panel__empty,
+    .today-plan-panel__section--closed.has-sikao-anniv-goals-overlay > .today-plan-panel__win {
+      visibility: hidden;
     }
 
     #todayPlanPanelClosedMount:has(.has-sikao-anniv-goals-overlay) {
@@ -15508,45 +15488,54 @@
       box-sizing: border-box;
       padding: 8px 8px 8px 9px;
       border-radius: 18px;
-      border: 1.5px solid transparent;
-      background:
-        radial-gradient(120% 80% at 8% 0%, rgba(186, 230, 253, 0.55) 0%, transparent 52%),
-        radial-gradient(90% 70% at 92% 100%, rgba(251, 207, 232, 0.42) 0%, transparent 55%),
-        linear-gradient(
-            145deg,
-            rgba(248, 252, 255, 0.96) 0%,
-            rgba(243, 240, 255, 0.94) 48%,
-            rgba(252, 244, 255, 0.96) 100%
-          )
-          padding-box,
-        linear-gradient(135deg, #5ce1ff 0%, #7c6bff 42%, #ff4fd8 78%, #ff2d9b 100%) border-box;
-      background-clip: padding-box, padding-box, padding-box, border-box;
-      -webkit-background-clip: padding-box, padding-box, padding-box, border-box;
-      box-shadow:
-        0 10px 22px rgba(15, 23, 42, 0.12),
-        0 0 0 1px rgba(255, 255, 255, 0.35) inset,
-        0 0 14px rgba(56, 189, 248, 0.22),
-        0 0 18px rgba(236, 72, 153, 0.16);
+      border: 0;
+      background: transparent;
       overflow: hidden;
       isolation: isolate;
     }
 
-    .today-sikao-anniv-goals-overlay__panel::before {
+    /*
+     * 独立不透明背景层（根因修复）：
+     * - background-color 实色兜底，禁止低透明度 rgba 底
+     * - 渐变收束到同色实色，不用 transparent 打穿
+     * - 渐变描边仅 border-box，不吃掉 padding 遮挡面
+     */
+    .today-sikao-anniv-goals-overlay__bg {
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      border-radius: 18px;
+      pointer-events: none;
+      box-sizing: border-box;
+      border: 1.5px solid transparent;
+      background-color: #f3f0ff;
+      background-image:
+        radial-gradient(120% 80% at 8% 0%, #dbeafe 0%, #f3f0ff 55%),
+        radial-gradient(90% 70% at 92% 100%, #fce7f3 0%, #f3f0ff 58%),
+        linear-gradient(145deg, #f7fbff 0%, #f3f0ff 48%, #fcf4ff 100%),
+        linear-gradient(135deg, #5ce1ff 0%, #7c6bff 42%, #ff4fd8 78%, #ff2d9b 100%);
+      background-origin: padding-box, padding-box, padding-box, border-box;
+      background-clip: padding-box, padding-box, padding-box, border-box;
+      -webkit-background-clip: padding-box, padding-box, padding-box, border-box;
+      box-shadow:
+        0 10px 22px rgba(15, 23, 42, 0.14),
+        0 0 0 1px rgba(255, 255, 255, 0.55) inset,
+        0 0 14px rgba(56, 189, 248, 0.22),
+        0 0 18px rgba(236, 72, 153, 0.16);
+    }
+
+    .today-sikao-anniv-goals-overlay__bg::before {
       content: "";
       position: absolute;
-      left: -12%;
-      right: -8%;
-      bottom: -42%;
-      height: 68%;
+      left: -10%;
+      right: -6%;
+      bottom: -40%;
+      height: 66%;
       border-radius: 50%;
-      background: radial-gradient(
-        closest-side,
-        rgba(255, 255, 255, 0.7) 0%,
-        rgba(255, 255, 255, 0) 74%
-      );
+      /* 高光叠在不透明底之上，终点用实色而非 transparent */
+      background: radial-gradient(closest-side, #ffffff 0%, #f3f0ff 78%);
       pointer-events: none;
-      opacity: 0.75;
-      z-index: 0;
+      opacity: 0.55;
     }
 
     .today-sikao-anniv-goals-overlay__goals {
@@ -15571,11 +15560,13 @@
       min-height: 32px;
       padding: 4px 7px 4px 5px;
       border-radius: 999px;
-      border: 1px solid rgba(226, 232, 240, 0.95);
-      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      background-image: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      opacity: 1;
       box-shadow:
         0 3px 8px rgba(15, 23, 42, 0.06),
-        0 1px 0 rgba(255, 255, 255, 0.9) inset;
+        0 1px 0 #ffffff inset;
       box-sizing: border-box;
     }
 
@@ -15647,27 +15638,17 @@
       overflow: hidden;
     }
 
+    /* 目标名称：现代无衬线粗体（取消隶书）；字号保持当前档 */
     .today-sikao-anniv-goals-overlay__label {
       flex: 0 1 auto;
       min-width: 0;
-      font-size: 14px;
-      font-weight: 700;
-      color: #1e293b;
-      letter-spacing: -0.015em;
-      line-height: 1.15;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    /* 仅目标名称用隶书；数字/倒计时/待设置提示保持现代字体 */
-    .today-sikao-anniv-goals-overlay__label:not(.today-sikao-anniv-goals-overlay__label--pending) {
-      font-family: var(--font-lishu);
+      font-family: var(--font-sans-zh), system-ui, sans-serif;
       font-size: 15px;
-      font-weight: 500;
+      font-weight: 700;
       color: #0b1f3a;
-      letter-spacing: 0.045em;
+      letter-spacing: -0.015em;
       line-height: 1.2;
+      white-space: nowrap;
       overflow: visible;
       text-overflow: clip;
     }
@@ -15782,12 +15763,14 @@
       gap: 2px;
       padding: 8px 4px 7px;
       border-radius: 999px;
-      border: 1.5px solid rgba(255, 255, 255, 0.55);
-      background: linear-gradient(180deg, #ff4d9a 0%, #e11d74 48%, #be185d 100%);
+      border: 1.5px solid #ffffff;
+      background-color: #e11d74;
+      background-image: linear-gradient(180deg, #ff4d9a 0%, #e11d74 48%, #be185d 100%);
+      opacity: 1;
       box-shadow:
         0 6px 14px rgba(190, 24, 93, 0.34),
         0 0 12px rgba(244, 63, 94, 0.28),
-        inset 0 1px 0 rgba(255, 255, 255, 0.42),
+        inset 0 1px 0 #ffffff,
         inset 0 -2px 6px rgba(136, 19, 55, 0.22);
       color: #fff;
       box-sizing: border-box;
@@ -15886,11 +15869,6 @@
     }
 
     /* 极窄时才略缩字号；优先靠 prune-pad / 去图标保住关键数字与下划线 */
-    .today-sikao-anniv-goals-overlay.is-prune-font .today-sikao-anniv-goals-overlay__label:not(.today-sikao-anniv-goals-overlay__label--pending) {
-      font-size: 13px;
-      letter-spacing: 0.02em;
-    }
-
     .today-sikao-anniv-goals-overlay.is-prune-font .today-sikao-anniv-goals-overlay__label {
       font-size: 13px;
     }
@@ -15952,11 +15930,6 @@
 
       .today-sikao-anniv-goals-overlay__body {
         gap: 2px 3px;
-      }
-
-      .today-sikao-anniv-goals-overlay__label:not(.today-sikao-anniv-goals-overlay__label--pending) {
-        font-size: 13px;
-        letter-spacing: 0.02em;
       }
 
       .today-sikao-anniv-goals-overlay__label {
@@ -111410,7 +111383,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261101f";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261101h";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -197372,6 +197345,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       overlay.hidden = true;
       const panel = document.createElement("div");
       panel.className = "today-sikao-anniv-goals-overlay__panel";
+      /* 独立不透明背景层：与内容层分离，避免整层 opacity/半透明渐变打穿 */
+      const bg = document.createElement("div");
+      bg.className = "today-sikao-anniv-goals-overlay__bg";
+      bg.setAttribute("aria-hidden", "true");
       const goalsCol = document.createElement("div");
       goalsCol.className = "today-sikao-anniv-goals-overlay__goals";
       const src = getTodaySikaoAnnivGoalsOverlaySource();
@@ -197394,6 +197371,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         typeof getWeeklyPlanSprintAnniversaryRemainDays === "function"
           ? getWeeklyPlanSprintAnniversaryRemainDays()
           : null;
+      panel.appendChild(bg);
       panel.appendChild(goalsCol);
       panel.appendChild(buildTodaySikaoAnnivGoalsOverlayRemain(dayDiff));
       overlay.appendChild(panel);
