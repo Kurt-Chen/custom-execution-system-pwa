@@ -45444,7 +45444,11 @@
       outline-offset: 2px;
     }
 
-    /* fixed：默认离屏，打开后由 syncDoneRowMenuPanelPosition 写入 top/left，避免任意祖先 overflow 裁切 */
+    /*
+     * 完成清单「⋯」菜单面板：样式不依赖 ul.app-done-time-timeline 祖先，
+     * 以便 Portal 到 document.body 后仍生效（否则会被时间轴 overflow/transform 裁切）。
+     */
+    .done-row-menu-panel,
     ul.app-done-time-timeline .done-row-menu-panel {
       position: fixed;
       left: -9999px;
@@ -45460,8 +45464,15 @@
       box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12);
       z-index: 10050;
       box-sizing: border-box;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+    }
+    .done-row-menu-panel.is-done-row-menu-ported {
+      /* 高于主内容 / 底栏 / 时段边框；低于登录门禁(9999)与胜利 FX(10050+) 时可并存 */
+      z-index: 10050;
     }
 
+    .done-row-menu-panel .done-row-menu-item,
     ul.app-done-time-timeline .done-row-menu-item {
       display: block;
       width: 100%;
@@ -45477,14 +45488,17 @@
       color: #334155;
     }
 
+    .done-row-menu-panel .done-row-menu-item:hover,
     ul.app-done-time-timeline .done-row-menu-item:hover {
       background: #f8fafc;
     }
 
+    .done-row-menu-panel .done-row-menu-item--danger,
     ul.app-done-time-timeline .done-row-menu-item--danger {
       color: #b91c1c;
     }
 
+    .done-row-menu-panel .done-row-menu-item--danger:hover,
     ul.app-done-time-timeline .done-row-menu-item--danger:hover {
       background: #fef2f2;
     }
@@ -84772,12 +84786,14 @@
         }
       }
 
-      /* 平板：完成清单「⋯」恢复/删除——在整页 zoom 外再加大一档，贴近列表正文字阶 */
+      /* 平板：完成清单「⋯」恢复/删除——在整页 zoom 外再加大一档，贴近列表正文字阶（含 Portal 到 body） */
+      .done-row-menu-panel,
       ul.app-done-time-timeline .done-row-menu-panel {
         min-width: 156px;
         padding: 10px 0;
       }
 
+      .done-row-menu-panel .done-row-menu-item,
       ul.app-done-time-timeline .done-row-menu-item {
         font-size: 22px;
         line-height: 1.35;
@@ -86764,12 +86780,14 @@
         font-size: 11px;
       }
 
-      /* 完成清单「⋯」下拉：窄屏加大字号与行高，触控区 ≥48px */
+      /* 完成清单「⋯」下拉：窄屏加大字号与行高，触控区 ≥48px（含 Portal 到 body） */
+      .done-row-menu-panel,
       ul.app-done-time-timeline .done-row-menu-panel {
         min-width: 132px;
         padding: 6px 0;
       }
 
+      .done-row-menu-panel .done-row-menu-item,
       ul.app-done-time-timeline .done-row-menu-item {
         font-size: 16px;
         line-height: 1.3;
@@ -110487,7 +110505,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261031ai";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261031aj";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -178232,16 +178250,46 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       panel.style.left = "-9999px";
       panel.style.top = "-9999px";
       panel.style.right = "auto";
+      panel.style.bottom = "auto";
+      panel.style.margin = "0";
       panel.style.marginTop = "0";
       panel.style.zIndex = "";
       panel.style.maxWidth = "";
+      panel.style.maxHeight = "";
+      panel.style.overflowY = "";
       panel.style.visibility = "";
+      panel.style.transform = "";
     }
 
-    /** 固定定位：跳出 .module-content 等 overflow 容器，避免折叠行下拉被裁切；钳制在可视区内防小屏溢出 */
+    /** 将完成清单「⋯」面板 Portal 到 body，彻底脱离时间轴 / module-content 的 overflow 与 transform 裁切 */
+    function mountDoneRowMenuPanelPortal(panel, homeEl) {
+      if (!panel) return;
+      if (!panel._doneMenuHome && homeEl) panel._doneMenuHome = homeEl;
+      if (panel.parentElement !== document.body) {
+        document.body.appendChild(panel);
+      }
+      panel.classList.add("is-done-row-menu-ported");
+      panel.setAttribute("data-done-row-menu-ported", "1");
+    }
+
+    function restoreDoneRowMenuPanelPortal(panel) {
+      if (!panel) return;
+      const home = panel._doneMenuHome;
+      panel.classList.remove("is-done-row-menu-ported");
+      panel.removeAttribute("data-done-row-menu-ported");
+      if (home && home.isConnected && panel.parentElement !== home) {
+        home.appendChild(panel);
+      }
+    }
+
+    /**
+     * 视口坐标定位（面板已在 body）：右缘对齐触发钮；下方不足则上翻；
+     * 左右钳制；可用高度不足时设 max-height 并内部滚动。
+     */
     function syncDoneRowMenuPanelPosition(panel, trigger) {
       if (!panel || !trigger) return;
       const r = trigger.getBoundingClientRect();
+      if (!r || (r.width === 0 && r.height === 0)) return;
       const pad = 4;
       const vv = window.visualViewport;
       const viewW = vv && Number.isFinite(vv.width) ? vv.width : window.innerWidth;
@@ -178250,31 +178298,67 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const viewTop = vv && Number.isFinite(vv.offsetTop) ? vv.offsetTop : 0;
       const edge = 8;
       const maxW = Math.max(80, viewW - edge * 2);
-      panel.style.maxWidth = maxW + "px";
-      /* 先落到视口内再量宽，避免 hidden/-9999 时 width 为 0 导致右缘算偏、删除项溢出屏外 */
+      const spaceBelow = viewTop + viewH - edge - (r.bottom + pad);
+      const spaceAbove = r.top - pad - (viewTop + edge);
+      const availH = Math.max(48, Math.max(spaceBelow, spaceAbove));
+
       panel.style.position = "fixed";
+      panel.style.right = "auto";
+      panel.style.bottom = "auto";
+      panel.style.margin = "0";
+      panel.style.transform = "none";
+      panel.style.maxWidth = maxW + "px";
+      panel.style.maxHeight = "";
+      panel.style.overflowY = "visible";
+      panel.style.zIndex = "10050";
+      /* 先落到视口内再量尺寸，避免 hidden/-9999 时 width 为 0 */
       panel.style.left = viewLeft + edge + "px";
       panel.style.top = viewTop + edge + "px";
-      panel.style.right = "auto";
       panel.style.visibility = "hidden";
-      const measured = Math.max(panel.offsetWidth || 0, panel.getBoundingClientRect().width || 0, 96);
-      const w = Math.min(measured, maxW);
-      const h = Math.max(panel.offsetHeight || 0, panel.getBoundingClientRect().height || 0, 64);
+
+      const measuredW = Math.max(
+        panel.offsetWidth || 0,
+        panel.getBoundingClientRect().width || 0,
+        96
+      );
+      const w = Math.min(measuredW, maxW);
+      let naturalH = Math.max(
+        panel.offsetHeight || 0,
+        panel.getBoundingClientRect().height || 0,
+        48
+      );
+      const needScroll = naturalH > availH;
+      if (needScroll) {
+        panel.style.maxHeight = Math.floor(availH) + "px";
+        panel.style.overflowY = "auto";
+        naturalH = Math.min(naturalH, availH);
+      }
+      const h = naturalH;
+
       let left = r.right - w;
       if (left < viewLeft + edge) left = viewLeft + edge;
       if (left + w > viewLeft + viewW - edge) {
         left = Math.max(viewLeft + edge, viewLeft + viewW - w - edge);
       }
+
       let top = r.bottom + pad;
-      if (top + h > viewTop + viewH - edge && r.top - h - pad > viewTop + edge) {
+      if (spaceBelow < h && spaceAbove >= h) {
         top = r.top - h - pad;
-      } else if (top + h > viewTop + viewH - edge) {
+      } else if (spaceBelow < h && spaceAbove < h) {
+        top =
+          spaceAbove > spaceBelow
+            ? Math.max(viewTop + edge, r.top - h - pad)
+            : Math.min(r.bottom + pad, viewTop + viewH - edge - h);
+      }
+      if (top < viewTop + edge) top = viewTop + edge;
+      if (top + h > viewTop + viewH - edge) {
         top = Math.max(viewTop + edge, viewTop + viewH - h - edge);
       }
+
+      left = Math.round(left);
+      top = Math.round(top);
       panel.style.left = left + "px";
       panel.style.top = top + "px";
-      panel.style.marginTop = "0";
-      panel.style.zIndex = "10050";
       panel.style.visibility = "";
     }
 
@@ -178420,7 +178504,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function doneRowMenuPointerInsideActions(ev) {
       const el = doneRowMenuEventTargetElement(ev);
-      return !!(el && el.closest && el.closest(".done-row-actions-menu"));
+      if (!el || !el.closest) return false;
+      /* Portal 后面板在 body 上，不能只认 .done-row-actions-menu */
+      return !!(
+        el.closest(".done-row-actions-menu") ||
+        el.closest(".done-row-menu-panel") ||
+        el.closest(".done-row-menu-btn")
+      );
     }
 
     function bindDoneRowMenuOutsideDismiss(panel) {
@@ -178428,35 +178518,111 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (doneRowMenuPointerInsideActions(ev)) return;
         closeAllDoneRowMenus();
       }
+      function dismissOnEsc(ev) {
+        if (ev && (ev.key === "Escape" || ev.key === "Esc")) {
+          closeAllDoneRowMenus();
+        }
+      }
       document.addEventListener("pointerdown", dismissFromOutside, true);
+      document.addEventListener("keydown", dismissOnEsc, true);
       return function unbindDoneRowMenuOutside() {
         document.removeEventListener("pointerdown", dismissFromOutside, true);
+        document.removeEventListener("keydown", dismissOnEsc, true);
       };
     }
 
+    function unbindDoneRowMenuLiveListeners(panel) {
+      if (!panel) return;
+      if (panel._doneMenuDocDismiss) {
+        panel._doneMenuDocDismiss();
+        panel._doneMenuDocDismiss = null;
+      }
+      if (panel._doneMenuResizeHandler) {
+        window.removeEventListener("resize", panel._doneMenuResizeHandler);
+        if (window.visualViewport) {
+          window.visualViewport.removeEventListener("resize", panel._doneMenuResizeHandler);
+          window.visualViewport.removeEventListener("scroll", panel._doneMenuResizeHandler);
+        }
+        panel._doneMenuResizeHandler = null;
+      }
+      if (panel._doneMenuScrollRepos && panel._doneMenuScrollEls) {
+        panel._doneMenuScrollEls.forEach(function (el) {
+          try {
+            el.removeEventListener("scroll", panel._doneMenuScrollRepos);
+          } catch (_e) {}
+        });
+        panel._doneMenuScrollRepos = null;
+        panel._doneMenuScrollEls = null;
+      }
+      /* 兼容旧字段 */
+      if (panel._doneMenuScrollClose && panel._doneMenuScrollEl) {
+        panel._doneMenuScrollEl.removeEventListener("scroll", panel._doneMenuScrollClose);
+        panel._doneMenuScrollClose = null;
+        panel._doneMenuScrollEl = null;
+      }
+    }
+
     function closeAllDoneRowMenus() {
-      document.querySelectorAll("ul.app-done-time-timeline .done-row-menu-panel").forEach(function (panel) {
-        if (panel._doneMenuDocDismiss) {
-          panel._doneMenuDocDismiss();
-          panel._doneMenuDocDismiss = null;
-        }
-        if (panel._doneMenuResizeHandler) {
-          window.removeEventListener("resize", panel._doneMenuResizeHandler);
-          panel._doneMenuResizeHandler = null;
-        }
-        if (panel._doneMenuScrollClose && panel._doneMenuScrollEl) {
-          panel._doneMenuScrollEl.removeEventListener("scroll", panel._doneMenuScrollClose);
-          panel._doneMenuScrollClose = null;
-          panel._doneMenuScrollEl = null;
-        }
-        clearDoneRowMenuPanelPosition(panel);
-        panel.hidden = true;
-        const wrap = panel.closest(".done-row-actions-menu");
+      document.querySelectorAll(".done-row-menu-panel").forEach(function (panel) {
+        unbindDoneRowMenuLiveListeners(panel);
+        const home = panel._doneMenuHome;
+        const wrap =
+          (home && home.classList && home.classList.contains("done-row-actions-menu") && home) ||
+          panel.closest(".done-row-actions-menu") ||
+          (home && home.closest && home.closest(".done-row-actions-menu"));
         const trigger = wrap && wrap.querySelector(".done-row-menu-btn");
         if (trigger) trigger.setAttribute("aria-expanded", "false");
-        const rowLi = panel.closest("li.timeline-item");
+        const rowLi =
+          (wrap && wrap.closest && wrap.closest("li.timeline-item")) ||
+          (trigger && trigger.closest && trigger.closest("li.timeline-item")) ||
+          panel.closest("li.timeline-item");
         if (rowLi) rowLi.classList.remove("done-row-menu-open");
+        clearDoneRowMenuPanelPosition(panel);
+        panel.hidden = true;
+        restoreDoneRowMenuPanelPortal(panel);
       });
+    }
+
+    /** 打开完成清单「⋯」菜单：Portal 到 body + 视口定位；滚动/缩放时重定位而非直接关闭 */
+    function openDoneRowMenuPanel(panel, trigger, menuWrap, rowLi) {
+      if (!panel || !trigger) return;
+      closeAllDoneRowMenus();
+      mountDoneRowMenuPanelPortal(panel, menuWrap || trigger.closest(".done-row-actions-menu"));
+      panel.hidden = false;
+      trigger.setAttribute("aria-expanded", "true");
+      if (rowLi) rowLi.classList.add("done-row-menu-open");
+      syncDoneRowMenuPanelPosition(panel, trigger);
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          syncDoneRowMenuPanelPosition(panel, trigger);
+        });
+      });
+      function onReposition() {
+        if (panel.hidden) return;
+        syncDoneRowMenuPanelPosition(panel, trigger);
+      }
+      panel._doneMenuResizeHandler = onReposition;
+      window.addEventListener("resize", onReposition);
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener("resize", onReposition);
+        window.visualViewport.addEventListener("scroll", onReposition);
+      }
+      const scrollEls = [];
+      const mcScroll =
+        document.querySelector("#dynamicModule.module-focus-active > .module-content") ||
+        document.querySelector("#dynamicModule > .module-content") ||
+        document.querySelector("#forgeModule.module-focus-active > .module-content") ||
+        document.querySelector("#forgeModule > .module-content");
+      if (mcScroll) scrollEls.push(mcScroll);
+      const listScroll = trigger.closest("ul.app-done-time-timeline");
+      if (listScroll && listScroll !== mcScroll) scrollEls.push(listScroll);
+      scrollEls.push(window);
+      panel._doneMenuScrollRepos = onReposition;
+      panel._doneMenuScrollEls = scrollEls;
+      scrollEls.forEach(function (el) {
+        el.addEventListener("scroll", onReposition, { passive: true });
+      });
+      panel._doneMenuDocDismiss = bindDoneRowMenuOutsideDismiss(panel);
     }
 
     function updateDoneJournalField(taskId, field, value) {
@@ -178769,33 +178935,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             closeAllDoneRowMenus();
             return;
           }
-          closeAllDoneRowMenus();
-          panel.hidden = false;
-          trigger.setAttribute("aria-expanded", "true");
-          if (rowLiForMenu) rowLiForMenu.classList.add("done-row-menu-open");
-          syncDoneRowMenuPanelPosition(panel, trigger);
-          requestAnimationFrame(function () {
-            requestAnimationFrame(function () {
-              syncDoneRowMenuPanelPosition(panel, trigger);
-            });
-          });
-          function onResize() {
-            syncDoneRowMenuPanelPosition(panel, trigger);
-          }
-          panel._doneMenuResizeHandler = onResize;
-          window.addEventListener("resize", onResize);
-          function onScrollClose() {
-            closeAllDoneRowMenus();
-          }
-          panel._doneMenuScrollClose = onScrollClose;
-          const mcScroll =
-            document.querySelector("#dynamicModule.module-focus-active > .module-content") ||
-            document.querySelector("#dynamicModule > .module-content");
-          if (mcScroll) {
-            panel._doneMenuScrollEl = mcScroll;
-            mcScroll.addEventListener("scroll", onScrollClose, { passive: true, once: true });
-          }
-          panel._doneMenuDocDismiss = bindDoneRowMenuOutsideDismiss(panel);
+          openDoneRowMenuPanel(panel, trigger, menuWrap, rowLiForMenu);
         });
         menuWrap.appendChild(trigger);
         menuWrap.appendChild(panel);
