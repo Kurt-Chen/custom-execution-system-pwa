@@ -15659,6 +15659,26 @@
       white-space: nowrap;
     }
 
+    /* 本期目标尚未设置：单行提示，不沿用上一周期文案 */
+    .today-sikao-anniv-goals-overlay__row--pending {
+      justify-content: center;
+      min-height: 36px;
+    }
+
+    .today-sikao-anniv-goals-overlay__label--pending {
+      flex: 1 1 auto;
+      text-align: center;
+      color: #64748b;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      overflow: visible;
+      text-overflow: clip;
+    }
+
+    .today-sikao-anniv-goals-overlay__goals.is-pending {
+      justify-content: center;
+    }
+
     /* 右侧竖向玫红倒计时胶囊：仅剩 / 数字 / 天 为独立文字节点 */
     .today-sikao-anniv-goals-overlay__remain {
       position: relative;
@@ -111264,7 +111284,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261101b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261101c";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -112012,6 +112032,7 @@
       tickTimerId: null,
       midnightTimerId: null,
       beijingDayKey: "",
+      contentFingerprint: "",
       sectionEl: null,
       overlayEl: null,
       labelEl: null
@@ -196804,7 +196825,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return true;
     }
 
-    /** 从现有十二周年目标文案拆出 label / 高亮数值 / 后缀（不另存一份目标） */
+    /**
+     * 从当前周期目标文案拆出 label / 高亮数值 / 后缀。
+     * 不硬编码任何周期文案；解析失败则整句作 label。
+     */
     function parseTodaySikaoAnnivGoalOverlayParts(goalText, index) {
       const raw = String(goalText || "").trim();
       const full =
@@ -196815,7 +196839,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (money) {
         return {
           kind: "income",
-          label: String(money[1] || "").trim() || "第二收入来源净赚",
+          showIcon: true,
+          label: String(money[1] || "").trim(),
           value: String(money[2] || "").replace(/\s+/g, ""),
           suffix: ""
         };
@@ -196824,30 +196849,93 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (pct) {
         return {
           kind: "bodyfat",
-          label: String(pct[1] || "").trim() || "体脂率降到",
+          showIcon: true,
+          label: String(pct[1] || "").trim(),
           value: String(pct[2] || "").replace(/\s+/g, ""),
           suffix: pct[3] || ""
         };
       }
+      /* 无金额/百分比：保留全文；配色轮换以保持双行层次，不臆造旧周期文案 */
       return {
-        kind: index === 0 ? "income" : "bodyfat",
+        kind: index % 2 === 0 ? "income" : "bodyfat",
+        showIcon: false,
         label: full,
         value: "",
         suffix: ""
       };
     }
 
-    function getTodaySikaoAnnivGoalsOverlayGoalParts() {
-      const goals =
-        typeof getCurrentAnniversaryGoalsForTodayMarquee === "function"
-          ? getCurrentAnniversaryGoalsForTodayMarquee()
-          : [];
-      const list = Array.isArray(goals) ? goals : [];
-      const out = [];
-      for (let i = 0; i < Math.min(2, list.length); i++) {
-        out.push(parseTodaySikaoAnnivGoalOverlayParts(list[i], i));
+    /**
+     * 浮窗目标数据源：始终跟「当前生效周期」模块，不缓存上一周期。
+     * pending=true 表示本期尚无目标文案（勿回显旧周期）。
+     */
+    function getTodaySikaoAnnivGoalsOverlaySource() {
+      const moduleKey =
+        typeof getCurrentAnniversaryModuleForDate === "function"
+          ? getCurrentAnniversaryModuleForDate(new Date())
+          : null;
+      if (!moduleKey) {
+        return {
+          moduleKey: null,
+          goals: [],
+          pending: true,
+          fingerprint: "none|pending"
+        };
       }
-      return out;
+      const mod =
+        typeof getAnniversaryTwStateModule === "function"
+          ? getAnniversaryTwStateModule(moduleKey)
+          : null;
+      if (!mod) {
+        return {
+          moduleKey: moduleKey,
+          goals: [],
+          pending: true,
+          fingerprint: moduleKey + "|pending"
+        };
+      }
+      const pair =
+        typeof normalizeAnniversaryTwelveWeekGoalsOnModule === "function"
+          ? normalizeAnniversaryTwelveWeekGoalsOnModule(mod, moduleKey)
+          : [];
+      const goals = (Array.isArray(pair) ? pair : [])
+        .map(function (s) {
+          return String(s || "").trim();
+        })
+        .filter(Boolean);
+      /* 紧凑布局：最多展示 3 条，优先完整显示关键数字 */
+      const capped = goals.slice(0, 3);
+      const pending = capped.length === 0;
+      return {
+        moduleKey: moduleKey,
+        goals: capped,
+        pending: pending,
+        fingerprint: moduleKey + "|" + (pending ? "pending" : capped.join("\u0001"))
+      };
+    }
+
+    function getTodaySikaoAnnivGoalsOverlayGoalParts() {
+      const src = getTodaySikaoAnnivGoalsOverlaySource();
+      if (src.pending) return [];
+      return src.goals.map(function (g, i) {
+        return parseTodaySikaoAnnivGoalOverlayParts(g, i);
+      });
+    }
+
+    function getTodaySikaoAnnivGoalsOverlayContentFingerprint() {
+      const src = getTodaySikaoAnnivGoalsOverlaySource();
+      const dayDiff =
+        typeof getWeeklyPlanSprintAnniversaryRemainDays === "function"
+          ? getWeeklyPlanSprintAnniversaryRemainDays()
+          : null;
+      const dayKey = getTodaySikaoAnnivGoalsBeijingDayKey(new Date());
+      return (
+        src.fingerprint +
+        "|d:" +
+        (dayDiff == null ? "na" : String(dayDiff)) +
+        "|k:" +
+        dayKey
+      );
     }
 
     /**
@@ -196911,22 +196999,29 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       idx.className = "today-sikao-anniv-goals-overlay__idx";
       idx.setAttribute("aria-hidden", "true");
       idx.textContent = idxLabel;
-      const ruleBeforeIcon = document.createElement("span");
-      ruleBeforeIcon.className = "today-sikao-anniv-goals-overlay__rule";
-      ruleBeforeIcon.setAttribute("aria-hidden", "true");
-      const icon = document.createElement("span");
-      icon.className = "today-sikao-anniv-goals-overlay__icon";
-      icon.setAttribute("aria-hidden", "true");
-      icon.innerHTML =
-        kind === "income"
-          ? TODAY_SIKAO_ANNIV_GOALS_ICON_INCOME
-          : TODAY_SIKAO_ANNIV_GOALS_ICON_BODYFAT;
+      row.appendChild(idx);
+      if (parts.showIcon) {
+        const ruleBeforeIcon = document.createElement("span");
+        ruleBeforeIcon.className = "today-sikao-anniv-goals-overlay__rule";
+        ruleBeforeIcon.setAttribute("aria-hidden", "true");
+        const icon = document.createElement("span");
+        icon.className = "today-sikao-anniv-goals-overlay__icon";
+        icon.setAttribute("aria-hidden", "true");
+        icon.innerHTML =
+          kind === "income"
+            ? TODAY_SIKAO_ANNIV_GOALS_ICON_INCOME
+            : TODAY_SIKAO_ANNIV_GOALS_ICON_BODYFAT;
+        row.appendChild(ruleBeforeIcon);
+        row.appendChild(icon);
+      }
       const body = document.createElement("span");
       body.className = "today-sikao-anniv-goals-overlay__body";
-      const label = document.createElement("span");
-      label.className = "today-sikao-anniv-goals-overlay__label";
-      label.textContent = parts.label || "";
-      body.appendChild(label);
+      if (parts.label) {
+        const label = document.createElement("span");
+        label.className = "today-sikao-anniv-goals-overlay__label";
+        label.textContent = parts.label;
+        body.appendChild(label);
+      }
       if (parts.value) {
         const value = document.createElement("span");
         value.className = "today-sikao-anniv-goals-overlay__value";
@@ -196939,9 +197034,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         suffix.textContent = parts.suffix;
         body.appendChild(suffix);
       }
-      row.appendChild(idx);
-      row.appendChild(ruleBeforeIcon);
-      row.appendChild(icon);
+      row.appendChild(body);
+      return row;
+    }
+
+    function buildTodaySikaoAnnivGoalsOverlayPendingRow() {
+      const row = document.createElement("div");
+      row.className =
+        "today-sikao-anniv-goals-overlay__row today-sikao-anniv-goals-overlay__row--pending";
+      const body = document.createElement("span");
+      body.className = "today-sikao-anniv-goals-overlay__body";
+      const label = document.createElement("span");
+      label.className =
+        "today-sikao-anniv-goals-overlay__label today-sikao-anniv-goals-overlay__label--pending";
+      label.textContent = "本期目标待设置";
+      body.appendChild(label);
       row.appendChild(body);
       return row;
     }
@@ -196972,29 +197079,49 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return pill;
     }
 
-    /** 仅更新右侧倒计时文字（截止日变更 / 日切 / 唤醒校准），不重建整卡 */
-    function syncTodaySikaoAnnivGoalsOverlayRemainText() {
-      const ov = todaySikaoAnnivGoalsOverlayState.overlayEl;
-      if (!ov || !ov.isConnected) return false;
-      const dayDiff =
-        typeof getWeeklyPlanSprintAnniversaryRemainDays === "function"
-          ? getWeeklyPlanSprintAnniversaryRemainDays()
-          : null;
-      const parts = formatTodaySikaoAnnivGoalsRemainParts(dayDiff);
-      const prefix = ov.querySelector(".today-sikao-anniv-goals-overlay__remain-prefix");
-      const num = ov.querySelector(".today-sikao-anniv-goals-overlay__remain-num");
-      const suffix = ov.querySelector(".today-sikao-anniv-goals-overlay__remain-suffix");
-      if (!prefix || !num || !suffix) return false;
-      prefix.textContent = parts.prefix;
-      num.textContent = parts.num;
-      suffix.textContent = parts.suffix;
-      const dayKey = getTodaySikaoAnnivGoalsBeijingDayKey(new Date());
-      ov.dataset.remainDayKey = dayKey;
-      todaySikaoAnnivGoalsOverlayState.beijingDayKey = dayKey;
+    /**
+     * 周期/目标/剩余天变更时同步浮窗内容。
+     * fingerprint 未变则跳过重建，避免无关重绘；force=true 强制重建。
+     */
+    function syncTodaySikaoAnnivGoalsOverlayContent(forceOpt) {
+      const st = todaySikaoAnnivGoalsOverlayState;
+      const section = st.sectionEl;
+      let overlay = st.overlayEl;
+      if (!section || !section.isConnected) return false;
+      if (!overlay || !overlay.isConnected) {
+        overlay = section.querySelector("#" + TODAY_SIKAO_ANNIV_GOALS_OVERLAY_ID);
+        st.overlayEl = overlay;
+      }
+      if (!overlay) return false;
+      const fp = getTodaySikaoAnnivGoalsOverlayContentFingerprint();
+      if (!forceOpt && st.contentFingerprint && st.contentFingerprint === fp) {
+        return false;
+      }
+      const wasHidden = !!overlay.hidden;
+      const fresh = buildTodaySikaoAnnivGoalsOverlayEl();
+      fresh.hidden = wasHidden;
+      if (overlay.parentNode) {
+        overlay.replaceWith(fresh);
+      } else {
+        section.appendChild(fresh);
+      }
+      st.overlayEl = fresh;
+      st.contentFingerprint = fp;
+      st.beijingDayKey = getTodaySikaoAnnivGoalsBeijingDayKey(new Date());
+      if (!wasHidden) {
+        section.classList.add("has-sikao-anniv-goals-overlay");
+        positionTodaySikaoAnnivGoalsOverlay(section, fresh);
+      }
+      syncTodaySikaoAnnivGoalsOverlayLabelAria(!wasHidden);
       return true;
     }
 
-    /** 构建浮窗 DOM；目标/剩余天数读现有十二周年数据 */
+    /** 兼容旧调用名：目标/周期/截止日一并校准 */
+    function syncTodaySikaoAnnivGoalsOverlayRemainText() {
+      return syncTodaySikaoAnnivGoalsOverlayContent(false);
+    }
+
+    /** 构建浮窗 DOM；目标/剩余天数读当前生效十二周年周期（无硬编码） */
     function buildTodaySikaoAnnivGoalsOverlayEl() {
       const overlay = document.createElement("div");
       overlay.id = TODAY_SIKAO_ANNIV_GOALS_OVERLAY_ID;
@@ -197006,12 +197133,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       panel.className = "today-sikao-anniv-goals-overlay__panel";
       const goalsCol = document.createElement("div");
       goalsCol.className = "today-sikao-anniv-goals-overlay__goals";
-      const goals = getTodaySikaoAnnivGoalsOverlayGoalParts();
-      const idxLabels = ["01", "02"];
-      for (let i = 0; i < goals.length; i++) {
-        goalsCol.appendChild(
-          buildTodaySikaoAnnivGoalsOverlayRow(goals[i], idxLabels[i] || String(i + 1))
-        );
+      const src = getTodaySikaoAnnivGoalsOverlaySource();
+      if (src.pending) {
+        goalsCol.classList.add("is-pending");
+        goalsCol.appendChild(buildTodaySikaoAnnivGoalsOverlayPendingRow());
+      } else {
+        const partsList = src.goals.map(function (g, i) {
+          return parseTodaySikaoAnnivGoalOverlayParts(g, i);
+        });
+        for (let i = 0; i < partsList.length; i++) {
+          const idxLabel = String(i + 1).padStart(2, "0");
+          goalsCol.appendChild(buildTodaySikaoAnnivGoalsOverlayRow(partsList[i], idxLabel));
+        }
+      }
+      if (src.moduleKey) {
+        overlay.dataset.moduleKey = src.moduleKey;
       }
       const dayDiff =
         typeof getWeeklyPlanSprintAnniversaryRemainDays === "function"
@@ -197021,6 +197157,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       panel.appendChild(buildTodaySikaoAnnivGoalsOverlayRemain(dayDiff));
       overlay.appendChild(panel);
       overlay.dataset.remainDayKey = getTodaySikaoAnnivGoalsBeijingDayKey(new Date());
+      overlay.dataset.contentFp = getTodaySikaoAnnivGoalsOverlayContentFingerprint();
       /* 点击浮窗本身不冒泡到标题切换，避免误关 */
       overlay.addEventListener("click", function (ev) {
         ev.stopPropagation();
@@ -197105,7 +197242,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const visible = shouldShowTodaySikaoAnnivGoalsOverlay(now);
       const dayKey = getTodaySikaoAnnivGoalsBeijingDayKey(now);
       const dayChanged = !!(st.beijingDayKey && st.beijingDayKey !== dayKey);
-      const needRebuild = !!forceRebuildContent || dayChanged;
+      const fp = getTodaySikaoAnnivGoalsOverlayContentFingerprint();
+      const contentChanged = !!(st.contentFingerprint && st.contentFingerprint !== fp);
+      const needRebuild =
+        !!forceRebuildContent || dayChanged || contentChanged || !st.contentFingerprint;
       if (needRebuild) {
         const fresh = buildTodaySikaoAnnivGoalsOverlayEl();
         if (overlay.parentNode) {
@@ -197115,8 +197255,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         overlay = fresh;
         st.overlayEl = fresh;
-      } else {
-        syncTodaySikaoAnnivGoalsOverlayRemainText();
+        st.contentFingerprint = fp;
       }
       st.beijingDayKey = dayKey;
       overlay.hidden = !visible;
@@ -200868,6 +201007,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           notifyAliyunAnnivRealMetaAfterLocalChange("anniv-shell:twelveWeekGoal");
         }
       } catch (_ng) {}
+      /* 目标保存后立即刷新今天死磕浮窗（跨周期/改文案同源） */
+      if (typeof syncTodaySikaoAnnivGoalsOverlayContent === "function") {
+        syncTodaySikaoAnnivGoalsOverlayContent(true);
+      }
     }
 
     function commitAnniversaryTwelveWeekGoalFromInput(inp) {
@@ -203299,9 +203442,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (typeof ensureTodayAnnivGoalMarqueeScheduler === "function") {
         ensureTodayAnnivGoalMarqueeScheduler();
       }
-      /* 十二周年截止/模块切换后：同步今天死磕浮窗右侧倒计时 */
-      if (typeof syncTodaySikaoAnnivGoalsOverlayRemainText === "function") {
-        syncTodaySikaoAnnivGoalsOverlayRemainText();
+      /* 十二周年截止/模块/目标变更后：同步今天死磕浮窗目标与倒计时 */
+      if (typeof syncTodaySikaoAnnivGoalsOverlayContent === "function") {
+        syncTodaySikaoAnnivGoalsOverlayContent(false);
       }
     }
 
