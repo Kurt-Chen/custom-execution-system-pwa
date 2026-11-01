@@ -43892,6 +43892,49 @@
       box-sizing: border-box;
       margin: 0 0 2px;
     }
+    /*
+     * 第一行真实 DOM 容器：左状态链 + 右记分组。
+     * 记分必须是本行 Flex 子元素，禁止再作 .done-compact-row 兄弟（会被 align-items/align-self 相对整卡垂直居中）。
+     */
+    ul.app-done-time-timeline .done-compact-first-row {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: nowrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 4px;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+      margin: 0;
+    }
+    ul.app-done-time-timeline .done-compact-first-row > .done-compact-outcome-row {
+      display: inline-flex;
+      flex-direction: row;
+      flex-wrap: nowrap;
+      align-items: center;
+      flex: 1 1 auto;
+      width: auto;
+      max-width: calc(100% - 52px);
+      min-width: 0;
+      margin: 0;
+    }
+    ul.app-done-time-timeline .done-compact-first-row > .done-compact-trailing {
+      display: inline-flex;
+      flex-direction: row;
+      flex-wrap: nowrap;
+      align-items: center;
+      justify-content: flex-end;
+      flex: 0 0 auto;
+      align-self: center;
+      margin: 0 0 0 auto;
+      width: max-content;
+      max-width: none;
+      min-width: 0;
+      height: auto;
+      max-height: none;
+    }
     ul.app-done-time-timeline .done-compact-outcome-row {
       display: flex;
       flex-wrap: wrap;
@@ -43990,6 +44033,45 @@
         .done-compact-source-line {
         position: relative;
         z-index: 2;
+      }
+
+      /*
+       * 桌面/平板：展开 first-row，恢复「性质 | 来源+任务名 | 记分」单行横排，避免记分夹在性质与任务之间。
+       * 手机仍用真实 first-row Flex（见 ≤767），不走 contents。
+       */
+      ul.app-done-time-timeline
+        .done-compact-meta-stack:has(> .done-compact-first-row) {
+        flex-direction: row;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 8px;
+      }
+      ul.app-done-time-timeline .done-compact-first-row {
+        display: contents;
+      }
+      ul.app-done-time-timeline
+        .done-compact-meta-stack:has(> .done-compact-first-row)
+        .done-compact-outcome-row {
+        order: 1;
+      }
+      ul.app-done-time-timeline
+        .done-compact-meta-stack:has(> .done-compact-first-row)
+        > .done-compact-source-line {
+        order: 2;
+      }
+      ul.app-done-time-timeline
+        .done-compact-meta-stack:has(> .done-compact-first-row)
+        .done-compact-trailing {
+        order: 3;
+        margin-left: 0;
+        align-self: center;
+      }
+      /* 展开改性质：收回 contents，记分仍贴在状态行右侧 */
+      ul.app-done-time-timeline
+        .done-compact-row:has(details[open])
+        .done-compact-first-row {
+        display: flex;
+        width: 100%;
       }
     }
 
@@ -44732,112 +44814,119 @@
       }
 
       /*
-       * 手机双行（仅 max-width:767）· Flex 单一事实源：
-       * 第一行：左 Hard Choice › Power；右记分(+···) margin-left:auto；同线垂直居中、不换行；
-       * 第二行：来源胶囊（习惯/十二周年…）+ 任务名，间距 6px；无来源则任务名顶格；
-       * 行距 gap 4px；顶底 padding 3（原 6 的 50%）/ 左右 8；禁止第三行 / space-between / 多余 min-height。
-       * text-wrap / meta-stack 用 contents；source-line 保持 flex 行（勿 contents，否则 pill 会掉进第一行）。
+       * 手机双行（仅 max-width:767）· DOM 第一行事实源：
+       * .done-compact-first-row = 左 Hard Choice › Power + 右记分(+···)（同 Flex 行、align-items:center）；
+       * .done-compact-source-line = 第二行来源胶囊 + 任务名；
+       * 顶底 padding 3 / 左右 8 / meta gap 4；禁止再靠 display:contents + order 拼第一行。
        */
-      ul.app-done-time-timeline.done-time-block-list
-        .done-time-block-item--flex-row:not(.done-text-expanded)
-        .done-time-block-row__task
-        .done-compact-row[class*="done-compact-row--outcome-"]:has(.done-compact-meta-stack):not(:has(details[open])),
-      ul.app-done-time-timeline
-        .done-compact-row:has(.done-compact-meta-stack):not(:has(details[open])) {
-        display: flex !important;
-        flex-direction: row !important;
-        flex-wrap: wrap !important;
-        align-items: center !important;
-        align-content: flex-start !important;
-        justify-content: flex-start !important;
-        gap: 4px !important;
-        column-gap: 4px !important;
-        row-gap: 4px !important;
-      }
       ul.app-done-time-timeline.done-time-block-list
         .done-time-block-item--flex-row:not(.done-text-expanded)
         .done-time-block-row__task
         .done-compact-row[class*="done-compact-row--outcome-"]:has(.done-compact-meta-stack):not(:has(details[open])) {
         flex: 0 1 auto !important;
         align-self: flex-start !important;
+        align-items: stretch !important;
         height: auto !important;
         min-height: 0 !important;
         padding: 3px 8px !important;
         box-sizing: border-box;
+        gap: 0 !important;
       }
       ul.app-done-time-timeline
-        .done-compact-row:has(.done-compact-meta-stack):not(:has(details[open]))
-        > .done-compact-text-wrap,
+        .done-compact-row:has(.done-compact-first-row):not(:has(details[open]))
+        > .done-compact-text-wrap {
+        display: flex !important;
+        flex-direction: column !important;
+        flex: 1 1 auto !important;
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100%;
+        gap: 0 !important;
+      }
       ul.app-done-time-timeline
-        .done-compact-row:has(.done-compact-meta-stack):not(:has(details[open]))
+        .done-compact-row:has(.done-compact-first-row):not(:has(details[open]))
         .done-compact-meta-stack {
-        display: contents;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 4px !important;
+        width: 100% !important;
+        margin: 0 !important;
       }
-      /* 第一行左：Hard Choice › Power，紧凑不换行 */
       ul.app-done-time-timeline
-        .done-compact-row:has(.done-compact-meta-stack):not(:has(details[open]))
-        .done-compact-outcome-row {
-        display: inline-flex;
-        flex-direction: row;
-        flex-wrap: nowrap;
-        align-items: center;
-        flex: 0 0 auto;
-        width: auto;
-        max-width: none;
-        min-width: 0;
+        .done-compact-row:has(.done-compact-first-row):not(:has(details[open]))
+        .done-compact-first-row {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        gap: 4px !important;
+        width: 100% !important;
+        min-width: 0 !important;
         max-height: 18px;
-        min-height: 0;
-        margin: 0;
-        order: 1;
       }
-      /* 第一行右：记分(+···) margin-left:auto */
       ul.app-done-time-timeline
-        .done-compact-row:has(.done-compact-meta-stack):not(:has(details[open]))
+        .done-compact-row:has(.done-compact-first-row):not(:has(details[open]))
+        .done-compact-first-row
+        > .done-compact-outcome-row {
+        display: inline-flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        align-items: center !important;
+        flex: 1 1 auto !important;
+        width: auto !important;
+        max-width: calc(100% - 52px) !important;
+        min-width: 0 !important;
+        max-height: 18px;
+        margin: 0 !important;
+      }
+      ul.app-done-time-timeline
+        .done-compact-row:has(.done-compact-first-row):not(:has(details[open]))
+        .done-compact-first-row
         > .done-compact-trailing {
         display: inline-flex !important;
-        flex-direction: row;
-        flex-wrap: nowrap;
-        align-items: center;
-        justify-content: flex-end;
-        flex: 0 0 auto;
-        gap: 2px;
-        padding-top: 0;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        align-items: center !important;
+        justify-content: flex-end !important;
+        flex: 0 0 auto !important;
+        align-self: center !important;
+        gap: 2px !important;
+        padding-top: 0 !important;
         margin: 0 0 0 auto !important;
-        width: max-content;
-        max-width: none;
-        height: auto;
-        max-height: 18px;
-        min-height: 0;
-        order: 2;
+        width: max-content !important;
+        max-width: none !important;
+        height: auto !important;
+        max-height: 18px !important;
+        min-height: 0 !important;
       }
       ul.app-done-time-timeline
-        .done-compact-row:has(.done-compact-meta-stack):not(:has(details[open]))
+        .done-compact-row:has(.done-compact-first-row):not(:has(details[open]))
+        .done-compact-first-row
         > .done-compact-trailing
         > .actions {
-        margin-left: 0;
-        width: auto;
-        flex: 0 0 auto;
+        margin-left: 0 !important;
+        width: auto !important;
+        flex: 0 0 auto !important;
       }
-      /* 第二行：来源胶囊 + 任务名（或仅任务名）；整行 100% 宽，禁止再换行成第三行 */
+      /* 第二行：来源胶囊 + 任务名 */
       ul.app-done-time-timeline
-        .done-compact-row:has(.done-compact-meta-stack):not(:has(details[open]))
+        .done-compact-row:has(.done-compact-first-row):not(:has(details[open]))
         .done-compact-source-line {
         display: flex !important;
         flex-direction: row !important;
         flex-wrap: nowrap !important;
         align-items: center !important;
         gap: 6px !important;
-        flex: 1 1 100% !important;
-        flex-basis: 100% !important;
         width: 100% !important;
-        min-width: 100% !important;
-        max-width: 100%;
-        margin: 0;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        margin: 0 !important;
         box-sizing: border-box;
-        order: 3;
       }
       ul.app-done-time-timeline
-        .done-compact-row:has(.done-compact-meta-stack):not(:has(details[open]))
+        .done-compact-row:has(.done-compact-first-row):not(:has(details[open]))
         .done-compact-source-line
         > .done-entry-pill {
         flex: 0 0 auto !important;
@@ -44848,7 +44937,7 @@
         white-space: nowrap;
       }
       ul.app-done-time-timeline
-        .done-compact-row:has(.done-compact-meta-stack):not(:has(details[open]))
+        .done-compact-row:has(.done-compact-first-row):not(:has(details[open]))
         .done-compact-source-line
         > .task-text {
         flex: 1 1 0% !important;
@@ -110398,7 +110487,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261031ah";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261031ai";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -178805,6 +178894,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           const metaStack = document.createElement("div");
           metaStack.className = "done-compact-meta-stack";
 
+          /** 第一行容器：左 Hard Choice › Power，右记分(+···)；避免 trailing 与双行 text-wrap 成兄弟被垂直居中 */
+          const firstRow = document.createElement("div");
+          firstRow.className = "done-compact-first-row";
+
           const outcomeRow = document.createElement("div");
           outcomeRow.className = "done-compact-outcome-row";
           appendDoneOutcomeKindIntoContainer(outcomeRow, task);
@@ -178848,8 +178941,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           // 90 天提示仅挂在性质/分值区（block），避免与任务行旁再插一条重复
           /* 分隔符规则：仅「选择 › 结果」；分数/分类/任务名之间不加分隔符（含 Neutral） */
 
-          if (outcomeRow.firstChild) metaStack.appendChild(outcomeRow);
+          if (outcomeRow.firstChild) firstRow.appendChild(outcomeRow);
           if (outcomeRow.firstChild || taskLine.querySelector(".done-entry-pill")) {
+            if (firstRow.firstChild) metaStack.appendChild(firstRow);
             metaStack.appendChild(taskLine);
             main.appendChild(metaStack);
           } else {
@@ -178912,7 +179006,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
         if (numEl) row.appendChild(numEl);
         row.appendChild(main);
-        /* 右侧仅保留：评分徽章 + ···；删除纯展示用 celebrate 勾选/警告图标 */
+        /* 评分 + ···：优先挂进第一行（与 Hard Choice › Power 同 Flex 行），勿再作 row 兄弟以免整卡垂直居中 */
         const trailing = document.createElement("div");
         trailing.className = "done-compact-trailing";
         if (task.kind !== "timeReflection") {
@@ -178922,7 +179016,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           trailing.appendChild(actions);
         }
         if (trailing.childNodes.length) {
-          row.appendChild(trailing);
+          const firstRowEl = main.querySelector(".done-compact-first-row");
+          if (firstRowEl) {
+            firstRowEl.appendChild(trailing);
+          } else {
+            row.appendChild(trailing);
+          }
         }
 
         row.classList.add("done-row-toggle");
