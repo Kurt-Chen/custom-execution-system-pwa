@@ -15469,22 +15469,16 @@
     }
 
     /*
-     * 浮窗打开：只盖住第1–2条（visibility 隐藏但仍占位）；第3条保持可见并留在文档流。
-     * 今天死磕最多 3 条，不考虑第4条及以后。
-     * --sikao-anniv-overlay-slot-h：仅 0/1 条或 empty/win 时保底容纳浮窗，不人为垫出第三行空白。
+     * 浮窗打开：第1–2条 visibility 隐藏但仍占位（文档流高度=浮窗高度来源）；
+     * 第3条保持原样紧跟其后，列表 gap 仍为 0，禁止再加 margin/padding。
+     * 浮窗 top/height 由 JS 按前两条实测写入，避免「占位 + 额外空隙」叠算。
+     * --sikao-anniv-overlay-slot-h：仅 0/1 条或 empty/win 保底。
      */
     .today-plan-panel__section--closed.has-sikao-anniv-goals-overlay
       > .today-plan-panel__list
       > .today-plan-panel__item.is-sikao-anniv-covered {
       visibility: hidden;
       pointer-events: none;
-    }
-
-    .today-plan-panel__section--closed.has-sikao-anniv-goals-overlay
-      > .today-plan-panel__list
-      > .today-plan-panel__item.is-sikao-anniv-after-cover {
-      /* 浮窗与第3条之间的呼吸间距 */
-      margin-top: 6px;
     }
 
     .today-plan-panel__section--closed.has-sikao-anniv-goals-overlay > .today-plan-panel__empty,
@@ -111455,7 +111449,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261102d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261102e";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -197528,8 +197522,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * 浮窗开：第1–2条加 is-sikao-anniv-covered；第3条加 is-sikao-anniv-after-cover。
-     * 浮窗关：清掉全部标记。今天死磕最多 3 条。
+     * 浮窗开：仅第1–2条加 is-sikao-anniv-covered（占位）；第3条不加额外类/间距。
+     * 浮窗关：清掉标记。今天死磕最多 3 条。
      */
     function syncTodaySikaoAnnivGoalsOverlayCoveredItems(section, overlayOpen) {
       if (!section) return;
@@ -197543,64 +197537,95 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       for (let i = 0; i < n; i++) {
         const el = items[i];
         el.classList.toggle("is-sikao-anniv-covered", !!overlayOpen && i < 2);
-        el.classList.toggle("is-sikao-anniv-after-cover", !!overlayOpen && i === 2);
+        el.classList.remove("is-sikao-anniv-after-cover");
       }
-      /* 0/1 条或无列表：short-slot 保底；2/3 条靠真实行高，不垫第三行空白 */
+      /* 0/1 条或无列表：short-slot 保底；2/3 条靠前两条真实占位，不垫空白 */
       const short = !!overlayOpen && n < 2;
       if (list) list.classList.toggle("is-sikao-anniv-short-slot", short && n > 0);
       if (empty) empty.classList.toggle("is-sikao-anniv-short-slot", !!overlayOpen);
       if (win) win.classList.toggle("is-sikao-anniv-short-slot", short);
     }
 
+    /** 相对绿色 section：前 1–2 条任务卡合并占位（含其间 gap，当前为 0） */
+    function measureTodaySikaoAnnivCoverSpan(section, items) {
+      if (!section || !items || !items.length) return null;
+      const secRect = section.getBoundingClientRect();
+      const aRect = items[0].getBoundingClientRect();
+      const top = Math.round(aRect.top - secRect.top);
+      if (items.length >= 2) {
+        const bRect = items[1].getBoundingClientRect();
+        return {
+          top: top,
+          height: Math.max(1, Math.round(bRect.bottom - aRect.top))
+        };
+      }
+      return {
+        top: top,
+        height: Math.max(1, Math.round(aRect.height))
+      };
+    }
+
     function positionTodaySikaoAnnivGoalsOverlay(section, overlay) {
       if (!section || !overlay) return;
       const head = section.querySelector(":scope > .today-plan-panel__section-head");
+      const list = section.querySelector(":scope > .today-plan-panel__list");
+      const empty = section.querySelector(":scope > .today-plan-panel__empty");
+      const win = section.querySelector(":scope > .today-plan-panel__win");
+      const items = list
+        ? list.querySelectorAll(":scope > .today-plan-panel__item")
+        : [];
+      const itemCount = items.length;
       const inset = 6;
-      const minH = 68; /* 2 × closed item min-height 34px：紧凑浮窗高度 */
+      const minH = 68; /* 无任务时的两行保底；有 ≥2 条时改用实测高度 */
+      const overlayOpen = !overlay.hidden;
+
+      /* 先同步覆盖类，再量前两条真实几何，避免量到未 hidden 的偏差 */
+      syncTodaySikaoAnnivGoalsOverlayCoveredItems(section, overlayOpen);
+
       let topPx = inset;
-      if (head) {
+      let heightPx = minH;
+      const span = overlayOpen ? measureTodaySikaoAnnivCoverSpan(section, items) : null;
+      if (span && itemCount >= 2) {
+        /* 精确替代前两条占位：高度=卡1+卡2+间距，顶边对齐第1条 */
+        topPx = span.top;
+        heightPx = span.height;
+      } else if (span && itemCount === 1) {
+        topPx = span.top;
+        heightPx = Math.max(minH, span.height);
+      } else if (head) {
         const styles = window.getComputedStyle(head);
         const mb = parseFloat(styles.marginBottom) || 0;
         topPx = Math.max(
           inset,
-          Math.round(head.offsetTop + head.offsetHeight + mb + 2)
+          Math.round(head.offsetTop + head.offsetHeight + mb)
         );
+        heightPx = minH;
       }
+
       overlay.style.top = topPx + "px";
       overlay.style.left = inset + "px";
       overlay.style.right = inset + "px";
-      /* 始终保持两行紧凑高，不随任务列表被上下拉伸 */
       overlay.style.bottom = "auto";
-      overlay.style.height = "auto";
-      overlay.style.minHeight = minH + "px";
+      /* 固定外框高度=覆盖跨度；内部 flex 填满，不改目标/倒计时视觉样式 */
+      overlay.style.height = heightPx + "px";
+      overlay.style.minHeight = heightPx + "px";
+      overlay.style.maxHeight = heightPx + "px";
 
       const w = overlay.clientWidth || Math.max(0, section.clientWidth - inset * 2);
-      /* 精简顺序：编号 → 图标 → 间距 → 字号；侧栏约 310+ 仍尽量保留图标 */
       overlay.classList.toggle("is-prune-idx", w > 0 && w < 360);
       overlay.classList.toggle("is-prune-icon", w > 0 && w < 290);
       overlay.classList.toggle("is-prune-pad", w > 0 && w < 270);
       overlay.classList.toggle("is-prune-font", w > 0 && w < 245);
       layoutTodaySikaoAnnivGoalsOverlayUnderlines(overlay);
 
-      const overlayOpen = !overlay.hidden;
-      syncTodaySikaoAnnivGoalsOverlayCoveredItems(section, overlayOpen);
-
       /*
-       * 仅 empty / win / 0–1 条列表：用 slot 保底容纳浮窗。
-       * 2–3 条：前两条占位 + 第3条文档流，绿框自然包住，不额外垫高。
+       * 仅 empty / 无列表 win / 0–1 条：slot 保底。
+       * ≥2 条：文档流已由前两条占位撑开，不再写 slot，避免与浮窗高度叠算。
        */
-      const list = section.querySelector(":scope > .today-plan-panel__list");
-      const empty = section.querySelector(":scope > .today-plan-panel__empty");
-      const win = section.querySelector(":scope > .today-plan-panel__win");
-      const itemCount = list
-        ? list.querySelectorAll(":scope > .today-plan-panel__item").length
-        : 0;
       const needSlot =
         overlayOpen && (!!empty || (!list && !!win) || itemCount < 2);
       if (needSlot) {
-        const measured = Math.max(minH, Math.round(overlay.offsetHeight || minH));
-        const slotH = measured + inset;
-        section.style.setProperty("--sikao-anniv-overlay-slot-h", slotH + "px");
+        section.style.setProperty("--sikao-anniv-overlay-slot-h", heightPx + "px");
       } else {
         section.style.removeProperty("--sikao-anniv-overlay-slot-h");
       }
