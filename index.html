@@ -15462,18 +15462,23 @@
     }
 
     .today-plan-panel__section--closed.has-sikao-anniv-goals-overlay {
-      overflow: visible;
+      position: relative;
+      /* 保持绿框裁切边界；高度由下方 slot min-height 真实撑开，禁止溢出框外 */
+      overflow: hidden;
       z-index: 5;
     }
 
     /*
      * 浮窗盖住列表时，隐藏同级任务 DOM（不改数据）。
-     * 根因兜底：即使背景层合成异常，任务字/圆圈也不会再与目标重叠。
+     * 同时把内容区 min-height 撑到浮窗槽位，让绿色外框随浮窗展开。
+     * --sikao-anniv-overlay-slot-h 由 positionTodaySikaoAnnivGoalsOverlay 写入。
      */
     .today-plan-panel__section--closed.has-sikao-anniv-goals-overlay > .today-plan-panel__list,
     .today-plan-panel__section--closed.has-sikao-anniv-goals-overlay > .today-plan-panel__empty,
     .today-plan-panel__section--closed.has-sikao-anniv-goals-overlay > .today-plan-panel__win {
       visibility: hidden;
+      box-sizing: border-box;
+      min-height: var(--sikao-anniv-overlay-slot-h, 68px);
     }
 
     #todayPlanPanelClosedMount:has(.has-sikao-anniv-goals-overlay) {
@@ -111427,7 +111432,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261102a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261102b";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -197463,6 +197468,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!section || !overlay) return;
       const head = section.querySelector(":scope > .today-plan-panel__section-head");
       const inset = 6;
+      const minH = 68; /* 2 × closed item min-height 34px：紧凑浮窗高度 */
       let topPx = inset;
       if (head) {
         const styles = window.getComputedStyle(head);
@@ -197475,18 +197481,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       overlay.style.top = topPx + "px";
       overlay.style.left = inset + "px";
       overlay.style.right = inset + "px";
-      /* 列表够高：贴底并留边；过短：min-height≈两行任务卡，避免空列表塌缩裁切 */
-      const avail = Math.max(0, section.clientHeight - topPx - inset);
-      const minH = 68; /* 2 × closed item min-height 34px */
-      if (avail >= minH) {
-        overlay.style.bottom = inset + "px";
-        overlay.style.height = "";
-        overlay.style.minHeight = "";
-      } else {
-        overlay.style.bottom = "auto";
-        overlay.style.height = "auto";
-        overlay.style.minHeight = minH + "px";
-      }
+      /* 始终保持两行紧凑高，不随任务列表被上下拉伸 */
+      overlay.style.bottom = "auto";
+      overlay.style.height = "auto";
+      overlay.style.minHeight = minH + "px";
+
       const w = overlay.clientWidth || Math.max(0, section.clientWidth - inset * 2);
       /* 精简顺序：编号 → 图标 → 间距 → 字号；侧栏约 310+ 仍尽量保留图标 */
       overlay.classList.toggle("is-prune-idx", w > 0 && w < 360);
@@ -197494,6 +197493,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       overlay.classList.toggle("is-prune-pad", w > 0 && w < 270);
       overlay.classList.toggle("is-prune-font", w > 0 && w < 245);
       layoutTodaySikaoAnnivGoalsOverlayUnderlines(overlay);
+
+      /*
+       * 父容器真实展开：内容槽 min-height = 浮窗高度 + 底边留白。
+       * absolute 浮窗本身不占流；靠 list/empty/win 的 slot 把绿色外框撑开。
+       */
+      const overlayOpen = !overlay.hidden;
+      if (overlayOpen) {
+        const measured = Math.max(minH, Math.round(overlay.offsetHeight || minH));
+        const slotH = measured + inset;
+        section.style.setProperty("--sikao-anniv-overlay-slot-h", slotH + "px");
+      } else {
+        section.style.removeProperty("--sikao-anniv-overlay-slot-h");
+      }
     }
 
     function syncTodaySikaoAnnivGoalsOverlayLabelAria(visible) {
@@ -197555,6 +197567,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       st.beijingDayKey = dayKey;
       overlay.hidden = !visible;
       section.classList.toggle("has-sikao-anniv-goals-overlay", visible);
+      if (!visible) {
+        section.style.removeProperty("--sikao-anniv-overlay-slot-h");
+      }
       positionTodaySikaoAnnivGoalsOverlay(section, overlay);
       syncTodaySikaoAnnivGoalsOverlayLabelAria(visible);
     }
