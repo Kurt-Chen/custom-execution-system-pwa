@@ -42406,6 +42406,81 @@
       padding-bottom: 0;
     }
 
+    /*
+     * 当前冲刺小时：蓝白双层高亮框（仅包任务行，不含分隔线/冲刺条）
+     * ::before 蓝外线 / ::after 白内线；绝对定位覆盖，无光晕、无动画、框内透明
+     */
+    ul.app-done-time-timeline .done-current-hour-frame {
+      position: relative;
+      list-style: none;
+      margin: 4px 0;
+      padding: 5px;
+      box-sizing: border-box;
+      background: transparent;
+      isolation: isolate;
+    }
+    ul.app-done-time-timeline .done-current-hour-frame::before,
+    ul.app-done-time-timeline .done-current-hour-frame::after {
+      content: "";
+      position: absolute;
+      pointer-events: none;
+      box-sizing: border-box;
+      background: transparent;
+      box-shadow: none;
+      filter: none;
+      backdrop-filter: none;
+      animation: none;
+      transition: none;
+      z-index: 2;
+    }
+    /* 蓝外边线：约 1.35px（相对常见 1.5px 实线再细约 10%） */
+    ul.app-done-time-timeline .done-current-hour-frame::before {
+      inset: 0;
+      border: 1.35px solid #2563eb;
+      border-radius: 10px;
+    }
+    /* 白内边线：保持清晰 1px */
+    ul.app-done-time-timeline .done-current-hour-frame::after {
+      inset: 2px;
+      border: 1px solid #ffffff;
+      border-radius: 8px;
+    }
+    ul.app-done-time-timeline .done-current-hour-frame__list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      min-width: 0;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+      position: relative;
+      z-index: 1;
+      background: transparent;
+    }
+    ul.app-done-time-timeline
+      .done-current-hour-frame__list
+      > li.done-time-block-item:has(+ li.done-time-block-item)
+      .done-time-block-row__task {
+      padding-bottom: 1px;
+    }
+    ul.app-done-time-timeline
+      .done-current-hour-frame__list
+      > li.done-time-block-item:not(:last-child)
+      .done-time-block-row__task {
+      border-bottom: 1px solid rgba(226, 232, 240, 0.4);
+    }
+    ul.app-done-time-timeline
+      .done-time-block-items
+      > li.done-current-hour-frame:has(+ li.done-time-sprint-finish)
+      .done-current-hour-frame__list
+      > li.done-time-block-item:last-child
+      .done-time-block-row__task {
+      border-bottom: none;
+    }
+
     /* 冲刺跨小时：时间 | 单箭头·翻篇 | SPRINT N FINISH | 重启·单箭头·旗；副标题 Maniacal Urgency */
     ul.app-done-time-timeline .done-time-sprint-finish {
       --sprint-finish-orange: #ff5500;
@@ -112100,7 +112175,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261104m";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261104n";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -166001,11 +166076,111 @@
       return li;
     }
 
+    /**
+     * 今日当前冲刺小时（复用 nextSprintFinishHour - 1）。
+     * 非今日 / 冲刺外 / 无下一整点 → null（不画高亮框）。
+     */
+    function getDoneCurrentSprintHour(dateKey, nowOpt) {
+      const now = nowOpt instanceof Date ? nowOpt : new Date();
+      const todayKey = formatDateInputValue(now);
+      const raw = String(dateKey || "").trim() || todayKey;
+      if (raw !== todayKey) return null;
+      const nextHour = getDoneTimeNextSprintFinishHour(raw, now);
+      if (nextHour == null) return null;
+      const hour = nextHour - 1;
+      if (hour < 5 || hour > 22) return null;
+      return hour;
+    }
+
+    function getDoneTaskCompletedHour(task) {
+      const ts = Number(task && task.completedAt) || 0;
+      if (!ts) return null;
+      const h = new Date(ts).getHours();
+      return h >= 0 && h <= 23 ? h : null;
+    }
+
+    function isDoneTaskInCurrentSprintHour(task, currentHour) {
+      if (currentHour == null) return false;
+      return getDoneTaskCompletedHour(task) === currentHour;
+    }
+
+    /** 把当前小时框内的任务行拆回父 ul（小时切换时旧框立即拆除） */
+    function unwrapDoneCurrentHourHighlightFrames(root) {
+      if (!root) return;
+      const frames = root.querySelectorAll(":scope li.done-current-hour-frame");
+      for (let i = 0; i < frames.length; i++) {
+        const frame = frames[i];
+        const parent = frame.parentNode;
+        if (!parent) continue;
+        const list = frame.querySelector(":scope > ul.done-current-hour-frame__list");
+        if (list) {
+          while (list.firstChild) {
+            parent.insertBefore(list.firstChild, frame);
+          }
+        }
+        parent.removeChild(frame);
+      }
+    }
+
+    /**
+     * 轻量同步：只重包当前小时任务行，不重算任务列表、不全量 render。
+     * 挂在既有 visibility digest / 时间轴重建路径上。
+     */
+    function syncDoneCurrentHourHighlightFrames(rootUl) {
+      const root = rootUl || document.getElementById("doneList");
+      if (!root || !root.classList.contains("done-time-block-list")) return;
+      unwrapDoneCurrentHourHighlightFrames(root);
+      const dateKey =
+        (typeof selectedDoneDate !== "undefined" && selectedDoneDate) ||
+        formatDateInputValue(new Date());
+      const currentHour = getDoneCurrentSprintHour(dateKey);
+      if (currentHour == null) return;
+      const wraps = root.querySelectorAll(":scope ul.done-time-block-items");
+      for (let wi = 0; wi < wraps.length; wi++) {
+        const itemWrap = wraps[wi];
+        if (!itemWrap || itemWrap.closest(".done-current-hour-frame")) continue;
+        let hourFrameLi = null;
+        let hourFrameList = null;
+        function closeHourFrame() {
+          hourFrameLi = null;
+          hourFrameList = null;
+        }
+        function ensureHourFrame(beforeNode) {
+          if (hourFrameLi) return hourFrameList;
+          hourFrameLi = document.createElement("li");
+          hourFrameLi.className = "done-current-hour-frame";
+          hourFrameLi.setAttribute("data-current-hour", String(currentHour));
+          hourFrameList = document.createElement("ul");
+          hourFrameList.className = "done-current-hour-frame__list";
+          hourFrameLi.appendChild(hourFrameList);
+          itemWrap.insertBefore(hourFrameLi, beforeNode || null);
+          return hourFrameList;
+        }
+        const children = Array.prototype.slice.call(itemWrap.children);
+        for (let ci = 0; ci < children.length; ci++) {
+          const node = children[ci];
+          if (!node || !node.classList) continue;
+          if (!node.classList.contains("done-time-block-item")) {
+            closeHourFrame();
+            continue;
+          }
+          const itemHour = Number(node.getAttribute("data-item-hour"));
+          if (itemHour === currentHour) {
+            const list = ensureHourFrame(node);
+            list.appendChild(node);
+          } else {
+            closeHourFrame();
+          }
+        }
+      }
+    }
+
     /** 任务行与冲刺结束线混排（新→旧）：已过的照常显示，只多插下一条 */
     function fillDoneTimeBlockItems(itemWrap, block, blockTasks, ln) {
       const tasks = Array.isArray(blockTasks) ? blockTasks : [];
       const dateKey = selectedDoneDate || formatDateInputValue(new Date());
       const nextHour = getDoneTimeNextSprintFinishHour(dateKey);
+      const currentHour = getDoneCurrentSprintHour(dateKey);
       const finishHours = getDoneTimeBlockSprintFinishHours(block && block.key, nextHour);
       const rows = [];
       tasks.forEach(function (task, idx) {
@@ -166029,8 +166204,26 @@
         return 0;
       });
       let lastTaskLabel = null;
+      let hourFrameLi = null;
+      let hourFrameList = null;
+      function closeDoneCurrentHourFrame() {
+        hourFrameLi = null;
+        hourFrameList = null;
+      }
+      function ensureDoneCurrentHourFrame() {
+        if (hourFrameLi) return hourFrameList;
+        hourFrameLi = document.createElement("li");
+        hourFrameLi.className = "done-current-hour-frame";
+        hourFrameLi.setAttribute("data-current-hour", String(currentHour));
+        hourFrameList = document.createElement("ul");
+        hourFrameList.className = "done-current-hour-frame__list";
+        hourFrameLi.appendChild(hourFrameList);
+        itemWrap.appendChild(hourFrameLi);
+        return hourFrameList;
+      }
       rows.forEach(function (row) {
         if (row.kind === "sprint") {
+          closeDoneCurrentHourFrame();
           const sprintLi = createDoneTimeSprintFinishLi(row.hour, {
             isCurrent: nextHour != null && row.hour === nextHour
           });
@@ -166054,7 +166247,16 @@
           "done-time-block-item--" + block.key,
           "done-time-block-item--flex-row"
         );
-        itemWrap.appendChild(li);
+        const itemHour = getDoneTaskCompletedHour(task);
+        if (itemHour != null) {
+          li.setAttribute("data-item-hour", String(itemHour));
+        }
+        if (isDoneTaskInCurrentSprintHour(task, currentHour)) {
+          ensureDoneCurrentHourFrame().appendChild(li);
+        } else {
+          closeDoneCurrentHourFrame();
+          itemWrap.appendChild(li);
+        }
       });
     }
 
@@ -176615,6 +176817,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             console.warn("[冲刺进度] 重建时段失败", err);
           }
         });
+        /* 小时切换：只重包当前小时高亮框，不重算任务、不全量 render */
+        try {
+          syncDoneCurrentHourHighlightFrames(ul);
+        } catch (err) {
+          console.warn("[冲刺小时高亮] 同步失败", err);
+        }
       }
       ul.querySelectorAll("li.done-time-block[data-done-block-key]").forEach(function (li) {
         const key = li.getAttribute("data-done-block-key");
@@ -186024,6 +186232,37 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /** 只插任务行；绝不移动/替换 .done-time-sprint-finish（跑马灯 host） */
     function insertDoneTaskLiIntoBlockItems(wrap, rowLi, afterSiblingOpt) {
       if (!wrap || !rowLi) return;
+      /* 增量插入：若属于当前冲刺小时且已有高亮框，直接落入框内列表 */
+      try {
+        const dateKey =
+          (typeof selectedDoneDate !== "undefined" && selectedDoneDate) ||
+          formatDateInputValue(new Date());
+        const currentHour = getDoneCurrentSprintHour(dateKey);
+        const itemHour = Number(rowLi.getAttribute("data-item-hour"));
+        if (currentHour != null && itemHour === currentHour) {
+          let frame = wrap.querySelector(":scope > li.done-current-hour-frame");
+          if (!frame) {
+            frame = document.createElement("li");
+            frame.className = "done-current-hour-frame";
+            frame.setAttribute("data-current-hour", String(currentHour));
+            const list = document.createElement("ul");
+            list.className = "done-current-hour-frame__list";
+            frame.appendChild(list);
+            const firstSprint = wrap.querySelector(":scope > li.done-time-sprint-finish");
+            if (firstSprint) wrap.insertBefore(frame, firstSprint);
+            else wrap.insertBefore(frame, wrap.firstChild);
+          }
+          const frameList = frame.querySelector(":scope > ul.done-current-hour-frame__list");
+          if (frameList) {
+            if (afterSiblingOpt && afterSiblingOpt.parentNode === frameList) {
+              frameList.insertBefore(rowLi, afterSiblingOpt.nextSibling);
+            } else {
+              frameList.insertBefore(rowLi, frameList.firstChild);
+            }
+            return;
+          }
+        }
+      } catch (_hourFrameIns) {}
       if (afterSiblingOpt && afterSiblingOpt.parentNode === wrap) {
         wrap.insertBefore(rowLi, afterSiblingOpt.nextSibling);
         return;
@@ -186100,6 +186339,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           "done-time-block-item--" + blockKey,
           "done-time-block-item--flex-row"
         );
+        const incrItemHour = getDoneTaskCompletedHour(task);
+        if (incrItemHour != null) {
+          li.setAttribute("data-item-hour", String(incrItemHour));
+        }
         try {
           const afterSameBlock =
             lastInserted && lastInsertedBlockKey === blockKey ? lastInserted : null;
