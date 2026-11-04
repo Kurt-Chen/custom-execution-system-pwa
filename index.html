@@ -111759,6 +111759,12 @@
      * 与主缓存分开：主盘已同版不代表 emergency 已同版。
      */
     let _emergencyBackupJsonCache = null;
+    /** 紧急备份已落盘 done.length；-1=未知。避免每次落盘 JSON.parse(prev) */
+    let _emergencyBackupDoneLen = -1;
+    /** 紧急备份 done id 集合（字符串）；fewer 校验时复用，避免反复 parse 整包 */
+    let _emergencyBackupDoneIdSet = null;
+    /** 最近一次「Done 变少且不允许覆盖」的签名，避免毒快照下同步窗口反复全量 parse */
+    let _emergencyBackupFewerRejectSig = "";
     let statePersistQueue = Promise.resolve();
     /** 已成功打开的 IDB 连接；失效（close / versionchange）后清空，下次再 open */
     let appStateIdbDb = null;
@@ -112138,7 +112144,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261104g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261104m";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -113306,6 +113312,13 @@
     let localPersistDirty = false;
     let localPersistTimer = null;
     const LOCAL_PERSIST_DEBOUNCE_MS = 400;
+    /* SYNC_STALL_FIX_PERSIST_DEDUPE_v1：拉取/合并窗口内合并多域 save → 一次 stringify */
+    const LOCAL_PERSIST_DEBOUNCE_SYNC_COALESCE_MS = 2200;
+    let localPersistPreferCoalesce = false;
+    let _stateMutEpoch = 0;
+    let _stateSerializeCacheJson = null;
+    let _stateSerializeCacheEpoch = -1;
+    let _statePersistedEpoch = -1;
     const UI_PAINT_SLICE_KEYS = [
       "stopDoing",
       "notToDo",
@@ -113561,6 +113574,9 @@
       hygieneSkippedCount: 0,
       persistFlushCount: 0,
       persistDeferredCount: 0,
+      persistSerializeCacheHitCount: 0,
+      persistEpochSkipCount: 0,
+      persistCoalesceRescheduleCount: 0,
       hygieneMs: 0,
       stallTraceCount: 0
     };
@@ -114248,6 +114264,11 @@
         hygienePassCount: c.hygienePassCount,
         hygieneSkippedCount: c.hygieneSkippedCount,
         hygieneMs: Math.round(c.hygieneMs * 100) / 100,
+        persistFlushCount: c.persistFlushCount || 0,
+        persistDeferredCount: c.persistDeferredCount || 0,
+        persistSerializeCacheHitCount: c.persistSerializeCacheHitCount || 0,
+        persistEpochSkipCount: c.persistEpochSkipCount || 0,
+        persistCoalesceRescheduleCount: c.persistCoalesceRescheduleCount || 0,
         stallTraceCount: c.stallTraceCount
       };
     }
@@ -114648,6 +114669,9 @@
       };
     }
 
+    window.__forceRenderForDiag = function __forceRenderForDiag() {
+      if (typeof render === "function") render(true);
+    };
     window.__syncStallDiag = {
       enable: function () {
         syncStallDiagForceOn = true;
@@ -123607,7 +123631,12 @@
         }
       } catch (_rd) {}
       try {
-        if (typeof render === "function") render();
+        /* SYNC_STALL_FIX_COALESCE_RENDER_v1 */
+        if (typeof requestCloudDrivenUiRender === "function") {
+          requestCloudDrivenUiRender("immediate");
+        } else if (typeof render === "function") {
+          render();
+        }
       } catch (_ren) {}
     }
 
@@ -124039,6 +124068,10 @@
             aliyunSyncCheckMarkBodyDomain(d.id);
           }
           const r = await d.run();
+          /* SYNC_STALL_FIX_COALESCE_RENDER_v1：域与域之间让出主线程 */
+          try {
+            if (typeof yieldToMainThread === "function") await yieldToMainThread();
+          } catch (_yieldDom) {}
           if (pullGen && !isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
             superseded = true;
             results[d.id] = { ok: false, skipped: true, reason: "superseded" };
@@ -124351,8 +124384,22 @@
       if (!isAliyunSyncPrimaryPullGenerationCurrent(gen)) return false;
       aliyunSyncPrimaryPullInFlight = false;
       aliyunSyncPrimaryPullStartedAt = 0;
+      /* SYNC_STALL_FIX_PERSIST_DEDUPE_v1：拉取结束立刻合并落盘，勿把 coalesce 窗口拖过用户操作 */
+      try {
+        if (localPersistDirty && typeof flushLocalPersistedState === "function") {
+          flushLocalPersistedState("pull-end");
+        }
+      } catch (_pullEndPersist) {}
       return true;
     }
+
+    /** 仅诊断：强制释放阿里云 pull 锁 */
+    window.__diagClearAliyunPullInFlight = function __diagClearAliyunPullInFlight() {
+      aliyunSyncPrimaryPullGen += 1;
+      aliyunSyncPrimaryPullInFlight = false;
+      aliyunSyncPrimaryPullStartedAt = 0;
+      return { gen: aliyunSyncPrimaryPullGen, inFlight: aliyunSyncPrimaryPullInFlight };
+    };
 
     /**
      * 清除僵尸 pullInFlight（休眠挂起的 GET）；未超时则不动。
@@ -124457,8 +124504,13 @@
       names.forEach(function (n) {
         logUiPartialUpdate(n === "weeklyPlan" ? "today-plan" : n);
       });
+      /* SYNC_STALL_FIX_COALESCE_RENDER_v1：云驱动刷新走 requestCloudDrivenUiRender */
       const _flowCloudRenT0 = typeof switchPerfNow === "function" ? switchPerfNow() : Date.now();
-      if (typeof render === "function") render();
+      if (typeof requestCloudDrivenUiRender === "function") {
+        requestCloudDrivenUiRender("immediate");
+      } else if (typeof render === "function") {
+        render();
+      }
       try {
         if (typeof flowDiagNoteCloudRender === "function") {
           const _ms =
@@ -127033,18 +127085,14 @@
         } else if (mergedCount || tombstoneApplied) {
           const tRen0 = Date.now();
           /* 仅脏 Done 切片的局部 render；rAF 错开网络回调，避免卡输入 */
-          logUiPartialUpdate("done");
-          if (typeof requestAnimationFrame === "function") {
-            await new Promise(function (resolve) {
-              requestAnimationFrame(function () {
-                try {
-                  render();
-                } finally {
-                  resolve();
-                }
-              });
-            });
+          /* SYNC_STALL_FIX_COALESCE_RENDER_v1 */
+          if (typeof renderCloudDomainPartial === "function") {
+            renderCloudDomainPartial(["done"]);
+          } else if (typeof requestCloudDrivenUiRender === "function") {
+            logUiPartialUpdate("done");
+            requestCloudDrivenUiRender("immediate");
           } else {
+            logUiPartialUpdate("done");
             render();
           }
           if (moveBreakMerged && typeof renderDoneMoveHourlySlogan === "function") {
@@ -135038,7 +135086,12 @@
         return;
       }
       try {
-        if (typeof render === "function") render();
+        /* SYNC_STALL_FIX_COALESCE_RENDER_v1 */
+        if (typeof requestCloudDrivenUiRender === "function") {
+          requestCloudDrivenUiRender("immediate");
+        } else if (typeof render === "function") {
+          render();
+        }
       } catch (_ren) {}
     }
 
@@ -135885,7 +135938,12 @@
         if (changed) {
           const paintR100 = function () {
             try {
-              if (typeof render === "function") render();
+              /* SYNC_STALL_FIX_COALESCE_RENDER_v1 */
+              if (typeof requestCloudDrivenUiRender === "function") {
+                requestCloudDrivenUiRender("immediate");
+              } else if (typeof render === "function") {
+                render();
+              }
             } catch (_r) {}
           };
           if (typeof requestAnimationFrame === "function") {
@@ -136368,7 +136426,12 @@
         if (typeof renderTrash === "function") renderTrash();
       } catch (_tr) {}
       try {
-        if (typeof render === "function") render();
+        /* SYNC_STALL_FIX_COALESCE_RENDER_v1 */
+        if (typeof requestCloudDrivenUiRender === "function") {
+          requestCloudDrivenUiRender("immediate");
+        } else if (typeof render === "function") {
+          render();
+        }
       } catch (_ren) {}
     }
 
@@ -137249,7 +137312,12 @@
         return;
       }
       try {
-        if (typeof render === "function") render();
+        /* SYNC_STALL_FIX_COALESCE_RENDER_v1 */
+        if (typeof requestCloudDrivenUiRender === "function") {
+          requestCloudDrivenUiRender("immediate");
+        } else if (typeof render === "function") {
+          render();
+        }
       } catch (_r) {}
     }
 
@@ -144923,63 +144991,110 @@
       pushStateToCloudFull();
     }
 
-    function maybeWriteStateEmergencyBackup(json) {
+    /**
+     * 紧急备份写入（主盘落盘后）。
+     * 热路径：doneLen 缓存 + 调用方 meta.doneCount，避免对 MB 级 JSON 双重 parse。
+     * fewer 守卫：内存 id Set + 当前 state（与 json 同源）；语义与原「tombstone 覆盖才允许变少」一致。
+     */
+    function maybeWriteStateEmergencyBackup(json, meta) {
       const s = String(json || "");
       if (!s.length || s.length > STATE_EMERGENCY_BACKUP_MAX_CHARS) return;
       /* 仅当可证明 emergency 已是同一完整 JSON 时才跳过；不可用「内存将写内容」冒充已落盘 */
-      if (_emergencyBackupJsonCache != null && _emergencyBackupJsonCache === s) return;
+      if (_emergencyBackupJsonCache != null && _emergencyBackupJsonCache === s) {
+        if (meta && Number.isFinite(Number(meta.doneCount))) {
+          _emergencyBackupDoneLen = Math.max(0, Number(meta.doneCount) | 0);
+        }
+        return;
+      }
       try {
-        let prevDone = 0;
-        let nextDone = 0;
-        try {
-          const prev = localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY);
-          if (prev) {
-            if (prev === s) {
-              _emergencyBackupJsonCache = prev;
-              return;
+        let nextDone = -1;
+        if (meta && Number.isFinite(Number(meta.doneCount))) {
+          nextDone = Math.max(0, Number(meta.doneCount) | 0);
+        }
+        let prevDone = _emergencyBackupDoneLen;
+        if (prevDone < 0) {
+          try {
+            const prev = localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY);
+            if (prev) {
+              if (prev === s) {
+                _emergencyBackupJsonCache = prev;
+                if (nextDone >= 0) _emergencyBackupDoneLen = nextDone;
+                return;
+              }
+              const pp = JSON.parse(prev);
+              prevDone = Array.isArray(pp.done) ? pp.done.length : 0;
+              const idSet = new Set();
+              (Array.isArray(pp.done) ? pp.done : []).forEach(function (t) {
+                if (t && t.id != null) idSet.add(String(t.id));
+              });
+              _emergencyBackupDoneIdSet = idSet;
+            } else {
+              prevDone = 0;
+              _emergencyBackupDoneIdSet = new Set();
             }
-            const pp = JSON.parse(prev);
-            prevDone = Array.isArray(pp.done) ? pp.done.length : 0;
+          } catch (_prevErr) {
+            prevDone = 0;
+            _emergencyBackupDoneIdSet = new Set();
           }
-        } catch (_prevErr) {}
-        try {
-          const np = JSON.parse(s);
-          nextDone = Array.isArray(np.done) ? np.done.length : 0;
-        } catch (_nextErr) {
-          return;
+          _emergencyBackupDoneLen = prevDone;
+        }
+        if (nextDone < 0) {
+          try {
+            const np = JSON.parse(s);
+            nextDone = Array.isArray(np.done) ? np.done.length : 0;
+          } catch (_nextErr) {
+            return;
+          }
         }
         /* 勿用更少 Done 的快照覆盖紧急备份（防止错误整包覆盖冲掉可恢复副本） */
         if (prevDone > 0 && nextDone < prevDone) {
-          /* 例外：变少的 id 均已记入 syncTombstones（用户主动删除）时允许更新，避免刷新后从备份复活 */
+          const tsObj =
+            state && state.syncTombstones && typeof state.syncTombstones === "object"
+              ? state.syncTombstones
+              : {};
+          const tombCount = Object.keys(tsObj).length;
+          const rejectSig = String(prevDone) + ":" + String(nextDone) + ":" + String(tombCount);
+          if (_emergencyBackupFewerRejectSig === rejectSig) return;
           let allowFewer = false;
           try {
-            const prevParsed = JSON.parse(localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY) || "null");
-            const nextParsed = JSON.parse(s);
-            const ts =
-              nextParsed && nextParsed.syncTombstones && typeof nextParsed.syncTombstones === "object"
-                ? nextParsed.syncTombstones
-                : {};
-            const nextIds = {};
-            (Array.isArray(nextParsed.done) ? nextParsed.done : []).forEach(function (t) {
+            if (!_emergencyBackupDoneIdSet || !(_emergencyBackupDoneIdSet instanceof Set)) {
+              const prevParsed = JSON.parse(localStorage.getItem(STATE_EMERGENCY_BACKUP_KEY) || "null");
+              const idSet = new Set();
+              (Array.isArray(prevParsed && prevParsed.done) ? prevParsed.done : []).forEach(function (t) {
+                if (t && t.id != null) idSet.add(String(t.id));
+              });
+              _emergencyBackupDoneIdSet = idSet;
+            }
+            const nextIds = Object.create(null);
+            (state && Array.isArray(state.done) ? state.done : []).forEach(function (t) {
               if (t && t.id != null) nextIds[String(t.id)] = true;
             });
-            const removed = (Array.isArray(prevParsed && prevParsed.done) ? prevParsed.done : []).filter(
-              function (t) {
-                return t && t.id != null && !nextIds[String(t.id)];
-              }
-            );
+            const removed = [];
+            _emergencyBackupDoneIdSet.forEach(function (id) {
+              if (!nextIds[id]) removed.push(id);
+            });
             allowFewer =
               removed.length > 0 &&
-              removed.every(function (t) {
-                return !!ts[String(t.id)];
+              removed.every(function (id) {
+                return !!tsObj[id];
               });
           } catch (_allowFewer) {
             allowFewer = false;
           }
-          if (!allowFewer) return;
+          if (!allowFewer) {
+            _emergencyBackupFewerRejectSig = rejectSig;
+            return;
+          }
         }
         localStorage.setItem(STATE_EMERGENCY_BACKUP_KEY, s);
         _emergencyBackupJsonCache = s;
+        _emergencyBackupDoneLen = nextDone;
+        _emergencyBackupFewerRejectSig = "";
+        const writtenIds = new Set();
+        (state && Array.isArray(state.done) ? state.done : []).forEach(function (t) {
+          if (t && t.id != null) writtenIds.add(String(t.id));
+        });
+        _emergencyBackupDoneIdSet = writtenIds;
       } catch (_e) {}
     }
 
@@ -146867,19 +146982,57 @@
       }
     }
 
+    function isLocalPersistSyncCoalesceActive() {
+      try {
+        if (typeof cloudSyncSuppressPush !== "undefined" && cloudSyncSuppressPush) return true;
+      } catch (_sup) {}
+      try {
+        if (typeof aliyunSyncPrimaryPullInFlight !== "undefined" && aliyunSyncPrimaryPullInFlight) {
+          return true;
+        }
+      } catch (_pull) {}
+      return false;
+    }
+
     function scheduleLocalPersistFlush() {
       localPersistDirty = true;
+      _stateMutEpoch += 1;
       if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.persistDeferredCount += 1;
-      if (localPersistTimer) return;
+      /* SYNC_STALL_FIX_PERSIST_DEDUPE_v1：合并窗口内重置长防抖，避免域间各 stringify 一次 */
+      if (isLocalPersistSyncCoalesceActive()) localPersistPreferCoalesce = true;
+      const delay = localPersistPreferCoalesce
+        ? LOCAL_PERSIST_DEBOUNCE_SYNC_COALESCE_MS
+        : LOCAL_PERSIST_DEBOUNCE_MS;
+      if (localPersistTimer) {
+        if (localPersistPreferCoalesce) {
+          clearTimeout(localPersistTimer);
+          if (isCloudSyncPerfEnabled()) {
+            cloudSyncPerfCounters.persistCoalesceRescheduleCount += 1;
+          }
+          localPersistTimer = setTimeout(function () {
+            localPersistTimer = null;
+            localPersistPreferCoalesce = false;
+            try {
+              flushLocalPersistedState("debounce-coalesce");
+            } catch (persistFlushErr) {
+              localPersistDirty = true;
+              console.warn("[存储] 延迟落盘失败:", persistFlushErr);
+            }
+          }, delay);
+        }
+        return;
+      }
+      const flushReason = localPersistPreferCoalesce ? "debounce-coalesce" : "debounce";
       localPersistTimer = setTimeout(function () {
         localPersistTimer = null;
+        localPersistPreferCoalesce = false;
         try {
-          flushLocalPersistedState("debounce");
+          flushLocalPersistedState(flushReason);
         } catch (persistFlushErr) {
           localPersistDirty = true;
           console.warn("[存储] 延迟落盘失败:", persistFlushErr);
         }
-      }, LOCAL_PERSIST_DEBOUNCE_MS);
+      }, delay);
     }
 
     function persistStateToLocalStorage(explicitJson) {
@@ -146896,15 +147049,47 @@
       };
       try {
       const tPrep = perfNow();
-      compactStateForLocalStorage(false);
+      const retentionChanged = !!compactStateForLocalStorage(false);
+      if (retentionChanged) _stateMutEpoch += 1;
       split.prepareMs = perfRound(perfNow() - tPrep);
       let json;
       if (explicitJson != null && String(explicitJson).length) {
         json = String(explicitJson);
+        /* 外部显式 JSON：不与 epoch 缓存绑定 */
+      } else if (
+        _statePersistedEpoch === _stateMutEpoch &&
+        _stateJsonCache != null &&
+        String(_stateJsonCache).length
+      ) {
+        /* SYNC_STALL_FIX_PERSIST_DEDUPE_v1：内存态相对上次成功落盘无变更 → 零 stringify */
+        split.skippedUnchanged = true;
+        split.bytes = _stateJsonCache.length;
+        if (isCloudSyncPerfEnabled()) cloudSyncPerfCounters.persistEpochSkipCount += 1;
+        maybeWriteStateEmergencyBackup(_stateJsonCache, {
+          doneCount: Array.isArray(state.done) ? state.done.length : 0
+        });
+        return {
+          ok: true,
+          localPersisted: true,
+          quotaRelief: false,
+          persistPromise: null,
+          skippedUnchanged: true
+        };
+      } else if (
+        _stateSerializeCacheJson != null &&
+        _stateSerializeCacheEpoch === _stateMutEpoch
+      ) {
+        json = _stateSerializeCacheJson;
+        split.jsonStringifyMs = 0;
+        if (isCloudSyncPerfEnabled()) {
+          cloudSyncPerfCounters.persistSerializeCacheHitCount += 1;
+        }
       } else {
         const tStr = perfNow();
         json = cloudSyncPerfJsonStringify(state);
         split.jsonStringifyMs = perfRound(perfNow() - tStr);
+        _stateSerializeCacheJson = json;
+        _stateSerializeCacheEpoch = _stateMutEpoch;
       }
       split.bytes = typeof json === "string" ? json.length : 0;
       if (isPerfDiagEnabled() && split.jsonStringifyMs >= 50) {
@@ -146922,7 +147107,10 @@
         }
         if (_stateJsonCache != null && _stateJsonCache === json) {
           /* 主盘已是同版：跳过 STORAGE_KEY setItem；emergency 自行证明后再决定 */
-          maybeWriteStateEmergencyBackup(json);
+          _statePersistedEpoch = _stateMutEpoch;
+          maybeWriteStateEmergencyBackup(json, {
+            doneCount: Array.isArray(state.done) ? state.done.length : 0
+          });
           split.localStorageMs = perfRound(perfNow() - tLs);
           split.skippedUnchanged = true;
           if (syncChainActive && isSyncChainPerfEnabled()) {
@@ -146934,7 +147122,10 @@
         }
         localStorage.setItem(STORAGE_KEY, json);
         _stateJsonCache = json;
-        maybeWriteStateEmergencyBackup(json);
+        _statePersistedEpoch = _stateMutEpoch;
+        maybeWriteStateEmergencyBackup(json, {
+          doneCount: Array.isArray(state.done) ? state.done.length : 0
+        });
         split.localStorageMs = perfRound(perfNow() - tLs);
         if (syncChainActive && isSyncChainPerfEnabled()) {
           syncChainNote("persistWriteMs", split.localStorageMs);
@@ -146962,7 +147153,10 @@
         /* 与「最后成功落盘」逐字相同 → 不 open、不 put；emergency 另证 */
         if (_stateJsonCache != null && _stateJsonCache === json) {
           notePersistWriteSkipped();
-          maybeWriteStateEmergencyBackup(json);
+          _statePersistedEpoch = _stateMutEpoch;
+          maybeWriteStateEmergencyBackup(json, {
+            doneCount: Array.isArray(state.done) ? state.done.length : 0
+          });
           if (isPerfDiagEnabled()) {
             perfIx.lastPersistSplit = Object.assign({}, split);
             perfLog("persist-split", split);
@@ -147002,7 +147196,10 @@
                   perfLog("persist-split", split);
                 }
               }
-              maybeWriteStateEmergencyBackup(json);
+              _statePersistedEpoch = _stateMutEpoch;
+              maybeWriteStateEmergencyBackup(json, {
+                doneCount: Array.isArray(state.done) ? state.done.length : 0
+              });
             });
           })
           .catch(function (idbErr) {
@@ -147714,14 +147911,19 @@
         delete day.bodyFatRate;
       });
 
+      let doneKeyDirty = false;
       state.done.forEach((item) => {
         if (!item.habitMeta) return;
         const key = item.habitMeta.key;
         if (key === "bodyWeight" || key === "bodyFatRate") {
           item.habitMeta.key = "weightAndBodyFat";
           item.text = "【习惯】称体重·测体脂";
+          doneKeyDirty = true;
         }
       });
+      if (doneKeyDirty && typeof invalidateHabitDoneDayIndex === "function") {
+        invalidateHabitDoneDayIndex("migrate-weight-key");
+      }
     }
 
     /** 健康分类 Non-Sleep Deep Rest（nsdr）并入 Protocols protocolNsdr，保留打卡与 Done 记录 */
@@ -147757,6 +147959,9 @@
           item.text = "【习惯】" + label;
           dirty = true;
         });
+        if (dirty && typeof invalidateHabitDoneDayIndex === "function") {
+          invalidateHabitDoneDayIndex("migrate-nsdr-key");
+        }
       }
       return dirty;
     }
@@ -147774,12 +147979,17 @@
         }
         delete day[legacyKeys[0]];
       });
+      let doneKeyDirty = false;
       state.done.forEach((item) => {
         if (!item.habitMeta) return;
         if (item.habitMeta.key !== legacyKeys[0]) return;
         item.habitMeta.key = mergedKey;
         item.text = "【习惯】Visual Target Focusing";
+        doneKeyDirty = true;
       });
+      if (doneKeyDirty && typeof invalidateHabitDoneDayIndex === "function") {
+        invalidateHabitDoneDayIndex("migrate-visual-key");
+      }
     }
 
     function migrateBeliefAssumptionAuditHabit() {
@@ -147806,13 +148016,18 @@
         }
       });
 
+      let doneKeyDirty = false;
       state.done.forEach((item) => {
         if (!item.habitMeta) return;
         const key = item.habitMeta.key;
         if (legacyKeys.indexOf(key) === -1) return;
         item.habitMeta.key = mergedKey;
         item.text = "【习惯】信念审计·假设审计";
+        doneKeyDirty = true;
       });
+      if (doneKeyDirty && typeof invalidateHabitDoneDayIndex === "function") {
+        invalidateHabitDoneDayIndex("migrate-belief-key");
+      }
     }
 
     /** 习惯分类 id 重命名：tenX→tenXEverything、ai→aiFirst（兼容旧 key 与可能持久化的 UI 状态） */
@@ -150904,18 +151119,127 @@
       return true;
     }
 
-    function getHabitDoneRowsForDay(habitKey, dateStr) {
-      return state.done
-        .filter(
-          (item) =>
-            item.habitMeta &&
-            item.habitMeta.key === habitKey &&
-            item.habitMeta.date === dateStr
-        )
-        .sort(function (a, b) {
-          return Number(b.completedAt || 0) - Number(a.completedAt || 0);
-        });
+    /**
+     * Habit Done 按日索引（性能）：避免 getHabitDoneRowsForDay 对 state.done 反复全表 filter。
+     * 失效：Done 数组引用/长度变化（增删/整表替换）；habitMeta.key/date 原地改须 invalidateHabitDoneDayIndex。
+     * completedAt 原地改无需失效（每次查询对桶内小数组重新 sort）。
+     * 不改变业务结果；返回值始终为新数组（与原 filter 语义一致）。
+     */
+    let habitDoneDayIndexMap = null;
+    let habitDoneDayIndexDoneRef = null;
+    let habitDoneDayIndexDoneLen = -1;
+    let habitDoneDayIndexToken = 0;
+    let habitDoneDayIndexBuiltToken = -1;
+    const habitDoneDayIndexStats = {
+      builds: 0,
+      hits: 0,
+      misses: 0,
+      invalidations: 0,
+      lastBuildMs: 0,
+      lastBuildRows: 0
+    };
+
+    function invalidateHabitDoneDayIndex(reason) {
+      habitDoneDayIndexToken += 1;
+      habitDoneDayIndexMap = null;
+      habitDoneDayIndexDoneRef = null;
+      habitDoneDayIndexDoneLen = -1;
+      habitDoneDayIndexBuiltToken = -1;
+      habitDoneDayIndexStats.invalidations += 1;
+      try {
+        if (window.__HABIT_DONE_DAY_INDEX_DIAG__ === true) {
+          console.log("[habitDoneDayIndex] invalidate", reason || "", "token=" + habitDoneDayIndexToken);
+        }
+      } catch (_d) {}
     }
+
+    function habitDoneDayIndexKey(habitKey, dateStr) {
+      return String(habitKey || "") + "\0" + String(dateStr || "");
+    }
+
+    function ensureHabitDoneDayIndex() {
+      const done = Array.isArray(state.done) ? state.done : null;
+      const len = done ? done.length : 0;
+      if (
+        habitDoneDayIndexMap &&
+        habitDoneDayIndexBuiltToken === habitDoneDayIndexToken &&
+        done === habitDoneDayIndexDoneRef &&
+        len === habitDoneDayIndexDoneLen
+      ) {
+        return habitDoneDayIndexMap;
+      }
+      const t0 = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+      const map = Object.create(null);
+      let habitRows = 0;
+      if (done) {
+        for (let i = 0; i < done.length; i++) {
+          const item = done[i];
+          if (!item || !item.habitMeta) continue;
+          const k = item.habitMeta.key;
+          const d = item.habitMeta.date;
+          if (k == null || d == null || d === "") continue;
+          const id = habitDoneDayIndexKey(k, d);
+          let bucket = map[id];
+          if (!bucket) {
+            bucket = [];
+            map[id] = bucket;
+          }
+          bucket.push(item);
+          habitRows += 1;
+        }
+      }
+      habitDoneDayIndexMap = map;
+      habitDoneDayIndexDoneRef = done;
+      habitDoneDayIndexDoneLen = len;
+      habitDoneDayIndexBuiltToken = habitDoneDayIndexToken;
+      habitDoneDayIndexStats.builds += 1;
+      habitDoneDayIndexStats.lastBuildRows = habitRows;
+      habitDoneDayIndexStats.lastBuildMs =
+        Math.round(
+          ((typeof performance !== "undefined" && performance.now ? performance.now() : Date.now()) - t0) *
+            10
+        ) / 10;
+      habitDoneDayIndexStats.misses += 1;
+      return map;
+    }
+
+    function getHabitDoneRowsForDay(habitKey, dateStr) {
+      const map = ensureHabitDoneDayIndex();
+      const bucket = map[habitDoneDayIndexKey(habitKey, dateStr)];
+      if (!bucket || !bucket.length) {
+        habitDoneDayIndexStats.hits += 1;
+        return [];
+      }
+      habitDoneDayIndexStats.hits += 1;
+      /* 拷贝 + 按 completedAt 降序，与原 filter().sort() 一致；不共享内部桶数组 */
+      return bucket.slice().sort(function (a, b) {
+        return Number(b.completedAt || 0) - Number(a.completedAt || 0);
+      });
+    }
+
+    try {
+      window.invalidateHabitDoneDayIndex = invalidateHabitDoneDayIndex;
+      window.__habitDoneDayIndex = {
+        invalidate: invalidateHabitDoneDayIndex,
+        stats: function () {
+          return Object.assign({}, habitDoneDayIndexStats, {
+            token: habitDoneDayIndexToken,
+            builtToken: habitDoneDayIndexBuiltToken,
+            bucketCount: habitDoneDayIndexMap ? Object.keys(habitDoneDayIndexMap).length : 0,
+            doneLen: habitDoneDayIndexDoneLen
+          });
+        },
+        resetStats: function () {
+          habitDoneDayIndexStats.builds = 0;
+          habitDoneDayIndexStats.hits = 0;
+          habitDoneDayIndexStats.misses = 0;
+          habitDoneDayIndexStats.invalidations = 0;
+          habitDoneDayIndexStats.lastBuildMs = 0;
+          habitDoneDayIndexStats.lastBuildRows = 0;
+        }
+      };
+    } catch (_idxWin) {}
+
 
     /**
      * 根据 My Done 剩余条目重建当日 habitCheckins。
@@ -151443,6 +151767,9 @@
           } else {
             row.habitMeta.key = "dailyThreeWins";
             row.habitMeta.date = dateStr;
+            if (typeof invalidateHabitDoneDayIndex === "function") {
+              invalidateHabitDoneDayIndex("dailyThreeWins-inplace-meta");
+            }
             if (meta.stampAt) row.habitMeta.stampAt = meta.stampAt;
           }
           if (!row.completedAt) row.completedAt = completedAt;
@@ -151865,9 +152192,15 @@
         if (frozenCreatedAt > 0) row.createdAt = frozenCreatedAt;
         if (!row.habitMeta || typeof row.habitMeta !== "object") {
           row.habitMeta = { key: "dailyThreeWins", date: frozenDate };
+          if (typeof invalidateHabitDoneDayIndex === "function") {
+            invalidateHabitDoneDayIndex("dailyThreeWins-backfill-meta");
+          }
         } else {
           row.habitMeta.key = "dailyThreeWins";
           row.habitMeta.date = frozenDate;
+          if (typeof invalidateHabitDoneDayIndex === "function") {
+            invalidateHabitDoneDayIndex("dailyThreeWins-backfill-meta");
+          }
         }
         if (
           frozenCompletedAt > 0 &&
@@ -179444,9 +179777,88 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     let doneVictoryFxCleanupTimer = 0;
     let doneVictoryFxToken = 0;
     let doneFxWebpPreloadStarted = false;
+    /** 稳定 URL → Blob；播放时用短命 objectURL，避免 ?t= 每次重拉 1–3MB ANMF */
+    const doneFxWebpBlobByUrl = new Map();
+    let doneFxActiveObjectUrl = "";
+    /** 烟花播放软空闲窗：仅跳过 5s 轮询拉取，不阻断本机 save / 上传队列 */
+    let victoryFxSoftIdleUntil = 0;
     let doneVictoryFxRepositionBound = false;
     let doneVictoryFxPanelMo = null;
     let doneVictoryFxReposRaf = 0;
+
+    function armVictoryFxSoftIdleWindow(holdMs) {
+      const ms = Math.max(0, Number(holdMs) || 0);
+      const until = Date.now() + ms + 120;
+      if (until > victoryFxSoftIdleUntil) victoryFxSoftIdleUntil = until;
+    }
+
+    function isVictoryFxSoftIdleWindowActive() {
+      return Date.now() < victoryFxSoftIdleUntil;
+    }
+
+    function revokeDoneFxActiveObjectUrl() {
+      if (!doneFxActiveObjectUrl) return;
+      try {
+        URL.revokeObjectURL(doneFxActiveObjectUrl);
+      } catch (_rev) {}
+      doneFxActiveObjectUrl = "";
+    }
+
+    function cacheDoneFxWebpBlob(url, blob) {
+      const key = String(url || "");
+      if (!key || !blob) return;
+      try {
+        doneFxWebpBlobByUrl.set(key, blob);
+      } catch (_set) {}
+    }
+
+    function getCachedDoneFxWebpBlob(url) {
+      const key = String(url || "");
+      if (!key) return null;
+      try {
+        return doneFxWebpBlobByUrl.get(key) || null;
+      } catch (_get) {
+        return null;
+      }
+    }
+
+    /**
+     * 为播放生成可重启 ANMF 的 src：优先 Blob objectURL（不进网络、可强制从头播），
+     * 否则回退稳定 URL（禁止 ?t= cache-bust，避免打穿 SW precache）。
+     */
+    function mintDoneFxPlaySrc(stableUrl) {
+      const url = String(stableUrl || "");
+      if (!url) return "";
+      revokeDoneFxActiveObjectUrl();
+      const blob = getCachedDoneFxWebpBlob(url);
+      if (blob && typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+        try {
+          doneFxActiveObjectUrl = URL.createObjectURL(blob);
+          return doneFxActiveObjectUrl;
+        } catch (_obj) {}
+      }
+      return url;
+    }
+
+    function fetchAndCacheDoneFxWebpBlob(url) {
+      const key = String(url || "");
+      if (!key) return Promise.resolve(null);
+      const hit = getCachedDoneFxWebpBlob(key);
+      if (hit) return Promise.resolve(hit);
+      if (typeof fetch !== "function") return Promise.resolve(null);
+      return fetch(key, { credentials: "same-origin", cache: "force-cache" })
+        .then(function (res) {
+          if (!res || !res.ok) throw new Error("fx-webp-fetch-" + (res && res.status));
+          return res.blob();
+        })
+        .then(function (blob) {
+          cacheDoneFxWebpBlob(key, blob);
+          return blob;
+        })
+        .catch(function () {
+          return null;
+        });
+    }
 
     function pickDoneVictoryFxKind() {
       const kinds = DONE_VICTORY_FX_KINDS;
@@ -179716,9 +180128,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         doneVictoryFxActiveEl.parentNode.removeChild(doneVictoryFxActiveEl);
       }
       doneVictoryFxActiveEl = null;
+      revokeDoneFxActiveObjectUrl();
     }
 
-    /** 空闲预加载 12 张 WebP，避免首次打卡卡顿；失败忽略 */
+    /** 空闲预加载 20 张 WebP：Blob 缓存 + Image 异步解码，避免首次打卡卡顿；失败忽略 */
     function preloadDoneFxWebps() {
       if (doneFxWebpPreloadStarted) return;
       doneFxWebpPreloadStarted = true;
@@ -179734,10 +180147,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
       }
       for (let i = 0; i < urls.length; i++) {
+        const u = urls[i];
+        try {
+          fetchAndCacheDoneFxWebpBlob(u);
+        } catch (_fetch) {}
         try {
           const img = new Image();
           img.decoding = "async";
-          img.src = urls[i];
+          img.src = u;
         } catch (_img) {}
       }
     }
@@ -179793,6 +180210,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         doneVictoryFxCleanupTimer = 0;
       }
       const ms = Math.max(0, Number(holdMs) || 0);
+      armVictoryFxSoftIdleWindow(ms);
       fxDiagPush(
         "hold_arm",
         Object.assign(
@@ -179825,7 +180243,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       img.alt = "";
       img.setAttribute("aria-hidden", "true");
       img.draggable = false;
-      img.decoding = "sync";
+      /* async：主线程不因 1–3MB ANMF 同步解码卡住；Blob/缓存命中后仍可迅速首帧 */
+      img.decoding = "async";
       /* 显式正方形固有尺寸，避免浏览器把 ANMF 固有比算歪 */
       img.width = 512;
       img.height = 512;
@@ -179959,7 +180378,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           mainH: mainBox ? Math.round(mainBox.height) : null
         });
         if (img) {
-          const bust = src + (src.indexOf("?") >= 0 ? "&" : "?") + "t=" + String(Date.now());
+          const playSrc = mintDoneFxPlaySrc(src);
           /* 舞台已在 DOM 且完成一次布局后再赋 src；光晕等 is-playing 与首帧同开 */
           img.addEventListener(
             "load",
@@ -179971,12 +180390,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           img.addEventListener(
             "error",
             function () {
-              fxDiagPush("img_error", { src: bust });
+              fxDiagPush("img_error", { src: playSrc, stableSrc: src });
               beginVictoryFxPlaybackSynced();
             },
             { once: true }
           );
-          img.src = bust;
+          img.src = playSrc;
+          /* 后台补缓存：下次播放可走 objectURL，彻底避开重复网络/磁盘读 */
+          if (!getCachedDoneFxWebpBlob(src)) {
+            try {
+              fetchAndCacheDoneFxWebpBlob(src);
+            } catch (_warm) {}
+          }
           if (img.complete && img.naturalWidth > 0) {
             beginVictoryFxPlaybackSynced();
           }
@@ -180178,6 +180603,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       };
       window.__protoGoldFireworks = window.__debugPlayCanvasGoldFireworks;
       window.__getVictoryFxMainContentRect = getVictoryFxMainContentRect;
+      window.__getDoneFxWebpBlobCacheSize = function () {
+        return doneFxWebpBlobByUrl.size;
+      };
+      window.__isVictoryFxSoftIdle = isVictoryFxSoftIdleWindowActive;
     } catch (_dbgFx) {}
 
     function appendDoneCelebrateIcon(row, task, forcedGlyph) {
@@ -216488,8 +216917,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /**
      * Body / SPT 动作主键：去掉 ×终身污染与粘连英文副标题（如 原地弹跳in-placebounce → 原地弹跳）。
      * 旧 Done 无 rowKey 或曾写入双语 textContent 时，与 DOM 中文主键对齐，避免今日涨、终身不涨。
+     * 性能：纯函数按「原始入参字符串」Map 缓存；文案变更即新 key，删除/同步无需显式失效。
      */
-    function forgeWpCanonicalPrimaryTaskKey(name) {
+    const _forgeWpCanonKeyCache = new Map();
+    const FORGE_WP_CANON_CACHE_MAX = 8192;
+    const _forgeWpCanonKeyStats = { hits: 0, misses: 0, clears: 0 };
+
+    function forgeWpCanonicalPrimaryTaskKeyUncached(name) {
       let s = forgeWpNormalizeTaskKey(forgeWpSanitizeRowKeyHint(String(name || "")));
       if (!s) return "";
       s = s.replace(/绕头/g, "绕颈");
@@ -216503,6 +216937,41 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       return s;
     }
+
+    function forgeWpCanonicalPrimaryTaskKey(name) {
+      const rawIn = name == null ? "" : String(name);
+      if (_forgeWpCanonKeyCache.has(rawIn)) {
+        _forgeWpCanonKeyStats.hits += 1;
+        return _forgeWpCanonKeyCache.get(rawIn);
+      }
+      const out = forgeWpCanonicalPrimaryTaskKeyUncached(rawIn);
+      if (_forgeWpCanonKeyCache.size >= FORGE_WP_CANON_CACHE_MAX) {
+        _forgeWpCanonKeyCache.clear();
+        _forgeWpCanonKeyStats.clears += 1;
+      }
+      _forgeWpCanonKeyCache.set(rawIn, out);
+      _forgeWpCanonKeyStats.misses += 1;
+      return out;
+    }
+
+    try {
+      window.__forgeWpCanonKeyCache = {
+        stats: function () {
+          return Object.assign({}, _forgeWpCanonKeyStats, {
+            size: _forgeWpCanonKeyCache.size
+          });
+        },
+        resetStats: function () {
+          _forgeWpCanonKeyStats.hits = 0;
+          _forgeWpCanonKeyStats.misses = 0;
+          _forgeWpCanonKeyStats.clears = 0;
+        },
+        clear: function () {
+          _forgeWpCanonKeyCache.clear();
+          _forgeWpCanonKeyStats.clears += 1;
+        }
+      };
+    } catch (_canonWin) {}
 
     /** 壶铃标题「动作·16/·24」拆成基名与公斤；无重量后缀则 kg 为空 */
     function forgeWpSplitKbWeightPrimaryKey(key) {
