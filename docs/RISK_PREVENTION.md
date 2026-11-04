@@ -14,10 +14,12 @@
 **优先级（高 → 低）：**
 
 ```text
-预防风险 > 数据安全 > 系统稳定 > 用户体验 > 性能优化 > 成本节省
+预防风险 > 数据安全 > 系统稳定 > 用户体验（含已满意流畅度 / Performance First）> 性能优化 > 成本节省
 ```
 
 本原则优先于「单纯追求极限性能」或「单纯降低成本」。已验证的流畅度（`golden-v1` / `v20261104m`）与阿里云稳定基线仍须保护，不得为跑分或省几元钱倒退体验与数据正确性。
+
+功能 / 视觉 / 重构侧的流畅度硬约束见 **[Performance First](./PERFORMANCE_FIRST.md)**（`.cursor/rules/performance-first.mdc`）：不得用新功能换卡顿；与本文件「禁止极限跑分优化」互补。
 
 ---
 
@@ -65,7 +67,7 @@
 - 不为追求跑分破坏当前满意的流畅度与动画交互。
 - 发现持续退化时：**先诊断，再提出最小修复方案**；禁止自动化擅自改业务代码。
 
-相关：`pwa-perf-cloud-budget.mdc`、`hour-marquee-continuous-baseline.mdc`、`perf/ci/`。
+相关：`performance-first.mdc`、`docs/PERFORMANCE_FIRST.md`、`pwa-perf-cloud-budget.mdc`、`hour-marquee-continuous-baseline.mdc`、`perf/ci/`。
 
 ---
 
@@ -160,6 +162,7 @@ Cursor / 开发者在修改正式代码前必须先考虑：
 | 文档/规则 | 作用 |
 |-----------|------|
 | `.cursor/rules/risk-prevention-priority.mdc` | Agent 永久强制 |
+| `.cursor/rules/performance-first.mdc` / `docs/PERFORMANCE_FIRST.md` | Performance First：功能不得牺牲流畅度 |
 | `docs/PERFORMANCE_GOLDEN_BASELINE.md` | golden-v1 只读体验基准 |
 | `.cursor/rules/alicloud-stable-baseline.mdc` | 同步流畅稳定基线 |
 | `.cursor/rules/pwa-perf-cloud-budget.mdc` | 性能与 ≤30 元预算 |

@@ -1,7 +1,8 @@
 # PWA 性能黄金基准（Performance Golden Baseline）
 
 > **只读历史参照。** 以后出现卡顿 / 同步变慢 / 动画掉帧 / 响应下降，必须先与本基准对照，再只修有证据的瓶颈。  
-> **原则：以本次实际达到的流畅度为标准——系统变慢了，就与它对齐找退化，再精准修复。**
+> **原则：以本次实际达到的流畅度为标准——系统变慢了，就与它对齐找退化，再精准修复。**  
+> **开发约束**：日常改动须遵守 Performance First（[`.cursor/rules/performance-first.mdc`](../.cursor/rules/performance-first.mdc) / [`PERFORMANCE_FIRST.md`](./PERFORMANCE_FIRST.md)），不得轻易使本基准日体验退化。
 
 ---
 
