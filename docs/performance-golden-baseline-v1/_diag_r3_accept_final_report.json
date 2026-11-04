@@ -1,0 +1,105 @@
+{
+  "title": "第三轮性能优化后 · 跨设备完整性验收最终报告",
+  "at": "2026-11-04T12:26:00+08:00",
+  "cache": "exec-system-pwa-v20261104m",
+  "verdict": "PASS_WITH_EXPLICIT_DUAL_DEVICE_GAPS",
+  "scope": {
+    "changedArchitecture": false,
+    "changedPoll5s": false,
+    "changedBusinessUi": false,
+    "committed": false,
+    "deployed": false,
+    "furtherPerfWork": "暂停，等待最终人工验收"
+  },
+  "summaryCounts": {
+    "staticAuditPass": 14,
+    "mechanismPass": 11,
+    "dualContextApproxPass": 3,
+    "perfRegressionPass": 1,
+    "realPhysicalDualDevice": "NOT_AUTOMATED"
+  },
+  "focusTests": {
+    "1_A_pull_B_add": {
+      "automated": "approx",
+      "result": "PASS",
+      "method": "同机两个 BrowserContext + 真实阿里云 default-room；B notifyAliyunDoneRealUpsert 后 A manual-full 可见",
+      "realDualDevice": "未做（需真手机/第二台电脑）"
+    },
+    "2_A_pull_B_delete": {
+      "automated": "approx",
+      "result": "PASS",
+      "method": "B tombstone 上传后 A 再拉，条目未复活",
+      "realDualDevice": "未做"
+    },
+    "3_local_edit_same_task_during_pull": {
+      "automated": true,
+      "result": "PASS",
+      "evidence": "coalesceLastWrite → 最终文本 COAL_8；stringifyCount=1"
+    },
+    "4_multi_domain_edit_during_pull": {
+      "automated": true,
+      "result": "PASS",
+      "evidence": "done + memo 同时脏写后均保留"
+    },
+    "5_offline_then_online_queue": {
+      "automated": "approx",
+      "result": "PASS",
+      "method": "CDP Network.emulate offline 写入 → online 后本地仍在",
+      "note": "pending 标志可能已即时清空；物理断网未测"
+    },
+    "6_refresh_during_or_before_persist": {
+      "automated": true,
+      "result": "PASS",
+      "evidence": "hidden flush + await statePersistQueue 后 reload 仍保留"
+    },
+    "7_two_devices_same_record": {
+      "automated": false,
+      "result": "NOT_VERIFIED_REAL_DUAL",
+      "reason": "无法在本环境代操作两台真实设备的同时编辑时钟/网络路径；未用模拟冒充"
+    },
+    "8_tombstone_not_lost": {
+      "automated": true,
+      "result": "PASS",
+      "evidence": "recordSyncTombstone 后 tomb 仍在且条目不在 done；跨上下文删除后 A 侧未复活"
+    },
+    "9_multi_pull_keeps_last_edit": {
+      "automated": true,
+      "result": "PASS",
+      "evidence": "连续 3 次 manual-full 中改文案，最终 LAST_EDIT_V4"
+    },
+    "10_pull_end_immediate_flush": {
+      "automated": "code+behavior",
+      "result": "PASS",
+      "evidence": "endAliyunSyncPrimaryPullInFlight 含 flushLocalPersistedState('pull-end')；共路径 flush 在 IDB 下可用"
+    }
+  },
+  "mechanismChecks": {
+    "pullInFlight_local_edits_retained": "PASS",
+    "suppressPush_end_upload_path": "PASS（Done 队列 notify+flush；Firebase pending 非本轮主路径）",
+    "coalesce_does_not_drop_last_mutation": "PASS（COAL_8）",
+    "epoch_cache_invalidates_on_mutate": "PASS（idle epoch-skip 后 mutate 再 stringify）",
+    "identical_content_skip_no_false_drop": "PASS（无变更二次 force 不增加 stringify）",
+    "emergency_backup_fewer_guard": "PASS（done 变少且无 tomb 时 emergency 不回落）",
+    "close_before_persist": "PASS（hidden/pagehide/beforeunload 均挂 flush；reload 实测保留）"
+  },
+  "perfRegression": {
+    "scenario": "与第三轮相同：manual-full + 拉取中 14×saveState@450ms",
+    "before_r3": { "stringifyCount": 19, "persistCount": 19, "longTaskMaxMs": 2547, "fps": 43.5, "aliyunReqCount": 37 },
+    "accept_rerun": { "stringifyCount": 1, "persistCount": 1, "saveStateCount": 28, "coalesceReschedule": 28, "longTaskMaxMs": 0, "fps": 59.9, "aliyunReqCount": 30 },
+    "result": "PASS（去重仍在；FPS 未降；请求未暴涨；无秒级 Long Task）"
+  },
+  "cannotAutoVerifyAsRealDualDevice": [
+    "真手机 / 第二台电脑：A 正在 pull 时 B 新增",
+    "真双机：A 正在 pull 时 B 删除",
+    "真双机同时改同一条（时钟偏差与双向 LWW）",
+    "真实蜂窝/Wi‑Fi 断网（本轮仅 CDP Network.emulate）",
+    "用户手势中途杀进程（仅验证了 reload + pagehide/hidden flush 路径）"
+  ],
+  "artifacts": [
+    "_accept_r3_integrity.mjs",
+    "_diag_r3_accept_final_report.json",
+    "_diag_r3_accept_perf.json",
+    "_diag_r3_persist_before.json",
+    "_diag_r3_persist_after.json"
+  ]
+}

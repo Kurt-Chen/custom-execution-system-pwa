@@ -1,5 +1,9 @@
 # Performance Baseline / Regression Checklist
 
+> **注意（2026-11-04）：** 当前「体验流畅度」黄金基准见  
+> [`docs/PERFORMANCE_GOLDEN_BASELINE.md`](../docs/PERFORMANCE_GOLDEN_BASELINE.md)  
+> （正式站 **`v20261104m`** / commit `cf23764`）。本文为 2026-09 模块热路径保护线，**不要与黄金基准混用**。
+
 > 保护线版本：**v1.1**（2026-09-08）  
 > **原则：Measure First — 升级前后跑同一套检查；不改业务逻辑来“配合测试”。**
 

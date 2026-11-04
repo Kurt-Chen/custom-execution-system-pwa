@@ -1,0 +1,79 @@
+{
+  "round": 3,
+  "title": "减少大型 JSON 序列化与本地持久化主线程阻塞",
+  "measuredAt": "2026-11-04T12:10:00+08:00",
+  "environment": "local http://127.0.0.1:8765 · Edge puppeteer-core · real Aliyun primary room",
+  "scenario": "manual-full pull (meta gate off + clear fingerprints) + 14× saveState@450ms during pull (simulate multi-domain dirty)",
+  "fixMarkers": [
+    "SYNC_STALL_FIX_COALESCE_RENDER_v1 (retained from R2)",
+    "SYNC_STALL_FIX_PERSIST_DEDUPE_v1",
+    "LOCAL_PERSIST_DEBOUNCE_SYNC_COALESCE_MS=2200",
+    "_stateMutEpoch / _stateSerializeCacheEpoch / _statePersistedEpoch",
+    "pull-end flushLocalPersistedState",
+    "maybeWriteStateEmergencyBackup(json, {doneCount}) no re-parse"
+  ],
+  "cacheAfter": "exec-system-pwa-v20261104m",
+  "before": {
+    "source": "_diag_r3_persist_before.json",
+    "cache": "exec-system-pwa-v20261104j-r3before",
+    "persistDedupe": false,
+    "forceAllBodies": true,
+    "aliyunReqCount": 37,
+    "saveStateCount": 45,
+    "stringifyCount": 19,
+    "stringifyMs": 216.5,
+    "stringifyBytesTotal": 16769128,
+    "persistCount": 19,
+    "persistMs": 308.1,
+    "longTaskMaxMs": 2547,
+    "longTaskCount": 39,
+    "fps": 43.5,
+    "elapsedMs": 48107,
+    "doneLen": 2393
+  },
+  "after": {
+    "source": "_diag_r3_persist_after.json",
+    "cache": "exec-system-pwa-v20261104m",
+    "persistDedupe": true,
+    "aliyunReqCount": 30,
+    "saveStateCount": 28,
+    "stringifyCount": 1,
+    "stringifyMs": 4.9,
+    "stringifyBytesTotal": 572896,
+    "persistCount": 1,
+    "persistMs": 5.0,
+    "persistDeferredCount": 28,
+    "persistCoalesceRescheduleCount": 28,
+    "persistEpochSkipCount": 0,
+    "persistSerializeCacheHitCount": 0,
+    "longTaskMaxMs": 0,
+    "longTaskCount": 0,
+    "fps": 59.8,
+    "elapsedMs": 9196,
+    "doneLen": 1933
+  },
+  "delta": {
+    "stringifyCount": "19 → 1 (−94.7%)",
+    "stringifyMs": "216.5 → 4.9 (−97.7%)",
+    "persistCount": "19 → 1 (−94.7%)",
+    "persistMs": "308.1 → 5.0 (−98.4%)",
+    "longTaskMaxMs": "2547 → 0",
+    "fps": "43.5 → 59.8",
+    "localWriteAmplification": "each saveState no longer forces full stringify; coalesce window collapses multi-domain dirty to one persist"
+  },
+  "integrityNotes": {
+    "dataFormatUnchanged": true,
+    "aliyunArchitectureUnchanged": true,
+    "pollIntervalUnchanged": true,
+    "firebaseUntouched": true,
+    "mergeLwwTombstoneMetaGateLogicUnchanged": true,
+    "emergencyBackupRetained": true,
+    "offlineDirtyPreservedViaEpochAndPullEndFlush": true,
+    "doneLenVariance": "before/after rooms diverged during full merge (2393 vs 1933); metric focus is stringify/persist amplification under same harness"
+  },
+  "notDoneThisRound": [
+    "Web Worker off-thread stringify (not needed after dedupe)",
+    "Incremental per-domain serialize format change",
+    "git commit / push / deploy"
+  ]
+}

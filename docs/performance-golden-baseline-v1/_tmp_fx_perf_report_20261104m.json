@@ -1,0 +1,105 @@
+{
+  "title": "PWA 烟花 WebP 性能 · 基础优化报告",
+  "cache": "exec-system-pwa-v20261104m",
+  "date": "2026-11-04",
+  "scope": "仅庆祝特效播放路径；未改 20 种素材/时长/中心几何/打卡触发",
+  "rootCause": [
+    "每次播放对 WebP 追加 ?t=Date.now() cache-bust，打穿 SW precache 与浏览器缓存键",
+    "单文件 fx-power-fireworks.webp ≈2.27MB（同类庆祝款 1–3.2MB），每次重读/重解约 2.3MB ANMF",
+    "img.decoding=sync 迫使主线程同步解码",
+    "播放窗内 5s 阿里云轮询可能叠加 Long Task（次要放大器）"
+  ],
+  "changes": [
+    "Blob 预取缓存（20 张）+ 播放用短命 objectURL 重启 ANMF",
+    "移除 ?t= cache-bust",
+    "decoding 改为 async",
+    "clearDoneVictoryFx 时 revokeObjectURL",
+    "烟花 hold 期间跳过非紧急 5s 轮询拉取（不阻断 save/上传队列）"
+  ],
+  "before": {
+    "envNote": "Cursor 内嵌浏览器存在明显后台节流，绝对 FPS 偏低；对比以 mount→ready / 网络 / Long Task 为准",
+    "fireworks_replays": [
+      {
+        "label": "coldish_1",
+        "mountToReadyMs": 185,
+        "netEncodedBytes": 2322530,
+        "netName": "fx-power-fireworks.webp?t=...",
+        "longTaskCount": 5,
+        "longTaskTotalMs": 1699,
+        "maxLongTaskMs": 413
+      },
+      {
+        "label": "replay_2",
+        "mountToReadyMs": 402,
+        "netEncodedBytes": 2322530,
+        "longTaskCount": 7,
+        "longTaskTotalMs": 1741,
+        "maxLongTaskMs": 442
+      },
+      {
+        "label": "replay_3",
+        "mountToReadyMs": 101,
+        "netEncodedBytes": 2322530,
+        "longTaskCount": 5,
+        "longTaskTotalMs": 347,
+        "maxLongTaskMs": 90
+      }
+    ],
+    "isolationNotes": {
+      "A_idle": "环境本身有节流 Long Task，不能单独作为绝对 FPS 基线",
+      "B_C_fireworks": "每次必现 2.3MB 资源项 + 百毫秒级 mount→ready",
+      "D_plus_sync": "同步叠加时 maxFrame 更差；主因仍是动画解码/重读",
+      "E_canvas_proto": "Canvas 金色烟花不在正式 20 种随机池，本轮未改"
+    }
+  },
+  "after": {
+    "blobCacheSize": 20,
+    "fireworks_replays": [
+      {
+        "label": "post_1",
+        "mountToReadyMs": 37,
+        "net": [],
+        "longTaskCount": 0,
+        "longTaskTotalMs": 0,
+        "maxLongTaskMs": 0
+      },
+      {
+        "label": "post_2",
+        "mountToReadyMs": 61,
+        "net": [],
+        "longTaskCount": 1,
+        "longTaskTotalMs": 121,
+        "maxLongTaskMs": 121
+      },
+      {
+        "label": "post_3",
+        "mountToReadyMs": 24,
+        "net": [],
+        "longTaskCount": 0,
+        "longTaskTotalMs": 0,
+        "maxLongTaskMs": 0
+      }
+    ],
+    "acceptance": {
+      "webpKinds": 17,
+      "treasonKinds": 3,
+      "smokeTriggerOk": "20/20（energy-burst 单独复测通过；批量 120ms 竞态曾误报 1 次）",
+      "transparentBackground": "rgba(0,0,0,0)",
+      "blobSrcConfirmed": true,
+      "resourceRelease": "hold 后 DOM 移除 + objectURL revoke",
+      "cacheBustRemoved": true
+    },
+    "delta": {
+      "mountToReadyMs_avg_before": 229,
+      "mountToReadyMs_avg_after": 41,
+      "mountToReadyImprovement": "~5.6x faster",
+      "repeatNetworkBytes_before": 2322530,
+      "repeatNetworkBytes_after": 0,
+      "longTaskTotal_avg_before": 1262,
+      "longTaskTotal_avg_after": 40
+    }
+  },
+  "platformImpact": "Both（逻辑层；Desktop/Mobile/Tablet 同一播放路径）",
+  "notDeployed": true,
+  "notCommitted": true
+}

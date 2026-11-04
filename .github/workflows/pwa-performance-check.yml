@@ -1,0 +1,192 @@
+# PWA 长期性能自动体检（只读 · 完全运行在 GitHub Actions 云端）
+# - 不依赖本机开机、Cursor、本地浏览器
+# - 测正式 GitHub Pages；不改业务代码；不自动 commit/push/部署
+# - 北京时间每月 1日、16日 08:17 = UTC 00:17
+# - 1 日自动升级为 monthly；16 日为 biweekly
+# - 仅失败 / 明显退化 / 环境故障时开 Issue 通知（PASS 与 PASS_WITH_WARNINGS 不打扰）
+name: PWA performance check
+
+on:
+  schedule:
+    # 北京时间无夏令时：UTC+8 → 本地 08:17 = UTC 00:17
+    - cron: "17 0 1,16 * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "体检模式"
+        required: true
+        type: choice
+        options:
+          - biweekly
+          - monthly
+          - full
+        default: biweekly
+      target_url:
+        description: "正式站 URL"
+        required: false
+        default: "https://kurt-chen.github.io/custom-execution-system-pwa/"
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+concurrency:
+  group: pwa-performance-check
+  cancel-in-progress: false
+
+jobs:
+  healthcheck:
+    name: Playwright Pages healthcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: perf/ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve check mode
+        id: mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            MODE="${{ github.event.inputs.mode }}"
+          else
+            DAY="$(date -u +%d)"
+            if [ "$DAY" = "01" ]; then
+              MODE="monthly"
+            else
+              MODE="biweekly"
+            fi
+          fi
+          echo "mode=${MODE}" >> "$GITHUB_OUTPUT"
+          echo "Resolved PERF_CI_MODE=${MODE} (UTC now=$(date -u -Iseconds))"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: perf/ci/package-lock.json
+
+      - name: Restore streak / archive cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            perf/ci/.ci-state
+            docs/performance-history/_ci_cache
+          key: pwa-perf-streak-v1-${{ github.run_id }}
+          restore-keys: |
+            pwa-perf-streak-v1-
+
+      - name: Install deps
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          npx playwright install --with-deps chromium
+
+      - name: Run performance healthcheck
+        id: run
+        continue-on-error: true
+        env:
+          PERF_CI_URL: ${{ github.event.inputs.target_url || 'https://kurt-chen.github.io/custom-execution-system-pwa/' }}
+          PERF_CI_MODE: ${{ steps.mode.outputs.mode }}
+          PERF_CI_GLOBAL_TIMEOUT_MS: "900000"
+          PERF_UNLOCK_PASSWORD: ${{ secrets.PERF_UNLOCK_PASSWORD }}
+          PERF_HISTORY_DIR: ${{ github.workspace }}/docs/performance-history
+          PERF_CI_STATE_DIR: ${{ github.workspace }}/perf/ci/.ci-state
+        run: npm run healthcheck
+
+      - name: Upload report artifact (90 天归档)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-healthcheck-${{ github.run_id }}
+          path: |
+            perf/ci/reports/latest.json
+            perf/ci/reports/healthcheck-*.json
+            perf/ci/reports/diagnosis-*.md
+            docs/performance-history/latest-summary.md
+            docs/performance-history/INDEX.md
+            docs/performance-history/entries/*.json
+            perf/ci/.ci-state/streak-state.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Save streak cache for next run
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            perf/ci/.ci-state
+            docs/performance-history/_ci_cache
+          key: pwa-perf-streak-v1-${{ github.run_id }}
+
+      - name: Notify only on failure / regression / infra
+        if: always() && steps.run.outcome != 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'perf/ci/reports/latest.json';
+            let report = null;
+            try {
+              report = JSON.parse(fs.readFileSync(path, 'utf8'));
+            } catch (e) {
+              report = {
+                verdict: 'INFRA_OR_SCRIPT_FAILURE',
+                infraError: String(e),
+                comparison: { findings: [] }
+              };
+            }
+            const verdict = report.verdict || 'UNKNOWN';
+            // PASS / PASS_WITH_WARNINGS 不会走到本步骤（run success）
+            const isInfra = verdict === 'INFRA_OR_SCRIPT_FAILURE';
+            const title = isInfra
+              ? `[perf-ci] 体检脚本/环境失败（非性能判定）· run ${context.runId}`
+              : `[perf-ci] 性能明显退化 · ${verdict} · mode=${report.mode || '?'} · run ${context.runId}`;
+            const findings = ((report.comparison && report.comparison.findings) || [])
+              .map((f) => `- ${f.severity}: ${f.message || f.kind}`)
+              .join('\n') || '- （无明细）';
+            const body = [
+              `**Verdict:** ${verdict}`,
+              `**Mode:** ${report.mode || '?'}`,
+              `**URL:** ${report.targetUrl || ''}`,
+              `**Cache:** ${(report.measured && report.measured.cacheName) || '?'}`,
+              `**Golden ref:** golden-v1 / v20261104m（只读，未自动升级）`,
+              `**Workflow:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              '',
+              '### Findings',
+              findings,
+              '',
+              isInfra
+                ? '> 此 Issue 表示**测试环境或脚本故障**，不要直接当成 PWA 性能退化。'
+                : '> 请下载 Artifact `perf-healthcheck-*`，对照 `docs/PERFORMANCE_GOLDEN_BASELINE.md` 与 `perf/ci/ci-baseline.json`。**禁止自动改业务代码。**',
+              '',
+              '_自动创建 · 只检查，不擅自修改 · PASS 时不发通知_'
+            ].join('\n');
+            const labels = isInfra ? ['perf-ci', 'perf-infra'] : ['perf-ci', 'perf-regression'];
+            for (const name of labels) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  color: isInfra ? 'fbca04' : 'd73a4a'
+                });
+              } catch (_) {}
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels
+            });
+
+      - name: Fail job if healthcheck failed
+        if: always() && steps.run.outcome != 'success'
+        run: exit 1

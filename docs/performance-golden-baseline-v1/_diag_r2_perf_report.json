@@ -1,0 +1,98 @@
+{
+  "round": 2,
+  "measuredAt": "2026-11-04T12:08:00+08:00",
+  "committed": false,
+  "cache": "exec-system-pwa-v20261104l",
+  "branch": "diag/sync-stall-isolation-20261104",
+  "prerequisite": {
+    "round1": "getHabitDoneRowsForDay Done 版本化按日索引（本轮实测前已重新打回工作区）"
+  },
+  "baselineProfile": {
+    "file": "C:/Users/ASUS/.cursor/browser-logs/cdp-profile-Profiler.stop-2026-11-04T03-57-51-710Z.json",
+    "scenario": "真实在线 Aliyun pull 12s 窗口（runAliyunSyncPrimaryNearRealtimePull）",
+    "busyMs": 15148,
+    "longTaskMaxMs": 716,
+    "longTaskTop": [716, 604, 444, 434],
+    "rankBySelfTime": [
+      { "name": "(garbage collector)", "ms": 3411, "busyPct": 22.5 },
+      { "name": "maybeWriteStateEmergencyBackup", "ms": 2620, "busyPct": 17.3 },
+      { "name": "forgeWpCanonicalPrimaryTaskKey", "ms": 830, "busyPct": 5.5 },
+      { "name": "cloudSyncPerfJsonStringify", "ms": 668, "busyPct": 4.4 },
+      { "name": "hasHabitDoneEntry", "ms": 437, "busyPct": 2.9 }
+    ],
+    "habitIndex": { "hits": 45340, "builds": 4, "lastBuildMs": 6.8 },
+    "cloudSyncPerfWindowDelta": {
+      "stringifyCount": 14,
+      "stringifyMs": 372.6,
+      "stringifyBytesLast": 2668469,
+      "persistCount": 14,
+      "persistMs": 374.5,
+      "hygieneMs": 1646.1
+    },
+    "note": "排名来自本轮重采，未沿用优化前旧占比。getHabitDoneRowsForDay 已不在 top。"
+  },
+  "chosenBottleneck": {
+    "function": "maybeWriteStateEmergencyBackup",
+    "evidence": "CPU self 17.3%/2620ms，高于 forgeWp 5.5% 与 stringify 4.4%；且每次落盘对 ~2.6–4.3MB JSON 做 localStorage.getItem + 双重 JSON.parse（取 done.length / tombstone 校验），直接推高 GC。",
+    "rootCause": "重复全量反序列化同一紧急备份与即将写入的 JSON，只为比较 done 条数与 tombstone。",
+    "rejectedAlternativesThisRound": [
+      "forgeWpCanonicalPrimaryTaskKey（第二，留待下轮）",
+      "cloudSyncPerfJsonStringify（第四；部分已有 persist dedupe）",
+      "全局轮询 / 阿里云架构（禁止）"
+    ]
+  },
+  "fix": {
+    "summary": "版本化缓存 emergency doneLen + id Set；热路径用 meta.doneCount；fewer 守卫改用内存 id Set + 当前 state.syncTombstones；同签名拒绝短缓存。不改备份键、冲突语义、轮询、UI。",
+    "files": ["index.html", "sw.js"],
+    "markers": ["_emergencyBackupDoneLen", "_emergencyBackupDoneIdSet", "_emergencyBackupFewerRejectSig"]
+  },
+  "afterProfile": {
+    "file": "C:/Users/ASUS/.cursor/browser-logs/cdp-profile-Profiler.stop-2026-11-04T04-07-43-359Z.json",
+    "scenario": "相同真实在线 pull 12s 窗口",
+    "busyMs": 13617,
+    "longTaskMaxMs": 655,
+    "longTaskTop": [655, 518, 453, 450],
+    "rankBySelfTime": [
+      { "name": "(garbage collector)", "ms": 2466, "busyPct": 18.1 },
+      { "name": "forgeWpCanonicalPrimaryTaskKey", "ms": 2023, "busyPct": 14.9 },
+      { "name": "maybeWriteStateEmergencyBackup", "ms": 974, "busyPct": 7.2 },
+      { "name": "hasHabitDoneEntry", "ms": 744, "busyPct": 5.5 },
+      { "name": "cloudSyncPerfJsonStringify", "ms": 450, "busyPct": 3.3 }
+    ],
+    "habitIndex": { "hits": 22670, "builds": 2, "invalidations": 29, "lastBuildMs": 2.9 },
+    "cloudSyncPerfWindowDelta": {
+      "stringifyCount": 7,
+      "stringifyMs": 186,
+      "persistCount": 7,
+      "persistMs": 186.3,
+      "hygieneMs": 774.3,
+      "aliyunRequestCount": 52
+    }
+  },
+  "comparison": {
+    "maybeWriteStateEmergencyBackup_ms": { "before": 2620, "after": 974, "deltaMs": -1646, "deltaPct": -62.8 },
+    "maybeWriteStateEmergencyBackup_busyPct": { "before": 17.3, "after": 7.2 },
+    "GC_ms": { "before": 3411, "after": 2466, "deltaMs": -945 },
+    "busyMs": { "before": 15148, "after": 13617, "deltaMs": -1531 },
+    "longTaskMaxMs": { "before": 716, "after": 655, "deltaMs": -61 },
+    "stringify_self_ms": { "before": 668, "after": 450 },
+    "nextLargestCandidate": "forgeWpCanonicalPrimaryTaskKey（after 窗口 abs 升高，下轮优先）"
+  },
+  "correctness": {
+    "unitTest": "_test_r2_emergency_backup_skip_parse.mjs ok（增长写入 / 无 tomb 拒绝变少 / 有 tomb 允许变少 / rejectSig 稳定）",
+    "habitIndexUnit": "_test_habit_done_day_index.mjs ok",
+    "liveEmergencyBackup": {
+      "bytes": 4375622,
+      "doneInBackup": 17925,
+      "liveStateDone": 8960,
+      "note": "本地紧急备份仍保留更高 done 水位；无对应 tombstone 时拒绝用更少快照覆盖——与原语义一致。本轮未改冲突/恢复策略。"
+    },
+    "cacheInvalidation": "doneLen/idSet 仅在成功 setItem 后更新；JSON 逐字相同早退；fewer 拒绝按 prevDone:nextDone:tombCount 签名短缓存，tomb 增加会重检",
+    "cloudRequests": "仍走既有 Aliyun primary pull；未改轮询间隔；本窗口约 52 次 aliyun/fc 资源请求（与 baseline 同量级）"
+  },
+  "git": {
+    "autoCommit": false,
+    "autoPush": false,
+    "rollback": "丢弃工作区 index.html/sw.js 相关改动，或回退到含 v20261104h 索引的补丁脚本重放"
+  }
+}
