@@ -42564,9 +42564,19 @@
      */
     @media (max-width: 767px) {
       ul.app-done-time-timeline .done-current-hour-frame {
-        --hour-wm-size-mobile-max: var(--hour-wm-size-2);
-        --hour-wm-size-mobile-2: calc(var(--hour-wm-size-mobile-max) * 0.65);
-        --hour-wm-size-mobile-3: calc(var(--hour-wm-size-mobile-max) * 0.82);
+        /*
+         * 封顶 = 电脑端 2 条设计尺寸；65%/82%/100% 用「系数×同一括号」写死，
+         * 避免 calc(var(--length) * 0.65) 在部分 WebKit 整段无效、回退成桌面 size-2。
+         */
+        --hour-wm-size-mobile-max: calc(
+          0.38 * (var(--hour-wm-pad-y) + 2 * var(--hour-wm-row))
+        );
+        --hour-wm-size-mobile-2: calc(
+          0.38 * 0.65 * (var(--hour-wm-pad-y) + 2 * var(--hour-wm-row))
+        );
+        --hour-wm-size-mobile-3: calc(
+          0.38 * 0.82 * (var(--hour-wm-pad-y) + 2 * var(--hour-wm-row))
+        );
         /* 手机任务右 pad 实为 6px（非桌面 12）+ 胶囊32 + gap2 + 菜单28 → 胶囊左缘 */
         --hour-wm-capsule-col: 68px;
         --hour-wm-gap-capsule: 5px;
@@ -42587,14 +42597,20 @@
         text-align: right;
       }
       ul.app-done-time-timeline .done-current-hour-frame[data-wm-tier="2"] > .done-current-hour-frame__list[data-sprint-wm]::after {
-        font-size: var(--hour-wm-size-mobile-2) !important;
+        font-size: calc(
+          0.38 * 0.65 * (var(--hour-wm-pad-y) + 2 * var(--hour-wm-row))
+        ) !important;
       }
       ul.app-done-time-timeline .done-current-hour-frame[data-wm-tier="3"] > .done-current-hour-frame__list[data-sprint-wm]::after {
-        font-size: var(--hour-wm-size-mobile-3) !important;
+        font-size: calc(
+          0.38 * 0.82 * (var(--hour-wm-pad-y) + 2 * var(--hour-wm-row))
+        ) !important;
       }
       ul.app-done-time-timeline .done-current-hour-frame[data-wm-tier="4"] > .done-current-hour-frame__list[data-sprint-wm]::after,
       ul.app-done-time-timeline .done-current-hour-frame[data-wm-tier="5"] > .done-current-hour-frame__list[data-sprint-wm]::after {
-        font-size: var(--hour-wm-size-mobile-max) !important;
+        font-size: calc(
+          0.38 * (var(--hour-wm-pad-y) + 2 * var(--hour-wm-row))
+        ) !important;
       }
     }
     /* 当前小时框：行底色落到 ::before，文字/胶囊抬到水印之上 */
@@ -112402,7 +112418,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261105l";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261105m";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -166340,25 +166356,29 @@
         return;
       }
       const list = frame.querySelector(":scope > ul.done-current-hour-frame__list");
-      let count = 0;
-      if (list) {
-        const kids = list.children;
-        for (let i = 0; i < kids.length; i++) {
-          if (kids[i].classList && kids[i].classList.contains("done-time-block-item")) count++;
-        }
-      }
+      /* 只数框内真实任务 li，不按双行 DOM 视觉行 */
+      const count = list
+        ? list.querySelectorAll(":scope > li.done-time-block-item").length
+        : 0;
       const hour = Number(frame.getAttribute("data-current-hour"));
       const sprintWm = Number.isFinite(hour) ? hour - 4 : NaN;
       if (count < 2 || !(sprintWm >= 1)) {
         frame.removeAttribute("data-sprint-wm");
         frame.removeAttribute("data-wm-tier");
-        if (list) list.removeAttribute("data-sprint-wm");
+        if (list) {
+          list.removeAttribute("data-sprint-wm");
+          list.removeAttribute("data-wm-tier");
+        }
         return;
       }
+      /* 4+ 在手机 CSS 中同用 100%；此处仍写实际档 4/5，供桌面 4/5 分档 */
       const tier = count >= 5 ? 5 : count;
       frame.setAttribute("data-sprint-wm", String(sprintWm));
       frame.setAttribute("data-wm-tier", String(tier));
-      if (list) list.setAttribute("data-sprint-wm", String(sprintWm));
+      if (list) {
+        list.setAttribute("data-sprint-wm", String(sprintWm));
+        list.setAttribute("data-wm-tier", String(tier));
+      }
     }
 
     /** 把当前小时框内的任务行拆回父 ul（小时切换时旧框立即拆除） */
