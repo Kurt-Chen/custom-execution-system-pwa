@@ -45,6 +45,16 @@
       --app-bottom-nav-space: calc(
         72px + env(safe-area-inset-bottom, 0px) + var(--done-sleep-countdown-dock-space, 0px)
       );
+      /*
+       * Done List 内容区水平内边距（相对主栏 / morePageSkeleton）：
+       * = .module-content 水平 padding + #dynamicModule .columns > section 的 padding。
+       * 睡眠倒计时 dock 后复用此值，与移顶前宽度对齐；勿改成底栏全宽或固定百分比。
+       */
+      --done-list-inline-pad-start: calc(clamp(10px, 1.4vw, 16px) + 10px);
+      --done-list-inline-pad-end: calc(clamp(10px, 1.4vw, 16px) + 10px);
+      /* 与 .primary-bottom-nav-chrome 水平 padding 同步 */
+      --bottom-nav-chrome-inline-pad-start: max(8px, env(safe-area-inset-left, 0px));
+      --bottom-nav-chrome-inline-pad-end: max(8px, env(safe-area-inset-right, 0px));
       /* 与 html{zoom} 同步；供 Habit/100法则卡与今日计划 rail 壳 max-height 抵消 zoom（勿套用到 Kinetic） */
       --app-ui-zoom: 1;
       /*
@@ -3603,13 +3613,22 @@
      * 睡眠倒计时 dock：固定底栏 chrome 内、导航正上方。
      * 隐藏时 [hidden]→display:none，不占位；可见时靠 --done-sleep-countdown-dock-space
      * 并入 --app-bottom-nav-space，任务列表底部自动留出安全空间（纯 CSS，无滚动监听）。
+     * 水平：抵消 chrome 内边距后再套 Done List 内容区内边距，恢复移顶前同宽同对齐。
      */
     .primary-bottom-nav-chrome > #doneSleepCountdownBar.done-sleep-countdown {
-      margin: 0 0 5px;
-      width: 100%;
+      width: auto;
       max-width: 100%;
       flex: 0 0 auto;
       align-self: stretch;
+      box-sizing: border-box;
+      margin-top: 0;
+      margin-bottom: 5px;
+      margin-left: calc(
+        var(--done-list-inline-pad-start) - var(--bottom-nav-chrome-inline-pad-start)
+      );
+      margin-right: calc(
+        var(--done-list-inline-pad-end) - var(--bottom-nav-chrome-inline-pad-end)
+      );
     }
 
     /* 桌面/默认：36px 条 + 3px×2 边 + 5px 间距；写在 :root 以便并入 --app-bottom-nav-space */
@@ -86843,6 +86862,16 @@
         scroll-padding-bottom: 12px;
       }
 
+      /* 平板全屏：Done List 水平内边距 = module-content + kinetic-tab-panel section */
+      :root {
+        --done-list-inline-pad-start: calc(
+          max(6px, env(safe-area-inset-left, 0px)) + max(4px, env(safe-area-inset-left, 0px))
+        );
+        --done-list-inline-pad-end: calc(
+          max(8px, env(safe-area-inset-right, 0px)) + max(4px, env(safe-area-inset-right, 0px))
+        );
+      }
+
       body.primary-module-fullscreen .module-stack > .card.module-focus-active#dynamicModule {
         overflow-x: hidden;
       }
@@ -87508,8 +87537,19 @@
         --done-sleep-countdown-dock-space: 44px;
       }
 
+      /*
+       * 手机全屏：module-content 水平仅 safe-area；section 仍为 10px
+       * （#dynamicModule .columns > section），对齐移顶前宽度。
+       */
+      :root {
+        --done-list-inline-pad-start: calc(max(0px, env(safe-area-inset-left, 0px)) + 10px);
+        --done-list-inline-pad-end: calc(max(0px, env(safe-area-inset-right, 0px)) + 10px);
+        --bottom-nav-chrome-inline-pad-start: max(8px, env(safe-area-inset-left, 0px));
+        --bottom-nav-chrome-inline-pad-end: max(8px, env(safe-area-inset-right, 0px));
+      }
+
       .primary-bottom-nav-chrome > #doneSleepCountdownBar.done-sleep-countdown {
-        margin: 0 0 4px;
+        margin-bottom: 4px;
       }
 
       /*
@@ -89233,8 +89273,15 @@
         --done-sleep-countdown-dock-space: 44px;
       }
 
+      :root {
+        --done-list-inline-pad-start: calc(max(0px, env(safe-area-inset-left, 0px)) + 10px);
+        --done-list-inline-pad-end: calc(max(0px, env(safe-area-inset-right, 0px)) + 10px);
+        --bottom-nav-chrome-inline-pad-start: max(8px, env(safe-area-inset-left, 0px));
+        --bottom-nav-chrome-inline-pad-end: max(8px, env(safe-area-inset-right, 0px));
+      }
+
       .primary-bottom-nav-chrome > #doneSleepCountdownBar.done-sleep-countdown {
-        margin: 0 0 4px;
+        margin-bottom: 4px;
       }
 
       .container,
@@ -113054,7 +113101,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261106d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261106e";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
