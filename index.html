@@ -38558,16 +38558,16 @@
 
     /*
      * 觉察信号提醒（可整段回滚）
-     * 独立宿主：锚定 .module-stack 右上角；紧凑轻量卡片；与两分钟左上宿主空间分离。
+     * 独立宿主：右侧与两分钟左缘绕 .container 中轴镜像；同高；不改两分钟定位。
      */
     .awareness-signal-host {
       position: fixed;
-      top: 10px;
-      right: 10px;
+      top: 12px;
+      right: 12px;
       left: auto;
       z-index: 5200;
       width: max-content;
-      max-width: min(420px, calc(100% - 20px));
+      max-width: min(420px, calc(100% - 24px));
       margin: 0;
       padding: 0;
       box-sizing: border-box;
@@ -38621,6 +38621,7 @@
       padding: 8px 10px 8px 9px;
       border: 1px solid #4aa8ff;
       border-radius: 12px;
+      /* 与两分钟卡片同色米黄底，保持关键词原色；不叠加额外光晕 */
       background: #fffcf5;
       box-shadow:
         0 0 0 1.5px #fffcf5,
@@ -38801,9 +38802,9 @@
 
     @media (max-width: 767px) {
       .awareness-signal-host {
-        top: 8px;
-        right: 6px;
-        max-width: calc(100% - 12px);
+        top: 10px;
+        right: 8px;
+        max-width: calc(100% - 16px);
       }
 
       .awareness-signal-overlay {
@@ -112180,7 +112181,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261104u";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261104v";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -222780,9 +222781,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const TWO_MINUTE_HOST_VIEW_PAD_PX = 8;
       let twoMinuteHostPosBound = false;
 
-      /** 觉察：独立右上宿主，锚定 .module-stack 右侧；与左上两分钟空间分离。 */
+      /** 觉察：右缘镜像两分钟左缘（绕 .container 中轴）；同高；不改两分钟。 */
       const AWARENESS_HOST_TOP_INSET_PX = 12;
-      const AWARENESS_HOST_RIGHT_INSET_PX = 8;
       const AWARENESS_HOST_VIEW_PAD_PX = 8;
       /** 窄屏时若与左上宿主水平投影冲突，把觉察整体下移，避免空间重叠。 */
       const AWARENESS_HOST_STACK_GAP_PX = 10;
@@ -222860,9 +222860,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const host = document.getElementById("awarenessSignalHost");
         if (!host) return;
         const stack = document.querySelector(".module-stack");
-        const anchor = stack || document.querySelector(".container");
+        const container = document.querySelector(".container");
+        const anchor = stack || container;
         if (!anchor) return;
         const r = anchor.getBoundingClientRect();
+        const mirrorBox = (container || anchor).getBoundingClientRect();
         const vv = window.visualViewport;
         const viewLeft = vv ? vv.offsetLeft : 0;
         const viewWidth = vv ? vv.width : window.innerWidth;
@@ -222871,14 +222873,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const pad = AWARENESS_HOST_VIEW_PAD_PX;
         const maxRight = Math.round(viewLeft + viewWidth - pad);
         const minLeft = Math.round(viewLeft + pad);
+        /* 与两分钟同高（仅读取其 inset 常量，不改两分钟宿主） */
         let top = Math.round(r.top + AWARENESS_HOST_TOP_INSET_PX);
-        let rightInset = Math.max(pad, Math.round(viewLeft + viewWidth - r.right + AWARENESS_HOST_RIGHT_INSET_PX));
+        const twoMinPad = Math.max(
+          TWO_MINUTE_HOST_VIEW_PAD_PX,
+          Math.round(viewLeft + TWO_MINUTE_HOST_VIEW_PAD_PX)
+        );
+        const twoMinLeft = Math.max(
+          twoMinPad,
+          Math.round(r.left + TWO_MINUTE_HOST_LEFT_INSET_PX)
+        );
+        /* 绕主要内容容器 .container 垂直中轴，镜像两分钟左缘 → 觉察右缘 */
+        const centerX = (mirrorBox.left + mirrorBox.right) / 2;
+        let mirroredRight = Math.round(2 * centerX - twoMinLeft);
+        mirroredRight = Math.min(maxRight, Math.max(minLeft + 160, mirroredRight));
+        let rightInset = Math.max(pad, Math.round(viewLeft + viewWidth - mirroredRight));
         host.style.left = "auto";
         host.style.right = rightInset + "px";
         host.style.top = top + "px";
 
         const maxWFromView = Math.max(160, maxRight - minLeft);
-        const maxWFromAnchor = Math.max(160, Math.round(r.width - AWARENESS_HOST_RIGHT_INSET_PX));
+        const maxWFromAnchor = Math.max(160, Math.round(r.width / 2));
         host.style.maxWidth = Math.min(420, maxWFromView, maxWFromAnchor) + "px";
 
         /* 窄屏：若觉察宿主与两分钟宿主水平投影重叠，则下移觉察，保证空间不重叠 */
