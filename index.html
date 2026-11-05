@@ -46,12 +46,25 @@
         72px + env(safe-area-inset-bottom, 0px) + var(--done-sleep-countdown-dock-space, 0px)
       );
       /*
-       * Done List 内容区水平内边距（相对主栏 / morePageSkeleton）：
-       * = .module-content 水平 padding + #dynamicModule .columns > section 的 padding。
-       * 睡眠倒计时 dock 后复用此值，与移顶前宽度对齐；勿改成底栏全宽或固定百分比。
+       * Done List 任务区内容盒水平内边距（相对主栏 / morePageSkeleton）：
+       * = module-content pad + section border + section pad（+ 右端 scrollbar-gutter）。
+       * 对齐目标：section 内 width:100% 子项（与移顶前倒计时同宽），非底栏全宽。
        */
-      --done-list-inline-pad-start: calc(clamp(10px, 1.4vw, 16px) + 10px);
-      --done-list-inline-pad-end: calc(clamp(10px, 1.4vw, 16px) + 10px);
+      --done-list-module-pad-start: clamp(10px, 1.4vw, 16px);
+      --done-list-module-pad-end: clamp(10px, 1.4vw, 16px);
+      --done-list-section-pad-start: 10px;
+      --done-list-section-pad-end: 10px;
+      --done-list-section-border-start: 4px;
+      --done-list-section-border-end: 1px;
+      --done-list-scrollbar-gutter: 0px;
+      --done-list-inline-pad-start: calc(
+        var(--done-list-module-pad-start) + var(--done-list-section-border-start) +
+          var(--done-list-section-pad-start)
+      );
+      --done-list-inline-pad-end: calc(
+        var(--done-list-module-pad-end) + var(--done-list-section-border-end) +
+          var(--done-list-section-pad-end) + var(--done-list-scrollbar-gutter)
+      );
       /* 与 .primary-bottom-nav-chrome 水平 padding 同步 */
       --bottom-nav-chrome-inline-pad-start: max(8px, env(safe-area-inset-left, 0px));
       --bottom-nav-chrome-inline-pad-end: max(8px, env(safe-area-inset-right, 0px));
@@ -3617,17 +3630,21 @@
      */
     .primary-bottom-nav-chrome > #doneSleepCountdownBar.done-sleep-countdown {
       width: auto;
+      min-width: 0;
       max-width: 100%;
       flex: 0 0 auto;
       align-self: stretch;
       box-sizing: border-box;
       margin-top: 0;
       margin-bottom: 5px;
-      margin-left: calc(
-        var(--done-list-inline-pad-start) - var(--bottom-nav-chrome-inline-pad-start)
+      /* --dsc-dock-ml/mr 由 syncDoneSleepCountdownDockAlign 按任务区实测写入；无值时用 CSS 估算 */
+      margin-left: var(
+        --dsc-dock-ml,
+        calc(var(--done-list-inline-pad-start) - var(--bottom-nav-chrome-inline-pad-start))
       );
-      margin-right: calc(
-        var(--done-list-inline-pad-end) - var(--bottom-nav-chrome-inline-pad-end)
+      margin-right: var(
+        --dsc-dock-mr,
+        calc(var(--done-list-inline-pad-end) - var(--bottom-nav-chrome-inline-pad-end))
       );
     }
 
@@ -86873,14 +86890,13 @@
         scroll-padding-bottom: 12px;
       }
 
-      /* 平板全屏：Done List 水平内边距 = module-content + kinetic-tab-panel section */
+      /* 平板全屏：与 module-content / kinetic-tab-panel 水平 padding 对齐；stable gutter 计入右缘 */
       :root {
-        --done-list-inline-pad-start: calc(
-          max(6px, env(safe-area-inset-left, 0px)) + max(4px, env(safe-area-inset-left, 0px))
-        );
-        --done-list-inline-pad-end: calc(
-          max(8px, env(safe-area-inset-right, 0px)) + max(4px, env(safe-area-inset-right, 0px))
-        );
+        --done-list-module-pad-start: max(6px, env(safe-area-inset-left, 0px));
+        --done-list-module-pad-end: max(8px, env(safe-area-inset-right, 0px));
+        --done-list-section-pad-start: max(4px, env(safe-area-inset-left, 0px));
+        --done-list-section-pad-end: max(4px, env(safe-area-inset-right, 0px));
+        --done-list-scrollbar-gutter: 12px;
       }
 
       body.primary-module-fullscreen .module-stack > .card.module-focus-active#dynamicModule {
@@ -87255,6 +87271,11 @@
         box-sizing: border-box;
       }
 
+      /* 桌面：module-content scrollbar-gutter:stable 计入任务区右缘 */
+      :root {
+        --done-list-scrollbar-gutter: 12px;
+      }
+
       body.primary-module-fullscreen #dynamicModule.module-focus-active > .module-content > .kinetic-tabs {
         position: sticky;
         top: 0;
@@ -87549,12 +87570,17 @@
       }
 
       /*
-       * 手机全屏：module-content 水平仅 safe-area；section 仍为 10px
-       * （#dynamicModule .columns > section），对齐移顶前宽度。
+       * 手机全屏：module-content 水平仅 safe-area；section padding 10px、边框按实际
+       * （部分窄屏边框为 0，由 syncDoneSleepCountdownDockAlign 实测校正）。
        */
       :root {
-        --done-list-inline-pad-start: calc(max(0px, env(safe-area-inset-left, 0px)) + 10px);
-        --done-list-inline-pad-end: calc(max(0px, env(safe-area-inset-right, 0px)) + 10px);
+        --done-list-module-pad-start: max(0px, env(safe-area-inset-left, 0px));
+        --done-list-module-pad-end: max(0px, env(safe-area-inset-right, 0px));
+        --done-list-section-pad-start: 10px;
+        --done-list-section-pad-end: 10px;
+        --done-list-section-border-start: 4px;
+        --done-list-section-border-end: 1px;
+        --done-list-scrollbar-gutter: 0px;
         --bottom-nav-chrome-inline-pad-start: max(8px, env(safe-area-inset-left, 0px));
         --bottom-nav-chrome-inline-pad-end: max(8px, env(safe-area-inset-right, 0px));
       }
@@ -89285,8 +89311,13 @@
       }
 
       :root {
-        --done-list-inline-pad-start: calc(max(0px, env(safe-area-inset-left, 0px)) + 10px);
-        --done-list-inline-pad-end: calc(max(0px, env(safe-area-inset-right, 0px)) + 10px);
+        --done-list-module-pad-start: max(0px, env(safe-area-inset-left, 0px));
+        --done-list-module-pad-end: max(0px, env(safe-area-inset-right, 0px));
+        --done-list-section-pad-start: 10px;
+        --done-list-section-pad-end: 10px;
+        --done-list-section-border-start: 4px;
+        --done-list-section-border-end: 1px;
+        --done-list-scrollbar-gutter: 0px;
         --bottom-nav-chrome-inline-pad-start: max(8px, env(safe-area-inset-left, 0px));
         --bottom-nav-chrome-inline-pad-end: max(8px, env(safe-area-inset-right, 0px));
       }
@@ -113112,7 +113143,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261106f";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261106g";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -178882,6 +178913,109 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return host;
     }
 
+    let doneSleepCountdownDockAlignRaf = 0;
+    let doneSleepCountdownDockAlignBound = false;
+
+    /**
+     * 将 dock 睡眠倒计时左右外缘对齐 Done 任务区内容盒（section 内原 width:100% 位置）。
+     * 仅写 CSS 变量 --dsc-dock-ml/mr，不改倒计时内部 DOM、无轮询。
+     */
+    function clearDoneSleepCountdownDockAlign(hostOpt) {
+      const host = hostOpt || document.getElementById("doneSleepCountdownBar");
+      if (!host) return;
+      host.style.removeProperty("--dsc-dock-ml");
+      host.style.removeProperty("--dsc-dock-mr");
+    }
+
+    function syncDoneSleepCountdownDockAlign(hostOpt) {
+      const host = hostOpt || document.getElementById("doneSleepCountdownBar");
+      if (!host || host.hidden) {
+        clearDoneSleepCountdownDockAlign(host);
+        return;
+      }
+      const chrome = host.parentElement;
+      if (!chrome || !chrome.classList.contains("primary-bottom-nav-chrome")) return;
+      const section = document.querySelector(
+        "#dynamicModule .columns > section.kinetic-sub-done"
+      );
+      const list = document.getElementById("doneList");
+      let targetLeft = NaN;
+      let targetRight = NaN;
+      if (section && section.getClientRects().length) {
+        const sRect = section.getBoundingClientRect();
+        const sCs = getComputedStyle(section);
+        const bl = parseFloat(sCs.borderLeftWidth) || 0;
+        const br = parseFloat(sCs.borderRightWidth) || 0;
+        const pl = parseFloat(sCs.paddingLeft) || 0;
+        const pr = parseFloat(sCs.paddingRight) || 0;
+        /* section 内容盒 = 移顶前倒计时作为子项时的包含块 */
+        targetLeft = sRect.left + bl + pl;
+        targetRight = sRect.right - br - pr;
+      } else if (list && list.getClientRects().length) {
+        const lRect = list.getBoundingClientRect();
+        targetLeft = lRect.left;
+        targetRight = lRect.right;
+      } else {
+        return;
+      }
+      if (!Number.isFinite(targetLeft) || !Number.isFinite(targetRight)) return;
+      if (targetRight - targetLeft < 40) return;
+
+      const cRect = chrome.getBoundingClientRect();
+      const cCs = getComputedStyle(chrome);
+      const cPadL = parseFloat(cCs.paddingLeft) || 0;
+      const cPadR = parseFloat(cCs.paddingRight) || 0;
+      let zoom = 1;
+      try {
+        const zRaw =
+          getComputedStyle(document.documentElement).zoom ||
+          document.documentElement.style.zoom ||
+          "1";
+        const zNum = parseFloat(zRaw);
+        if (Number.isFinite(zNum) && zNum > 0.2 && zNum < 4) zoom = zNum;
+      } catch (_z) {}
+      /* getBoundingClientRect 为视口视觉坐标；padding/zoom 写入须换算回 CSS px */
+      const contentLeft = cRect.left + cPadL * zoom;
+      const contentRight = cRect.right - cPadR * zoom;
+      let ml = (targetLeft - contentLeft) / zoom;
+      let mr = (contentRight - targetRight) / zoom;
+      if (!Number.isFinite(ml) || !Number.isFinite(mr)) return;
+      ml = Math.max(0, ml);
+      mr = Math.max(0, mr);
+      const mlStr = ml.toFixed(2) + "px";
+      const mrStr = mr.toFixed(2) + "px";
+      if (host.style.getPropertyValue("--dsc-dock-ml") !== mlStr) {
+        host.style.setProperty("--dsc-dock-ml", mlStr);
+      }
+      if (host.style.getPropertyValue("--dsc-dock-mr") !== mrStr) {
+        host.style.setProperty("--dsc-dock-mr", mrStr);
+      }
+    }
+
+    function ensureDoneSleepCountdownDockAlignBound() {
+      if (doneSleepCountdownDockAlignBound) return;
+      doneSleepCountdownDockAlignBound = true;
+      /* 仅窗口尺寸变化时重算对齐；无滚动监听、无轮询 */
+      window.addEventListener("resize", scheduleDoneSleepCountdownDockAlign);
+      window.addEventListener("orientationchange", scheduleDoneSleepCountdownDockAlign);
+      try {
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener(
+            "resize",
+            scheduleDoneSleepCountdownDockAlign
+          );
+        }
+      } catch (_vv) {}
+    }
+
+    function scheduleDoneSleepCountdownDockAlign() {
+      if (doneSleepCountdownDockAlignRaf) return;
+      doneSleepCountdownDockAlignRaf = requestAnimationFrame(function () {
+        doneSleepCountdownDockAlignRaf = 0;
+        syncDoneSleepCountdownDockAlign();
+      });
+    }
+
     function updateDoneSleepCountdownBarDom(opts) {
       const forceTime = !!(opts && opts.forceTime);
       const host = document.getElementById("doneSleepCountdownBar");
@@ -178894,6 +179028,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       /* 1s ticker 仍会调用本函数以驱动跑马灯；时间文案 / 进度条仅分钟级写入 */
       if (!shouldUpdateTimeUi) {
         syncDoneSleepCountdownMottoMarquee(host);
+        if (!host.hidden) {
+          ensureDoneSleepCountdownDockAlignBound();
+          scheduleDoneSleepCountdownDockAlign();
+        }
         return;
       }
       doneSleepCountdownLastUiMin = minuteBucket;
@@ -178911,6 +179049,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
       if (snap.phase === "hidden") {
         host.hidden = true;
+        clearDoneSleepCountdownDockAlign(host);
         syncDoneSleepCountdownMottoMarquee(host);
         return;
       }
@@ -178992,6 +179131,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
 
       syncDoneSleepCountdownMottoMarquee(host);
+      ensureDoneSleepCountdownDockAlignBound();
+      scheduleDoneSleepCountdownDockAlign();
     }
 
     function renderDoneSleepCountdownBar() {
@@ -181415,6 +181556,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     function scheduleDoneVictoryFxReposition() {
+      /* 窗口缩放时顺带校正睡眠倒计时 dock 对齐（复用现有 resize 路径，不新增监听） */
+      if (typeof scheduleDoneSleepCountdownDockAlign === "function") {
+        scheduleDoneSleepCountdownDockAlign();
+      }
       if (!doneVictoryFxActiveEl) return;
       if (doneVictoryFxReposRaf) {
         try {
