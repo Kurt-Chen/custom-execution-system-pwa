@@ -42476,10 +42476,47 @@
       /* 允许内层列表向左伸出以对齐轴线，不裁切圆点 */
       overflow: visible;
     }
-    ul.app-done-time-timeline .done-current-hour-frame::before,
+    ul.app-done-time-timeline .done-current-hour-frame::before {
+      content: none;
+      display: none;
+    }
+    /*
+     * 当前冲刺小时数字水印（基础版）：仅 ::after，零额外 DOM。
+     * 层叠在任务列表（z-index:1）之下；无阴影/光晕/模糊/动画。
+     * 内容来自 data-sprint-wm（进行中冲刺编号 = currentHour - 4）。
+     */
     ul.app-done-time-timeline .done-current-hour-frame::after {
       content: none;
       display: none;
+    }
+    ul.app-done-time-timeline .done-current-hour-frame[data-sprint-wm]::after {
+      content: attr(data-sprint-wm);
+      display: block;
+      position: absolute;
+      right: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 0;
+      margin: 0;
+      padding: 0;
+      border: none;
+      pointer-events: none;
+      user-select: none;
+      line-height: 1;
+      letter-spacing: -0.04em;
+      font-family: system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-weight: 800;
+      font-style: normal;
+      font-variant-numeric: tabular-nums;
+      font-size: 6.5rem;
+      color: rgba(47, 155, 255, 0.2);
+      text-shadow: none;
+      filter: none;
+      box-shadow: none;
+      background: none;
+      animation: none;
+      transition: none;
+      white-space: nowrap;
     }
     ul.app-done-time-timeline .done-current-hour-frame__list {
       list-style: none;
@@ -112239,7 +112276,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261105d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261105e";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -166168,6 +166205,23 @@
       return getDoneTaskCompletedHour(task) === currentHour;
     }
 
+    /**
+     * 当前冲刺小时数字水印（基础版）：写入 data-sprint-wm 供 ::after 显示。
+     * 进行中冲刺编号 = 下一整点 finishHour - 5 = currentHour - 4。
+     */
+    function applyDoneCurrentHourFrameWatermark(frame) {
+      if (!frame || !frame.classList || !frame.classList.contains("done-current-hour-frame")) {
+        return;
+      }
+      const hour = Number(frame.getAttribute("data-current-hour"));
+      const sprintWm = Number.isFinite(hour) ? hour - 4 : NaN;
+      if (!(sprintWm >= 1)) {
+        frame.removeAttribute("data-sprint-wm");
+        return;
+      }
+      frame.setAttribute("data-sprint-wm", String(sprintWm));
+    }
+
     /** 把当前小时框内的任务行拆回父 ul（小时切换时旧框立即拆除） */
     function unwrapDoneCurrentHourHighlightFrames(root) {
       if (!root) return;
@@ -166236,6 +166290,8 @@
             closeHourFrame();
           }
         }
+        const painted = itemWrap.querySelector(":scope > li.done-current-hour-frame");
+        if (painted) applyDoneCurrentHourFrameWatermark(painted);
       }
     }
 
@@ -166322,6 +166378,8 @@
           itemWrap.appendChild(li);
         }
       });
+      const paintedFrame = itemWrap.querySelector(":scope > li.done-current-hour-frame");
+      if (paintedFrame) applyDoneCurrentHourFrameWatermark(paintedFrame);
     }
 
 const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ 回收能量";
@@ -186323,6 +186381,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             } else {
               frameList.insertBefore(rowLi, frameList.firstChild);
             }
+            applyDoneCurrentHourFrameWatermark(frame);
             return;
           }
         }
