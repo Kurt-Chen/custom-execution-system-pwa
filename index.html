@@ -38949,6 +38949,77 @@
       }
     }
 
+    /* 分心提醒浮窗 · 底部座右铭（仅追加，不改动上方布局） */
+    .awareness-signal-motto {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+      margin: 1px 0 0;
+      padding: 0 0 2px;
+      /* 不参与 max-content 撑宽：只吃上方标题/胶囊决定的宽度 */
+      width: 0;
+      min-width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+
+    .awareness-signal-motto__rule {
+      display: block;
+      width: 100%;
+      height: 0;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-top: 1px solid #9ecfff;
+      box-sizing: border-box;
+    }
+
+    .awareness-signal-motto__text {
+      margin: 0;
+      padding: 0 2px;
+      text-align: center;
+      color: #1e3a8a;
+      font-size: 13.5px;
+      font-weight: 750;
+      line-height: 1.35;
+      letter-spacing: 0.01em;
+      white-space: normal;
+      overflow-wrap: break-word;
+      word-break: keep-all;
+      font-family: inherit;
+    }
+
+    .awareness-signal-motto__em {
+      color: #db2777;
+      font: inherit;
+      font-family: inherit;
+      font-size: inherit;
+      font-weight: inherit;
+      letter-spacing: inherit;
+      line-height: inherit;
+    }
+    @media (min-width: 768px) and (max-width: 1366px) and (pointer: coarse) {
+      .awareness-signal-motto__text {
+        font-size: 13.75px;
+      }
+    }
+
+    @media (max-width: 767px) {
+      .awareness-signal-motto {
+        gap: 7px;
+        padding: 0 0 1px;
+      }
+
+      .awareness-signal-motto__text {
+        font-size: 12.5px;
+        line-height: 1.4;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+    }
+
 
     /* 平板触控（粗指针，含横屏）：三句加大间距铺开；放不下由 fitDoneManualInputSlogan 略缩 */
     @media (min-width: 768px) and (max-width: 1366px) and (pointer: coarse) {
@@ -112499,7 +112570,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261105r";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261105s";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -223464,15 +223535,44 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return cap;
       }
 
+      /** 分心提醒浮窗底部座右铭：胶囊下方浅蓝分隔线 + 居中金句（艰难与恐惧玫红） */
+      function makeAwarenessMottoBlock() {
+        const wrap = document.createElement("div");
+        wrap.className = "awareness-signal-motto";
+        const rule = document.createElement("div");
+        rule.className = "awareness-signal-motto__rule";
+        rule.setAttribute("aria-hidden", "true");
+        const text = document.createElement("p");
+        text.className = "awareness-signal-motto__text";
+        text.appendChild(document.createTextNode("你想要的一切，都在"));
+        const em = document.createElement("span");
+        em.className = "awareness-signal-motto__em";
+        em.textContent = "艰难与恐惧";
+        text.appendChild(em);
+        text.appendChild(document.createTextNode("的另一边"));
+        wrap.appendChild(rule);
+        wrap.appendChild(text);
+        return wrap;
+      }
+
+      /** 若卡片尚无座右铭节点则追加（兼容热更新/已挂载 overlay） */
+      function ensureAwarenessMottoInCard(card) {
+        if (!card || card.querySelector(".awareness-signal-motto")) return;
+        card.appendChild(makeAwarenessMottoBlock());
+      }
+
       function ensureAwarenessOverlay() {
         if (awarenessOverlayEl && awarenessOverlayEl.isConnected) {
-          return ensureAwarenessGlobalHost(awarenessOverlayEl);
+          const hostRoot = ensureAwarenessGlobalHost(awarenessOverlayEl);
+          ensureAwarenessMottoInCard(hostRoot && hostRoot.querySelector(".awareness-signal-card"));
+          return hostRoot;
         }
         const existing = document.getElementById("awarenessSignalOverlay");
         if (existing) {
           awarenessOverlayEl = ensureAwarenessGlobalHost(existing);
           const staleClose = existing.querySelector(".awareness-signal-close");
           if (staleClose && staleClose.parentNode) staleClose.parentNode.removeChild(staleClose);
+          ensureAwarenessMottoInCard(existing.querySelector(".awareness-signal-card"));
           return awarenessOverlayEl;
         }
 
@@ -223529,6 +223629,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
         card.appendChild(head);
         card.appendChild(caps);
+        card.appendChild(makeAwarenessMottoBlock());
         root.appendChild(card);
         const host = ensureAwarenessSharedHostEl();
         if (host) host.appendChild(root);
