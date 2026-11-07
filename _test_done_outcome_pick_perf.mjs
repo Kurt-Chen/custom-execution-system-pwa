@@ -64,6 +64,31 @@ if (!html.includes("function patchDoneVdIndexHomeAfterOutcomeEdit(")) {
 }
 ok("V/D 分类后就地 patch 存在");
 
+const vdPatchStart = html.indexOf("function patchDoneVdIndexHomeAfterOutcomeEdit(");
+const vdPatchEnd = html.indexOf("\n    function refreshOpenDoneVdPanelBodyAfterOutcomeEdit(", vdPatchStart);
+if (vdPatchEnd < 0) fail("missing refreshOpenDoneVdPanelBodyAfterOutcomeEdit");
+const vdPatchBody = html.slice(vdPatchStart, vdPatchEnd);
+if (vdPatchBody.includes("renderDoneVdIndexMethodPanel")) {
+  fail("capsule patch must not rebuild the open method panel on the click chrome path");
+}
+ok("分类点击的胶囊 patch 不重建趋势面板");
+
+if (!html.includes("function syncDoneRowOutcomeTone(")) {
+  fail("missing syncDoneRowOutcomeTone");
+}
+ok("行色调随分类立即更新");
+
+const layoutStart = html.indexOf("function syncDoneCompactPickLayout(");
+const layoutEnd = html.indexOf("\n    function normalizeDoneOutcomeKindsInState(", layoutStart);
+const layoutBody = html.slice(layoutStart, layoutEnd);
+if (!layoutBody.includes("const laidOut")) {
+  fail("picking layout must skip redundant appendChild when already laid out");
+}
+if (layoutBody.includes("clearOrphanMetaStackHints();\n        const hint")) {
+  fail("picking layout must not delete the promoted 90-day hint");
+}
+ok("选择态重复切换不再搬动节点或删掉 90 天提示");
+
 const chromeStart = html.indexOf("function refreshDoneOutcomeDerivedChromeLight(");
 const chromeEnd = html.indexOf("\n    function scheduleDoneOutcomeClickFollowUp(", chromeStart);
 if (chromeStart < 0 || chromeEnd < 0) fail("missing refreshDoneOutcomeDerivedChromeLight");
@@ -82,12 +107,12 @@ if (chromeBody.includes("syncVdIndexRulesMarquee") || chromeBody.includes("syncV
 }
 ok("顶栏派生跳过时段/Refocus/跑马灯，改用 V/D 就地 patch");
 
-if (!html.includes('APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261107b"')) {
-  fail("index.html cache badge not bumped to v20261107b");
+if (!html.includes('APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261107c"')) {
+  fail("index.html cache badge not bumped to v20261107c");
 }
-if (!sw.includes('CACHE_NAME = "exec-system-pwa-v20261107b"')) {
-  fail("sw.js CACHE_NAME not bumped to v20261107b");
+if (!sw.includes('CACHE_NAME = "exec-system-pwa-v20261107c"')) {
+  fail("sw.js CACHE_NAME not bumped to v20261107c");
 }
-ok("缓存版本 v20261107b");
+ok("缓存版本 v20261107c");
 
 console.log("\nAll checks passed.");
