@@ -113297,7 +113297,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261106n";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261107a";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -182502,8 +182502,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      * → flushCloudSyncPulseImmediate() → render() 整页（含 V/D / 时间轴全量）
      * → 且仅 manualDone 才 notifyAliyunDoneRealUpsert。
      * 目标：先改 state + 本行 UI，保存/云同步/顶栏派生全部后台异步。
+     *
+     * 2026-11-07 二次卡顿：点击后虽已行级 patch，但仍同步跑 saveState +
+     * notifyAliyunDoneRealUpsert（实验日志区 textarea 写值会强制布局），
+     * 并在 setTimeout(0) 里 flushLocalPersistedState("force") 整包 stringify，
+     * 与首帧绘制抢主线程。现改为：paint 后再落盘/upsert；落盘走 400ms 防抖
+     *（隐藏页/卸载已有 force flush）；顶栏派生单独短防抖合并连点。
      */
     let doneOutcomeClickFollowUpTimer = null;
+    let doneOutcomeClickFollowUpRaf = 0;
+    let doneOutcomeChromeRefreshTimer = null;
+    /** @type {Map<string, {item: object, reason: string}>} */
+    let doneOutcomePendingUpserts = new Map();
+    let doneOutcomePendingPatchedOk = true;
 
     /** 当前性质 UI 结构模式：同模式可就地改选中态，避免整段卸载闪动 */
     function resolveDoneOutcomeUiMode(task) {
@@ -182613,11 +182624,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!task || task.id == null || !doneList) return false;
       const sid = String(task.id);
       let li = null;
-      const nodes = doneList.querySelectorAll("li.timeline-item.done[data-done-id]");
-      for (let i = 0; i < nodes.length; i++) {
-        if (nodes[i].getAttribute("data-done-id") === sid) {
-          li = nodes[i];
-          break;
+      try {
+        /* 直接按属性定位，避免每次点击扫整表 li 节点 */
+        if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+          li = doneList.querySelector(
+            'li.timeline-item.done[data-done-id="' + CSS.escape(sid) + '"]'
+          );
+        }
+      } catch (_q) {
+        li = null;
+      }
+      if (!li) {
+        const nodes = doneList.querySelectorAll("li.timeline-item.done[data-done-id]");
+        for (let i = 0; i < nodes.length; i++) {
+          if (nodes[i].getAttribute("data-done-id") === sid) {
+            li = nodes[i];
+            break;
+          }
         }
       }
       if (!li) return false;
@@ -182691,38 +182714,72 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
-    /** 后台：窄域 save + 阿里云 Done upsert + 合并连点后刷派生 UI */
+    /** 后台：窄域 save + 阿里云 Done upsert + 合并连点后刷派生 UI（须在首帧 paint 之后） */
     function scheduleDoneOutcomeClickFollowUp(item, reason, patchedOk) {
       /*
        * 本机行已 patch 成功时：禁止把 done 切片标脏。
        * 否则后续任意 render()/云合并 hygiene 会整表重建时间轴 → 闪动、详情态丢失、重复节点感。
        * 仍落盘 + 阿里云 upsert；卫生只跑 donePrune，避免全量 hygiene 连锁。
+       *
+       * 点击同步路径只改 state + 本行 DOM；save/notify/顶栏全部延后到 paint 后，
+       * 且不 force flush 整包（避免 stringify 抢帧）。多行连点用 Map 合并 upsert。
        */
-      saveState({
-        lists: ["done"],
-        skipUiPaintDirty: !!patchedOk,
-        hygieneDomains: ["donePrune"]
-      });
-      if (item && typeof notifyAliyunDoneRealUpsert === "function") {
-        try {
-          notifyAliyunDoneRealUpsert(reason || "outcome-edit", item);
-        } catch (_aliyunDoneOutcome) {}
+      if (item && item.id != null) {
+        doneOutcomePendingUpserts.set(String(item.id), {
+          item: item,
+          reason: reason || "outcome-edit"
+        });
       }
-      if (doneOutcomeClickFollowUpTimer) clearTimeout(doneOutcomeClickFollowUpTimer);
-      doneOutcomeClickFollowUpTimer = setTimeout(function () {
-        doneOutcomeClickFollowUpTimer = null;
-        try {
-          flushLocalPersistedState("force");
-        } catch (_persistErr) {}
-        if (patchedOk) {
-          refreshDoneOutcomeDerivedChromeLight();
-        } else {
+      doneOutcomePendingPatchedOk = doneOutcomePendingPatchedOk && !!patchedOk;
+      /* Map 已更新；已排队的 rAF/macrotask 会读到最新 upserts */
+      if (doneOutcomeClickFollowUpRaf || doneOutcomeClickFollowUpTimer) return;
+
+      function armDoneOutcomeFollowUpMacrotask() {
+        doneOutcomeClickFollowUpRaf = 0;
+        if (doneOutcomeClickFollowUpTimer) clearTimeout(doneOutcomeClickFollowUpTimer);
+        doneOutcomeClickFollowUpTimer = setTimeout(function () {
+          doneOutcomeClickFollowUpTimer = null;
+          const upserts = doneOutcomePendingUpserts;
+          doneOutcomePendingUpserts = new Map();
+          const allPatchedOk = doneOutcomePendingPatchedOk;
+          doneOutcomePendingPatchedOk = true;
           try {
-            markUiPaintSlicesDirty(["done"]);
-            render();
-          } catch (_renderErr) {}
-        }
-      }, 0);
+            saveState({
+              lists: ["done"],
+              skipUiPaintDirty: allPatchedOk,
+              hygieneDomains: ["donePrune"]
+            });
+          } catch (_saveErr) {}
+          if (typeof notifyAliyunDoneRealUpsert === "function" && upserts && upserts.size) {
+            upserts.forEach(function (entry) {
+              if (!entry || !entry.item) return;
+              try {
+                notifyAliyunDoneRealUpsert(entry.reason || "outcome-edit", entry.item);
+              } catch (_aliyunDoneOutcome) {}
+            });
+          }
+          if (allPatchedOk) {
+            if (doneOutcomeChromeRefreshTimer) clearTimeout(doneOutcomeChromeRefreshTimer);
+            doneOutcomeChromeRefreshTimer = setTimeout(function () {
+              doneOutcomeChromeRefreshTimer = null;
+              try {
+                refreshDoneOutcomeDerivedChromeLight();
+              } catch (_chromeErr) {}
+            }, 48);
+          } else {
+            try {
+              markUiPaintSlicesDirty(["done"]);
+              render();
+            } catch (_renderErr) {}
+          }
+        }, 0);
+      }
+
+      if (typeof requestAnimationFrame === "function") {
+        doneOutcomeClickFollowUpRaf = requestAnimationFrame(armDoneOutcomeFollowUpMacrotask);
+      } else {
+        armDoneOutcomeFollowUpMacrotask();
+      }
     }
 
     function setDoneOutcomeKindForDoneId(id, kind) {
@@ -182924,31 +182981,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         "aria-label",
         "当前：" + kindLabel + " " + scoreLabel + "，展开可更改"
       );
-      summary.addEventListener("click", function (ev) {
-        ev.stopPropagation();
-      });
-
-      const chain = createDoneOutcomeStatusChainEl(cur);
-      chain.setAttribute("aria-hidden", "true");
-      summary.appendChild(chain);
-
-      const panel = document.createElement("div");
-      panel.className = "done-outcome-expand-panel";
-      const inner = document.createElement("div");
-      inner.className = "done-outcome-segment done-outcome-segment--expand-row";
-      appendOutcomeButtons(inner, true);
-      appendScoreButtons(inner, cur, curScore);
-      inner.appendChild(createDoneOutcome90DayHintEl(true));
-      panel.appendChild(inner);
-
-      details.appendChild(summary);
-      details.appendChild(panel);
-      /*
-       * 展开 details 会同时露出 summary 状态链 + 面板三键 → 视觉上「两个 Neutral」。
-       * 打开即切入 keepScorePickOpen 的 expand-row，与直接编辑态同一套 DOM，避免叠层。
-       */
-      details.addEventListener("toggle", function onDoneOutcomeDetailsToggle() {
-        if (!details.open) return;
+      function enterDoneOutcomeExpandFromCompact() {
         if (!doneOutcomeScorePickOpenIds.has(tid)) {
           doneOutcomeScorePickOpenIds.add(tid);
         }
@@ -182959,17 +182992,32 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               })
             : null;
         if (!item) return;
-        if (typeof requestAnimationFrame === "function") {
-          requestAnimationFrame(function () {
-            try {
-              patchDoneOutcomeUiImmediate(item);
-            } catch (_detPatch) {}
-          });
-        } else {
-          try {
-            patchDoneOutcomeUiImmediate(item);
-          } catch (_detPatch2) {}
-        }
+        try {
+          patchDoneOutcomeUiImmediate(item);
+        } catch (_enterExpand) {}
+      }
+
+      /*
+       * 点击摘要直接切入 expand-row（与编辑态同一套 DOM）。
+       * 禁止先让 details 原生打开再 rAF 重建：会多一次 :has(details[open]) 布局
+       * 与「summary 链 + 面板三键」叠层闪动，分类选择器展开体感卡顿。
+       * compact 态不再预建展开面板（打开必重建），减初始挂载与点击路径无效 DOM。
+       */
+      summary.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        enterDoneOutcomeExpandFromCompact();
+      });
+
+      const chain = createDoneOutcomeStatusChainEl(cur);
+      chain.setAttribute("aria-hidden", "true");
+      summary.appendChild(chain);
+
+      details.appendChild(summary);
+      /* 键盘等非 click 打开 details 时仍切到同一套 expand-row */
+      details.addEventListener("toggle", function onDoneOutcomeDetailsToggle() {
+        if (!details.open) return;
+        enterDoneOutcomeExpandFromCompact();
       });
       return details;
     }
