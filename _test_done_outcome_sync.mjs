@@ -17,8 +17,8 @@ mustInclude("aliyunDoneRealMergeOutcomeIntoLocal(local, remote, false)", "merge 
 mustInclude("outcomeGap", "fingerprint skip checks outcome gap");
 mustInclude("notifyAliyunDoneRealUpsert(reason || \"outcome-edit\", item)", "click uploads outcome");
 mustInclude("mergeDoneItemOutcomeFields(next, local, remote, true)", "LWW path uses shared outcome merge");
-mustInclude("exec-system-pwa-v20261021m", "cache bump html");
-assert.ok(sw.includes("exec-system-pwa-v20261021m"), "cache bump sw");
+mustInclude("exec-system-pwa-v20261107a", "cache bump html");
+assert.ok(sw.includes("exec-system-pwa-v20261107a"), "cache bump sw");
 
 /* 纯逻辑：本机更新更新、远端有力量 → 仍应合入 */
 function mergeDoneItemOutcomeFields(mergedItem, localItem, remoteItem, preferRemoteOnConflict) {
