@@ -113297,7 +113297,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261106n";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261107a";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -182502,8 +182502,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      * → flushCloudSyncPulseImmediate() → render() 整页（含 V/D / 时间轴全量）
      * → 且仅 manualDone 才 notifyAliyunDoneRealUpsert。
      * 目标：先改 state + 本行 UI，保存/云同步/顶栏派生全部后台异步。
+     *
+     * 残余卡顿（v20261107）：
+     * 1) 收起态 <details> 打开会先布局预挂面板，再 rAF 整段重建 → 双布局
+     * 2) 点击当帧仍同步 saveState + Aliyun enqueue，且 setTimeout(0) force 整包落盘
+     *    与 V/D 顶栏刷新抢主线程。
+     * 现：展开直接切入 expand-row；保存/云同步延后到绘制后；落盘走既有 debounce，
+     * 顶栏派生短防抖合并连点（visibility/pagehide/beforeunload 仍 force flush）。
      */
     let doneOutcomeClickFollowUpTimer = null;
+    let doneOutcomeChromeRefreshTimer = null;
+    /** 连点合并窗口内待 upsert 的 Done 项（按 id 去重，保留最后一次） */
+    const doneOutcomePendingFollowUps = [];
+    const DONE_OUTCOME_CHROME_REFRESH_MS = 120;
 
     /** 当前性质 UI 结构模式：同模式可就地改选中态，避免整段卸载闪动 */
     function resolveDoneOutcomeUiMode(task) {
@@ -182613,11 +182624,24 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!task || task.id == null || !doneList) return false;
       const sid = String(task.id);
       let li = null;
-      const nodes = doneList.querySelectorAll("li.timeline-item.done[data-done-id]");
-      for (let i = 0; i < nodes.length; i++) {
-        if (nodes[i].getAttribute("data-done-id") === sid) {
-          li = nodes[i];
-          break;
+      try {
+        const esc =
+          typeof CSS !== "undefined" && typeof CSS.escape === "function"
+            ? CSS.escape(sid)
+            : sid.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+        li = doneList.querySelector(
+          'li.timeline-item.done[data-done-id="' + esc + '"]'
+        );
+      } catch (_q) {
+        li = null;
+      }
+      if (!li) {
+        const nodes = doneList.querySelectorAll("li.timeline-item.done[data-done-id]");
+        for (let i = 0; i < nodes.length; i++) {
+          if (nodes[i].getAttribute("data-done-id") === sid) {
+            li = nodes[i];
+            break;
+          }
         }
       }
       if (!li) return false;
@@ -182691,31 +182715,61 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
-    /** 后台：窄域 save + 阿里云 Done upsert + 合并连点后刷派生 UI */
+    /** 合并连点：轻量刷顶栏性质/V·D，不重建时间轴 */
+    function scheduleDoneOutcomeChromeRefreshLight() {
+      if (doneOutcomeChromeRefreshTimer) clearTimeout(doneOutcomeChromeRefreshTimer);
+      doneOutcomeChromeRefreshTimer = setTimeout(function () {
+        doneOutcomeChromeRefreshTimer = null;
+        refreshDoneOutcomeDerivedChromeLight();
+      }, DONE_OUTCOME_CHROME_REFRESH_MS);
+    }
+
+    /**
+     * 后台：窄域 save + 阿里云 Done upsert + 合并连点后刷派生 UI。
+     * 必须在本行 UI patch 之后调用；本函数内不再做同步重活，让出首帧绘制。
+     * 连点合并时按 id 保留最后一次 upsert，避免只上传最后一条任务。
+     */
     function scheduleDoneOutcomeClickFollowUp(item, reason, patchedOk) {
       /*
        * 本机行已 patch 成功时：禁止把 done 切片标脏。
        * 否则后续任意 render()/云合并 hygiene 会整表重建时间轴 → 闪动、详情态丢失、重复节点感。
-       * 仍落盘 + 阿里云 upsert；卫生只跑 donePrune，避免全量 hygiene 连锁。
+       * 落盘走 scheduleLocalPersistFlush 防抖；不在点击路径 force 整包 stringify/IDB。
+       * 隐藏页 / pagehide / beforeunload 仍会 force flush，保证不丢。
        */
-      saveState({
-        lists: ["done"],
-        skipUiPaintDirty: !!patchedOk,
-        hygieneDomains: ["donePrune"]
+      doneOutcomePendingFollowUps.push({
+        item: item || null,
+        reason: reason || "outcome-edit",
+        patchedOk: !!patchedOk
       });
-      if (item && typeof notifyAliyunDoneRealUpsert === "function") {
-        try {
-          notifyAliyunDoneRealUpsert(reason || "outcome-edit", item);
-        } catch (_aliyunDoneOutcome) {}
-      }
       if (doneOutcomeClickFollowUpTimer) clearTimeout(doneOutcomeClickFollowUpTimer);
       doneOutcomeClickFollowUpTimer = setTimeout(function () {
         doneOutcomeClickFollowUpTimer = null;
+        const batch = doneOutcomePendingFollowUps.splice(0, doneOutcomePendingFollowUps.length);
+        let anyPatchFail = false;
+        const upsertById = new Map();
+        for (let i = 0; i < batch.length; i++) {
+          const b = batch[i];
+          if (!b.patchedOk) anyPatchFail = true;
+          if (b.item && b.item.id != null) {
+            upsertById.set(String(b.item.id), b);
+          }
+        }
         try {
-          flushLocalPersistedState("force");
-        } catch (_persistErr) {}
-        if (patchedOk) {
-          refreshDoneOutcomeDerivedChromeLight();
+          saveState({
+            lists: ["done"],
+            skipUiPaintDirty: !anyPatchFail,
+            hygieneDomains: ["donePrune"]
+          });
+        } catch (_saveErr) {}
+        if (typeof notifyAliyunDoneRealUpsert === "function") {
+          upsertById.forEach(function (b) {
+            try {
+              notifyAliyunDoneRealUpsert(b.reason, b.item);
+            } catch (_aliyunDoneOutcome) {}
+          });
+        }
+        if (!anyPatchFail) {
+          scheduleDoneOutcomeChromeRefreshLight();
         } else {
           try {
             markUiPaintSlicesDirty(["done"]);
@@ -182924,31 +182978,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         "aria-label",
         "当前：" + kindLabel + " " + scoreLabel + "，展开可更改"
       );
-      summary.addEventListener("click", function (ev) {
-        ev.stopPropagation();
-      });
 
       const chain = createDoneOutcomeStatusChainEl(cur);
       chain.setAttribute("aria-hidden", "true");
       summary.appendChild(chain);
-
-      const panel = document.createElement("div");
-      panel.className = "done-outcome-expand-panel";
-      const inner = document.createElement("div");
-      inner.className = "done-outcome-segment done-outcome-segment--expand-row";
-      appendOutcomeButtons(inner, true);
-      appendScoreButtons(inner, cur, curScore);
-      inner.appendChild(createDoneOutcome90DayHintEl(true));
-      panel.appendChild(inner);
-
       details.appendChild(summary);
-      details.appendChild(panel);
       /*
-       * 展开 details 会同时露出 summary 状态链 + 面板三键 → 视觉上「两个 Neutral」。
-       * 打开即切入 keepScorePickOpen 的 expand-row，与直接编辑态同一套 DOM，避免叠层。
+       * 展开优化：不预挂 expand 面板，也不走原生 details open。
+       * 旧路径会先布局 summary+面板（「两个 Neutral」），再 rAF 整段重建 → 双布局卡顿。
+       * 现：阻止默认开合，当帧直接 keepScorePickOpen → expand-row（与编辑态同一套 DOM）。
        */
-      details.addEventListener("toggle", function onDoneOutcomeDetailsToggle() {
-        if (!details.open) return;
+      function openDoneOutcomeEditorFromCompact(ev) {
+        if (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+        }
         if (!doneOutcomeScorePickOpenIds.has(tid)) {
           doneOutcomeScorePickOpenIds.add(tid);
         }
@@ -182959,17 +183003,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               })
             : null;
         if (!item) return;
-        if (typeof requestAnimationFrame === "function") {
-          requestAnimationFrame(function () {
-            try {
-              patchDoneOutcomeUiImmediate(item);
-            } catch (_detPatch) {}
-          });
-        } else {
-          try {
-            patchDoneOutcomeUiImmediate(item);
-          } catch (_detPatch2) {}
-        }
+        try {
+          patchDoneOutcomeUiImmediate(item);
+        } catch (_detPatch) {}
+      }
+      summary.addEventListener("click", openDoneOutcomeEditorFromCompact);
+      /* 键盘/辅助技术若仍触发 toggle，同样切入编辑态，避免空白 details */
+      details.addEventListener("toggle", function onDoneOutcomeDetailsToggle() {
+        if (!details.open) return;
+        openDoneOutcomeEditorFromCompact(null);
       });
       return details;
     }
