@@ -113297,7 +113297,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261107a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261107b";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -174090,7 +174090,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /** 首页常显：Done 头部主指标 Victory/Defeat Index（点击展开方法论） */
-    function renderDoneVdIndexHome(tasks) {
+    function renderDoneVdIndexHome(tasks, opts) {
       const el = document.getElementById("doneVdIndexHome");
       if (!el) return;
       const summary = computeDoneVdIndex(tasks);
@@ -174154,11 +174154,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         (summary.total ? mathText : "暂无") +
         "（点击胶囊展开趋势与方法论）";
       renderDoneVdIndexMethodPanel(tasks);
-      if (typeof syncVdIndexRulesMarquee === "function") {
-        syncVdIndexRulesMarquee();
-      }
-      if (typeof syncVdDesireMarquee === "function") {
-        syncVdDesireMarquee();
+      /*
+       * 分类点击后的轻量顶栏刷新：只更新数值/图例，不碰跑马灯。
+       * 避免选性质后 48ms 内误触发规则/欲望跑马灯调度，与本行反馈抢帧。
+       */
+      if (!(opts && opts.skipMarqueeSync)) {
+        if (typeof syncVdIndexRulesMarquee === "function") {
+          syncVdIndexRulesMarquee();
+        }
+        if (typeof syncVdDesireMarquee === "function") {
+          syncVdDesireMarquee();
+        }
       }
     }
 
@@ -182508,6 +182514,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      * 并在 setTimeout(0) 里 flushLocalPersistedState("force") 整包 stringify，
      * 与首帧绘制抢主线程。现改为：paint 后再落盘/upsert；落盘走 400ms 防抖
      *（隐藏页/卸载已有 force flush）；顶栏派生单独短防抖合并连点。
+     * 三次收尾：分类顶栏刷新 skipMarqueeSync；同模式就地点选跳过 pick 布局搬迁；
+     * 庆祝 FX 排在本行 patch 之后。
      */
     let doneOutcomeClickFollowUpTimer = null;
     let doneOutcomeClickFollowUpRaf = 0;
@@ -182658,13 +182666,29 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           ":scope > .done-outcome-segment--pending, :scope > .done-outcome-segment--expand-row"
         );
         if (seg && patchDoneOutcomePickSelectionInPlace(seg, task)) {
+          let structureChanged = false;
           if (wantMode === "pending" && hasExplicitDoneOutcomeKind(task) && hasExplicitDoneOutcomeScore(task)) {
             /* 结构类名应升为 expand-row */
             seg.classList.remove("done-outcome-segment--pending");
             seg.classList.add("done-outcome-segment--expand-row");
+            structureChanged = true;
           }
           patchDoneTrailingScoreBadge(li, task);
-          syncDoneCompactPickLayout(li);
+          /*
+           * 已在 picking 且仅改三键/分值选中态时，跳过 metaStack 节点搬迁，
+           * 避免每次切换分类都触发强制重排。hint 仍在段内或尚未 --picking 时仍同步。
+           */
+          const compactRow =
+            li.classList && li.classList.contains("done-compact-row")
+              ? li
+              : li.querySelector(".done-compact-row");
+          const alreadyPicking =
+            compactRow &&
+            compactRow.classList.contains("done-compact-row--picking");
+          const hintStillInSeg = !!seg.querySelector(":scope > .done-outcome-90day-hint");
+          if (structureChanged || !alreadyPicking || hintStillInSeg) {
+            syncDoneCompactPickLayout(li);
+          }
           return true;
         }
       }
@@ -182703,7 +182727,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           renderDoneDayStats(doneDayStats, statsTasks);
         }
         if (typeof renderDoneVdIndexHome === "function") {
-          renderDoneVdIndexHome(statsTasks);
+          renderDoneVdIndexHome(statsTasks, { skipMarqueeSync: true });
         }
         if (typeof renderDoneDailyDecisionReport === "function") {
           renderDoneDailyDecisionReport(statsTasks);
@@ -182791,6 +182815,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
       if (!item || item.kind === "timeReflection" || doneTaskUsesPowerBadgeOnly(item)) return;
       item.outcomeKind = kind;
+      let celebrateMode = "";
+      let celebrateScore = 0;
       if (kind === "neutral") {
         item.outcomeScore = 0;
         doneOutcomeScorePickOpenIds.delete(sid);
@@ -182802,30 +182828,32 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
          * 用户点「力量选择」即确认分类：立即播中央烟花，不必再点 +1/+2。
          * +1/+2 仍可稍后补选；claimDoneFxPlayOnce 保证同 id 只庆祝一次。
          * 不改计分默认值（此处不写入 outcomeScore）。背叛需分值才知警告素材，仍等选分。
+         * 庆祝延后到本行 patch 之后，避免与选中态首帧争主线程。
          */
-        if (kind === "power") {
-          queueDoneCelebrateFx(sid, { userInitiated: true });
-          playVictoryCelebration(sid, { userInitiated: true });
-        }
+        if (kind === "power") celebrateMode = "power";
       } else {
         doneOutcomeScorePickOpenIds.add(sid);
         queueDoneOutcomeScoreFx(sid, item.outcomeScore);
         if (kind === "power") {
           const ps = Number(item.outcomeScore);
-          if (ps === 1 || ps === 2) {
-            queueDoneCelebrateFx(sid, { userInitiated: true });
-            playVictoryCelebration(sid, { userInitiated: true });
-          }
+          if (ps === 1 || ps === 2) celebrateMode = "power";
         } else if (kind === "treason") {
           const ts = Number(item.outcomeScore);
           if (ts === -1 || ts === -2 || ts === -10) {
-            queueDoneCelebrateFx(sid, { userInitiated: true });
-            playTreasonCelebration(sid, ts, { userInitiated: true });
+            celebrateMode = "treason";
+            celebrateScore = ts;
           }
         }
       }
       item.updatedAt = Date.now();
       const patchedOk = patchDoneOutcomeUiImmediate(item);
+      if (celebrateMode === "power") {
+        queueDoneCelebrateFx(sid, { userInitiated: true });
+        playVictoryCelebration(sid, { userInitiated: true });
+      } else if (celebrateMode === "treason") {
+        queueDoneCelebrateFx(sid, { userInitiated: true });
+        playTreasonCelebration(sid, celebrateScore, { userInitiated: true });
+      }
       scheduleDoneOutcomeClickFollowUp(item, "outcome-kind", patchedOk);
     }
 
@@ -182844,6 +182872,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       item.updatedAt = Date.now();
       doneOutcomeScorePickOpenIds.delete(sid);
       queueDoneOutcomeScoreFx(sid, n);
+      const patchedOk = patchDoneOutcomeUiImmediate(item);
+      /* 先本行选中态，再排队庆祝，避免 FX 调度抢在 patch 之前 */
       if (kind === "power" && (n === 1 || n === 2)) {
         queueDoneCelebrateFx(sid, { userInitiated: true });
         playVictoryCelebration(sid, { userInitiated: true });
@@ -182851,7 +182881,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         queueDoneCelebrateFx(sid, { userInitiated: true });
         playTreasonCelebration(sid, n, { userInitiated: true });
       }
-      const patchedOk = patchDoneOutcomeUiImmediate(item);
       scheduleDoneOutcomeClickFollowUp(item, "outcome-score", patchedOk);
     }
 
