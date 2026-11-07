@@ -174162,6 +174162,95 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
+    /**
+     * 分类选择后的 V/D 顶栏轻量刷新：就地改胶囊数字/文案，不销毁跑马灯 overlay，
+     * 不触发 marquee sync；方法论面板仅在已展开且非「规则」Tab 时重建
+     *（规则文案与任务性质无关；趋势/战报需跟当日分值）。
+     */
+    function patchDoneVdIndexHomeAfterOutcomeEdit(tasks) {
+      const el = document.getElementById("doneVdIndexHome");
+      if (!el) return;
+      const left = el.querySelector(":scope > .done-vd-index-home__left");
+      const verdict =
+        left && left.querySelector(":scope > .done-vd-index-home__verdict");
+      const value = el.querySelector(":scope > .done-vd-index-home__value");
+      const label = left && left.querySelector(":scope > .done-vd-index-home__label");
+      if (!left || !verdict || !value || !label) {
+        if (typeof renderDoneVdIndexHome === "function") renderDoneVdIndexHome(tasks);
+        return;
+      }
+      const summary = computeDoneVdIndex(tasks);
+      const ui = ensureDoneUi();
+      const methodOpen = !!ui.vdIndexMethodOpen;
+      const keepRulesPlaying = el.classList.contains("is-vd-rules-marquee-playing");
+      const keepDesirePlaying = el.classList.contains("is-vd-desire-marquee-playing");
+
+      el.classList.remove(
+        "done-vd-index-home--empty",
+        "done-vd-index-home--flat",
+        "done-vd-index-home--victory",
+        "done-vd-index-home--defeat",
+        "done-vd-index-home--method-open"
+      );
+      if (methodOpen) el.classList.add("done-vd-index-home--method-open");
+      if (keepRulesPlaying) el.classList.add("is-vd-rules-marquee-playing");
+      if (keepDesirePlaying) el.classList.add("is-vd-desire-marquee-playing");
+
+      verdict.className = "done-vd-index-home__verdict";
+      value.className = "done-vd-index-home__value";
+      const mathText = formatDoneVdIndexMath(summary);
+      if (!summary.total) {
+        el.classList.add("done-vd-index-home--empty", "done-vd-index-home--flat");
+        verdict.classList.add("done-vd-index-home__verdict--flat");
+        value.classList.add("done-vd-index-home__value--flat");
+        verdict.textContent = "暂无计入统计的完成";
+        value.textContent = "—";
+        el.setAttribute("aria-label", "Victory/Defeat Index 暂无数据，点击展开趋势与方法论");
+      } else if (summary.index > 0) {
+        el.classList.add("done-vd-index-home--victory");
+        verdict.classList.add("done-vd-index-home__verdict--victory");
+        verdict.textContent = "Victory · Decision Winner";
+        appendDoneVdIndexMathEl(value, summary);
+        el.setAttribute(
+          "aria-label",
+          "Victory/Defeat Index " + mathText + "，Victory，点击展开趋势与方法论"
+        );
+      } else if (summary.index < 0) {
+        el.classList.add("done-vd-index-home--defeat");
+        verdict.classList.add("done-vd-index-home__verdict--defeat");
+        verdict.textContent = "Defeat · Decision Loser";
+        appendDoneVdIndexMathEl(value, summary);
+        el.setAttribute(
+          "aria-label",
+          "Victory/Defeat Index " + mathText + "，Defeat，点击展开趋势与方法论"
+        );
+      } else {
+        el.classList.add("done-vd-index-home--flat");
+        verdict.classList.add("done-vd-index-home__verdict--flat");
+        verdict.textContent = "Flat · 持平";
+        appendDoneVdIndexMathEl(value, summary);
+        el.setAttribute("aria-label", "Victory/Defeat Index " + mathText + "，持平，点击展开趋势与方法论");
+      }
+      el.setAttribute("aria-expanded", methodOpen ? "true" : "false");
+      el.title =
+        "当日 Victory/Defeat Index " +
+        (summary.total ? mathText : "暂无") +
+        "（点击胶囊展开趋势与方法论）";
+
+      if (methodOpen) {
+        const tab =
+          ui.vdIndexPanelTab === "rules"
+            ? "rules"
+            : ui.vdIndexPanelTab === "report"
+              ? "report"
+              : "trends";
+        /* 规则 Tab 与性质无关，避免整面板 replaceChildren */
+        if (tab !== "rules" && typeof renderDoneVdIndexMethodPanel === "function") {
+          renderDoneVdIndexMethodPanel(tasks);
+        }
+      }
+    }
+
     /** 粗糙开始 / 多巴胺初动：V/D 指数条与当前冲刺条共用 */
     const ROUGH_START_DOPAMINE_MARQUEE_TEXT =
       "想要采取行动的话，首先就要粗糙地开始。千万别想着「要好好开始」。这是最糟糕的。一追求完美，前额叶就会警戒「不确定性」，不再发出行动指令。这种状态下，就算有再棒的计划，也一步都迈不出去，根本没意义。相反，不管怎样粗糙地开始行动，「能行动了」这个事实会带来快感，多巴胺就会分泌出来。这样一来，大脑就会切换到「还想多做点」的模式。也就是说，「行动力」重要的不是「质量」，而是初动带来的神经回路激活。";
@@ -182692,22 +182781,21 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
     }
 
-    /** 顶栏性质统计 / Victory·Defeat：轻量刷新，不重建整条时间轴 */
+    /**
+     * 顶栏性质统计 / Victory·Defeat：分类选择专用轻量刷新。
+     * 不重建时间轴；跳过时段分布与 Refocus（与性质无关）；
+     * V/D 走 patchDoneVdIndexHomeAfterOutcomeEdit，避免整胶囊 replaceChildren + 跑马灯 sync。
+     */
     function refreshDoneOutcomeDerivedChromeLight() {
       try {
         const statsTasks = collectDoneTasksForOutcomeChrome();
         if (typeof renderDoneOutcomeDayStats === "function" && doneOutcomeDayStats) {
           renderDoneOutcomeDayStats(doneOutcomeDayStats, statsTasks);
         }
-        if (typeof renderDoneDayStats === "function" && typeof doneDayStats !== "undefined" && doneDayStats) {
-          renderDoneDayStats(doneDayStats, statsTasks);
-        }
-        if (typeof renderDoneVdIndexHome === "function") {
+        if (typeof patchDoneVdIndexHomeAfterOutcomeEdit === "function") {
+          patchDoneVdIndexHomeAfterOutcomeEdit(statsTasks);
+        } else if (typeof renderDoneVdIndexHome === "function") {
           renderDoneVdIndexHome(statsTasks);
-        }
-        if (typeof renderDoneDailyDecisionReport === "function") {
-          renderDoneDailyDecisionReport(statsTasks);
-          if (typeof renderDoneRefocusChrome === "function") renderDoneRefocusChrome();
         }
       } catch (_chromeErr) {
         console.warn("[Done] 性质派生刷新失败:", _chromeErr);

@@ -59,12 +59,35 @@ if (segBody.includes('className = "done-outcome-expand-panel"')) {
 }
 ok("compact 打开直切 expand-row，无预建面板");
 
-if (!html.includes('APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261107a"')) {
-  fail("index.html cache badge not bumped to v20261107a");
+if (!html.includes("function patchDoneVdIndexHomeAfterOutcomeEdit(")) {
+  fail("missing patchDoneVdIndexHomeAfterOutcomeEdit");
 }
-if (!sw.includes('CACHE_NAME = "exec-system-pwa-v20261107a"')) {
-  fail("sw.js CACHE_NAME not bumped to v20261107a");
+ok("V/D 分类后就地 patch 存在");
+
+const chromeStart = html.indexOf("function refreshDoneOutcomeDerivedChromeLight(");
+const chromeEnd = html.indexOf("\n    function scheduleDoneOutcomeClickFollowUp(", chromeStart);
+if (chromeStart < 0 || chromeEnd < 0) fail("missing refreshDoneOutcomeDerivedChromeLight");
+const chromeBody = html.slice(chromeStart, chromeEnd);
+if (!chromeBody.includes("patchDoneVdIndexHomeAfterOutcomeEdit")) {
+  fail("chrome light refresh must use patchDoneVdIndexHomeAfterOutcomeEdit");
 }
-ok("缓存版本 v20261107a");
+if (chromeBody.includes("renderDoneDayStats")) {
+  fail("outcome chrome refresh should skip time-of-day day stats rebuild");
+}
+if (chromeBody.includes("renderDoneRefocusChrome")) {
+  fail("outcome chrome refresh should skip Refocus chrome");
+}
+if (chromeBody.includes("syncVdIndexRulesMarquee") || chromeBody.includes("syncVdDesireMarquee")) {
+  fail("outcome chrome refresh must not sync V/D marquees");
+}
+ok("顶栏派生跳过时段/Refocus/跑马灯，改用 V/D 就地 patch");
+
+if (!html.includes('APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261107b"')) {
+  fail("index.html cache badge not bumped to v20261107b");
+}
+if (!sw.includes('CACHE_NAME = "exec-system-pwa-v20261107b"')) {
+  fail("sw.js CACHE_NAME not bumped to v20261107b");
+}
+ok("缓存版本 v20261107b");
 
 console.log("\nAll checks passed.");
