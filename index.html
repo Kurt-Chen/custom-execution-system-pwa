@@ -113297,7 +113297,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261107a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261107b";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -195657,6 +195657,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         const task = located ? located.task : tasks.find((t) => t && String(t.id) === tid);
         if (!task) return;
         const micro = (task.microTasks || []).find((x) => x && String(x.id) === mid);
+        const hadTodayPlan = Boolean(micro && micro.todayPlanDate);
         if (micro) {
           pushTrashEntry({
             sourceList: "weeklyPlanMicro",
@@ -195670,6 +195671,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               notifyAliyunSprintRealTombstone("sprint-micro-delete", mid, micro, wk);
             }
           } catch (_microTomb) {}
+          /* 挂牌一并记 tomb，防今日计划 marks 把已删 micro 又挂回其他任务 */
+          try {
+            if (typeof recordTodayPlanMarkRemoved === "function") {
+              recordTodayPlanMarkRemoved(mid);
+            }
+          } catch (_markTomb) {}
         }
         task.microTasks = (task.microTasks || []).filter((x) => !(x && String(x.id) === mid));
         applyWeeklyPlanMainDoneFromMicros(task);
@@ -195694,6 +195701,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         syncAllWeeklyPlanMirrorsForWeek(wk);
         if (!patchWeeklyPlanAfterMicroDeleted(tid, mid)) {
           refreshWeeklyPlanListAfterStructureChange();
+        }
+        if (
+          hadTodayPlan &&
+          typeof todayPlanPanelExpanded !== "undefined" &&
+          todayPlanPanelExpanded
+        ) {
+          try {
+            if (typeof patchTodayPlanUiAfterOtherTaskRemoved === "function") {
+              patchTodayPlanUiAfterOtherTaskRemoved(mid);
+            }
+          } catch (_tpPatch) {}
         }
         saveState({ lists: ["weeklyPlan", "done", "closedList", "trash"] });
         setTimeout(function () {
@@ -201836,9 +201854,34 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       panel.className = "today-plan-other-ops-menu-panel";
       panel.setAttribute("role", "menu");
       panel.hidden = true;
+      /* 浮层挂 body：阻断冒泡，避免触控端列表滚动/父级点击在 click 前关掉菜单 */
+      panel.addEventListener("pointerdown", function (ev) {
+        ev.stopPropagation();
+      });
+      panel.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+      });
       document.body.appendChild(panel);
       todayPlanOtherOpsMenuPanelEl = panel;
       return panel;
+    }
+
+    /**
+     * 其他任务「删除」：按同一任务 id 路由到冲刺清单已验证的删除函数。
+     * 主任务 → deleteWeeklyPlanTask；子任务 → deleteWeeklyPlanMicroTask。
+     * 不另建删除机制，保证首页与原始清单、tombstone、阿里云同步同一路径。
+     */
+    function deleteTodayPlanOtherTaskEntity(taskId) {
+      const tid = String(taskId || "");
+      if (!tid) return;
+      const microLoc = findWeeklyPlanMicroRaw(tid);
+      if (microLoc && microLoc.micro && microLoc.parent && microLoc.parent.id != null) {
+        deleteWeeklyPlanMicroTask(microLoc.parent.id, tid);
+        return;
+      }
+      if (typeof deleteWeeklyPlanTask === "function") {
+        deleteWeeklyPlanTask(tid);
+      }
     }
 
     function openTodayPlanOtherOpsMenu(trigger, taskId) {
@@ -201852,15 +201895,30 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       delItem.className = "today-plan-other-ops-menu-item";
       delItem.setAttribute("role", "menuitem");
       delItem.textContent = "删除任务";
-      delItem.addEventListener("click", function (ev) {
+      let ran = false;
+      function runDeleteMenuAction(ev) {
+        if (ran) return;
+        ran = true;
         ev.preventDefault();
         ev.stopPropagation();
         const id = todayPlanOtherOpsMenuTaskId;
         closeTodayPlanOtherOpsMenu();
         if (!id) return;
-        if (!window.confirm("确定将此任务移出今日「其他任务」？")) return;
-        removeTodayPlanOtherTask(id);
+        /*
+         * 保留既有单次确认；不增加额外步骤。
+         * 延后到下一 macrotask：部分平板 WebView 在 pointerup 手势内直接 confirm 会被静默吞掉。
+         */
+        setTimeout(function () {
+          if (!window.confirm("确定删除此任务？可从垃圾箱恢复。")) return;
+          deleteTodayPlanOtherTaskEntity(id);
+        }, 0);
+      }
+      /* pointerup 先于 click；平板触控若在 click 前被 scroll 关掉菜单，松手仍能删 */
+      delItem.addEventListener("pointerup", function (ev) {
+        if (ev.pointerType === "mouse" && ev.button !== 0) return;
+        runDeleteMenuAction(ev);
       });
+      delItem.addEventListener("click", runDeleteMenuAction);
       panel.appendChild(delItem);
 
       if (todayPlanOtherOpsMenuTriggerEl && todayPlanOtherOpsMenuTriggerEl !== trigger) {
