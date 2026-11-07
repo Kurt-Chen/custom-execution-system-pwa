@@ -113297,7 +113297,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261106n";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261107a";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -182669,22 +182669,189 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
     }
 
+    /**
+     * 顶栏性质图例：只改数量/占比文本。
+     * 结构不一致时返回 false，由调用方回退整段重建。
+     */
+    function tryPatchDoneOutcomeDayStatsInPlace(el, tasks) {
+      if (!el || !el.querySelector) return false;
+      const keys = ["power", "neutral", "treason"];
+      const labels = { power: "力量选择", neutral: "中立流", treason: "背叛选择" };
+      const counts = { power: 0, neutral: 0, treason: 0 };
+      (tasks || []).forEach(function (t) {
+        const b = getDoneStatsOutcomeBucket(t);
+        if (counts[b] !== undefined) counts[b]++;
+      });
+      const total = tasks ? tasks.length : 0;
+      if (!total) return el.classList.contains("done-outcome-day-stats--empty");
+      if (
+        !el.classList.contains("done-outcome-day-stats") ||
+        el.classList.contains("done-outcome-day-stats--empty")
+      ) {
+        return false;
+      }
+      const pcts = keys.map(function (k) {
+        return Math.round((counts[k] / total) * 100);
+      });
+      const drift = 100 - (pcts[0] + pcts[1] + pcts[2]);
+      pcts[2] = Math.max(0, Math.min(100, pcts[2] + drift));
+      const nodes = [];
+      for (let i = 0; i < keys.length; i++) {
+        const item = el.querySelector(
+          ":scope > .done-outcome-day-stats__legend > .done-outcome-day-stats__legend-item:nth-child(" +
+            (i + 1) +
+            ")"
+        );
+        const countSpan = item
+          ? item.querySelector(":scope > .done-outcome-day-stats__legend-count")
+          : null;
+        const pctSpan = item
+          ? item.querySelector(":scope > .done-outcome-day-stats__legend-pct")
+          : null;
+        if (!item || !countSpan || !pctSpan) return false;
+        nodes.push({ item: item, countSpan: countSpan, pctSpan: pctSpan });
+      }
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        const row = nodes[i];
+        const nextTitle = labels[k] + " " + counts[k] + " 项（" + pcts[i] + "%）";
+        if (row.item.title !== nextTitle) row.item.title = nextTitle;
+        const nextCount = String(counts[k]) + " · ";
+        if (row.countSpan.textContent !== nextCount) row.countSpan.textContent = nextCount;
+        const nextPct = String(pcts[i]) + "%";
+        if (row.pctSpan.textContent !== nextPct) row.pctSpan.textContent = nextPct;
+      }
+      const aria =
+        "当日完成性质：力量" +
+        counts.power +
+        "项约" +
+        pcts[0] +
+        "%，中立" +
+        counts.neutral +
+        "项约" +
+        pcts[1] +
+        "%，背叛" +
+        counts.treason +
+        "项约" +
+        pcts[2] +
+        "%";
+      if (el.getAttribute("aria-label") !== aria) el.setAttribute("aria-label", aria);
+      return true;
+    }
+
+    /**
+     * 公式胶囊：胜负态不变时只改算式数字，不 replaceChildren。
+     * 避免拆掉 3D 胶囊和正在播放的跑马灯（重挂会量宽度并闪一下）。
+     */
+    function tryPatchDoneVdIndexHomeInPlace(summary) {
+      const el = document.getElementById("doneVdIndexHome");
+      if (!el || !summary) return false;
+      let tone = "flat";
+      if (!summary.total) tone = "empty";
+      else if (summary.index > 0) tone = "victory";
+      else if (summary.index < 0) tone = "defeat";
+      const have = el.classList.contains("done-vd-index-home--empty")
+        ? "empty"
+        : el.classList.contains("done-vd-index-home--victory")
+          ? "victory"
+          : el.classList.contains("done-vd-index-home--defeat")
+            ? "defeat"
+            : el.classList.contains("done-vd-index-home--flat")
+              ? "flat"
+              : "";
+      if (!have || have !== tone) return false;
+      if (tone === "empty") return true;
+      const value = el.querySelector(":scope > .done-vd-index-home__value");
+      if (!value) return false;
+      const powerText = value.querySelector(
+        ":scope > .done-vd-index-home__math-power > .done-vd-index-home__math-index-text"
+      );
+      const treasonText = value.querySelector(
+        ":scope > .done-vd-index-home__math-treason > .done-vd-index-home__math-index-text"
+      );
+      const idx = value.querySelector(":scope > .done-vd-index-home__math-index");
+      const idxText = idx
+        ? idx.querySelector(":scope > .done-vd-index-home__math-index-text")
+        : null;
+      if (!powerText || !treasonText || !idx || !idxText) return false;
+      powerText.textContent = "(" + formatDoneVdScoreLabel(summary.powerPts) + ")";
+      treasonText.textContent = "(" + formatDoneVdScoreLabel(summary.treasonPts) + ")";
+      const idxTone = summary.index > 0 ? "pos" : summary.index < 0 ? "neg" : "flat";
+      if (!idx.classList.contains("done-vd-index-home__math-index--" + idxTone)) {
+        idx.classList.remove(
+          "done-vd-index-home__math-index--pos",
+          "done-vd-index-home__math-index--neg",
+          "done-vd-index-home__math-index--flat"
+        );
+        idx.classList.add("done-vd-index-home__math-index--" + idxTone);
+      }
+      const nextIdx = formatDoneVdScoreLabel(summary.index);
+      if (idxText.textContent !== nextIdx) idxText.textContent = nextIdx;
+      const mathText = formatDoneVdIndexMath(summary);
+      const aria =
+        tone === "victory"
+          ? "Victory/Defeat Index " + mathText + "，Victory，点击展开趋势与方法论"
+          : tone === "defeat"
+            ? "Victory/Defeat Index " + mathText + "，Defeat，点击展开趋势与方法论"
+            : "Victory/Defeat Index " + mathText + "，持平，点击展开趋势与方法论";
+      if (el.getAttribute("aria-label") !== aria) el.setAttribute("aria-label", aria);
+      const nextTitle =
+        "当日 Victory/Defeat Index " + mathText + "（点击胶囊展开趋势与方法论）";
+      if (el.title !== nextTitle) el.title = nextTitle;
+      return true;
+    }
+
     /** 顶栏性质统计 / Victory·Defeat：轻量刷新，不重建整条时间轴 */
     function refreshDoneOutcomeDerivedChromeLight() {
       try {
         const statsTasks = collectDoneTasksForOutcomeChrome();
-        if (typeof renderDoneOutcomeDayStats === "function" && doneOutcomeDayStats) {
-          renderDoneOutcomeDayStats(doneOutcomeDayStats, statsTasks);
+        if (typeof doneOutcomeDayStats !== "undefined" && doneOutcomeDayStats) {
+          if (!tryPatchDoneOutcomeDayStatsInPlace(doneOutcomeDayStats, statsTasks)) {
+            if (typeof renderDoneOutcomeDayStats === "function") {
+              renderDoneOutcomeDayStats(doneOutcomeDayStats, statsTasks);
+            }
+          }
         }
-        if (typeof renderDoneDayStats === "function" && typeof doneDayStats !== "undefined" && doneDayStats) {
-          renderDoneDayStats(doneDayStats, statsTasks);
-        }
-        if (typeof renderDoneVdIndexHome === "function") {
+        /*
+         * 改分类不改变完成时刻，时段分布条无需重建（避免整条 replaceChildren 闪一下）。
+         * 胜负态不变时只改公式数字；跨过 0 或空态才整段重建。
+         * 公式面板若正展开，趋势图延后一帧，不挡本次点击。
+         */
+        const summary =
+          typeof computeDoneVdIndex === "function" ? computeDoneVdIndex(statsTasks) : null;
+        const patchedHome = summary && tryPatchDoneVdIndexHomeInPlace(summary);
+        if (!patchedHome && typeof renderDoneVdIndexHome === "function") {
           renderDoneVdIndexHome(statsTasks);
+        } else if (patchedHome && typeof ensureDoneUi === "function") {
+          const ui = ensureDoneUi();
+          if (ui && ui.vdIndexMethodOpen && typeof renderDoneVdIndexMethodPanel === "function") {
+            const tasksSnap = statsTasks;
+            const paint =
+              typeof requestAnimationFrame === "function"
+                ? requestAnimationFrame
+                : function (fn) {
+                    setTimeout(fn, 0);
+                  };
+            paint(function () {
+              try {
+                renderDoneVdIndexMethodPanel(tasksSnap);
+              } catch (_vdPanel) {}
+            });
+          }
         }
-        if (typeof renderDoneDailyDecisionReport === "function") {
+        const legacyReport = document.getElementById("doneDailyDecisionReportPanel");
+        if (
+          legacyReport &&
+          (!legacyReport.hidden || legacyReport.childNodes.length) &&
+          typeof renderDoneDailyDecisionReport === "function"
+        ) {
           renderDoneDailyDecisionReport(statsTasks);
-          if (typeof renderDoneRefocusChrome === "function") renderDoneRefocusChrome();
+        }
+        /* Refocus 与分类无关，但沿用原刷新，避免跨日归一只挂在这次点击上时被漏掉 */
+        if (typeof renderDoneRefocusChrome === "function") {
+          try {
+            renderDoneRefocusChrome();
+          } catch (_rfChrome) {}
         }
       } catch (_chromeErr) {
         console.warn("[Done] 性质派生刷新失败:", _chromeErr);
@@ -182696,7 +182863,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       /*
        * 本机行已 patch 成功时：禁止把 done 切片标脏。
        * 否则后续任意 render()/云合并 hygiene 会整表重建时间轴 → 闪动、详情态丢失、重复节点感。
-       * 仍落盘 + 阿里云 upsert；卫生只跑 donePrune，避免全量 hygiene 连锁。
+       * 落盘走 saveState 既有防抖（与其它顺畅操作同一条路径）；关页/锁屏仍会强制 flush。
+       * 不在点击后强制整包落盘：那会在主线程 JSON.stringify 全部 state，挡住下一次点选。
+       * 阿里云 upsert 读的是内存条目，不依赖这次落盘。
        */
       saveState({
         lists: ["done"],
@@ -182711,9 +182880,6 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (doneOutcomeClickFollowUpTimer) clearTimeout(doneOutcomeClickFollowUpTimer);
       doneOutcomeClickFollowUpTimer = setTimeout(function () {
         doneOutcomeClickFollowUpTimer = null;
-        try {
-          flushLocalPersistedState("force");
-        } catch (_persistErr) {}
         if (patchedOk) {
           refreshDoneOutcomeDerivedChromeLight();
         } else {
@@ -182926,6 +183092,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       );
       summary.addEventListener("click", function (ev) {
         ev.stopPropagation();
+        /*
+         * 拦住 details 原生展开：否则会先按 :has(details[open]) 排一帧，
+         * 再被下面的 expand-row 拆掉，点分类选择器等于布局两次。
+         */
+        ev.preventDefault();
+        details._outcomePickFromClick = 1;
+        openDoneOutcomePickerFromCompact();
       });
 
       const chain = createDoneOutcomeStatusChainEl(cur);
@@ -182946,9 +183119,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       /*
        * 展开 details 会同时露出 summary 状态链 + 面板三键 → 视觉上「两个 Neutral」。
        * 打开即切入 keepScorePickOpen 的 expand-row，与直接编辑态同一套 DOM，避免叠层。
+       * 点击已在同一轮同步切入；这里只兜键盘等仍让 details 打开的路径，且不再延后一帧。
        */
-      details.addEventListener("toggle", function onDoneOutcomeDetailsToggle() {
-        if (!details.open) return;
+      function openDoneOutcomePickerFromCompact() {
         if (!doneOutcomeScorePickOpenIds.has(tid)) {
           doneOutcomeScorePickOpenIds.add(tid);
         }
@@ -182959,17 +183132,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
               })
             : null;
         if (!item) return;
-        if (typeof requestAnimationFrame === "function") {
-          requestAnimationFrame(function () {
-            try {
-              patchDoneOutcomeUiImmediate(item);
-            } catch (_detPatch) {}
-          });
-        } else {
-          try {
-            patchDoneOutcomeUiImmediate(item);
-          } catch (_detPatch2) {}
-        }
+        try {
+          patchDoneOutcomeUiImmediate(item);
+        } catch (_openPick) {}
+      }
+      details.addEventListener("toggle", function onDoneOutcomeDetailsToggle() {
+        if (!details.open) return;
+        if (details._outcomePickFromClick) return;
+        openDoneOutcomePickerFromCompact();
       });
       return details;
     }
@@ -183131,18 +183301,40 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
 
       if (isPicking) {
-        clearOrphanMetaStackHints();
-        const hint = pickHost.querySelector(":scope > .done-outcome-90day-hint");
+        /*
+         * 已在选择态时禁止每点一次都 appendChild。
+         * 旧逻辑会先拆掉已挂到 metaStack 的 90 天提示，再把任务名行和提示挪到末尾，
+         * 每次切换分类都触发时间轴重排（跳动 / 卡顿）。节点已就位则零 DOM 搬动。
+         */
+        const hintInHost = pickHost.querySelector(":scope > .done-outcome-90day-hint");
+        let hint = hintInHost;
+        if (!hint) {
+          const stacked = metaStack.querySelectorAll(":scope > .done-outcome-90day-hint");
+          hint = stacked.length ? stacked[0] : null;
+          for (let hi = 1; hi < stacked.length; hi++) {
+            if (stacked[hi] && stacked[hi].parentNode) stacked[hi].parentNode.removeChild(stacked[hi]);
+          }
+        } else {
+          clearOrphanMetaStackHints();
+        }
         if (sourceLine && trailing && trailing.parentElement !== sourceLine) {
           sourceLine.appendChild(trailing);
         }
-        if (sourceLine && sourceLine.parentElement !== metaStack) {
-          metaStack.appendChild(sourceLine);
-        } else if (sourceLine && hint) {
-          /* 保证顺序：firstRow → sourceLine → hint */
-          metaStack.appendChild(sourceLine);
+        if (hint && hint.parentElement !== metaStack) {
+          metaStack.appendChild(hint);
         }
-        if (hint) metaStack.appendChild(hint);
+        if (sourceLine && sourceLine.parentElement !== metaStack) {
+          if (hint && hint.parentElement === metaStack) metaStack.insertBefore(sourceLine, hint);
+          else metaStack.appendChild(sourceLine);
+        } else if (
+          sourceLine &&
+          hint &&
+          sourceLine.parentElement === metaStack &&
+          hint.parentElement === metaStack &&
+          sourceLine.nextElementSibling !== hint
+        ) {
+          metaStack.insertBefore(sourceLine, hint);
+        }
       } else {
         if (firstRow && trailing && trailing.parentElement !== firstRow) {
           firstRow.appendChild(trailing);
