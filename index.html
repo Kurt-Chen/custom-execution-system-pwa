@@ -174169,7 +174169,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      */
     function patchDoneVdIndexHomeAfterOutcomeEdit(tasks) {
       const el = document.getElementById("doneVdIndexHome");
-      if (!el) return;
+      if (!el) return false;
       const left = el.querySelector(":scope > .done-vd-index-home__left");
       const verdict =
         left && left.querySelector(":scope > .done-vd-index-home__verdict");
@@ -174177,7 +174177,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const label = left && left.querySelector(":scope > .done-vd-index-home__label");
       if (!left || !verdict || !value || !label) {
         if (typeof renderDoneVdIndexHome === "function") renderDoneVdIndexHome(tasks);
-        return;
+        return false;
       }
       const summary = computeDoneVdIndex(tasks);
       const ui = ensureDoneUi();
@@ -174236,19 +174236,40 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         "当日 Victory/Defeat Index " +
         (summary.total ? mathText : "暂无") +
         "（点击胶囊展开趋势与方法论）";
+      /*
+       * 不在这里重建方法论面板。趋势图会扫全部历史 Done 并 replaceChildren，
+       * 分类连点时会把卡顿从任务行挪到展开的公式区。面板正文另走短延迟局部刷新。
+       */
+      return true;
+    }
 
-      if (methodOpen) {
-        const tab =
-          ui.vdIndexPanelTab === "rules"
-            ? "rules"
-            : ui.vdIndexPanelTab === "report"
-              ? "report"
-              : "trends";
-        /* 规则 Tab 与性质无关，避免整面板 replaceChildren */
-        if (tab !== "rules" && typeof renderDoneVdIndexMethodPanel === "function") {
+    /**
+     * 公式面板已展开时，只换正文（趋势 / 每日决策报告），保留 Tab 与滚动位置。
+     * 规则 Tab 与性质无关，调用方应先跳过。
+     */
+    function refreshOpenDoneVdPanelBodyAfterOutcomeEdit(tasks) {
+      const panel = document.getElementById("doneVdIndexMethodPanel");
+      if (!panel || panel.hidden) return;
+      const ui = ensureDoneUi();
+      if (!ui || !ui.vdIndexMethodOpen) return;
+      const tab = ui.vdIndexPanelTab === "report" ? "report" : "trends";
+      if (ui.vdIndexPanelTab === "rules") return;
+      const body = panel.querySelector(":scope > .done-vd-index-fs__body");
+      if (!body) {
+        if (typeof renderDoneVdIndexMethodPanel === "function") {
           renderDoneVdIndexMethodPanel(tasks);
         }
+        return;
       }
+      const scrollTop = panel.scrollTop;
+      body.replaceChildren();
+      if (tab === "report") appendDoneDailyDecisionReportBody(body, tasks);
+      else appendDoneVdTrendCharts(body);
+      panel.setAttribute(
+        "aria-label",
+        tab === "report" ? "每日决策报告" : "Victory/Defeat Index 趋势"
+      );
+      if (scrollTop) panel.scrollTop = scrollTop;
     }
 
     /** 粗糙开始 / 多巴胺初动：V/D 指数条与当前冲刺条共用 */
@@ -182601,6 +182622,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     let doneOutcomeClickFollowUpTimer = null;
     let doneOutcomeClickFollowUpRaf = 0;
     let doneOutcomeChromeRefreshTimer = null;
+    let doneOutcomePanelBodyTimer = null;
     /** @type {Map<string, {item: object, reason: string}>} */
     let doneOutcomePendingUpserts = new Map();
     let doneOutcomePendingPatchedOk = true;
@@ -182708,6 +182730,39 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return true;
     }
 
+    /** 行级色调（卡片 / 时间轴圆点）随性质立即变，避免等下一次整表 render */
+    function syncDoneRowOutcomeTone(li, task) {
+      if (!li || !task || task.kind === "timeReflection") return;
+      const bucket =
+        typeof getDoneStatsOutcomeBucket === "function"
+          ? getDoneStatsOutcomeBucket(task)
+          : "neutral";
+      const rowEl = li.querySelector(".done-compact-row");
+      if (rowEl && !rowEl.classList.contains("done-compact-row--outcome-reflection")) {
+        const tone = "done-compact-row--outcome-" + bucket;
+        if (!rowEl.classList.contains(tone)) {
+          rowEl.classList.remove(
+            "done-compact-row--outcome-power",
+            "done-compact-row--outcome-neutral",
+            "done-compact-row--outcome-treason"
+          );
+          rowEl.classList.add(tone);
+        }
+      }
+      const dot = li.querySelector(".done-time-block-row__dot");
+      if (dot && !dot.classList.contains("done-time-block-row__dot--reminder")) {
+        const dotTone = "done-time-block-row__dot--outcome-" + bucket;
+        if (!dot.classList.contains(dotTone)) {
+          dot.classList.remove(
+            "done-time-block-row__dot--outcome-power",
+            "done-time-block-row__dot--outcome-neutral",
+            "done-time-block-row__dot--outcome-treason"
+          );
+          dot.classList.add(dotTone);
+        }
+      }
+    }
+
     /** 仅替换该行性质控件与行尾评分，避免整页 render 阻塞点击反馈 */
     function patchDoneOutcomeUiImmediate(task) {
       if (!task || task.id == null || !doneList) return false;
@@ -182735,6 +182790,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!li) return false;
       const row = li.querySelector(".done-compact-outcome-row");
       if (!row) return false;
+      syncDoneRowOutcomeTone(li, task);
       const wantMode = resolveDoneOutcomeUiMode(task);
       const haveMode = readDoneOutcomeUiModeFromDom(row);
       if (
@@ -182782,24 +182838,103 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
+     * 顶栏性质图例：结构已在时只改数量与占比，避免每次分类选择 replaceChildren。
+     * 结构不符或当日为空时返回 false，由调用方走完整 renderDoneOutcomeDayStats。
+     */
+    function patchDoneOutcomeDayStatsCounts(el, tasks) {
+      if (!el || !el.querySelector) return false;
+      const items = el.querySelectorAll(
+        ":scope > .done-outcome-day-stats__legend > .done-outcome-day-stats__legend-item"
+      );
+      if (items.length !== 3) return false;
+      const keys = ["power", "neutral", "treason"];
+      const labels = { power: "力量选择", neutral: "中立流", treason: "背叛选择" };
+      const counts = { power: 0, neutral: 0, treason: 0 };
+      (tasks || []).forEach(function (t) {
+        const b = getDoneStatsOutcomeBucket(t);
+        if (counts[b] !== undefined) counts[b]++;
+      });
+      const total = tasks ? tasks.length : 0;
+      if (!total) return false;
+      const pcts = keys.map(function (k) {
+        return Math.round((counts[k] / total) * 100);
+      });
+      const drift = 100 - (pcts[0] + pcts[1] + pcts[2]);
+      pcts[2] = Math.max(0, Math.min(100, pcts[2] + drift));
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        const item = items[i];
+        item.title = labels[k] + " " + counts[k] + " 项（" + pcts[i] + "%）";
+        const countSpan = item.querySelector(".done-outcome-day-stats__legend-count");
+        const pctSpan = item.querySelector(".done-outcome-day-stats__legend-pct");
+        if (!countSpan || !pctSpan) return false;
+        countSpan.textContent = String(counts[k]) + " · ";
+        pctSpan.textContent = String(pcts[i]) + "%";
+      }
+      el.setAttribute(
+        "aria-label",
+        "当日完成性质：力量" +
+          counts.power +
+          "项约" +
+          pcts[0] +
+          "%，中立" +
+          counts.neutral +
+          "项约" +
+          pcts[1] +
+          "%，背叛" +
+          counts.treason +
+          "项约" +
+          pcts[2] +
+          "%"
+      );
+      return true;
+    }
+
+    /**
      * 顶栏性质统计 / Victory·Defeat：分类选择专用轻量刷新。
      * 不重建时间轴；跳过时段分布与 Refocus（与性质无关）；
      * V/D 走 patchDoneVdIndexHomeAfterOutcomeEdit，避免整胶囊 replaceChildren + 跑马灯 sync。
+     * 已展开的趋势/报告正文延后局部刷新，不挡分类点击。
      */
     function refreshDoneOutcomeDerivedChromeLight() {
       try {
         const statsTasks = collectDoneTasksForOutcomeChrome();
         if (typeof renderDoneOutcomeDayStats === "function" && doneOutcomeDayStats) {
-          renderDoneOutcomeDayStats(doneOutcomeDayStats, statsTasks);
+          if (!patchDoneOutcomeDayStatsCounts(doneOutcomeDayStats, statsTasks)) {
+            renderDoneOutcomeDayStats(doneOutcomeDayStats, statsTasks);
+          }
         }
         if (typeof patchDoneVdIndexHomeAfterOutcomeEdit === "function") {
-          patchDoneVdIndexHomeAfterOutcomeEdit(statsTasks);
+          /* 返回 true 表示只改了胶囊数字；false 时已整段 renderDoneVdIndexHome（含面板） */
+          if (patchDoneVdIndexHomeAfterOutcomeEdit(statsTasks) === true) {
+            scheduleDoneOutcomeOpenPanelBodyRefresh();
+          }
         } else if (typeof renderDoneVdIndexHome === "function") {
           renderDoneVdIndexHome(statsTasks);
         }
       } catch (_chromeErr) {
         console.warn("[Done] 性质派生刷新失败:", _chromeErr);
       }
+    }
+
+    /** 公式面板正文：分类连点合并为一次，且晚于行内选中态绘制 */
+    function scheduleDoneOutcomeOpenPanelBodyRefresh() {
+      if (doneOutcomePanelBodyTimer) clearTimeout(doneOutcomePanelBodyTimer);
+      let ui = null;
+      try {
+        ui = ensureDoneUi();
+      } catch (_ui) {
+        ui = null;
+      }
+      if (!ui || !ui.vdIndexMethodOpen || ui.vdIndexPanelTab === "rules") return;
+      doneOutcomePanelBodyTimer = setTimeout(function () {
+        doneOutcomePanelBodyTimer = null;
+        try {
+          const ui2 = ensureDoneUi();
+          if (!ui2 || !ui2.vdIndexMethodOpen || ui2.vdIndexPanelTab === "rules") return;
+          refreshOpenDoneVdPanelBodyAfterOutcomeEdit(collectDoneTasksForOutcomeChrome());
+        } catch (_panelErr) {}
+      }, 160);
     }
 
     /** 后台：窄域 save + 阿里云 Done upsert + 合并连点后刷派生 UI（须在首帧 paint 之后） */
@@ -183267,18 +183402,39 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
 
       if (isPicking) {
-        clearOrphanMetaStackHints();
-        const hint = pickHost.querySelector(":scope > .done-outcome-90day-hint");
+        /*
+         * 90 天提示在第一次进入选择态时就被提升到 metaStack。
+         * 不能把已提升的提示当成残留删掉，也不能在顺序已正确时再次 appendChild
+         *（每次切换性质都会触发布局，体感即分类键卡顿）。
+         */
+        let hint = pickHost.querySelector(":scope > .done-outcome-90day-hint");
+        const stacked = metaStack.querySelectorAll(":scope > .done-outcome-90day-hint");
+        if (!hint && stacked.length) hint = stacked[0];
+        for (let hi = 0; hi < stacked.length; hi++) {
+          if (stacked[hi] !== hint && stacked[hi].parentNode) {
+            stacked[hi].parentNode.removeChild(stacked[hi]);
+          }
+        }
         if (sourceLine && trailing && trailing.parentElement !== sourceLine) {
           sourceLine.appendChild(trailing);
         }
-        if (sourceLine && sourceLine.parentElement !== metaStack) {
-          metaStack.appendChild(sourceLine);
-        } else if (sourceLine && hint) {
-          /* 保证顺序：firstRow → sourceLine → hint */
-          metaStack.appendChild(sourceLine);
+        const laidOut =
+          (!sourceLine || sourceLine.parentElement === metaStack) &&
+          (!trailing || !sourceLine || trailing.parentElement === sourceLine) &&
+          (!hint ||
+            (hint.parentElement === metaStack &&
+              (!sourceLine || sourceLine.nextElementSibling === hint)));
+        if (!laidOut) {
+          if (sourceLine && sourceLine.parentElement !== metaStack) {
+            metaStack.appendChild(sourceLine);
+          } else if (sourceLine && hint && sourceLine.nextElementSibling !== hint) {
+            metaStack.appendChild(sourceLine);
+          }
+          if (hint && hint.parentElement !== metaStack) metaStack.appendChild(hint);
+          else if (hint && sourceLine && sourceLine.nextElementSibling !== hint) {
+            metaStack.appendChild(hint);
+          }
         }
-        if (hint) metaStack.appendChild(hint);
       } else {
         if (firstRow && trailing && trailing.parentElement !== firstRow) {
           firstRow.appendChild(trailing);
