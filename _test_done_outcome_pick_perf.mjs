@@ -59,12 +59,37 @@ if (segBody.includes('className = "done-outcome-expand-panel"')) {
 }
 ok("compact 打开直切 expand-row，无预建面板");
 
-if (!html.includes('APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261107a"')) {
-  fail("index.html cache badge not bumped to v20261107a");
+if (!html.includes('APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261107b"')) {
+  fail("index.html cache badge not bumped to v20261107b");
 }
-if (!sw.includes('CACHE_NAME = "exec-system-pwa-v20261107a"')) {
-  fail("sw.js CACHE_NAME not bumped to v20261107a");
+if (!sw.includes('CACHE_NAME = "exec-system-pwa-v20261107b"')) {
+  fail("sw.js CACHE_NAME not bumped to v20261107b");
 }
-ok("缓存版本 v20261107a");
+ok("缓存版本 v20261107b");
+
+/* 三次收尾：顶栏轻刷跳过跑马灯；就地点选可跳过 pick 布局 */
+const chromeStart = html.indexOf("function refreshDoneOutcomeDerivedChromeLight(");
+const chromeEnd = html.indexOf("\n    function scheduleDoneOutcomeClickFollowUp(", chromeStart);
+const chromeBody = html.slice(chromeStart, chromeEnd);
+if (!chromeBody.includes("skipMarqueeSync: true")) {
+  fail("chrome light refresh must skip marquee sync on outcome click path");
+}
+ok("顶栏轻刷 skipMarqueeSync");
+
+const patchStart = html.indexOf("function patchDoneOutcomeUiImmediate(");
+const patchEnd = html.indexOf("\n    function collectDoneTasksForOutcomeChrome(", patchStart);
+const patchBody = html.slice(patchStart, patchEnd);
+if (!patchBody.includes("hintStillInSeg") || !patchBody.includes("alreadyPicking")) {
+  fail("in-place outcome patch should skip pick layout when already picking");
+}
+ok("就地点选可跳过 pick 布局搬迁");
+
+const kindStart = html.indexOf("function setDoneOutcomeKindForDoneId(");
+const kindEnd = html.indexOf("\n    function setDoneOutcomeScoreForDoneId(", kindStart);
+const kindBody = html.slice(kindStart, kindEnd);
+if (kindBody.indexOf("patchDoneOutcomeUiImmediate") > kindBody.indexOf("playVictoryCelebration(") && kindBody.includes("playVictoryCelebration(")) {
+  fail("kind select must patch row before victory celebration");
+}
+ok("性质选择先 patch 再庆祝");
 
 console.log("\nAll checks passed.");

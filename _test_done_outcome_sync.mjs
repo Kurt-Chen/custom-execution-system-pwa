@@ -20,8 +20,8 @@ mustInclude(
   "click uploads outcome (paint 后合并 upsert)"
 );
 mustInclude("mergeDoneItemOutcomeFields(next, local, remote, true)", "LWW path uses shared outcome merge");
-mustInclude("exec-system-pwa-v20261107a", "cache bump html");
-assert.ok(sw.includes("exec-system-pwa-v20261107a"), "cache bump sw");
+mustInclude("exec-system-pwa-v20261107b", "cache bump html");
+assert.ok(sw.includes("exec-system-pwa-v20261107b"), "cache bump sw");
 
 /* 纯逻辑：本机更新更新、远端有力量 → 仍应合入 */
 function mergeDoneItemOutcomeFields(mergedItem, localItem, remoteItem, preferRemoteOnConflict) {
