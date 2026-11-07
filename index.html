@@ -113297,7 +113297,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261106n";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261106o";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -182497,11 +182497,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * Done 分类点击卡顿根因（优化前同步链）：
-     * setDoneOutcomeKind/Score → saveState() 裸调用（markAllUiPaintSlicesDirty）
-     * → flushCloudSyncPulseImmediate() → render() 整页（含 V/D / 时间轴全量）
-     * → 且仅 manualDone 才 notifyAliyunDoneRealUpsert。
-     * 目标：先改 state + 本行 UI，保存/云同步/顶栏派生全部后台异步。
+     * Done 分类点击卡顿根因：
+     * 1) 打开选择器：details 先展开再 rAF 整段替换 → 双布局。
+     * 2) 选中后 timeout(0) force persist 整包 stringify + 拆掉公式胶囊/跑马灯。
+     * 目标：打开即 expand-row；先改 state + 本行 UI；落盘走 400ms 防抖；顶栏就地改数字。
      */
     let doneOutcomeClickFollowUpTimer = null;
 
@@ -182608,18 +182607,49 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return true;
     }
 
+    /** 打开分类选择：同步切入 expand-row，不经 details 展开 + rAF 二次重建 */
+    function openDoneOutcomePickerForId(id) {
+      const tid = String(id || "");
+      if (!tid) return;
+      if (!doneOutcomeScorePickOpenIds.has(tid)) {
+        doneOutcomeScorePickOpenIds.add(tid);
+      }
+      const item =
+        typeof state !== "undefined" && Array.isArray(state.done)
+          ? state.done.find(function (x) {
+              return x && String(x.id) === tid;
+            })
+          : null;
+      if (!item) return;
+      try {
+        patchDoneOutcomeUiImmediate(item);
+      } catch (_openPick) {}
+    }
+
+    /** 按 id 定位时间轴行：优先属性选择器，避免每次点选扫完全表 NodeList */
+    function findDoneTimelineItemById(id) {
+      if (!doneList || id == null) return null;
+      const sid = String(id);
+      if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+        try {
+          const hit = doneList.querySelector(
+            'li.timeline-item.done[data-done-id="' + CSS.escape(sid) + '"]'
+          );
+          if (hit) return hit;
+        } catch (_esc) {}
+      }
+      const nodes = doneList.querySelectorAll("li.timeline-item.done[data-done-id]");
+      for (let i = 0; i < nodes.length; i++) {
+        if (nodes[i].getAttribute("data-done-id") === sid) return nodes[i];
+      }
+      return null;
+    }
+
     /** 仅替换该行性质控件与行尾评分，避免整页 render 阻塞点击反馈 */
     function patchDoneOutcomeUiImmediate(task) {
       if (!task || task.id == null || !doneList) return false;
       const sid = String(task.id);
-      let li = null;
-      const nodes = doneList.querySelectorAll("li.timeline-item.done[data-done-id]");
-      for (let i = 0; i < nodes.length; i++) {
-        if (nodes[i].getAttribute("data-done-id") === sid) {
-          li = nodes[i];
-          break;
-        }
-      }
+      const li = findDoneTimelineItemById(sid);
       if (!li) return false;
       const row = li.querySelector(".done-compact-outcome-row");
       if (!row) return false;
@@ -182669,6 +182699,91 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
     }
 
+    /**
+     * 分类点选后就地更新公式胶囊数字，禁止 replaceChildren。
+     * 全量 renderDoneVdIndexHome 会拆掉跑马灯宿主并重绘趋势/规则，点选时会卡。
+     */
+    function patchDoneVdIndexHomeInPlace(tasks) {
+      const el = document.getElementById("doneVdIndexHome");
+      if (!el) return;
+      const verdict = el.querySelector(".done-vd-index-home__verdict");
+      const value = el.querySelector(".done-vd-index-home__value");
+      if (!verdict || !value) {
+        if (typeof renderDoneVdIndexHome === "function") renderDoneVdIndexHome(tasks);
+        return;
+      }
+      const summary = computeDoneVdIndex(tasks);
+      const ui = ensureDoneUi();
+      const methodOpen = !!ui.vdIndexMethodOpen;
+      const mathText = formatDoneVdIndexMath(summary);
+      el.classList.toggle("done-vd-index-home--method-open", methodOpen);
+      el.classList.remove(
+        "done-vd-index-home--empty",
+        "done-vd-index-home--victory",
+        "done-vd-index-home--defeat",
+        "done-vd-index-home--flat"
+      );
+      verdict.classList.remove(
+        "done-vd-index-home__verdict--victory",
+        "done-vd-index-home__verdict--defeat",
+        "done-vd-index-home__verdict--flat"
+      );
+      value.classList.remove("done-vd-index-home__value--flat");
+      if (!summary.total) {
+        el.classList.add("done-vd-index-home--empty", "done-vd-index-home--flat");
+        verdict.classList.add("done-vd-index-home__verdict--flat");
+        value.classList.add("done-vd-index-home__value--flat");
+        verdict.textContent = "暂无计入统计的完成";
+        value.textContent = "—";
+        el.setAttribute("aria-label", "Victory/Defeat Index 暂无数据，点击展开趋势与方法论");
+      } else if (summary.index > 0) {
+        el.classList.add("done-vd-index-home--victory");
+        verdict.classList.add("done-vd-index-home__verdict--victory");
+        verdict.textContent = "Victory · Decision Winner";
+        appendDoneVdIndexMathEl(value, summary);
+        el.setAttribute(
+          "aria-label",
+          "Victory/Defeat Index " + mathText + "，Victory，点击展开趋势与方法论"
+        );
+      } else if (summary.index < 0) {
+        el.classList.add("done-vd-index-home--defeat");
+        verdict.classList.add("done-vd-index-home__verdict--defeat");
+        verdict.textContent = "Defeat · Decision Loser";
+        appendDoneVdIndexMathEl(value, summary);
+        el.setAttribute(
+          "aria-label",
+          "Victory/Defeat Index " + mathText + "，Defeat，点击展开趋势与方法论"
+        );
+      } else {
+        el.classList.add("done-vd-index-home--flat");
+        verdict.classList.add("done-vd-index-home__verdict--flat");
+        verdict.textContent = "Flat · 持平";
+        appendDoneVdIndexMathEl(value, summary);
+        el.setAttribute("aria-label", "Victory/Defeat Index " + mathText + "，持平，点击展开趋势与方法论");
+      }
+      el.setAttribute("aria-expanded", methodOpen ? "true" : "false");
+      el.title =
+        "当日 Victory/Defeat Index " +
+        (summary.total ? mathText : "暂无") +
+        "（点击胶囊展开趋势与方法论）";
+      if (!methodOpen) return;
+      const tab =
+        ui.vdIndexPanelTab === "rules"
+          ? "rules"
+          : ui.vdIndexPanelTab === "report"
+            ? "report"
+            : "trends";
+      const panel = document.getElementById("doneVdIndexMethodPanel");
+      const body = panel && panel.querySelector(".done-vd-index-fs__body");
+      if (!body) return;
+      if (tab === "report" && typeof appendDoneDailyDecisionReportBody === "function") {
+        appendDoneDailyDecisionReportBody(body, tasks);
+      } else if (tab === "trends" && typeof appendDoneVdTrendCharts === "function") {
+        body.replaceChildren();
+        appendDoneVdTrendCharts(body);
+      }
+    }
+
     /** 顶栏性质统计 / Victory·Defeat：轻量刷新，不重建整条时间轴 */
     function refreshDoneOutcomeDerivedChromeLight() {
       try {
@@ -182676,16 +182791,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         if (typeof renderDoneOutcomeDayStats === "function" && doneOutcomeDayStats) {
           renderDoneOutcomeDayStats(doneOutcomeDayStats, statsTasks);
         }
-        if (typeof renderDoneDayStats === "function" && typeof doneDayStats !== "undefined" && doneDayStats) {
-          renderDoneDayStats(doneDayStats, statsTasks);
-        }
-        if (typeof renderDoneVdIndexHome === "function") {
-          renderDoneVdIndexHome(statsTasks);
-        }
-        if (typeof renderDoneDailyDecisionReport === "function") {
-          renderDoneDailyDecisionReport(statsTasks);
-          if (typeof renderDoneRefocusChrome === "function") renderDoneRefocusChrome();
-        }
+        /* 时段分布与 Refocus 不随分类变化；公式胶囊就地改数字，避免拆跑马灯 */
+        patchDoneVdIndexHomeInPlace(statsTasks);
       } catch (_chromeErr) {
         console.warn("[Done] 性质派生刷新失败:", _chromeErr);
       }
@@ -182711,9 +182818,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (doneOutcomeClickFollowUpTimer) clearTimeout(doneOutcomeClickFollowUpTimer);
       doneOutcomeClickFollowUpTimer = setTimeout(function () {
         doneOutcomeClickFollowUpTimer = null;
-        try {
-          flushLocalPersistedState("force");
-        } catch (_persistErr) {}
+        /*
+         * 不 force persist：saveState 已安排 400ms 防抖落盘；
+         * pagehide/beforeunload 仍会 flush。点选后立刻 stringify 整包会卡住选择器。
+         */
         if (patchedOk) {
           refreshDoneOutcomeDerivedChromeLight();
         } else {
@@ -182926,6 +183034,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       );
       summary.addEventListener("click", function (ev) {
         ev.stopPropagation();
+        /* 阻止 details 先展开再被整段替换：打开即切入 expand-row，避免双布局卡顿 */
+        ev.preventDefault();
+        openDoneOutcomePickerForId(tid);
       });
 
       const chain = createDoneOutcomeStatusChainEl(cur);
@@ -182946,30 +183057,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       /*
        * 展开 details 会同时露出 summary 状态链 + 面板三键 → 视觉上「两个 Neutral」。
        * 打开即切入 keepScorePickOpen 的 expand-row，与直接编辑态同一套 DOM，避免叠层。
+       * preventDefault 失败时 toggle 仍作兜底；已 patch 则节点已卸下，直接返回。
        */
       details.addEventListener("toggle", function onDoneOutcomeDetailsToggle() {
-        if (!details.open) return;
-        if (!doneOutcomeScorePickOpenIds.has(tid)) {
-          doneOutcomeScorePickOpenIds.add(tid);
-        }
-        const item =
-          typeof state !== "undefined" && Array.isArray(state.done)
-            ? state.done.find(function (x) {
-                return x && String(x.id) === tid;
-              })
-            : null;
-        if (!item) return;
-        if (typeof requestAnimationFrame === "function") {
-          requestAnimationFrame(function () {
-            try {
-              patchDoneOutcomeUiImmediate(item);
-            } catch (_detPatch) {}
-          });
-        } else {
-          try {
-            patchDoneOutcomeUiImmediate(item);
-          } catch (_detPatch2) {}
-        }
+        if (!details.open || !details.isConnected) return;
+        openDoneOutcomePickerForId(tid);
       });
       return details;
     }
