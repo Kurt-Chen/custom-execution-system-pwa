@@ -2109,7 +2109,30 @@
     }
 
     #dynamicModule .kinetic-tab-btn#kineticTabBtn-anniversary .kinetic-tab-btn__label {
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      white-space: nowrap;
+      text-align: center;
+      /* 稳定「12 Week Year」与「第X周·仅X天」切换时胶囊宽度 */
+      min-width: 8.5em;
+      box-sizing: border-box;
+    }
+
+    /* 每小时 :00–:04 / :30–:34：周数与剩余天数数字柠檬黄，其余白字 */
+    #dynamicModule
+      .kinetic-tab-btn#kineticTabBtn-anniversary[aria-selected="true"]
+      .kinetic-tab-btn__label.is-anniv-status {
+      color: #ffffff;
+    }
+
+    #dynamicModule
+      .kinetic-tab-btn#kineticTabBtn-anniversary
+      .kinetic-tab-btn__label
+      .kinetic-anniv-tab-status-num {
+      color: #ffff00;
+      font-weight: inherit;
+      font-variant-numeric: tabular-nums;
     }
 
     #dynamicModule .kinetic-tab-btn#kineticTabBtn-anniversary.is-anniv-goal-tab-marquee-playing {
@@ -113445,7 +113468,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261108c";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261108d";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -208005,6 +208028,94 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return label;
     }
 
+    /**
+     * 每小时 00:00–04:59 / 30:00–34:59：顶栏显示「第X周·仅X天」。
+     * 周数 / 剩余天数复用十二周年现有计算；纯 UI，不 saveState。
+     */
+    let kineticAnniversaryTabIdleLabelKey = "";
+
+    function isKineticAnniversaryTabStatusWindow(dateOpt) {
+      const d = dateOpt instanceof Date ? dateOpt : new Date();
+      const min = d.getMinutes();
+      return (min >= 0 && min < 5) || (min >= 30 && min < 35);
+    }
+
+    /** 与「当前 · 第N周」/「仅剩X天」同源；无效时返回 null */
+    function getKineticAnniversaryTabStatusData() {
+      const moduleKey =
+        typeof getCurrentAnniversaryModuleForDate === "function"
+          ? getCurrentAnniversaryModuleForDate(new Date())
+          : null;
+      if (!moduleKey || typeof getAnniversaryTwWeekIndexForModule !== "function") return null;
+      let weekNum = Math.floor(Number(getAnniversaryTwWeekIndexForModule(moduleKey)));
+      if (!(weekNum >= 1 && weekNum <= 13)) return null;
+      let remainDays = null;
+      if (typeof getWeeklyPlanSprintAnniversaryRemainDays === "function") {
+        remainDays = getWeeklyPlanSprintAnniversaryRemainDays();
+      } else if (
+        typeof getAnniversaryTwWeek12DeadlineMsForModule === "function" &&
+        typeof kineticCalendarDaysFromToday === "function"
+      ) {
+        const deadlineMs = getAnniversaryTwWeek12DeadlineMsForModule(moduleKey);
+        if (deadlineMs != null) remainDays = kineticCalendarDaysFromToday(deadlineMs);
+      }
+      if (remainDays == null || !Number.isFinite(remainDays) || remainDays < 0) return null;
+      return { weekNum: weekNum, remainDays: Math.floor(Number(remainDays)) };
+    }
+
+    function buildKineticAnniversaryTabStatusLabel(labelEl, weekNum, remainDays) {
+      if (!labelEl) return;
+      labelEl.replaceChildren();
+      labelEl.appendChild(document.createTextNode("第"));
+      const weekEl = document.createElement("span");
+      weekEl.className = "kinetic-anniv-tab-status-num";
+      weekEl.textContent = String(weekNum);
+      labelEl.appendChild(weekEl);
+      labelEl.appendChild(document.createTextNode("周·仅"));
+      const daysEl = document.createElement("span");
+      daysEl.className = "kinetic-anniv-tab-status-num";
+      daysEl.textContent = String(remainDays);
+      labelEl.appendChild(daysEl);
+      labelEl.appendChild(document.createTextNode("天"));
+    }
+
+    /** 由 tickDoneTimeBlockSprint 每秒调用；仅文案变化时改 DOM */
+    function syncKineticAnniversaryTabIdleLabel() {
+      if (kineticAnniversaryGoalMarqueeState.phase === "playing") return;
+      const btn = queryKineticAnniversaryTabBtn();
+      if (!btn) return;
+      const label = ensureKineticAnniversaryTabLabelEl(btn);
+      if (!label) return;
+      const now = new Date();
+      let nextKey = "default";
+      let statusData = null;
+      if (isKineticAnniversaryTabStatusWindow(now)) {
+        statusData = getKineticAnniversaryTabStatusData();
+        if (statusData) {
+          nextKey = "status:" + statusData.weekNum + ":" + statusData.remainDays;
+        }
+      }
+      if (
+        nextKey === kineticAnniversaryTabIdleLabelKey &&
+        label.dataset.annivIdleKey === nextKey
+      ) {
+        return;
+      }
+      kineticAnniversaryTabIdleLabelKey = nextKey;
+      label.dataset.annivIdleKey = nextKey;
+      if (statusData) {
+        label.classList.add("is-anniv-status");
+        buildKineticAnniversaryTabStatusLabel(
+          label,
+          statusData.weekNum,
+          statusData.remainDays
+        );
+      } else {
+        label.classList.remove("is-anniv-status");
+        label.textContent = KINETIC_ANNIVERSARY_TAB_LABEL;
+      }
+    }
+
     function clearKineticAnniversaryGoalMarqueeFinishTimer() {
       if (kineticAnniversaryGoalMarqueeState.finishTimerId) {
         clearTimeout(kineticAnniversaryGoalMarqueeState.finishTimerId);
@@ -208019,8 +208130,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         btn.classList.remove("is-anniv-goal-tab-marquee-playing");
         const overlay = btn.querySelector(":scope > .kinetic-anniversary-goal-marquee-overlay");
         if (overlay) overlay.remove();
+        /* 播完后按当前分钟窗口恢复：可能是「12 Week Year」或「第X周·仅X天」 */
+        kineticAnniversaryTabIdleLabelKey = "";
         const label = ensureKineticAnniversaryTabLabelEl(btn);
-        if (label) label.textContent = KINETIC_ANNIVERSARY_TAB_LABEL;
+        if (label) delete label.dataset.annivIdleKey;
+        syncKineticAnniversaryTabIdleLabel();
       }
       kineticAnniversaryGoalMarqueeState.phase = "idle";
     }
@@ -208227,8 +208341,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return true;
     }
 
-    /** 半点触发入口：由 tickDoneTimeBlockSprint 每秒调用；纯 UI，不 saveState */
+    /** 半点跑马灯 + 整点/半点 5 分钟状态文案：由 tickDoneTimeBlockSprint 每秒调用；纯 UI，不 saveState */
     function syncKineticAnniversaryTabGoalMarquee() {
+      /* 先同步闲时/状态文案（:00–:04 / :30–:34）；跑马灯播放中由 idle sync 自行跳过 */
+      syncKineticAnniversaryTabIdleLabel();
       if (kineticAnniversaryGoalMarqueeState.phase === "playing") return;
       if (document.visibilityState === "hidden") return;
       const slotKey = getKineticAnniversaryTabGoalMarqueeClockSlotKey(new Date());
@@ -208249,6 +208365,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return playKineticAnniversaryTabGoalMarqueeOnce(true);
       };
       window.__syncKineticAnniversaryTabGoalMarquee = syncKineticAnniversaryTabGoalMarquee;
+      window.__syncKineticAnniversaryTabIdleLabel = syncKineticAnniversaryTabIdleLabel;
+      window.__isKineticAnniversaryTabStatusWindow = isKineticAnniversaryTabStatusWindow;
     } catch (_wAnnivTab) {}
 
     function renderAnniversaryTwAnchorModule(moduleKey) {
