@@ -14415,6 +14415,83 @@
     }
 
     /*
+     * BLOCK 每日梦想深度工作小时：紧贴右上角 ⇄ / < 下方，两枚独立胶囊。
+     * 不改 5/9 HOURS 标题与时间卡片；三端同款紧凑尺寸。
+     */
+    .today-plan-block-dream-hours {
+      position: absolute;
+      top: 34px;
+      right: 4px;
+      z-index: 5;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 4px;
+      width: 46px;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+      pointer-events: auto;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    #todayPlanPanel.is-block-view:not(.is-collapsed) .today-plan-block-dream-hours {
+      display: flex;
+    }
+
+    #todayPlanPanel.is-collapsed .today-plan-block-dream-hours,
+    #todayPlanPanel:not(.is-block-view) .today-plan-block-dream-hours {
+      display: none;
+    }
+
+    .today-plan-block-dream-hours__value,
+    .today-plan-block-dream-hours__inc {
+      box-sizing: border-box;
+      margin: 0;
+      border: 0;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      line-height: 1;
+      cursor: pointer;
+      box-shadow: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .today-plan-block-dream-hours__value {
+      width: 45px;
+      height: 23px;
+      padding: 0 4px;
+      background: #fbe4ed;
+      color: #b51250;
+      font-size: 12px;
+      letter-spacing: 0.01em;
+    }
+
+    .today-plan-block-dream-hours__inc {
+      width: 33px;
+      height: 22px;
+      padding: 0;
+      background: #c2185b;
+      color: #fff;
+      font-size: 12px;
+      letter-spacing: 0;
+    }
+
+    .today-plan-block-dream-hours__value:focus-visible,
+    .today-plan-block-dream-hours__inc:focus-visible {
+      outline: 2px solid rgba(194, 24, 91, 0.45);
+      outline-offset: 1px;
+    }
+
+    /*
      * .today-plan-block { display:flex } 会盖掉 UA [hidden]，
      * 导致 Weekday / Holiday 同时占布局。强制互斥隐藏、不占位。
      * 不改动模块内部样式。
@@ -95185,6 +95262,26 @@
       <button type="button" id="todayPlanPanelCollapse" class="today-plan-panel__collapse" aria-label="收起今日计划" hidden>
         <span class="today-plan-panel__collapse-chevron" aria-hidden="true">&lt;</span>
       </button>
+      <!-- BLOCK 展开：右上角功能钮下方 · 梦想深度工作小时手动累计（不改 5/9 HOURS） -->
+      <div
+        id="todayPlanBlockDreamHours"
+        class="today-plan-block-dream-hours"
+        role="group"
+        aria-label="每日梦想项目深度工作小时"
+      >
+        <button
+          type="button"
+          id="todayPlanBlockDreamHoursValue"
+          class="today-plan-block-dream-hours__value"
+          aria-label="今日累计深度工作小时，长按可调整"
+        >0/5</button>
+        <button
+          type="button"
+          id="todayPlanBlockDreamHoursInc"
+          class="today-plan-block-dream-hours__inc"
+          aria-label="深度工作累计加一小时"
+        >+1</button>
+      </div>
       <div class="today-plan-panel__body" hidden>
         <!--
           顶部行动反馈区：日期 + Problem/Approach + MONEY 公式条，
@@ -114992,7 +115089,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261110q";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261111a";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -116112,6 +116209,9 @@
           isHoliday ? "当前休，点击切换到班" : "当前班，点击切换到休"
         );
       }
+      try {
+        if (typeof syncBlockDreamHoursUI === "function") syncBlockDreamHoursUI();
+      } catch (_bdhModeUi) {}
     }
 
     function setTodayPlanBlockMode(mode, opts) {
@@ -116377,6 +116477,276 @@
       }, delay);
     }
 
+    /** BLOCK 梦想深度工作：班=5 / 休=9；按北京日累计，历史保留在 days */
+    const BLOCK_DREAM_HOURS_WEEKDAY_TARGET = 5;
+    const BLOCK_DREAM_HOURS_HOLIDAY_TARGET = 9;
+    const BLOCK_DREAM_HOURS_MAX = 48;
+    let blockDreamHoursMidnightTimer = null;
+    const todayPlanBlockDreamHoursValueEl = document.getElementById(
+      "todayPlanBlockDreamHoursValue"
+    );
+    const todayPlanBlockDreamHoursIncEl = document.getElementById(
+      "todayPlanBlockDreamHoursInc"
+    );
+
+    function ensureBlockDreamHoursState() {
+      if (!state.blockDreamHours || typeof state.blockDreamHours !== "object") {
+        state.blockDreamHours = { days: {} };
+      }
+      if (!state.blockDreamHours.days || typeof state.blockDreamHours.days !== "object") {
+        state.blockDreamHours.days = {};
+      }
+      return state.blockDreamHours;
+    }
+
+    function normalizeBlockDreamHoursDayEntry(raw) {
+      if (raw == null || raw === "") return null;
+      if (typeof raw === "object" && !Array.isArray(raw)) {
+        const hours = Math.floor(Number(raw.hours));
+        if (!Number.isFinite(hours) || hours < 0) return null;
+        const updatedAt = Number(raw.updatedAt) || Number(raw.loggedAt) || 0;
+        return {
+          hours: Math.min(BLOCK_DREAM_HOURS_MAX, hours),
+          updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : 0
+        };
+      }
+      const nHours = Math.floor(Number(raw));
+      if (!Number.isFinite(nHours) || nHours < 0) return null;
+      return { hours: Math.min(BLOCK_DREAM_HOURS_MAX, nHours), updatedAt: 0 };
+    }
+
+    function mergeBlockDreamHoursForSync(localRaw, remoteRaw) {
+      const lo =
+        localRaw && typeof localRaw === "object" && localRaw.days && typeof localRaw.days === "object"
+          ? localRaw.days
+          : localRaw && typeof localRaw === "object" && !localRaw.days
+            ? localRaw
+            : {};
+      const ro =
+        remoteRaw &&
+        typeof remoteRaw === "object" &&
+        remoteRaw.days &&
+        typeof remoteRaw.days === "object"
+          ? remoteRaw.days
+          : remoteRaw && typeof remoteRaw === "object" && !remoteRaw.days
+            ? remoteRaw
+            : {};
+      const keys = new Set(Object.keys(lo || {}).concat(Object.keys(ro || {})));
+      const days = {};
+      keys.forEach(function (k) {
+        const l = normalizeBlockDreamHoursDayEntry(lo[k]);
+        const r = normalizeBlockDreamHoursDayEntry(ro[k]);
+        if (!l && !r) return;
+        if (!l) {
+          days[k] = { hours: r.hours, updatedAt: r.updatedAt || 0 };
+          return;
+        }
+        if (!r) {
+          days[k] = { hours: l.hours, updatedAt: l.updatedAt || 0 };
+          return;
+        }
+        /* 同日取较大累计，避免跨设备回放重复 +1；戳取对应侧 */
+        const hours = Math.max(l.hours, r.hours);
+        let updatedAt = Math.max(l.updatedAt || 0, r.updatedAt || 0);
+        if (hours === l.hours && l.updatedAt) updatedAt = Math.max(updatedAt, l.updatedAt);
+        if (hours === r.hours && r.updatedAt) updatedAt = Math.max(updatedAt, r.updatedAt);
+        days[k] = { hours: hours, updatedAt: updatedAt || 0 };
+      });
+      return { days: days };
+    }
+
+    function mergeBlockDreamHoursIntoState(remoteRaw) {
+      ensureBlockDreamHoursState();
+      const merged = mergeBlockDreamHoursForSync(state.blockDreamHours, remoteRaw);
+      let changed = false;
+      try {
+        changed =
+          JSON.stringify(state.blockDreamHours.days || {}) !==
+          JSON.stringify((merged && merged.days) || {});
+      } catch (_cmp) {
+        changed = true;
+      }
+      if (changed) {
+        state.blockDreamHours = merged;
+        try {
+          if (typeof syncBlockDreamHoursUI === "function") syncBlockDreamHoursUI();
+        } catch (_bdhMergeUi) {}
+      }
+      return changed;
+    }
+
+    function getBlockDreamHoursTarget() {
+      const mode =
+        typeof getEffectiveTodayPlanBlockMode === "function"
+          ? getEffectiveTodayPlanBlockMode()
+          : todayPlanBlockMode;
+      return mode === "holiday"
+        ? BLOCK_DREAM_HOURS_HOLIDAY_TARGET
+        : BLOCK_DREAM_HOURS_WEEKDAY_TARGET;
+    }
+
+    function getBlockDreamHoursTodayKey() {
+      if (typeof getTodaySikaoAnnivGoalsBeijingDayKey === "function") {
+        return getTodaySikaoAnnivGoalsBeijingDayKey();
+      }
+      if (typeof getBeijingDateKey === "function") {
+        return getBeijingDateKey(new Date());
+      }
+      const d = new Date();
+      return (
+        d.getFullYear() +
+        "-" +
+        String(d.getMonth() + 1).padStart(2, "0") +
+        "-" +
+        String(d.getDate()).padStart(2, "0")
+      );
+    }
+
+    function getBlockDreamHoursForDay(dayKey) {
+      ensureBlockDreamHoursState();
+      const entry = normalizeBlockDreamHoursDayEntry(state.blockDreamHours.days[dayKey]);
+      return entry ? entry.hours : 0;
+    }
+
+    function setBlockDreamHoursForDay(dayKey, hours, opts) {
+      const options = opts || {};
+      ensureBlockDreamHoursState();
+      const key = String(dayKey || "").trim();
+      if (!key) return false;
+      const nextHours = Math.max(
+        0,
+        Math.min(BLOCK_DREAM_HOURS_MAX, Math.floor(Number(hours) || 0))
+      );
+      const prev = normalizeBlockDreamHoursDayEntry(state.blockDreamHours.days[key]);
+      const prevHours = prev ? prev.hours : 0;
+      if (prevHours === nextHours && !options.forceStamp) return false;
+      if (nextHours <= 0) {
+        delete state.blockDreamHours.days[key];
+      } else {
+        state.blockDreamHours.days[key] = {
+          hours: nextHours,
+          updatedAt: Date.now()
+        };
+      }
+      if (options.skipSave) return true;
+      saveState();
+      try {
+        if (typeof notifyAliyunForgeRealSettingsAfterLocalChange === "function") {
+          notifyAliyunForgeRealSettingsAfterLocalChange("block-dream-hours");
+        }
+      } catch (_aliyunBdh) {}
+      syncBlockDreamHoursUI();
+      return true;
+    }
+
+    function incrementBlockDreamHoursToday() {
+      const dayKey = getBlockDreamHoursTodayKey();
+      const cur = getBlockDreamHoursForDay(dayKey);
+      return setBlockDreamHoursForDay(dayKey, cur + 1);
+    }
+
+    function syncBlockDreamHoursUI() {
+      if (!todayPlanBlockDreamHoursValueEl) return;
+      const hours = getBlockDreamHoursForDay(getBlockDreamHoursTodayKey());
+      const target = getBlockDreamHoursTarget();
+      const label = hours + "/" + target;
+      if (todayPlanBlockDreamHoursValueEl.textContent !== label) {
+        todayPlanBlockDreamHoursValueEl.textContent = label;
+      }
+      todayPlanBlockDreamHoursValueEl.setAttribute(
+        "aria-label",
+        "今日梦想深度工作 " + label + " 小时，长按可调整"
+      );
+    }
+
+    function openBlockDreamHoursAdjustPrompt() {
+      const dayKey = getBlockDreamHoursTodayKey();
+      const cur = getBlockDreamHoursForDay(dayKey);
+      const target = getBlockDreamHoursTarget();
+      const raw = window.prompt(
+        "调整今日梦想深度工作小时数（0–" +
+          BLOCK_DREAM_HOURS_MAX +
+          " 的整数；当前目标 " +
+          target +
+          "）：",
+        String(cur)
+      );
+      if (raw == null) return;
+      const trimmed = String(raw).trim();
+      if (!trimmed) return;
+      const nAdj = Math.floor(Number(trimmed));
+      if (!Number.isFinite(nAdj) || nAdj < 0) {
+        window.alert("请输入非负整数。");
+        return;
+      }
+      setBlockDreamHoursForDay(dayKey, nAdj);
+    }
+
+    function scheduleBlockDreamHoursMidnightRefresh() {
+      if (blockDreamHoursMidnightTimer) {
+        clearTimeout(blockDreamHoursMidnightTimer);
+        blockDreamHoursMidnightTimer = null;
+      }
+      const delay =
+        typeof getMsUntilNextBeijingMidnight === "function"
+          ? getMsUntilNextBeijingMidnight()
+          : 60 * 60 * 1000;
+      blockDreamHoursMidnightTimer = setTimeout(function () {
+        blockDreamHoursMidnightTimer = null;
+        try {
+          syncBlockDreamHoursUI();
+        } catch (_midUi) {}
+        scheduleBlockDreamHoursMidnightRefresh();
+      }, delay);
+    }
+
+    function bindBlockDreamHoursControls() {
+      if (todayPlanBlockDreamHoursIncEl) {
+        todayPlanBlockDreamHoursIncEl.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          incrementBlockDreamHoursToday();
+        });
+      }
+      if (todayPlanBlockDreamHoursValueEl) {
+        let longPressTimer = null;
+        let longPressFired = false;
+        const clearLongPress = function () {
+          if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+          }
+        };
+        todayPlanBlockDreamHoursValueEl.addEventListener("pointerdown", function (ev) {
+          if (ev.button != null && ev.button !== 0) return;
+          longPressFired = false;
+          clearLongPress();
+          longPressTimer = setTimeout(function () {
+            longPressTimer = null;
+            longPressFired = true;
+            openBlockDreamHoursAdjustPrompt();
+          }, 550);
+        });
+        todayPlanBlockDreamHoursValueEl.addEventListener("pointerup", clearLongPress);
+        todayPlanBlockDreamHoursValueEl.addEventListener("pointerleave", clearLongPress);
+        todayPlanBlockDreamHoursValueEl.addEventListener("pointercancel", clearLongPress);
+        todayPlanBlockDreamHoursValueEl.addEventListener("contextmenu", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          clearLongPress();
+          openBlockDreamHoursAdjustPrompt();
+        });
+        todayPlanBlockDreamHoursValueEl.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (longPressFired) {
+            longPressFired = false;
+            return;
+          }
+        });
+      }
+    }
+
     function initTodayPlanBlockSidebar() {
       syncTodayPlanBlockModeUI();
       try {
@@ -116384,6 +116754,9 @@
         maybeAutoSwitchTodayPlanBlockView({ force: true, expand: false });
       } catch (_bootAutoErr) {}
       scheduleTodayPlanBlockAutoSwitch();
+      syncBlockDreamHoursUI();
+      scheduleBlockDreamHoursMidnightRefresh();
+      bindBlockDreamHoursControls();
       if (todayPlanBlockModeToggle) {
         todayPlanBlockModeToggle.addEventListener("click", function (ev) {
           ev.stopPropagation();
@@ -116396,6 +116769,10 @@
           maybeAutoSwitchTodayPlanBlockView({ expand: false });
         } catch (_visErr) {}
         scheduleTodayPlanBlockAutoSwitch();
+        try {
+          syncBlockDreamHoursUI();
+        } catch (_visBdh) {}
+        scheduleBlockDreamHoursMidnightRefresh();
       });
     }
 
@@ -121095,6 +121472,8 @@
         trendsOpen: false
       },
       habitCheckins: {},
+      /** BLOCK：每日梦想项目深度工作小时 { days: { YYYY-MM-DD: { hours, updatedAt } } } */
+      blockDreamHours: { days: {} },
       weeklyPlan: {},
       weeklyPlanUi: {
         addLane: "life",
@@ -123285,6 +123664,12 @@
       }
       if (next.moveBreakDay || prev.moveBreakDay) {
         next.moveBreakDay = mergeMoveBreakDayForSync(prev.moveBreakDay, next.moveBreakDay);
+      }
+      if (prev.blockDreamHours || next.blockDreamHours) {
+        next.blockDreamHours = mergeBlockDreamHoursForSync(
+          prev.blockDreamHours,
+          next.blockDreamHours
+        );
       }
       if (next.refocus || prev.refocus) {
         next.refocus = mergeRefocusForSync(prev.refocus, next.refocus);
@@ -133319,7 +133704,7 @@
       };
     }
 
-    /** state.forge 设置快照（壶铃重量 / 囚徒阶梯 / 日·周最低标准） */
+    /** state.forge 设置快照（壶铃重量 / 囚徒阶梯 / 日·周最低标准；附带 BLOCK 梦想小时） */
     function aliyunForgeRealCloneSettingsForCloud() {
       let slice = null;
       try {
@@ -133335,6 +133720,15 @@
       /* 本机戳：拉取时按 updatedAt LWW，避免 mergeForgeShallowMaps 的 Math.max 把 16kg 盖不过 24kg */
       state.forge.settingsUpdatedAt = now;
       out.updatedAt = now;
+      /* BLOCK 梦想深度工作小时：随 forge settings 小切片上云，按日 max 合并防重复累计 */
+      try {
+        ensureBlockDreamHoursState();
+        out.blockDreamHours = JSON.parse(JSON.stringify(state.blockDreamHours));
+      } catch (_bdhClone) {
+        try {
+          out.blockDreamHours = state.blockDreamHours;
+        } catch (_bdh2) {}
+      }
       return out;
     }
 
@@ -133347,7 +133741,17 @@
       if (!state.forge || typeof state.forge !== "object") state.forge = {};
       const remTs = Number(remoteSettings.updatedAt) || 0;
       const locTs = Number(state.forge.settingsUpdatedAt) || 0;
-      if (remTs < locTs) return false;
+      /* 梦想小时按日 max，独立于 forge settings LWW，避免重量变更戳盖掉他端 +1 */
+      let dreamChanged = false;
+      if (remoteSettings.blockDreamHours) {
+        dreamChanged = !!mergeBlockDreamHoursIntoState(remoteSettings.blockDreamHours);
+        if (dreamChanged) {
+          try {
+            syncBlockDreamHoursUI();
+          } catch (_bdhUi) {}
+        }
+      }
+      if (remTs < locTs) return dreamChanged;
       let changed = false;
       function assignObj(key) {
         if (!remoteSettings[key] || typeof remoteSettings[key] !== "object") return;
@@ -133425,14 +133829,14 @@
       try {
         if (typeof forgeLagMeasNoteSettingsApply === "function") {
           forgeLagMeasNoteSettingsApply({
-            contentChanged: !!changed,
+            contentChanged: !!(changed || dreamChanged),
             stampOnly: !!stampOnly,
             remTs: remTs,
             locTs: locTs
           });
         }
       } catch (_flSet) {}
-      return changed;
+      return !!(changed || dreamChanged);
     }
 
     function aliyunForgeRealParseEnvelope(rawPayload) {
@@ -148045,6 +148449,9 @@
         }
         return mergeHabitCheckinsForSync(state.habitCheckins, remoteState.habitCheckins);
       });
+      base.blockDreamHours = mergeDetailTime("field", "blockDreamHours", function () {
+        return mergeBlockDreamHoursForSync(state.blockDreamHours, remoteState.blockDreamHours);
+      });
       base.dailyWinTomorrowRef = mergeDetailTime("field", "dailyWinTomorrowRef", function () {
         if (aliyunAmbKeepLocal) {
           try {
@@ -151235,6 +151642,14 @@
           delete state.relentless;
           if (!state.habitCheckins || typeof state.habitCheckins !== "object") {
             state.habitCheckins = {};
+          }
+          if (!state.blockDreamHours || typeof state.blockDreamHours !== "object") {
+            state.blockDreamHours = { days: {} };
+          } else if (
+            !state.blockDreamHours.days ||
+            typeof state.blockDreamHours.days !== "object"
+          ) {
+            state.blockDreamHours.days = {};
           }
           if (!state.weeklyPlan || typeof state.weeklyPlan !== "object") {
             state.weeklyPlan = {};
