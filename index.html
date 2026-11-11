@@ -40581,22 +40581,28 @@
       margin: 0 auto;
       transform: translateY(-50%) scale(0.985);
       opacity: 0;
-      border-radius: 18px;
-      border: 1.5px solid #2eb6ff;
-      background:
-        linear-gradient(180deg, rgba(8, 28, 64, 0.22) 0%, rgba(0, 8, 24, 0) 28%),
-        linear-gradient(180deg, #04102a 0%, #020b1c 55%, #010914 100%);
-      box-shadow:
-        0 0 0 1px rgba(80, 190, 255, 0.35),
-        0 0 18px 2px rgba(46, 182, 255, 0.45),
-        0 18px 40px rgba(0, 0, 0, 0.45);
-      overflow: hidden;
+      /* 整卡原图自带边框/圆角；容器透明，避免叠边框或裁切 */
+      border-radius: 0;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+      overflow: visible;
       pointer-events: auto;
       transition: transform 260ms ease-out, opacity 260ms ease-out;
       will-change: transform, opacity;
-      font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
-        "Microsoft YaHei", sans-serif;
-      color: #f4f8ff;
+    }
+
+    .attention-calibrate-card__img {
+      display: block;
+      width: 100%;
+      height: auto;
+      aspect-ratio: 1024 / 768;
+      object-fit: contain;
+      object-position: center;
+      background: transparent;
+      user-select: none;
+      -webkit-user-drag: none;
+      pointer-events: none;
     }
 
     .attention-calibrate-overlay.is-open .attention-calibrate-card {
@@ -40813,7 +40819,7 @@
 
       .attention-calibrate-card {
         width: min(390px, calc(100vw - 20px));
-        border-radius: 14px;
+        border-radius: 0;
         transform: translateY(-50%) scale(0.985);
       }
 
@@ -228335,8 +228341,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const ATTN_SECOND = 30;
       const ATTN_BUSY_RETRY_MS = 8 * 1000;
       const ATTN_SKIP_NEAR_NEXT_MS = 90 * 1000;
-      const ATTN_MOUNTAIN_SRC = "assets/attention-calibrate-mountains.webp";
-      const ATTN_MOUNTAIN_FALLBACK = "assets/attention-calibrate-mountains.png";
+      const ATTN_CARD_SRC = "assets/attention-calibrate-card.jpg?v=20261111c";
       const FROST_OWNER = "attention";
 
       let overlayEl = null;
@@ -228544,11 +228549,32 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         btn.addEventListener("click", onCloseActivate);
       }
 
+      function mountAttentionCardImage(card) {
+        if (!card) return null;
+        let img = card.querySelector(".attention-calibrate-card__img");
+        if (!img) {
+          while (card.firstChild) card.removeChild(card.firstChild);
+          img = document.createElement("img");
+          img.className = "attention-calibrate-card__img";
+          img.alt = "注意力校准";
+          img.decoding = "async";
+          img.draggable = false;
+          img.width = 1024;
+          img.height = 768;
+          card.appendChild(img);
+        }
+        if (img.getAttribute("src") !== ATTN_CARD_SRC) {
+          img.src = ATTN_CARD_SRC;
+        }
+        return img;
+      }
+
       function ensureOverlay() {
         if (overlayEl && overlayEl.isConnected) {
           const stale = overlayEl.querySelector(".attention-calibrate-close");
           if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
           closeBtnEl = null;
+          if (cardEl) mountAttentionCardImage(cardEl);
           return overlayEl;
         }
         const existing = document.getElementById("attentionCalibrateOverlay");
@@ -228558,6 +228584,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           const stale = existing.querySelector(".attention-calibrate-close");
           if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
           closeBtnEl = null;
+          if (cardEl) mountAttentionCardImage(cardEl);
           return existing;
         }
 
@@ -228572,56 +228599,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         card.setAttribute("role", "dialog");
         card.setAttribute("aria-modal", "true");
         card.setAttribute("aria-label", "注意力校准");
+        mountAttentionCardImage(card);
 
-        const body = document.createElement("div");
-        body.className = "attention-calibrate-body";
-        body.appendChild(
-          buildQuestionBlock(
-            "blue",
-            "01",
-            "此刻，你的",
-            "注意力",
-            "在哪里？",
-            "Where is your attention right now?"
-          )
-        );
-
-        const arrow = document.createElement("div");
-        arrow.className = "attention-calibrate-arrow";
-        arrow.setAttribute("aria-hidden", "true");
-        arrow.innerHTML = arrowIconSvg();
-        body.appendChild(arrow);
-
-        body.appendChild(
-          buildQuestionBlock(
-            "green",
-            "02",
-            "此刻，你希望把",
-            "注意力",
-            "放在哪里？",
-            "Where would you like your attention to be right now?"
-          )
-        );
-
-        const scenic = document.createElement("img");
-        scenic.className = "attention-calibrate-scenic";
-        scenic.src = ATTN_MOUNTAIN_SRC;
-        scenic.alt = "";
-        scenic.decoding = "async";
-        scenic.draggable = false;
-        scenic.width = 804;
-        scenic.height = 128;
-        scenic.addEventListener(
-          "error",
-          function onScenicErr() {
-            scenic.removeEventListener("error", onScenicErr);
-            scenic.src = ATTN_MOUNTAIN_FALLBACK;
-          },
-          { once: true }
-        );
-
-        card.appendChild(body);
-        card.appendChild(scenic);
         root.appendChild(card);
         document.body.appendChild(root);
 
