@@ -19,8 +19,8 @@ function sliceAround(marker, before, after) {
 
 /* —— 静态契约 —— */
 assert.match(html, /ALIYUN_SYNC_PRIMARY_POLL_MS = 2500/);
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261111m"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261111m"/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261111n"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261111n"/);
 
 const setFn = sliceAround("function setBlockDreamHoursForDay", 0, 1400);
 assert.match(setFn, /乐观更新/);
@@ -93,7 +93,29 @@ function mergeBlockDreamHoursForSync(localRaw, remoteRaw) {
   return { days: days };
 }
 
-/** 模拟信封 settings 应用：戳旧仍并入梦想小时；戳新则整片替换但梦想小时取 max */
+function normalizeDay(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const hours = Math.max(0, Math.floor(Number(raw.hours) || 0));
+  if (hours <= 0) return null;
+  return { hours, updatedAt: Number(raw.updatedAt) || 0 };
+}
+function mergeBlockDreamHoursForEnvelopeApply(cloudRaw, localRaw) {
+  const co = (cloudRaw && cloudRaw.days) || {};
+  const lo = (localRaw && localRaw.days) || {};
+  const keys = new Set([...Object.keys(co), ...Object.keys(lo)]);
+  const days = {};
+  for (const k of keys) {
+    const c = normalizeDay(co[k]);
+    const l = normalizeDay(lo[k]);
+    if (!c && !l) continue;
+    if (!c) { days[k] = { hours: l.hours, updatedAt: l.updatedAt }; continue; }
+    if (!l) { days[k] = { hours: c.hours, updatedAt: c.updatedAt }; continue; }
+    if (l.updatedAt > c.updatedAt) days[k] = { hours: l.hours, updatedAt: l.updatedAt };
+    else if (c.updatedAt > l.updatedAt) days[k] = { hours: c.hours, updatedAt: c.updatedAt };
+    else days[k] = { hours: Math.max(c.hours, l.hours), updatedAt: Math.max(c.updatedAt, l.updatedAt) };
+  }
+  return { days };
+}
 function applySettingsMutationToEnvelope(env, mutation) {
   const now = Date.now();
   let next = JSON.parse(JSON.stringify(mutation.settings));
@@ -102,7 +124,7 @@ function applySettingsMutationToEnvelope(env, mutation) {
     env.settings && typeof env.settings === "object" ? Number(env.settings.updatedAt) || 0 : 0;
   const baseDream =
     env.settings && env.settings.blockDreamHours ? env.settings.blockDreamHours : { days: {} };
-  next.blockDreamHours = mergeBlockDreamHoursForSync(baseDream, next.blockDreamHours);
+  next.blockDreamHours = mergeBlockDreamHoursForEnvelopeApply(baseDream, next.blockDreamHours);
   if (ts < prevTs) {
     if (env.settings && typeof env.settings === "object") {
       env.settings.blockDreamHours = next.blockDreamHours;
@@ -147,9 +169,10 @@ applySettingsMutationToEnvelope(env, {
 assert.equal(env.settings.kbWeightKg.value, 16);
 assert.equal(
   env.settings.blockDreamHours.days[day].hours,
-  7,
-  "新戳替换 settings 时梦想小时仍取 max(云端7,本机6)"
+  6,
+  "日戳更新时允许显式下调（信封 LWW）；拉取进 state 仍用 max 防回放"
 );
+assert.match(html, /mergeBlockDreamHoursForEnvelopeApply/);
 
 /* 延迟预算（架构推算，非线上实测承诺） */
 const POLL_MS = 2500;
