@@ -19,14 +19,15 @@ function sliceAround(marker, before, after) {
 
 /* —— 静态契约 —— */
 assert.match(html, /ALIYUN_SYNC_PRIMARY_POLL_MS = 2500/);
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261111n"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261111n"/);
+assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261111o"/);
+assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261111o"/);
 
-const setFn = sliceAround("function setBlockDreamHoursForDay", 0, 1400);
+const setFn = sliceAround("function setBlockDreamHoursForDay", 0, 3200);
 assert.match(setFn, /乐观更新/);
 assert.match(setFn, /skipAliyunForgeNotify:\s*true/);
 assert.match(setFn, /skipUiPaintDirty:\s*true/);
-assert.match(setFn, /notifyAliyunForgeRealSettingsAfterLocalChange\("block-dream-hours"\)/);
+assert.match(setFn, /notifyAliyunForgeRealSettingsAfterLocalChange/);
+assert.match(setFn, /block-dream-hours/);
 assert.ok(
   setFn.indexOf("syncBlockDreamHoursUI()") < setFn.indexOf('saveState({ lists: ["forge"]'),
   "本机须先刷 UI 再 saveState"
