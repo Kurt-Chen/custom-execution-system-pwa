@@ -115391,7 +115391,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261113b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261113c";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -184331,6 +184331,161 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
+     * Forge Log · Body 完成量单位 → 中文显示标签（仅展示；不改 meta / 计数）。
+     * 优先保留已是中文的单位；英文配置映射为次/组/秒/分钟/小时等。
+     */
+    function forgeBodyUnitToZhDisplay(unitRaw) {
+      const raw = String(unitRaw || "").trim();
+      if (!raw) return "";
+      if (/^Set（组）$/i.test(raw)) return "组";
+      const nu = typeof forgeWpNormalizeUnit === "function" ? forgeWpNormalizeUnit(raw) : "";
+      if (nu === "reps") return "次";
+      if (nu === "min") return "分钟";
+      if (nu === "sec") return "秒";
+      if (nu === "set") return "组";
+      if (nu === "km") return "km";
+      if (nu === "米") return "米";
+      const low = raw.toLowerCase().replace(/\s+/g, "");
+      if (low === "hours" || low === "hour" || low === "hr" || low === "h" || raw === "小时") return "小时";
+      if (raw === "次" || raw === "个" || raw === "下") return "次";
+      if (raw === "组") return "组";
+      if (raw === "秒") return "秒";
+      if (raw === "分钟" || raw === "分") return "分钟";
+      if (raw === "米") return "米";
+      return raw.replace(/\s+/g, "");
+    }
+
+    /** 从完成量字符串拆出数字与已有单位（无单位则 unit 为空） */
+    function forgeParseBodyAmountNumAndUnit(amountRaw) {
+      const amt = String(amountRaw || "").trim();
+      if (!amt) return null;
+      const m = amt.match(/^(\d+(?:\.\d+)?)\s*(.*)$/);
+      if (!m) return null;
+      const num = m[1];
+      let rest = String(m[2] || "").trim();
+      if (/^(16|24)\s*kg$/i.test(rest)) return { num: num, unit: "" };
+      return { num: num, unit: rest };
+    }
+
+    /**
+     * 构建 Body/SPT 动作 → 单位 映射：卡片 idle 配置优先，其次日/周最低 unit。
+     * 仅供 Forge Log 桌面/平板展示；不写 state。
+     */
+    function buildForgeBodyExerciseUnitMapForLogDisplay() {
+      const map = Object.create(null);
+      function put(label, unit) {
+        const u = String(unit || "").trim();
+        if (!u || !label) return;
+        if (typeof forgeWpCanonicalPrimaryTaskKey === "function") {
+          const c = forgeWpCanonicalPrimaryTaskKey(label);
+          if (c && !map[c]) map[c] = u;
+        }
+        if (typeof forgeWpNormalizeTaskKey === "function") {
+          const n = forgeWpNormalizeTaskKey(label);
+          if (n && !map[n]) map[n] = u;
+        }
+      }
+      const mod = document.getElementById("forgeModule");
+      if (mod) {
+        mod.querySelectorAll(".forge-task-row").forEach(function (row) {
+          if (row.closest("#forgeMindCardBody")) return;
+          const valEl = row.querySelector(".forge-task-val");
+          if (!valEl) return;
+          const idle =
+            valEl.getAttribute("data-forge-idle") || String(valEl.textContent || "").trim();
+          const unit =
+            typeof forgeUnitSuffixFromIdleForDisplay === "function"
+              ? forgeUnitSuffixFromIdleForDisplay(idle)
+              : "";
+          if (!unit) return;
+          const label =
+            typeof forgeWpRowBeforeSlashFromDom === "function"
+              ? forgeWpRowBeforeSlashFromDom(row)
+              : "";
+          put(label, unit);
+        });
+      }
+      function putFromMinList(list) {
+        if (!Array.isArray(list)) return;
+        list.forEach(function (r) {
+          if (!r || typeof r !== "object") return;
+          const realm = r.realm === "mind" ? "mind" : r.realm === "spt" ? "spt" : "body";
+          if (realm === "mind") return;
+          put(r.label, r.unit);
+        });
+      }
+      if (state.forge) {
+        putFromMinList(state.forge.dailyMinimums);
+        putFromMinList(state.forge.weeklyMinimums);
+      }
+      return map;
+    }
+
+    /**
+     * Forge Log · Body：桌面/平板为完成量补单位文案（不改 task.text / meta）。
+     * 若完成量已自带单位，按该单位显示；否则读动作单位配置。
+     */
+    function formatForgeLogBodyStrippedWithUnit(stripped, task, unitMap) {
+      const base = String(stripped || "");
+      if (!task || !task.forgeBodyMeta) return base;
+      const meta = task.forgeBodyMeta;
+      const amt = String(meta.amount || "").trim();
+      const parsed = forgeParseBodyAmountNumAndUnit(amt);
+      if (!parsed || !parsed.num) return base;
+      let unitRaw = parsed.unit;
+      if (!unitRaw) {
+        const rowKey = String(meta.rowKey || "").trim();
+        const cKey =
+          typeof forgeWpCanonicalPrimaryTaskKey === "function"
+            ? forgeWpCanonicalPrimaryTaskKey(rowKey)
+            : "";
+        const nKey =
+          typeof forgeWpNormalizeTaskKey === "function" ? forgeWpNormalizeTaskKey(rowKey) : "";
+        if (unitMap && typeof unitMap === "object") {
+          unitRaw = (cKey && unitMap[cKey]) || (nKey && unitMap[nKey]) || "";
+        }
+        if (!unitRaw && typeof inferForgeWpGoalUnit === "function") {
+          unitRaw = inferForgeWpGoalUnit(rowKey) || "";
+        }
+      }
+      const zh = forgeBodyUnitToZhDisplay(unitRaw);
+      if (!zh) return base;
+      const amtWithUnit = parsed.num + " " + zh;
+      if (amt && base.endsWith(amt)) {
+        return base.slice(0, base.length - amt.length) + amtWithUnit;
+      }
+      const sep = " · ";
+      const lastSep = base.lastIndexOf(sep);
+      if (lastSep !== -1) {
+        const tail = base.slice(lastSep + sep.length).trim();
+        if (tail === amt || tail === parsed.num) {
+          return base.slice(0, lastSep + sep.length) + amtWithUnit;
+        }
+      }
+      return base;
+    }
+
+    /** Forge Log 行文案：仅 Body + 桌面/平板补单位；手机原样 */
+    function setForgeLogDoneLineTextEl(textEl, task, forgeDoneLine, doneRowOpts) {
+      if (!textEl || !forgeDoneLine) return;
+      let display = forgeDoneLine.stripped;
+      if (
+        forgeDoneLine.kind === "body" &&
+        doneRowOpts &&
+        doneRowOpts.forgeLogBodyUnitDisplay &&
+        typeof isHabitRoutineCompactMobile === "function" &&
+        !isHabitRoutineCompactMobile()
+      ) {
+        display = formatForgeLogBodyStrippedWithUnit(
+          forgeDoneLine.stripped,
+          task,
+          doneRowOpts.forgeBodyUnitMap || null
+        );
+      }
+      textEl.textContent = display;
+    }
+
+    /**
      * 从 Done 正文重建缺失的 forgeBodyMeta / forgeMindMeta。
      * 云合并若保留文案却丢 nested meta，Forge ×累计会显示为 0；本修复只补 meta，不删记录。
      */
@@ -187790,7 +187945,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             const variant =
               forgeDoneLine.kind === "mind" ? "forge-mind" : "forge-body";
             main.appendChild(createDoneEntryPill(inner, variant));
-            textEl.textContent = forgeDoneLine.stripped;
+            setForgeLogDoneLineTextEl(textEl, task, forgeDoneLine, doneRowOpts);
           } else {
             const br = parseLeadingBracketTag(String(task.text || ""));
             if (br) {
@@ -187838,7 +187993,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             const variant =
               forgeDoneLine.kind === "mind" ? "forge-mind" : "forge-body";
             taskLine.appendChild(createDoneEntryPill(inner, variant));
-            textEl.textContent = forgeDoneLine.stripped;
+            setForgeLogDoneLineTextEl(textEl, task, forgeDoneLine, doneRowOpts);
           } else {
             const br = parseLeadingBracketTag(String(task.text || ""));
             if (br) {
@@ -192002,6 +192157,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
       const itemWrap = document.createElement("ul");
       itemWrap.className = "done-time-block-items";
+      const forgeBodyUnitMap =
+        typeof buildForgeBodyExerciseUnitMapForLogDisplay === "function"
+          ? buildForgeBodyExerciseUnitMapForLogDisplay()
+          : null;
       blockTasks.forEach((task, idx) => {
         const curLabel = formatDoneListTime(task.completedAt);
         const prevLabel =
@@ -192013,7 +192172,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           timeBlockFlexLayout: true,
           blockKey: blockKey,
           blockIndex: idx,
-          blockLength: blockTasks.length
+          blockLength: blockTasks.length,
+          forgeLogBodyUnitDisplay: true,
+          forgeBodyUnitMap: forgeBodyUnitMap
         });
         li.classList.add(
           "done-time-block-item",
