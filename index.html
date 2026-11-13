@@ -115392,7 +115392,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261113c";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261113d";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -184332,31 +184332,30 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * Forge Log · Body 完成量单位 → 中文显示标签（仅展示；不改 meta / 计数）。
-     * 优先保留已是中文的单位；英文配置映射为次/组/秒/分钟/小时等。
+     * Forge Log · Body：原样保留动作单位文案（仅 trim；禁止翻译/归一化）。
+     * reps→reps、次→次、km→km、分钟→分钟。
      */
-    function forgeBodyUnitToZhDisplay(unitRaw) {
-      const raw = String(unitRaw || "").trim();
-      if (!raw) return "";
-      if (/^Set（组）$/i.test(raw)) return "组";
-      const nu = typeof forgeWpNormalizeUnit === "function" ? forgeWpNormalizeUnit(raw) : "";
-      if (nu === "reps") return "次";
-      if (nu === "min") return "分钟";
-      if (nu === "sec") return "秒";
-      if (nu === "set") return "组";
-      if (nu === "km") return "km";
-      if (nu === "米") return "米";
-      const low = raw.toLowerCase().replace(/\s+/g, "");
-      if (low === "hours" || low === "hour" || low === "hr" || low === "h" || raw === "小时") return "小时";
-      if (raw === "次" || raw === "个" || raw === "下") return "次";
-      if (raw === "组") return "组";
-      if (raw === "秒") return "秒";
-      if (raw === "分钟" || raw === "分") return "分钟";
-      if (raw === "米") return "米";
-      return raw.replace(/\s+/g, "");
+    function forgeBodyUnitAsConfiguredDisplay(unitRaw) {
+      return String(unitRaw || "").trim().replace(/\s+/g, " ");
     }
 
-    /** 从完成量字符串拆出数字与已有单位（无单位则 unit 为空） */
+    /**
+     * 从卡片 idle（如「— / — Reps」「— / — min」）字面提取单位，不做英中转换。
+     */
+    function forgeExtractIdleUnitLiteral(idle) {
+      const gr =
+        typeof forgeParseTaskValGoalRight === "function"
+          ? String(forgeParseTaskValGoalRight(idle) || "").trim()
+          : String(idle || "").trim();
+      if (!gr) return "";
+      const m = gr.match(/^(?:—|-|–)?\s*(?:[\d.]+)?\s*(.+)$/);
+      if (!m) return "";
+      const unit = forgeBodyUnitAsConfiguredDisplay(m[1]);
+      if (!unit || unit === "—" || unit === "-" || unit === "–" || /^[\d.]+$/.test(unit)) return "";
+      return unit;
+    }
+
+    /** 从完成量字符串拆出数字与已有单位（无单位则 unit 为空；单位原样保留） */
     function forgeParseBodyAmountNumAndUnit(amountRaw) {
       const amt = String(amountRaw || "").trim();
       if (!amt) return null;
@@ -184369,13 +184368,13 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * 构建 Body/SPT 动作 → 单位 映射：卡片 idle 配置优先，其次日/周最低 unit。
-     * 仅供 Forge Log 桌面/平板展示；不写 state。
+     * 构建 Body/SPT 动作 → 单位 映射：卡片 idle 字面配置优先，其次日/周最低 unit 原文。
+     * 仅供 Forge Log 桌面/平板展示；不写 state、不翻译单位。
      */
     function buildForgeBodyExerciseUnitMapForLogDisplay() {
       const map = Object.create(null);
       function put(label, unit) {
-        const u = String(unit || "").trim();
+        const u = forgeBodyUnitAsConfiguredDisplay(unit);
         if (!u || !label) return;
         if (typeof forgeWpCanonicalPrimaryTaskKey === "function") {
           const c = forgeWpCanonicalPrimaryTaskKey(label);
@@ -184394,10 +184393,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           if (!valEl) return;
           const idle =
             valEl.getAttribute("data-forge-idle") || String(valEl.textContent || "").trim();
-          const unit =
-            typeof forgeUnitSuffixFromIdleForDisplay === "function"
-              ? forgeUnitSuffixFromIdleForDisplay(idle)
-              : "";
+          const unit = forgeExtractIdleUnitLiteral(idle);
           if (!unit) return;
           const label =
             typeof forgeWpRowBeforeSlashFromDom === "function"
@@ -184424,7 +184420,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     /**
      * Forge Log · Body：桌面/平板为完成量补单位文案（不改 task.text / meta）。
-     * 若完成量已自带单位，按该单位显示；否则读动作单位配置。
+     * 完成量已带单位则原样显示该单位；否则读动作原有配置单位，禁止翻译。
      */
     function formatForgeLogBodyStrippedWithUnit(stripped, task, unitMap) {
       const base = String(stripped || "");
@@ -184449,9 +184445,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           unitRaw = inferForgeWpGoalUnit(rowKey) || "";
         }
       }
-      const zh = forgeBodyUnitToZhDisplay(unitRaw);
-      if (!zh) return base;
-      const amtWithUnit = parsed.num + " " + zh;
+      const unitDisp = forgeBodyUnitAsConfiguredDisplay(unitRaw);
+      if (!unitDisp) return base;
+      const amtWithUnit = parsed.num + " " + unitDisp;
       if (amt && base.endsWith(amt)) {
         return base.slice(0, base.length - amt.length) + amtWithUnit;
       }
