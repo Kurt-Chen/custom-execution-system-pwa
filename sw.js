@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261113d";
+const CACHE_NAME = "exec-system-pwa-v20261114a";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -16,7 +16,7 @@ const APP_SHELL = [
   "./icons/done-focus-badge.png",
   "./assets/obsession-reminder-card.png",
   "./assets/start-reminder-card.png",
-  "./assets/problem-driven-life-reminder.jpg",
+  "./assets/problem-driven-life-reminder.png",
   "./assets/choose-hard-live-easy-reminder.jpg",
   "./assets/attention-calibrate-card.png",
   "./assets/maniacal-urgency-card.png",
