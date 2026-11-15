@@ -20194,6 +20194,10 @@
       background: transparent;
     }
 
+    /*
+     * 仅 is-active + is-decoded 才显示：避免大图下载/解码过程中逐步涂抹或 opacity 淡入造成「慢慢出来」。
+     * 无过渡动画；PNG 原图保留，运行时优先 WebP。
+     */
     .manifesto-panel__img {
       position: absolute;
       inset: 0;
@@ -20210,17 +20214,11 @@
       pointer-events: none;
       user-select: none;
       -webkit-user-drag: none;
-      transition: opacity 0.22s ease;
+      transition: none;
     }
 
-    .manifesto-panel__img.is-active {
+    .manifesto-panel__img.is-active.is-decoded {
       opacity: 1;
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .manifesto-panel__img {
-        transition: none;
-      }
     }
 
     /*
@@ -96498,7 +96496,8 @@
           width="1081"
           height="1412"
           decoding="async"
-          data-src="./assets/hour-day-manifesto-card.png"
+          data-src="./assets/hour-day-manifesto-card.webp"
+          data-fallback-src="./assets/hour-day-manifesto-card.png"
         />
         <img
           class="manifesto-panel__img"
@@ -96507,7 +96506,8 @@
           width="960"
           height="1200"
           decoding="async"
-          data-src="./assets/manifesto-genuine-desire-card.png"
+          data-src="./assets/manifesto-genuine-desire-card.webp"
+          data-fallback-src="./assets/manifesto-genuine-desire-card.png"
         />
         <img
           class="manifesto-panel__img"
@@ -96516,7 +96516,8 @@
           width="960"
           height="1200"
           decoding="async"
-          data-src="./assets/manifesto-life-winner-card.png"
+          data-src="./assets/manifesto-life-winner-card.webp"
+          data-fallback-src="./assets/manifesto-life-winner-card.png"
         />
       <div class="manifesto-panel__switcher" role="group" aria-label="激励宣言图片切换">
         <button
@@ -115954,7 +115955,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261115i";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261115j";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -118129,6 +118130,22 @@
     /* 激励宣言卡片：本地记忆 index；仅手动切换，无自动轮播 */
     manifestoCardIndex = readManifestoCardIndex();
     syncManifestoCardDom();
+    /* 空闲预热当前张 WebP（不自动展开、不云同步），缩短首次点击等待 */
+    try {
+      const warm = function () {
+        if (!manifestoPanelImgs || !manifestoPanelImgs.length) return;
+        const warmIdx = clampManifestoCardIndex(manifestoCardIndex);
+        loadManifestoImageDecoded(manifestoPanelImgs[warmIdx]);
+        const warmNext =
+          manifestoPanelImgs[(warmIdx + 1) % manifestoPanelImgs.length];
+        if (warmNext) loadManifestoImageDecoded(warmNext);
+      };
+      if (typeof requestIdleCallback === "function") {
+        requestIdleCallback(warm, { timeout: 2500 });
+      } else {
+        setTimeout(warm, 800);
+      }
+    } catch (_warmErr) {}
     if (manifestoPanelPrev) {
       manifestoPanelPrev.addEventListener("click", function (ev) {
         ev.stopPropagation();
@@ -204689,32 +204706,119 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
-    /** 展开时再挂 src：先当前张，再空闲预载其余，避免默关仍拉三张大图 */
+    /** 取运行时图源：优先 WebP（data-src），不改仓库内 PNG 原图 */
+    function getManifestoImageSrc(img) {
+      if (!img) return "";
+      return String(img.getAttribute("data-src") || "").trim();
+    }
+
+    function getManifestoImageFallbackSrc(img) {
+      if (!img) return "";
+      return String(img.getAttribute("data-fallback-src") || "").trim();
+    }
+
+    function markManifestoImageDecoded(img) {
+      if (!img) return;
+      img.classList.add("is-decoded");
+    }
+
+    /**
+     * 加载并 decode 完成后再标 is-decoded，避免未完成解码时露出半幅/逐步涂抹。
+     * 仅本地静态资源；不触发云同步。
+     */
+    function loadManifestoImageDecoded(img) {
+      return new Promise(function (resolve) {
+        if (!img) {
+          resolve(false);
+          return;
+        }
+        const primary = getManifestoImageSrc(img);
+        const fallback = getManifestoImageFallbackSrc(img);
+        if (!primary && !fallback) {
+          resolve(false);
+          return;
+        }
+        const finishOk = function () {
+          markManifestoImageDecoded(img);
+          resolve(true);
+        };
+        const runDecode = function () {
+          if (typeof img.decode === "function") {
+            img
+              .decode()
+              .then(finishOk)
+              .catch(function () {
+                /* decode 失败仍若已有像素则显示，避免卡空白 */
+                if (img.naturalWidth > 0) finishOk();
+                else resolve(false);
+              });
+            return;
+          }
+          if (img.complete && img.naturalWidth > 0) finishOk();
+          else resolve(false);
+        };
+        const cur = img.getAttribute("src") || "";
+        if ((cur === primary || (fallback && cur === fallback)) && img.complete && img.naturalWidth > 0) {
+          runDecode();
+          return;
+        }
+        img.classList.remove("is-decoded");
+        let usedFallback = false;
+        const onLoad = function () {
+          runDecode();
+        };
+        const onError = function () {
+          if (!usedFallback && fallback && primary && img.getAttribute("src") === primary) {
+            usedFallback = true;
+            img.setAttribute("src", fallback);
+            return;
+          }
+          resolve(false);
+        };
+        img.addEventListener("load", onLoad, { once: true });
+        img.addEventListener("error", onError, { once: true });
+        img.setAttribute("src", primary || fallback);
+        if (img.complete && img.naturalWidth > 0) {
+          img.removeEventListener("load", onLoad);
+          img.removeEventListener("error", onError);
+          runDecode();
+        }
+      });
+    }
+
+    /**
+     * 展开时：先当前张 decode 完成；同时预载下一张（及上一张），切换时尽量已就绪。
+     * 第三张在空闲时补载，避免默关即拉满三张。
+     */
     function ensureManifestoPanelImage() {
-      if (!manifestoPanelImgs || !manifestoPanelImgs.length) return;
+      if (!manifestoPanelImgs || !manifestoPanelImgs.length) return Promise.resolve();
       const idx = clampManifestoCardIndex(manifestoCardIndex);
-      const loadOne = function (img) {
-        if (!img || img.getAttribute("src")) return;
-        const src = img.getAttribute("data-src") || "";
-        if (!src) return;
-        img.setAttribute("src", src);
-      };
-      loadOne(manifestoPanelImgs[idx]);
+      const count = manifestoPanelImgs.length;
+      const current = manifestoPanelImgs[idx];
+      const next = manifestoPanelImgs[(idx + 1) % count];
+      const prev = manifestoPanelImgs[(idx - 1 + count) % count];
+      const currentReady = loadManifestoImageDecoded(current);
+      /* 邻张立即预载，不走 idle，减少切换等待 */
+      loadManifestoImageDecoded(next);
+      if (prev !== next && prev !== current) loadManifestoImageDecoded(prev);
       const preloadRest = function () {
-        for (let i = 0; i < manifestoPanelImgs.length; i++) {
+        for (let i = 0; i < count; i++) {
           if (i === idx) continue;
-          loadOne(manifestoPanelImgs[i]);
+          const img = manifestoPanelImgs[i];
+          if (img === next || img === prev) continue;
+          loadManifestoImageDecoded(img);
         }
       };
       try {
         if (typeof requestIdleCallback === "function") {
-          requestIdleCallback(preloadRest, { timeout: 1200 });
+          requestIdleCallback(preloadRest, { timeout: 900 });
         } else {
-          setTimeout(preloadRest, 180);
+          setTimeout(preloadRest, 120);
         }
       } catch (_idleErr) {
         preloadRest();
       }
+      return currentReady;
     }
 
     function setManifestoCardIndex(idx, opts) {
@@ -204759,7 +204863,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return;
       }
       manifestoPanelExpanded = next;
-      if (manifestoPanelExpanded) ensureManifestoPanelImage();
+      if (manifestoPanelExpanded) {
+        /* 先踢加载/decode，再揭 DOM；未 decode 前 img 仍 opacity:0 */
+        ensureManifestoPanelImage();
+      }
       syncManifestoPanelDom();
       syncTodayPlanPanelBackdrop();
     }
