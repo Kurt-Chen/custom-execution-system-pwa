@@ -20150,6 +20150,7 @@
     }
 
     .manifesto-panel__body {
+      position: relative;
       display: flex;
       flex-direction: column;
       align-items: stretch;
@@ -20160,27 +20161,114 @@
       max-height: inherit;
       margin: 0;
       padding: 0;
-      overflow: auto;
+      overflow: visible;
       overscroll-behavior: contain;
       background: transparent;
       border: 0;
       box-shadow: none;
     }
 
+    /*
+     * 舞台锁死第一张 hour-day 的宽高比（1081/1412），切换时边栏尺寸不变。
+     * 第一张 object-fit:contain 恰好铺满；2/3 比例略异，仅它们 letterbox，不改第一张。
+     */
+    .manifesto-panel__stage {
+      position: relative;
+      width: 100%;
+      max-width: 100%;
+      aspect-ratio: 1081 / 1412;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: transparent;
+    }
+
     .manifesto-panel__img {
+      position: absolute;
+      inset: 0;
       display: block;
       width: 100%;
-      height: auto;
-      max-width: 100%;
+      height: 100%;
       margin: 0;
       padding: 0;
       border: 0;
       background: transparent;
       object-fit: contain;
-      object-position: top center;
+      object-position: center center;
+      opacity: 0;
       pointer-events: none;
       user-select: none;
       -webkit-user-drag: none;
+      transition: opacity 0.22s ease;
+    }
+
+    .manifesto-panel__img.is-active {
+      opacity: 1;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .manifesto-panel__img {
+        transition: none;
+      }
+    }
+
+    /* 右上角轻量切换：1/3 · 箭头；不挡收起钮（收起在左上） */
+    .manifesto-panel__switcher {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 4;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      box-sizing: border-box;
+      margin: 0;
+      padding: 2px 4px;
+      border: 1px solid rgba(194, 65, 12, 0.35);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.92);
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+      color: #9a3412;
+      line-height: 1;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .manifesto-panel__switcher-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: #9a3412;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .manifesto-panel__switcher-btn:hover,
+    .manifesto-panel__switcher-btn:focus-visible {
+      outline: none;
+      background: rgba(254, 215, 170, 0.55);
+    }
+
+    .manifesto-panel__switcher-page {
+      display: inline-block;
+      min-width: 2.4em;
+      padding: 0 2px;
+      font-size: 11px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.02em;
+      text-align: center;
+      color: #9a3412;
+      user-select: none;
     }
 
     /*
@@ -20274,7 +20362,7 @@
         overflow: auto;
       }
 
-      #manifestoPanel:not(.is-collapsed) .manifesto-panel__img {
+      #manifestoPanel:not(.is-collapsed) .manifesto-panel__stage {
         width: 100%;
         max-width: min(340px, 100%);
         margin: 0 auto;
@@ -95964,15 +96052,50 @@
       <span class="manifesto-panel__collapse-chevron" aria-hidden="true">&gt;</span>
     </button>
     <div class="manifesto-panel__body" hidden>
-      <img
-        id="manifestoPanelImg"
-        class="manifesto-panel__img"
-        alt="Make Every HOUR Count. Make Every DAY Worth Remembering."
-        width="1081"
-        height="1412"
-        decoding="async"
-        data-src="./assets/hour-day-manifesto-card.png"
-      />
+      <div class="manifesto-panel__stage" id="manifestoPanelStage" aria-live="polite">
+        <img
+          class="manifesto-panel__img is-active"
+          data-manifesto-index="0"
+          alt="Make Every HOUR Count. Make Every DAY Worth Remembering."
+          width="1081"
+          height="1412"
+          decoding="async"
+          data-src="./assets/hour-day-manifesto-card.png"
+        />
+        <img
+          class="manifesto-panel__img"
+          data-manifesto-index="1"
+          alt="真正的欲望"
+          width="960"
+          height="1200"
+          decoding="async"
+          data-src="./assets/manifesto-genuine-desire-card.png"
+        />
+        <img
+          class="manifesto-panel__img"
+          data-manifesto-index="2"
+          alt="如何成为真正的人生赢家"
+          width="960"
+          height="1200"
+          decoding="async"
+          data-src="./assets/manifesto-life-winner-card.png"
+        />
+      </div>
+      <div class="manifesto-panel__switcher" role="group" aria-label="激励宣言图片切换">
+        <button
+          type="button"
+          id="manifestoPanelPrev"
+          class="manifesto-panel__switcher-btn"
+          aria-label="上一张激励宣言"
+        >&lt;</button>
+        <span id="manifestoPanelPager" class="manifesto-panel__switcher-page">1/3</span>
+        <button
+          type="button"
+          id="manifestoPanelNext"
+          class="manifesto-panel__switcher-btn"
+          aria-label="下一张激励宣言"
+        >&gt;</button>
+      </div>
     </div>
   </aside>
   <div class="container">
@@ -115833,7 +115956,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261115d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261115e";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -116503,10 +116626,16 @@
     const manifestoPanel = document.getElementById("manifestoPanel");
     const manifestoPanelToggle = document.getElementById("manifestoPanelToggle");
     const manifestoPanelCollapse = document.getElementById("manifestoPanelCollapse");
-    const manifestoPanelImg = document.getElementById("manifestoPanelImg");
     const manifestoPanelBody = manifestoPanel
       ? manifestoPanel.querySelector(".manifesto-panel__body")
       : null;
+    const manifestoPanelStage = document.getElementById("manifestoPanelStage");
+    const manifestoPanelPager = document.getElementById("manifestoPanelPager");
+    const manifestoPanelPrev = document.getElementById("manifestoPanelPrev");
+    const manifestoPanelNext = document.getElementById("manifestoPanelNext");
+    const manifestoPanelImgs = manifestoPanelStage
+      ? manifestoPanelStage.querySelectorAll(".manifesto-panel__img")
+      : [];
     const todayPlanPanelLists = document.getElementById("todayPlanPanelLists");
     const todayPlanPanelClosedMount = document.getElementById("todayPlanPanelClosedMount");
     const todayPlanPanelOtherSection = document.getElementById("todayPlanPanelOtherSection");
@@ -116567,6 +116696,10 @@
      * 不落盘、不云同步、不按时间/事件自动打开；刷新后始终关闭。
      */
     let manifestoPanelExpanded = false;
+    /** 激励宣言当前卡片：仅 localStorage，不进业务 state / 云同步 */
+    const MANIFESTO_CARD_INDEX_KEY = "manifesto-card-index-v1";
+    const MANIFESTO_CARD_COUNT = 3;
+    let manifestoCardIndex = 0;
     /**
      * 金钱公式条 ResizeObserver：必须在平板横屏 sync IIFE / setTodayPlanPanelExpanded
      * 首次调用之前完成初始化，否则 TDZ（Cannot access before initialization）会中断整段主脚本。
@@ -117983,6 +118116,21 @@
       manifestoPanelCollapse.addEventListener("click", function (ev) {
         ev.stopPropagation();
         setManifestoPanelExpanded(false);
+      });
+    }
+    /* 激励宣言卡片：本地记忆 index；仅手动切换，无自动轮播 */
+    manifestoCardIndex = readManifestoCardIndex();
+    syncManifestoCardDom();
+    if (manifestoPanelPrev) {
+      manifestoPanelPrev.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        stepManifestoCard(-1);
+      });
+    }
+    if (manifestoPanelNext) {
+      manifestoPanelNext.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        stepManifestoCard(1);
       });
     }
     const doneList = document.getElementById("doneList");
@@ -204492,13 +204640,84 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       todayPlanPanelBackdrop.setAttribute("aria-hidden", show ? "false" : "true");
     }
 
-    /** 首次展开时再挂图，避免默认关闭仍预载大图 */
+    function clampManifestoCardIndex(idx) {
+      const n = Math.floor(Number(idx));
+      if (!Number.isFinite(n)) return 0;
+      const mod = ((n % MANIFESTO_CARD_COUNT) + MANIFESTO_CARD_COUNT) % MANIFESTO_CARD_COUNT;
+      return mod;
+    }
+
+    function readManifestoCardIndex() {
+      try {
+        const raw = localStorage.getItem(MANIFESTO_CARD_INDEX_KEY);
+        if (raw == null || raw === "") return 0;
+        return clampManifestoCardIndex(raw);
+      } catch (_e) {
+        return 0;
+      }
+    }
+
+    function writeManifestoCardIndex(idx) {
+      try {
+        localStorage.setItem(MANIFESTO_CARD_INDEX_KEY, String(clampManifestoCardIndex(idx)));
+      } catch (_e) {}
+    }
+
+    function syncManifestoCardDom() {
+      const idx = clampManifestoCardIndex(manifestoCardIndex);
+      manifestoCardIndex = idx;
+      if (manifestoPanelImgs && manifestoPanelImgs.length) {
+        for (let i = 0; i < manifestoPanelImgs.length; i++) {
+          const img = manifestoPanelImgs[i];
+          const on = i === idx;
+          img.classList.toggle("is-active", on);
+          img.setAttribute("aria-hidden", on ? "false" : "true");
+        }
+      }
+      if (manifestoPanelPager) {
+        manifestoPanelPager.textContent = idx + 1 + "/" + MANIFESTO_CARD_COUNT;
+      }
+    }
+
+    /** 展开时再挂 src：先当前张，再空闲预载其余，避免默关仍拉三张大图 */
     function ensureManifestoPanelImage() {
-      if (!manifestoPanelImg) return;
-      if (manifestoPanelImg.getAttribute("src")) return;
-      const src = manifestoPanelImg.getAttribute("data-src") || "";
-      if (!src) return;
-      manifestoPanelImg.setAttribute("src", src);
+      if (!manifestoPanelImgs || !manifestoPanelImgs.length) return;
+      const idx = clampManifestoCardIndex(manifestoCardIndex);
+      const loadOne = function (img) {
+        if (!img || img.getAttribute("src")) return;
+        const src = img.getAttribute("data-src") || "";
+        if (!src) return;
+        img.setAttribute("src", src);
+      };
+      loadOne(manifestoPanelImgs[idx]);
+      const preloadRest = function () {
+        for (let i = 0; i < manifestoPanelImgs.length; i++) {
+          if (i === idx) continue;
+          loadOne(manifestoPanelImgs[i]);
+        }
+      };
+      try {
+        if (typeof requestIdleCallback === "function") {
+          requestIdleCallback(preloadRest, { timeout: 1200 });
+        } else {
+          setTimeout(preloadRest, 180);
+        }
+      } catch (_idleErr) {
+        preloadRest();
+      }
+    }
+
+    function setManifestoCardIndex(idx, opts) {
+      const options = opts || {};
+      const next = clampManifestoCardIndex(idx);
+      manifestoCardIndex = next;
+      if (options.persist !== false) writeManifestoCardIndex(next);
+      syncManifestoCardDom();
+      if (manifestoPanelExpanded) ensureManifestoPanelImage();
+    }
+
+    function stepManifestoCard(delta) {
+      setManifestoCardIndex(manifestoCardIndex + (delta || 0));
     }
 
     function syncManifestoPanelDom() {
