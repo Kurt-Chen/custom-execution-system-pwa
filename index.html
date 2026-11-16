@@ -20410,9 +20410,8 @@
 
     /*
      * 结果导向学习（RESULTS）
-     * - 电脑端 fine：入口与展开均锚在主栏左下分隔线（覆盖 BLOCK 浮层，不推动布局）
-     * - 手机/平板 coarse：保持右侧浮层（与 MANIFESTO 同轨），不套用电脑左下规则
-     * - 定稿图原样：仅等比 contain；仅本地 UI，默认关闭，不落盘、不云同步；与 MANIFESTO 互斥
+     * - 右侧入口叠在 MANIFESTO 下方；展开亦在右侧，底部贴视口底边向上延伸
+     * - 定稿图原样 contain；仅本地 UI；与 MANIFESTO 互斥；不落盘/不云同步
      */
     body.app-locked #resultsPanel,
     body:has(#loginGate:not(.hidden)) #resultsPanel {
@@ -20423,9 +20422,15 @@
       --results-edge-bg: #c2410c;
       --results-edge-shadow: 0 4px 14px rgba(194, 65, 12, 0.3);
       position: absolute;
-      z-index: 45;
+      top: 86px;
+      right: auto;
+      left: 100%;
+      z-index: 40;
       width: max-content;
+      max-width: min(340px, calc(100vw - 24px));
       height: auto;
+      max-height: calc(100dvh / var(--app-ui-zoom, 1) - 14px - env(safe-area-inset-bottom, 0px));
+      margin: 0 0 0 12px;
       padding: 0;
       box-sizing: border-box;
       background: transparent;
@@ -20434,6 +20439,53 @@
       overflow: visible;
       box-shadow: none;
       pointer-events: auto;
+    }
+
+    #resultsPanel.is-collapsed {
+      width: max-content;
+      min-width: 0;
+      max-width: none;
+      max-height: none;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      overflow: visible;
+    }
+
+    /* 对侧已展开：入口挪到展开面板外侧，便于一点切换 */
+    body.is-manifesto-panel-open #resultsPanel.is-collapsed {
+      top: 0;
+      margin-left: calc(12px + 340px + 10px);
+    }
+
+    body.is-results-panel-open #manifestoPanel.is-collapsed {
+      margin-left: calc(12px + 340px + 10px);
+    }
+
+    /*
+     * 展开：右侧固定，底边贴视口 bottom:0，内容向上延伸；
+     * 覆盖主栏右侧，不推动布局；过高则 body 内滚。
+     */
+    #resultsPanel:not(.is-collapsed) {
+      position: fixed;
+      top: auto;
+      left: auto;
+      right: max(12px, env(safe-area-inset-right, 0px));
+      bottom: 0;
+      width: 340px;
+      min-width: 0;
+      max-width: min(340px, calc(100vw - 24px));
+      height: auto;
+      max-height: 100dvh;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      overflow: hidden;
+      z-index: 46;
     }
 
     #resultsPanel.is-collapsed .results-panel__body,
@@ -20462,7 +20514,7 @@
       overflow: visible;
       cursor: pointer;
       pointer-events: auto;
-      z-index: 46;
+      z-index: 42;
       -webkit-tap-highlight-color: transparent;
       font: inherit;
     }
@@ -20491,7 +20543,6 @@
       letter-spacing: 0;
       position: relative;
       width: 13px;
-      /* BLOCK=56px/5字 → RESULTS 7字约 78 */
       height: 74px;
       min-width: 13px;
       min-height: 0;
@@ -20568,7 +20619,6 @@
       box-shadow: none;
     }
 
-    /* 定稿图原始比例 1166×1349；仅整图等比缩放，不裁切 */
     .results-panel__stage {
       position: relative;
       width: 100%;
@@ -20603,100 +20653,91 @@
       opacity: 1;
     }
 
-    /*
-     * 电脑端 fine：RESULTS 入口/面板锚在 .container 左缘（BLOCK 与主栏分隔线），
-     * right:100% 使面板向左覆盖 BLOCK；不改今日计划/BLOCK 宽度与状态。
-     */
-    @media (min-width: 768px) and (pointer: fine) {
+    #resultsPanel:not(.is-collapsed) .results-panel__edge {
+      display: none !important;
+    }
+
+    #resultsPanel:not(.is-collapsed) .results-panel__body {
+      flex: 1 1 auto;
+      min-height: 0;
+      max-height: 100%;
+      overflow: auto;
+    }
+
+    @media (min-width: 768px) and (max-width: 1365px) and (pointer: fine) {
       #resultsPanel {
+        position: absolute;
+        top: 86px;
+        left: 100%;
+        right: auto;
+        margin: 0 0 0 12px;
+      }
+
+      body.is-manifesto-panel-open #resultsPanel.is-collapsed {
+        top: 0;
+        margin-left: calc(12px + min(340px, calc(100vw - 24px)) + 10px);
+      }
+
+      body.is-results-panel-open #manifestoPanel.is-collapsed {
+        margin-left: calc(12px + min(340px, calc(100vw - 24px)) + 10px);
+      }
+
+      #resultsPanel:not(.is-collapsed) {
+        position: fixed;
         top: auto;
+        bottom: 0;
         left: auto;
-        right: 100%;
-        bottom: max(12px, env(safe-area-inset-bottom, 0px));
-        width: max-content;
-        max-width: none;
+        right: max(12px, env(safe-area-inset-right, 0px));
+        width: min(340px, calc(100vw - 24px));
+        min-width: 0;
+        max-width: min(340px, calc(100vw - 24px));
         margin: 0;
-        max-height: none;
-        z-index: 45;
+        max-height: 100dvh;
+      }
+    }
+
+    @media (min-width: 1366px) and (pointer: fine) {
+      #resultsPanel {
+        position: absolute;
+        top: 86px;
+        left: 100%;
+        right: auto;
+        margin: 0 0 0 12px;
       }
 
       #resultsPanel.is-collapsed {
         width: max-content;
         min-width: 0;
         max-width: none;
-        max-height: none;
-        background: transparent;
-        border: 0;
-        box-shadow: none;
-        overflow: visible;
+        margin: 0 0 0 12px;
       }
 
-      /* 电脑端不再与右侧 MANIFESTO 抢位，取消旧的右栏互挤偏移 */
-      body.is-manifesto-panel-open #resultsPanel.is-collapsed,
+      body.is-manifesto-panel-open #resultsPanel.is-collapsed {
+        top: 0;
+        margin-left: calc(12px + 340px + 10px);
+      }
+
       body.is-results-panel-open #manifestoPanel.is-collapsed {
-        margin-left: 0;
+        margin-left: calc(12px + 340px + 10px);
       }
 
       #resultsPanel:not(.is-collapsed) {
-        width: 340px;
-        min-width: 340px;
-        max-width: min(340px, calc(100vw - 24px));
-        display: flex;
-        /* column-reverse：入口在底部分隔线，面板主体在上（向上展开） */
-        flex-direction: column-reverse;
-        align-items: stretch;
-        max-height: calc(
-          100dvh / var(--app-ui-zoom, 1) - 24px - env(safe-area-inset-top, 0px) -
-            env(safe-area-inset-bottom, 0px)
-        );
-        background: transparent;
-        border: 0;
-        box-shadow: none;
-        overflow: visible;
-        z-index: 46;
-      }
-
-      /* 展开后入口仍在分隔线底端，可再点收起；不挡定稿图 */
-      #resultsPanel:not(.is-collapsed) .results-panel__edge {
-        display: inline-flex !important;
-        position: relative;
-        align-self: flex-end;
-        margin: 0;
-        z-index: 6;
-      }
-
-      /* 关闭钮靠分隔线一侧（面板右上），便于从主栏点到 */
-      #resultsPanel:not(.is-collapsed) .results-panel__collapse {
+        position: fixed;
+        top: auto;
+        bottom: 0;
         left: auto;
-        right: 4px;
-      }
-
-      #resultsPanel:not(.is-collapsed) .results-panel__body {
-        flex: 1 1 auto;
-        min-height: 0;
-        width: 100%;
-        max-height: inherit;
-        overflow: auto;
-        box-sizing: border-box;
-      }
-
-      #resultsPanel:not(.is-collapsed) .results-panel__stage {
-        width: 100%;
-        max-width: 100%;
-        margin: 0;
-      }
-    }
-
-    @media (min-width: 1366px) and (pointer: fine) {
-      #resultsPanel:not(.is-collapsed) {
+        right: max(12px, env(safe-area-inset-right, 0px));
         width: 340px;
         min-width: 340px;
         max-width: 340px;
+        margin: 0;
+        max-height: 100dvh;
       }
     }
 
     /*
-     * 手机 + 平板（横/竖）coarse：保持右侧浮层（稳定布局），不套用电脑左下锚点。
+     * 手机 + 平板 coarse：右侧浮层；折叠入口叠在 MANIFESTO 上方；
+     * 展开仍贴视口底边向上延伸。
      */
     @media (max-width: 1023px) and (pointer: coarse),
       (max-width: 767px),
@@ -20707,8 +20748,8 @@
         top: auto;
         left: auto;
         right: 12px;
-        /* 叠在 MANIFESTO 入口上方：90% 尺寸后约 88px 留位 */
-        bottom: calc(var(--app-bottom-nav-space, 88px) + 8px + 88px);
+        /* MANIFESTO 入口约 80px 留位（再缩 10% 后） */
+        bottom: calc(var(--app-bottom-nav-space, 88px) + 8px + 80px);
         width: max-content;
         max-width: none;
         max-height: none;
@@ -20718,7 +20759,7 @@
 
       #resultsPanel.is-collapsed {
         top: auto;
-        bottom: calc(var(--app-bottom-nav-space, 88px) + 8px + 88px);
+        bottom: calc(var(--app-bottom-nav-space, 88px) + 8px + 80px);
         right: 12px;
         left: auto;
         margin: 0;
@@ -20735,15 +20776,16 @@
       }
 
       #resultsPanel:not(.is-collapsed) {
-        top: calc(env(safe-area-inset-top, 0px) + 8px);
-        right: max(22px, env(safe-area-inset-right, 0px));
-        left: max(22px, env(safe-area-inset-left, 0px));
-        bottom: calc(var(--app-bottom-nav-space, 88px) + 8px);
+        position: fixed;
+        top: auto;
+        right: max(12px, env(safe-area-inset-right, 0px));
+        left: max(12px, env(safe-area-inset-left, 0px));
+        bottom: 0;
         width: auto;
         min-width: 0;
         max-width: none;
         height: auto;
-        max-height: none;
+        max-height: 100dvh;
         padding: 0;
         box-sizing: border-box;
         overflow: hidden;
@@ -20766,7 +20808,6 @@
         flex: 1 1 auto;
         min-height: 0;
         overflow: auto;
-        padding-bottom: 0;
       }
 
       #resultsPanel:not(.is-collapsed) .results-panel__stage {
@@ -20776,138 +20817,139 @@
       }
     }
 
-
     /*
-     * 竖向入口缩放（相对修改前原始尺寸；不用 scale）：
-     * - 电脑 fine：80%
-     * - 手机 / 平板 coarse：90%
-     * 只改入口 padding/字号/脚印/圆角；不改展开面板与定稿图。
+     * 竖向入口缩放（相对「当前显示尺寸」再 ×0.9；不用 scale）：
+     * - 电脑 fine：此前约 80% 原始 → 现约 72% 原始
+     * - 手机/平板 coarse：此前约 90% 原始 → 现约 81% 原始
+     * 只改入口；不改展开面板与定稿图。
      */
     @media (min-width: 768px) and (pointer: fine) {
-      /* BLOCK（绿色）入口：与 今日计划 共用 edge，仅 block-view 缩尺寸 */
       #todayPlanPanel.is-block-view .today-plan-panel__edge {
-        padding: 4.8px 4px;
-        border-radius: 0 9.6px 9.6px 0;
+        padding: 4.32px 3.6px;
+        border-radius: 0 8.64px 8.64px 0;
       }
 
       #todayPlanPanel.is-block-view .today-plan-panel__edge-label {
-        font-size: 12px;
+        font-size: 10.8px;
       }
 
       #todayPlanPanel.is-block-view .today-plan-panel__edge-label--block {
-        width: 10.4px;
-        height: 44.8px;
-        min-width: 10.4px;
-        min-height: 44.8px;
+        width: 9.36px;
+        height: 40.32px;
+        min-width: 9.36px;
+        min-height: 40.32px;
       }
 
       #todayPlanPanel.is-block-view .today-plan-panel__edge-block-word {
-        font-size: 10.4px;
+        font-size: 9.36px;
       }
 
-      /* MANIFESTO 入口 */
       .manifesto-panel__edge {
-        padding: 4.8px 4px;
-        border-radius: 9.6px 0 0 9.6px;
+        padding: 4.32px 3.6px;
+        border-radius: 8.64px 0 0 8.64px;
       }
 
       .manifesto-panel__edge-label {
-        font-size: 12px;
+        font-size: 10.8px;
       }
 
       .manifesto-panel__edge-label--word {
-        width: 10.4px;
-        height: 75.2px;
-        min-width: 10.4px;
+        width: 9.36px;
+        height: 67.68px;
+        min-width: 9.36px;
       }
 
       .manifesto-panel__edge-word {
-        font-size: 10.4px;
+        font-size: 9.36px;
       }
 
-      /* RESULTS 入口 */
       .results-panel__edge {
-        padding: 4.8px 4px;
-        border-radius: 9.6px 0 0 9.6px;
+        padding: 4.32px 3.6px;
+        border-radius: 8.64px 0 0 8.64px;
       }
 
       .results-panel__edge-label {
-        font-size: 12px;
+        font-size: 10.8px;
       }
 
       .results-panel__edge-label--word {
-        width: 10.4px;
-        height: 59.2px;
-        min-width: 10.4px;
+        width: 9.36px;
+        height: 53.28px;
+        min-width: 9.36px;
       }
 
       .results-panel__edge-word {
-        font-size: 10.4px;
+        font-size: 9.36px;
+      }
+
+      /* 入口再缩后，RESULTS 叠在 MANIFESTO 下的 top 略收 */
+      #resultsPanel.is-collapsed {
+        top: 78px;
       }
     }
 
-    /* 手机 + 平板（复用现有触控/窄屏断点）：相对原始尺寸 90% */
     @media (max-width: 767px),
       (max-width: 1366px) and (pointer: coarse),
       (min-width: 1024px) and (orientation: landscape) and (pointer: coarse) {
       #todayPlanPanel.is-block-view .today-plan-panel__edge {
-        padding: 5.4px 4.5px;
-        border-radius: 0 10.8px 10.8px 0;
+        padding: 4.86px 4.05px;
+        border-radius: 0 9.72px 9.72px 0;
       }
 
       #todayPlanPanel.is-block-view .today-plan-panel__edge-label {
-        font-size: 13.5px;
+        font-size: 12.15px;
       }
 
       #todayPlanPanel.is-block-view .today-plan-panel__edge-label--block {
-        width: 11.7px;
-        height: 50.4px;
-        min-width: 11.7px;
-        min-height: 50.4px;
+        width: 10.53px;
+        height: 45.36px;
+        min-width: 10.53px;
+        min-height: 45.36px;
       }
 
       #todayPlanPanel.is-block-view .today-plan-panel__edge-block-word {
-        font-size: 11.7px;
+        font-size: 10.53px;
       }
 
       .manifesto-panel__edge {
-        padding: 5.4px 4.5px;
-        border-radius: 10.8px 0 0 10.8px;
+        padding: 4.86px 4.05px;
+        border-radius: 9.72px 0 0 9.72px;
       }
 
       .manifesto-panel__edge-label {
-        font-size: 13.5px;
+        font-size: 12.15px;
       }
 
       .manifesto-panel__edge-label--word {
-        width: 11.7px;
-        height: 84.6px;
-        min-width: 11.7px;
+        width: 10.53px;
+        height: 76.14px;
+        min-width: 10.53px;
       }
 
       .manifesto-panel__edge-word {
-        font-size: 11.7px;
+        font-size: 10.53px;
       }
 
       .results-panel__edge {
-        padding: 5.4px 4.5px;
-        border-radius: 10.8px 0 0 10.8px;
+        padding: 4.86px 4.05px;
+        border-radius: 9.72px 0 0 9.72px;
       }
 
       .results-panel__edge-label {
-        font-size: 13.5px;
+        font-size: 12.15px;
       }
 
       .results-panel__edge-label--word {
-        width: 11.7px;
-        height: 66.6px;
-        min-width: 11.7px;
+        width: 10.53px;
+        height: 59.94px;
+        min-width: 10.53px;
       }
 
       .results-panel__edge-word {
-        font-size: 11.7px;
+        font-size: 10.53px;
       }
     }
+
 
     #anniversaryModule .anniversary-tw-actions-wrap .compact-manual-item-icons {
       flex-wrap: wrap;
@@ -97050,7 +97092,7 @@
       </div>
     </div>
   </aside>
-  <!-- 结果导向学习 RESULTS：电脑端左下锚点覆盖 BLOCK；手机/平板仍右侧浮层；默认收起；定稿图原样；不落盘/不云同步 -->
+  <!-- 结果导向学习 RESULTS：右侧叠在 MANIFESTO 下；展开贴视口底边向上；默认收起；定稿图原样；不落盘/不云同步 -->
   <aside id="resultsPanel" class="results-panel is-collapsed" aria-label="结果导向学习">
     <button
       type="button"
@@ -116503,7 +116545,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261116e";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261116f";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -205498,7 +205540,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /**
      * 展开/收起结果导向学习：仅本地 UI。
      * 默认关闭；绝不自动打开。与 MANIFESTO 互斥；不改 BLOCK 计时/模式/布局宽度。
-     * 电脑端：左下分隔线锚点，向左上浮层覆盖 BLOCK；点面板外收起。
+     * 右侧展开：底边贴视口 bottom:0，向上延伸；点面板外收起。
      * 不落盘、不云同步。
      */
     let resultsOutsideCloseBound = false;
