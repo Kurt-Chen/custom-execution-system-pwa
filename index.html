@@ -115968,7 +115968,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261115k";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261116a";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -201775,29 +201775,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     const READING_PLAN_CHAPTER_COLLAPSE_AT = 6;
 
-    /** 文本形如「第一部分」时可能是分区标题（也可能是用户当作章节名添加的可打卡项） */
-    function isReadingPlanChapterGroupLabelText(text) {
-      return /^第[一二三四五六七八九十百千万0-9]+部分$/.test(String(text || "").trim());
-    }
-
     /**
-     * 章节渲染/进度条目：仅当书中同时存在「非第×部分」章节时，才把「第×部分」当分区标题；
-     * 若全书都是「第一部分」「第二部分」…（用户当章节名添加），则全部按可打卡章节渲染。
+     * 章节渲染条目。
+     * 历史曾把「第×部分」自动当成分区标题（无圆点/删除）；用户常把「导论」+「第一部分」…
+     * 都当作可打卡章节，自动分流会导致新增「第×部分」样式异常且无法勾选。
+     * 现一律按可打卡章节渲染；分区标题若以后需要，须显式字段，不再用文案启发式。
      */
     function getReadingPlanChapterEntries(chapters) {
       const list = Array.isArray(chapters) ? chapters : [];
-      const anyContent = list.some((c) => !isReadingPlanChapterGroupLabelText(c && c.text));
       return list.map((chapter) => ({
         chapter: chapter,
-        isGroup: anyContent && isReadingPlanChapterGroupLabelText(chapter && chapter.text)
+        isGroup: false
       }));
     }
 
-    /** 参与进度与完成态的章节（排除真正的分区标题行） */
+    /** 参与进度与完成态的章节（与列表展示一致：全部已保存章节） */
     function getReadingPlanContentChapters(chapters) {
-      return getReadingPlanChapterEntries(chapters)
-        .filter((e) => !e.isGroup)
-        .map((e) => e.chapter);
+      return getReadingPlanChapterEntries(chapters).map((e) => e.chapter);
     }
 
     /** 超过 6 章时默认折叠，仅渲染前 6 条章节（分区标题按需插入） */
@@ -202166,9 +202160,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           const next = String(inputEl.value || "").trim();
           if (next && next !== chapter.text) {
             updateReadingPlanChapterText(book.id, chapter.id, next);
-            return;
           }
         }
+        /* 保存后必须退出输入框，恢复与其它章节相同的列表态 span */
         txt.textContent = chapter.text;
         if (inputEl.parentNode === cLi) {
           cLi.replaceChild(txt, inputEl);
