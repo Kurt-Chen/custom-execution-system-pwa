@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261116k";
+const CACHE_NAME = "exec-system-pwa-v20261117a";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -30,8 +30,12 @@ const APP_SHELL = [
   "./assets/hour-day-manifesto-card.webp",
   "./assets/manifesto-genuine-desire-card.webp",
   "./assets/manifesto-life-winner-card.webp",
-  /* RESULTS 定稿图：原样 WebP 预缓存，避免首开慢/逐步显示 */
+  /* RESULTS 定稿图：原样 WebP 预缓存，避免首开慢/逐步显示；PNG 作第 2/3 张回退 */
   "./assets/results-oriented-learning-card.webp",
+  "./assets/results-do-most-important-card.webp",
+  "./assets/results-input-output-equation-card.webp",
+  "./assets/results-do-most-important-card.png",
+  "./assets/results-input-output-equation-card.png",
   /* 庆祝/警告 WebP：预缓存避免首打卡空白（彩带 confetti 已停用，不预缓存） */
   "./icons/fx/fx-power-fireworks.webp",
   "./icons/fx/fx-power-hearts.webp",
