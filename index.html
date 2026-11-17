@@ -42494,6 +42494,10 @@
      * 素材自带橙色圆角边框 + 外侧透明；容器透明、无第二层边框/底板。
      * Desktop 宽对齐两分钟浮窗（567）；高度按原图比例，不拉伸不裁切。
      */
+    /*
+     * PRESENT·ALIVE 清晰度：独立合成层，禁止继承/叠加 filter、半透明。
+     * 磨砂仅由下方 kineticReminderFrostMask 承担（owner 不抬到 12040，对齐两分钟）。
+     */
     .kinetic-image-reminder-card.kinetic-image-reminder-card--present-alive {
       width: min(567px, calc(100vw - 32px));
       max-width: 100%;
@@ -42503,6 +42507,21 @@
       background: transparent;
       box-shadow: none;
       overflow: visible;
+      isolation: isolate;
+      opacity: 1;
+      filter: none;
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      /* 打开态不再走共享卡的 opacity/scale 入场，避免半透明叠在磨砂上发灰 */
+      transform: none;
+      will-change: auto;
+    }
+
+    .kinetic-image-reminder-overlay.is-open .kinetic-image-reminder-card--present-alive,
+    .kinetic-image-reminder-overlay.is-closing .kinetic-image-reminder-card--present-alive {
+      opacity: 1;
+      transform: none;
+      filter: none;
     }
 
     .kinetic-image-reminder-card--present-alive .kinetic-image-reminder-card__img {
@@ -42512,6 +42531,9 @@
       object-fit: contain;
       object-position: center;
       background: transparent;
+      opacity: 1;
+      filter: none;
+      -webkit-filter: none;
     }
 
     @media (min-width: 768px) and (max-width: 1366px) and (pointer: coarse) {
@@ -116769,7 +116791,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261117f";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261117g";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -232206,10 +232228,19 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       let session = 0;
       const preloaded = Object.create(null);
 
-      function frostShow() {
+      /* presentAlive 对齐两分钟：磨砂 owner 不抬 z-index，避免 backdrop-filter 盖住图片发灰 */
+      const FROST_OWNER_PRESENT_ALIVE = "presentAlive";
+      let activeFrostOwner = FROST_OWNER;
+
+      function frostOwnerFor(id) {
+        return id === "presentAlive" ? FROST_OWNER_PRESENT_ALIVE : FROST_OWNER;
+      }
+
+      function frostShow(id) {
         try {
           if (typeof window.__kineticReminderFrostShow === "function") {
-            window.__kineticReminderFrostShow(FROST_OWNER);
+            activeFrostOwner = frostOwnerFor(id);
+            window.__kineticReminderFrostShow(activeFrostOwner);
           }
         } catch (_e) {}
       }
@@ -232217,9 +232248,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       function frostHide() {
         try {
           if (typeof window.__kineticReminderFrostHide === "function") {
-            window.__kineticReminderFrostHide(FROST_OWNER);
+            window.__kineticReminderFrostHide(activeFrostOwner || FROST_OWNER);
           }
         } catch (_e) {}
+        activeFrostOwner = FROST_OWNER;
       }
 
       function clearCloseAnimTimer() {
@@ -232429,7 +232461,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         root.setAttribute("aria-hidden", "false");
         root.classList.add("is-open");
         isOpen = true;
-        frostShow();
+        frostShow(targetId);
         void options;
         hideTimerId = setTimeout(function () {
           hideTimerId = null;
