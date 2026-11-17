@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261117e";
+const CACHE_NAME = "exec-system-pwa-v20261117f";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -20,6 +20,7 @@ const APP_SHELL = [
   "./assets/choose-hard-live-easy-reminder.jpg",
   "./assets/triple-package-success-drive-card.png",
   "./assets/tenx-seize-every-second-card.png",
+  "./assets/present-alive-100-reminder-01.png",
   "./assets/attention-calibrate-card.png",
   "./assets/maniacal-urgency-card.png",
   "./assets/today-plan-win-banner.png",
