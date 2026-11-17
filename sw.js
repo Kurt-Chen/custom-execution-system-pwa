@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261117g";
+const CACHE_NAME = "exec-system-pwa-v20261117h";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -27,6 +27,7 @@ const APP_SHELL = [
   "./assets/hour-day-manifesto-card.png",
   "./assets/manifesto-genuine-desire-card.png",
   "./assets/manifesto-life-winner-card.png",
+  "./assets/manifesto-maniacal-urgency-card.png",
   /* MANIFESTO 运行时优先 WebP；PNG 保留作原图/回退，均预缓存避免首开慢 */
   "./assets/hour-day-manifesto-card.webp",
   "./assets/manifesto-genuine-desire-card.webp",
