@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>恢复应用 · 清除卡住缓存</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #f4f6fb;
+      color: #0f172a;
+      padding: 24px;
+      box-sizing: border-box;
+    }
+    .card {
+      width: min(420px, 100%);
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+    }
+    h1 { font-size: 18px; margin: 0 0 10px; }
+    p { margin: 0 0 10px; line-height: 1.55; font-size: 14px; color: #334155; }
+    #log {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 10px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      font-size: 13px;
+      white-space: pre-wrap;
+      min-height: 72px;
+    }
+    button {
+      margin-top: 14px;
+      width: 100%;
+      border: 0;
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+      background: #2563eb;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.6; cursor: default; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>清除卡住的 PWA 缓存</h1>
+    <p>若主站白屏，通常是本机 Service Worker / Cache 卡住。本页会注销 SW、删除全部站点缓存，然后回到主应用。不会删除你的任务数据（IndexedDB / 云端）。</p>
+    <button id="go" type="button">立即恢复并进入应用</button>
+    <div id="log">准备中…</div>
+  </div>
+  <script>
+    (function () {
+      var logEl = document.getElementById("log");
+      var btn = document.getElementById("go");
+      function log(msg) {
+        logEl.textContent = String(msg || "");
+      }
+      async function recover() {
+        btn.disabled = true;
+        var lines = [];
+        function step(s) {
+          lines.push(s);
+          log(lines.join("\n"));
+        }
+        try {
+          if (!("serviceWorker" in navigator)) {
+            step("此浏览器无 Service Worker，直接进入应用。");
+          } else {
+            var regs = await navigator.serviceWorker.getRegistrations();
+            step("找到 " + regs.length + " 个 Service Worker，正在注销…");
+            await Promise.all(
+              regs.map(function (r) {
+                return r.unregister();
+              })
+            );
+            step("Service Worker 已注销。");
+          }
+          if (typeof caches !== "undefined" && caches.keys) {
+            var keys = await caches.keys();
+            step("找到 " + keys.length + " 个 Cache，正在删除…");
+            await Promise.all(
+              keys.map(function (k) {
+                return caches.delete(k);
+              })
+            );
+            step("Cache 已清空。");
+          }
+          step("3 秒后进入主应用…");
+          setTimeout(function () {
+            location.replace("./index.html?recovered=" + Date.now());
+          }, 1200);
+        } catch (e) {
+          step("恢复失败：" + (e && e.message ? e.message : e));
+          btn.disabled = false;
+        }
+      }
+      btn.addEventListener("click", recover);
+      /* 打开本页即自动执行一次 */
+      recover();
+    })();
+  </script>
+</body>
+</html>

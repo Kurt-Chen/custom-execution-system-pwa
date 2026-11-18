@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261119k";
+const CACHE_NAME = "exec-system-pwa-v20261119l";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -125,6 +125,12 @@ self.addEventListener("fetch", (event) => {
 
   /* sw.js 永不进 Cache Storage，避免手机端长期命中旧脚本、装不上新版本 */
   if (/\/sw\.js$/i.test(url.pathname)) {
+    event.respondWith(fetch(new Request(req, { cache: "reload" })));
+    return;
+  }
+
+  /* 恢复页始终走网络，且不写入 Cache，避免白屏时连自救页也被坏缓存劫持 */
+  if (/\/recover\.html$/i.test(url.pathname)) {
     event.respondWith(fetch(new Request(req, { cache: "reload" })));
     return;
   }
