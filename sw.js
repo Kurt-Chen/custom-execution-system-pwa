@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261119j";
+const CACHE_NAME = "exec-system-pwa-v20261119k";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -69,18 +69,25 @@ const APP_SHELL = [
 ];
 
 self.addEventListener("install", (event) => {
-  /* 单项 precache：避免 addAll 因某一资源失败导致整次 install 失败、手机永远装不上新 SW */
+  /* 先保证 index.html 进缓存，再预缓存其余；避免空缓存 activate 后离线白屏 */
   event.waitUntil(
     caches
       .open(CACHE_NAME)
       .then(function (cache) {
-        return Promise.all(
-          APP_SHELL.map(function (url) {
-            return cache.add(url).catch(function (err) {
-              console.warn("[sw] precache skip", url, err);
-            });
+        return cache
+          .add("./index.html")
+          .catch(function (err) {
+            console.warn("[sw] critical precache fail index.html", err);
           })
-        );
+          .then(function () {
+            return Promise.all(
+              APP_SHELL.map(function (url) {
+                return cache.add(url).catch(function (err) {
+                  console.warn("[sw] precache skip", url, err);
+                });
+              })
+            );
+          });
       })
       .then(function () {
         return self.skipWaiting();
@@ -138,7 +145,26 @@ self.addEventListener("fetch", (event) => {
         caches.open(CACHE_NAME).then((cache) => cache.put(req, cloned));
         return res;
       })
-      .catch(() => caches.match(req).then((cached) => cached || caches.match("./index.html")))
+      .catch(function () {
+        return caches.match(req).then(function (cached) {
+          if (cached) return cached;
+          return caches.match("./index.html").then(function (shell) {
+            if (shell) return shell;
+            return caches.match("./").then(function (root) {
+              if (root) return root;
+              return new Response(
+                "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/><title>加载失败</title><body style=\"font-family:system-ui,sans-serif;padding:28px;line-height:1.55;background:#f4f6fb;color:#0f172a\"><h1 style=\"font-size:18px;margin:0 0 12px\">页面暂时无法加载</h1><p style=\"margin:0 0 10px\">多半是离线缓存未就绪或网络中断。请强制刷新（Ctrl+Shift+R），或清除本站站点数据后重开。</p><p style=\"color:#64748b;font-size:13px;margin:16px 0 0\">" +
+                  CACHE_NAME +
+                  "</p></body></html>",
+                {
+                  status: 503,
+                  headers: { "Content-Type": "text/html; charset=utf-8" },
+                }
+              );
+            });
+          });
+        });
+      })
   );
 });
 
