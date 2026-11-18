@@ -31,27 +31,22 @@ const APP_SHELL = [
   "./assets/attention-calibrate-card.png",
   "./assets/maniacal-urgency-card.png",
   "./assets/today-plan-win-banner.png",
-  "./assets/hour-day-manifesto-card.png",
-  "./assets/manifesto-genuine-desire-card.png",
-  "./assets/manifesto-life-winner-card.png",
-  "./assets/manifesto-maniacal-urgency-card.png",
+  /*
+   * MANIFESTO / RESULTS：仅预缓存 WebP（优先首图），去掉大体积 PNG 以免安卓安装预算内抢带宽。
+   * PNG 仍保留在仓库作 fallback；首次命中后由 runtime cache 写入。
+   */
   "./assets/hour-day-manifesto-card.webp",
+  "./assets/results-isg-wormhole-card.webp",
   "./assets/manifesto-genuine-desire-card.webp",
   "./assets/manifesto-life-winner-card.webp",
+  "./assets/manifesto-maniacal-urgency-card.webp",
   "./assets/manifesto-focus-manage-card.webp",
-  "./assets/manifesto-focus-manage-card.png",
   "./assets/manifesto-carpe-momentum-card.webp",
-  "./assets/manifesto-carpe-momentum-card.png",
-  "./assets/results-isg-wormhole-card.webp",
   "./assets/results-oriented-learning-card.webp",
-  "./assets/results-oriented-learning-card.png",
   "./assets/results-do-most-important-card.webp",
   "./assets/results-input-output-equation-card.webp",
-  "./assets/results-power-law-path-card.png",
-  "./assets/results-pathways-thinking-card.png",
-  "./assets/results-isg-wormhole-card.png",
-  "./assets/results-do-most-important-card.png",
-  "./assets/results-input-output-equation-card.png",
+  "./assets/results-power-law-path-card.webp",
+  "./assets/results-pathways-thinking-card.webp",
   "./icons/fx/fx-power-fireworks.webp",
   "./icons/fx/fx-power-hearts.webp",
   "./icons/fx/fx-power-trophy.webp",
@@ -105,6 +100,23 @@ function matchCachedShell(req) {
       if (shell) return shell;
       return caches.match("./");
     });
+  });
+}
+
+/** 静态图片：cache-first，安卓弱网下避免每次展开都等网络 */
+function isCacheFirstImageRequest(url) {
+  if (!/\.(?:webp|png|jpe?g|gif|svg)$/i.test(url.pathname)) return false;
+  return (
+    url.pathname.indexOf("/assets/") !== -1 ||
+    url.pathname.indexOf("/icons/") !== -1
+  );
+}
+
+function putInCache(req, res) {
+  if (!res || !(res.ok || res.type === "opaque")) return;
+  const cloned = res.clone();
+  caches.open(CACHE_NAME).then(function (cache) {
+    cache.put(req, cloned);
   });
 }
 
@@ -188,18 +200,32 @@ self.addEventListener("fetch", (event) => {
     url.pathname === "/" ||
     url.pathname.endsWith("/") ||
     /\/index\.html$/i.test(url.pathname);
+
+  /* 静态图 cache-first：MANIFESTO/RESULTS WebP 二次打开与弱网安卓首屏友好；版本 bump 清旧缓存防回流 */
+  if (!isHtmlShell && isCacheFirstImageRequest(url)) {
+    event.respondWith(
+      caches.match(req).then(function (cached) {
+        if (cached) return cached;
+        return fetchWithTimeout(req, ASSET_FETCH_TIMEOUT_MS)
+          .then(function (res) {
+            putInCache(req, res);
+            return res;
+          })
+          .catch(function () {
+            return Response.error();
+          });
+      })
+    );
+    return;
+  }
+
   const netReq = isHtmlShell ? new Request(req, { cache: "reload" }) : req;
   const timeoutMs = isHtmlShell ? HTML_FETCH_TIMEOUT_MS : ASSET_FETCH_TIMEOUT_MS;
 
   event.respondWith(
     fetchWithTimeout(netReq, timeoutMs)
       .then(function (res) {
-        if (res && (res.ok || res.type === "opaque")) {
-          const cloned = res.clone();
-          caches.open(CACHE_NAME).then(function (cache) {
-            cache.put(req, cloned);
-          });
-        }
+        putInCache(req, res);
         return res;
       })
       .catch(function () {
