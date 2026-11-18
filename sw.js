@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261118v";
+const CACHE_NAME = "exec-system-pwa-v20261118z";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -36,6 +36,9 @@ const APP_SHELL = [
   "./assets/manifesto-focus-manage-card.png",
   /* RESULTS 定稿图：原样 WebP 预缓存，避免首开慢/逐步显示；PNG 作透明卡/回退 */
   "./assets/results-isg-wormhole-card.webp",
+  "./assets/results-almost-everything-is-noise-card.png",
+  "./assets/results-almost-nothing-can-produce-card.png",
+  "./assets/results-learn-only-what-result-demands-card.png",
   "./assets/results-oriented-learning-card.webp",
   "./assets/results-do-most-important-card.webp",
   "./assets/results-input-output-equation-card.webp",
