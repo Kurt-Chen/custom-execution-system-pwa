@@ -1,5 +1,12 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261119l";
+const CACHE_NAME = "exec-system-pwa-v20261119m";
+/** 导航/HTML：网络超时后立刻回退缓存，避免标签页一直转圈 */
+const HTML_FETCH_TIMEOUT_MS = 7000;
+/** 普通资源超时 */
+const ASSET_FETCH_TIMEOUT_MS = 15000;
+/** install 预缓存其余资源最多等这么久，超时仍 skipWaiting，避免新 SW 永远装不上 */
+const PRECACHE_BUDGET_MS = 12000;
+
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -28,13 +35,11 @@ const APP_SHELL = [
   "./assets/manifesto-genuine-desire-card.png",
   "./assets/manifesto-life-winner-card.png",
   "./assets/manifesto-maniacal-urgency-card.png",
-  /* MANIFESTO 运行时优先 WebP；PNG 保留作原图/回退，均预缓存避免首开慢 */
   "./assets/hour-day-manifesto-card.webp",
   "./assets/manifesto-genuine-desire-card.webp",
   "./assets/manifesto-life-winner-card.webp",
   "./assets/manifesto-focus-manage-card.webp",
   "./assets/manifesto-focus-manage-card.png",
-  /* RESULTS 定稿图：原样 WebP 预缓存，避免首开慢/逐步显示；PNG 作透明卡/回退 */
   "./assets/results-isg-wormhole-card.webp",
   "./assets/results-oriented-learning-card.webp",
   "./assets/results-oriented-learning-card.png",
@@ -45,7 +50,6 @@ const APP_SHELL = [
   "./assets/results-isg-wormhole-card.png",
   "./assets/results-do-most-important-card.png",
   "./assets/results-input-output-equation-card.png",
-  /* 庆祝/警告 WebP：预缓存避免首打卡空白（彩带 confetti 已停用，不预缓存） */
   "./icons/fx/fx-power-fireworks.webp",
   "./icons/fx/fx-power-hearts.webp",
   "./icons/fx/fx-power-trophy.webp",
@@ -68,8 +72,42 @@ const APP_SHELL = [
   "./icons/fx/fx-warning-minus10.webp"
 ];
 
+function fetchWithTimeout(request, ms) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(function () {
+    try {
+      ctrl.abort();
+    } catch (_e) {}
+  }, ms);
+  return fetch(request, { signal: ctrl.signal }).finally(function () {
+    clearTimeout(timer);
+  });
+}
+
+function offlineShellResponse() {
+  return new Response(
+    "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/><title>加载失败</title><body style=\"font-family:system-ui,sans-serif;padding:28px;line-height:1.55;background:#f4f6fb;color:#0f172a\"><h1 style=\"font-size:18px;margin:0 0 12px\">页面暂时无法加载</h1><p style=\"margin:0 0 10px\">网络超时或离线缓存未就绪。请打开 <a href=\"./recover.html\">recover.html</a> 清除卡住的缓存，或强制刷新后重试。</p><p style=\"color:#64748b;font-size:13px;margin:16px 0 0\">" +
+      CACHE_NAME +
+      "</p></body></html>",
+    {
+      status: 503,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    }
+  );
+}
+
+function matchCachedShell(req) {
+  return caches.match(req).then(function (cached) {
+    if (cached) return cached;
+    return caches.match("./index.html").then(function (shell) {
+      if (shell) return shell;
+      return caches.match("./");
+    });
+  });
+}
+
 self.addEventListener("install", (event) => {
-  /* 先保证 index.html 进缓存，再预缓存其余；避免空缓存 activate 后离线白屏 */
+  /* 先缓存 index，其余预缓存有时间上限，避免安装阶段永久卡住 */
   event.waitUntil(
     caches
       .open(CACHE_NAME)
@@ -80,13 +118,17 @@ self.addEventListener("install", (event) => {
             console.warn("[sw] critical precache fail index.html", err);
           })
           .then(function () {
-            return Promise.all(
+            const rest = Promise.all(
               APP_SHELL.map(function (url) {
                 return cache.add(url).catch(function (err) {
                   console.warn("[sw] precache skip", url, err);
                 });
               })
             );
+            const budget = new Promise(function (resolve) {
+              setTimeout(resolve, PRECACHE_BUDGET_MS);
+            });
+            return Promise.race([rest, budget]);
           });
       })
       .then(function () {
@@ -123,19 +165,21 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  /* sw.js 永不进 Cache Storage，避免手机端长期命中旧脚本、装不上新版本 */
-  if (/\/sw\.js$/i.test(url.pathname)) {
-    event.respondWith(fetch(new Request(req, { cache: "reload" })));
+  /* sw.js / recover 始终网络优先，并带超时，避免自救路径也一直转圈 */
+  if (/\/sw\.js$/i.test(url.pathname) || /\/recover\.html$/i.test(url.pathname)) {
+    event.respondWith(
+      fetchWithTimeout(new Request(req, { cache: "reload" }), HTML_FETCH_TIMEOUT_MS).catch(
+        function () {
+          if (/\/recover\.html$/i.test(url.pathname)) {
+            return offlineShellResponse();
+          }
+          return fetch(req);
+        }
+      )
+    );
     return;
   }
 
-  /* 恢复页始终走网络，且不写入 Cache，避免白屏时连自救页也被坏缓存劫持 */
-  if (/\/recover\.html$/i.test(url.pathname)) {
-    event.respondWith(fetch(new Request(req, { cache: "reload" })));
-    return;
-  }
-
-  /** HTML / 导航请求绕过 HTTP 缓存，避免线上长期看到旧版 index */
   const isHtmlShell =
     req.mode === "navigate" ||
     req.destination === "document" ||
@@ -143,32 +187,24 @@ self.addEventListener("fetch", (event) => {
     url.pathname.endsWith("/") ||
     /\/index\.html$/i.test(url.pathname);
   const netReq = isHtmlShell ? new Request(req, { cache: "reload" }) : req;
+  const timeoutMs = isHtmlShell ? HTML_FETCH_TIMEOUT_MS : ASSET_FETCH_TIMEOUT_MS;
 
   event.respondWith(
-    fetch(netReq)
-      .then((res) => {
-        const cloned = res.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(req, cloned));
+    fetchWithTimeout(netReq, timeoutMs)
+      .then(function (res) {
+        if (res && (res.ok || res.type === "opaque")) {
+          const cloned = res.clone();
+          caches.open(CACHE_NAME).then(function (cache) {
+            cache.put(req, cloned);
+          });
+        }
         return res;
       })
       .catch(function () {
-        return caches.match(req).then(function (cached) {
+        return matchCachedShell(req).then(function (cached) {
           if (cached) return cached;
-          return caches.match("./index.html").then(function (shell) {
-            if (shell) return shell;
-            return caches.match("./").then(function (root) {
-              if (root) return root;
-              return new Response(
-                "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/><title>加载失败</title><body style=\"font-family:system-ui,sans-serif;padding:28px;line-height:1.55;background:#f4f6fb;color:#0f172a\"><h1 style=\"font-size:18px;margin:0 0 12px\">页面暂时无法加载</h1><p style=\"margin:0 0 10px\">多半是离线缓存未就绪或网络中断。请强制刷新（Ctrl+Shift+R），或清除本站站点数据后重开。</p><p style=\"color:#64748b;font-size:13px;margin:16px 0 0\">" +
-                  CACHE_NAME +
-                  "</p></body></html>",
-                {
-                  status: 503,
-                  headers: { "Content-Type": "text/html; charset=utf-8" },
-                }
-              );
-            });
-          });
+          if (isHtmlShell) return offlineShellResponse();
+          return Response.error();
         });
       })
   );
