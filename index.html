@@ -20,6 +20,9 @@
   <!-- 手机无系统楷体时兜底：霞鹜文楷（失败时不得抢在系统中文字体之前） -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/style.css" />
   <title>Brute Force</title>
+  <!-- MANIFESTO / RESULTS 首图优先：HTML 解析阶段即拉 WebP，不改交互与视觉 -->
+  <link rel="preload" as="image" href="./assets/hour-day-manifesto-card.webp" type="image/webp" fetchpriority="high" />
+  <link rel="preload" as="image" href="./assets/results-isg-wormhole-card@2x-edsr-test.webp" type="image/webp" fetchpriority="high" />
   <style>
     :root {
       --bg: #f4f6fb;
@@ -97344,18 +97347,18 @@
           width="1024"
           height="1536"
           decoding="async"
-          data-src="./assets/manifesto-maniacal-urgency-card.png"
+          data-src="./assets/manifesto-maniacal-urgency-card.webp"
           data-fallback-src="./assets/manifesto-maniacal-urgency-card.png"
         />
         <img
           class="manifesto-panel__img"
           data-manifesto-index="4"
           alt="Stop Managing Your Time. Start Managing Your Focus. 不要再管理时间，开始管理注意力。"
-          width="626"
-          height="819"
+          width="1252"
+          height="1638"
           decoding="async"
-          data-src="./assets/manifesto-focus-manage-card.webp"
-          data-fallback-src="./assets/manifesto-focus-manage-card.png"
+          data-src="./assets/manifesto-focus-manage-card@2x-edsr-test.webp"
+          data-fallback-src="./assets/manifesto-focus-manage-card@2x-edsr-test.png"
         />
         <img
           class="manifesto-panel__img"
@@ -97413,11 +97416,11 @@
           class="results-panel__img is-active"
           data-results-index="0"
           alt="Impossible Singular Goal + Extreme Deadline = Wormhole：不可能单一目标与极限期限打开跃迁通道"
-          width="753"
-          height="992"
+          width="1506"
+          height="1984"
           decoding="async"
-          data-src="./assets/results-isg-wormhole-card.webp"
-          data-fallback-src="./assets/results-isg-wormhole-card.png"
+          data-src="./assets/results-isg-wormhole-card@2x-edsr-test.webp"
+          data-fallback-src="./assets/results-isg-wormhole-card@2x-edsr-test.png"
         />
         <img
           class="results-panel__img"
@@ -97453,19 +97456,21 @@
           class="results-panel__img"
           data-results-index="4"
           alt="幂律路径模型：Few Inputs → Most Outputs；寻找具有幂律效应的输入 · Power-Law Path"
-          width="579"
-          height="655"
+          width="1158"
+          height="1310"
           decoding="async"
-          data-src="./assets/results-power-law-path-card.png"
+          data-src="./assets/results-power-law-path-card@2x-edsr-test.webp"
+          data-fallback-src="./assets/results-power-law-path-card@2x-edsr-test.png"
         />
         <img
           class="results-panel__img"
           data-results-index="5"
           alt="路径思维：目标不变，路径可变化；生成、测试、切换并锁定最有杠杆的路径 · Pathways Thinking"
-          width="579"
-          height="655"
+          width="1158"
+          height="1310"
           decoding="async"
-          data-src="./assets/results-pathways-thinking-card.png"
+          data-src="./assets/results-pathways-thinking-card@2x-edsr-test.webp"
+          data-fallback-src="./assets/results-pathways-thinking-card@2x-edsr-test.png"
         />
       <div class="results-panel__switcher" role="group" aria-label="结果导向学习图片切换">
         <button
@@ -116903,7 +116908,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261119o";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261119q";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -119099,21 +119104,39 @@
     /* 激励宣言卡片：本地记忆 index；仅手动切换，无自动轮播 */
     manifestoCardIndex = readManifestoCardIndex();
     syncManifestoCardDom();
-    /* 空闲预热当前张 WebP（不自动展开、不云同步），缩短首次点击等待 */
+    /* 启动即优先预热 MANIFESTO 首图；首图就绪后再邻张（安卓不并行抢解码） */
     try {
-      const warm = function () {
+      const warmManifestoBoot = function () {
         if (!manifestoPanelImgs || !manifestoPanelImgs.length) return;
         const warmIdx = clampManifestoCardIndex(manifestoCardIndex);
-        loadManifestoImageDecoded(manifestoPanelImgs[warmIdx]);
-        const warmNext =
-          manifestoPanelImgs[(warmIdx + 1) % manifestoPanelImgs.length];
-        if (warmNext) loadManifestoImageDecoded(warmNext);
+        const count = manifestoPanelImgs.length;
+        const firstP = loadManifestoImageDecoded(manifestoPanelImgs[0], { priority: "high" });
+        const curP =
+          warmIdx !== 0
+            ? loadManifestoImageDecoded(manifestoPanelImgs[warmIdx], { priority: "high" })
+            : firstP;
+        const afterFirst = function () {
+          const warmNext = manifestoPanelImgs[(warmIdx + 1) % count];
+          const warmPrev = manifestoPanelImgs[(warmIdx - 1 + count) % count];
+          const cur = manifestoPanelImgs[warmIdx];
+          if (!warmNext) return;
+          if (typeof isKineticCarouselCoarseDevice === "function" && isKineticCarouselCoarseDevice()) {
+            loadManifestoImageDecoded(warmNext, { priority: "low" }).then(function () {
+              if (warmPrev && warmPrev !== warmNext && warmPrev !== cur) {
+                loadManifestoImageDecoded(warmPrev, { priority: "low" });
+              }
+            });
+          } else {
+            loadManifestoImageDecoded(warmNext, { priority: "low" });
+            if (warmPrev && warmPrev !== warmNext && warmPrev !== cur) {
+              loadManifestoImageDecoded(warmPrev, { priority: "low" });
+            }
+          }
+        };
+        /* 记忆位与首图都优先；任一完成后再邻张，避免安卓主线程尖峰 */
+        Promise.all([firstP, curP]).then(afterFirst, afterFirst);
       };
-      if (typeof requestIdleCallback === "function") {
-        requestIdleCallback(warm, { timeout: 2500 });
-      } else {
-        setTimeout(warm, 800);
-      }
+      setTimeout(warmManifestoBoot, 0);
     } catch (_warmErr) {}
     if (manifestoPanelPrev) {
       manifestoPanelPrev.addEventListener("click", function (ev) {
@@ -119142,21 +119165,54 @@
     /* RESULTS 卡片：本地记忆 index；仅手动切换，无自动轮播；交互对齐 MANIFESTO */
     resultsCardIndex = readResultsCardIndex();
     syncResultsCardDom();
-    /* 空闲预热 RESULTS 当前/邻张 WebP（不自动展开、不云同步），缩短首次点击等待 */
+    /* 启动即优先预热 RESULTS 首图；首图就绪后再邻张（与 MANIFESTO 错开，减轻安卓并发） */
     try {
-      const warmResults = function () {
+      const warmResultsBoot = function () {
         if (!resultsPanelImgs || !resultsPanelImgs.length) return;
         const warmIdx = clampResultsCardIndex(resultsCardIndex);
-        loadManifestoImageDecoded(resultsPanelImgs[warmIdx]);
-        const warmNext =
-          resultsPanelImgs[(warmIdx + 1) % resultsPanelImgs.length];
-        if (warmNext) loadManifestoImageDecoded(warmNext);
+        const count = resultsPanelImgs.length;
+        const firstP = loadManifestoImageDecoded(resultsPanelImgs[0], { priority: "high" });
+        const curP =
+          warmIdx !== 0
+            ? loadManifestoImageDecoded(resultsPanelImgs[warmIdx], { priority: "high" })
+            : firstP;
+        const afterFirst = function () {
+          const warmNext = resultsPanelImgs[(warmIdx + 1) % count];
+          const warmPrev = resultsPanelImgs[(warmIdx - 1 + count) % count];
+          const cur = resultsPanelImgs[warmIdx];
+          if (!warmNext) return;
+          if (typeof isKineticCarouselCoarseDevice === "function" && isKineticCarouselCoarseDevice()) {
+            loadManifestoImageDecoded(warmNext, { priority: "low" }).then(function () {
+              if (warmPrev && warmPrev !== warmNext && warmPrev !== cur) {
+                loadManifestoImageDecoded(warmPrev, { priority: "low" });
+              }
+            });
+          } else {
+            loadManifestoImageDecoded(warmNext, { priority: "low" });
+            if (warmPrev && warmPrev !== warmNext && warmPrev !== cur) {
+              loadManifestoImageDecoded(warmPrev, { priority: "low" });
+            }
+          }
+        };
+        Promise.all([firstP, curP]).then(afterFirst, afterFirst);
       };
-      if (typeof requestIdleCallback === "function") {
-        requestIdleCallback(warmResults, { timeout: 2500 });
-      } else {
-        setTimeout(warmResults, 900);
-      }
+      /* 安卓/平板：等 MANIFESTO 首图完成后再热 RESULTS 首图，避免双解码尖峰 */
+      setTimeout(function () {
+        const startResults = function () {
+          warmResultsBoot();
+        };
+        const coarse =
+          typeof isKineticCarouselCoarseDevice === "function" &&
+          isKineticCarouselCoarseDevice();
+        if (coarse && manifestoPanelImgs && manifestoPanelImgs[0]) {
+          loadManifestoImageDecoded(manifestoPanelImgs[0], { priority: "high" }).then(
+            startResults,
+            startResults
+          );
+        } else {
+          startResults();
+        }
+      }, 40);
     } catch (_warmResultsErr) {}
     if (resultsPanelPrev) {
       resultsPanelPrev.addEventListener("click", function (ev) {
@@ -205735,7 +205791,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
     }
 
-    /** 取运行时图源：优先 WebP（data-src），不改仓库内 PNG 原图 */
+    /** 取运行时图源：优先 WebP（data-src），PNG 仅作 fallback；不改仓库内 PNG 原图 */
     function getManifestoImageSrc(img) {
       if (!img) return "";
       return String(img.getAttribute("data-src") || "").trim();
@@ -205751,33 +205807,69 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       img.classList.add("is-decoded");
     }
 
+    /** 安卓/平板粗指针：串行邻张，避免同时解码多张高清图占满主线程与内存 */
+    function isKineticCarouselCoarseDevice() {
+      try {
+        return window.matchMedia("(pointer: coarse)").matches;
+      } catch (_mqErr) {
+        return false;
+      }
+    }
+
     /**
-     * 加载并 decode 完成后再标 is-decoded，避免未完成解码时露出半幅/逐步涂抹。
-     * 仅本地静态资源；不触发云同步。
+     * 加载并 decode 完成后再标 is-decoded；同 src 复用 Promise / 已解码态，关闭再开不重下不重解。
+     * 仅本地静态资源；不触发云同步。opts.priority: "high" | "low"（安卓首图优先）。
      */
-    function loadManifestoImageDecoded(img) {
-      return new Promise(function (resolve) {
-        if (!img) {
-          resolve(false);
-          return;
-        }
-        const primary = getManifestoImageSrc(img);
-        const fallback = getManifestoImageFallbackSrc(img);
-        if (!primary && !fallback) {
-          resolve(false);
-          return;
-        }
+    function loadManifestoImageDecoded(img, opts) {
+      if (!img) return Promise.resolve(false);
+      const options = opts || {};
+      const primary = getManifestoImageSrc(img);
+      const fallback = getManifestoImageFallbackSrc(img);
+      const target = primary || fallback;
+      if (!target) return Promise.resolve(false);
+
+      const cur = img.getAttribute("src") || "";
+      const srcMatches =
+        cur === primary || (fallback && cur === fallback) || cur === target;
+
+      /* 已成功加载并解码：直接复用，禁止再 remove is-decoded / 再 decode */
+      if (
+        srcMatches &&
+        img.classList.contains("is-decoded") &&
+        img.complete &&
+        img.naturalWidth > 0
+      ) {
+        return Promise.resolve(true);
+      }
+
+      /* 同目标进行中的 Promise 合并，避免重复请求与重复 decode */
+      if (
+        img._kineticImgLoadKey === target &&
+        img._kineticImgLoadPromise &&
+        typeof img._kineticImgLoadPromise.then === "function"
+      ) {
+        return img._kineticImgLoadPromise;
+      }
+
+      const promise = new Promise(function (resolve) {
         const finishOk = function () {
           markManifestoImageDecoded(img);
           resolve(true);
         };
         const runDecode = function () {
+          if (
+            img.classList.contains("is-decoded") &&
+            img.complete &&
+            img.naturalWidth > 0
+          ) {
+            resolve(true);
+            return;
+          }
           if (typeof img.decode === "function") {
             img
               .decode()
               .then(finishOk)
               .catch(function () {
-                /* decode 失败仍若已有像素则显示，避免卡空白 */
                 if (img.naturalWidth > 0) finishOk();
                 else resolve(false);
               });
@@ -205786,20 +205878,39 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           if (img.complete && img.naturalWidth > 0) finishOk();
           else resolve(false);
         };
-        const cur = img.getAttribute("src") || "";
-        if ((cur === primary || (fallback && cur === fallback)) && img.complete && img.naturalWidth > 0) {
+
+        if (srcMatches && img.complete && img.naturalWidth > 0) {
           runDecode();
           return;
         }
-        img.classList.remove("is-decoded");
+
+        /* 仅在真正换源时摘掉 is-decoded，避免复用路径闪空白 */
+        if (!srcMatches) {
+          img.classList.remove("is-decoded");
+        }
+
+        try {
+          if (options.priority === "high" && "fetchPriority" in img) {
+            img.fetchPriority = "high";
+          } else if (options.priority === "low" && "fetchPriority" in img) {
+            img.fetchPriority = "low";
+          }
+        } catch (_fpErr) {}
+
         let usedFallback = false;
         const onLoad = function () {
           runDecode();
         };
         const onError = function () {
-          if (!usedFallback && fallback && primary && img.getAttribute("src") === primary) {
+          if (
+            !usedFallback &&
+            fallback &&
+            primary &&
+            img.getAttribute("src") === primary
+          ) {
             usedFallback = true;
             img.setAttribute("src", fallback);
+            img._kineticImgLoadKey = fallback;
             return;
           }
           resolve(false);
@@ -205813,11 +205924,29 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           runDecode();
         }
       });
+
+      img._kineticImgLoadKey = target;
+      img._kineticImgLoadPromise = promise;
+      promise.then(
+        function (ok) {
+          if (!ok && img._kineticImgLoadPromise === promise) {
+            img._kineticImgLoadPromise = null;
+            img._kineticImgLoadKey = "";
+          }
+        },
+        function () {
+          if (img._kineticImgLoadPromise === promise) {
+            img._kineticImgLoadPromise = null;
+            img._kineticImgLoadKey = "";
+          }
+        }
+      );
+      return promise;
     }
 
     /**
-     * 展开时：先当前张 decode 完成；同时预载下一张（及上一张），切换时尽量已就绪。
-     * 第三张在空闲时补载，避免默关即拉满三张。
+     * 展开/切换：仅当前张 + 邻张；禁止一次解码整组（安卓/平板优先）。
+     * 粗指针：当前张完成后再串行预载邻张，减轻主线程与内存尖峰。
      */
     function ensureManifestoPanelImage() {
       if (!manifestoPanelImgs || !manifestoPanelImgs.length) return Promise.resolve();
@@ -205826,26 +205955,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const current = manifestoPanelImgs[idx];
       const next = manifestoPanelImgs[(idx + 1) % count];
       const prev = manifestoPanelImgs[(idx - 1 + count) % count];
-      const currentReady = loadManifestoImageDecoded(current);
-      /* 邻张立即预载，不走 idle，减少切换等待 */
-      loadManifestoImageDecoded(next);
-      if (prev !== next && prev !== current) loadManifestoImageDecoded(prev);
-      const preloadRest = function () {
-        for (let i = 0; i < count; i++) {
-          if (i === idx) continue;
-          const img = manifestoPanelImgs[i];
-          if (img === next || img === prev) continue;
-          loadManifestoImageDecoded(img);
+      const currentReady = loadManifestoImageDecoded(current, { priority: "high" });
+      const warmAdjacent = function () {
+        if (isKineticCarouselCoarseDevice()) {
+          loadManifestoImageDecoded(next, { priority: "low" }).then(function () {
+            if (prev !== next && prev !== current) {
+              loadManifestoImageDecoded(prev, { priority: "low" });
+            }
+          });
+        } else {
+          loadManifestoImageDecoded(next, { priority: "low" });
+          if (prev !== next && prev !== current) {
+            loadManifestoImageDecoded(prev, { priority: "low" });
+          }
         }
       };
-      try {
-        if (typeof requestIdleCallback === "function") {
-          requestIdleCallback(preloadRest, { timeout: 900 });
-        } else {
-          setTimeout(preloadRest, 120);
-        }
-      } catch (_idleErr) {
-        preloadRest();
+      if (isKineticCarouselCoarseDevice()) {
+        currentReady.then(function () {
+          warmAdjacent();
+        });
+      } else {
+        warmAdjacent();
       }
       return currentReady;
     }
@@ -205957,8 +206087,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * 展开时：先当前张 decode 完成；同时预载下一张（及上一张），切换时尽量已就绪。
-     * 复用 MANIFESTO 的 decode 门闩；切换不关浮窗、不重播磨砂。
+     * 展开/切换 RESULTS：仅当前张 + 邻张；禁止整组解码（安卓/平板优先）。
+     * 复用 MANIFESTO 的 decode 门闩与缓存；切换不关浮窗、不重播磨砂。
      */
     function ensureResultsPanelImage() {
       if (!resultsPanelImgs || !resultsPanelImgs.length) return Promise.resolve();
@@ -205967,25 +206097,27 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const current = resultsPanelImgs[idx];
       const next = resultsPanelImgs[(idx + 1) % count];
       const prev = resultsPanelImgs[(idx - 1 + count) % count];
-      const currentReady = loadManifestoImageDecoded(current);
-      loadManifestoImageDecoded(next);
-      if (prev !== next && prev !== current) loadManifestoImageDecoded(prev);
-      const preloadRest = function () {
-        for (let i = 0; i < count; i++) {
-          if (i === idx) continue;
-          const img = resultsPanelImgs[i];
-          if (img === next || img === prev) continue;
-          loadManifestoImageDecoded(img);
+      const currentReady = loadManifestoImageDecoded(current, { priority: "high" });
+      const warmAdjacent = function () {
+        if (isKineticCarouselCoarseDevice()) {
+          loadManifestoImageDecoded(next, { priority: "low" }).then(function () {
+            if (prev !== next && prev !== current) {
+              loadManifestoImageDecoded(prev, { priority: "low" });
+            }
+          });
+        } else {
+          loadManifestoImageDecoded(next, { priority: "low" });
+          if (prev !== next && prev !== current) {
+            loadManifestoImageDecoded(prev, { priority: "low" });
+          }
         }
       };
-      try {
-        if (typeof requestIdleCallback === "function") {
-          requestIdleCallback(preloadRest, { timeout: 900 });
-        } else {
-          setTimeout(preloadRest, 120);
-        }
-      } catch (_idleErr) {
-        preloadRest();
+      if (isKineticCarouselCoarseDevice()) {
+        currentReady.then(function () {
+          warmAdjacent();
+        });
+      } else {
+        warmAdjacent();
       }
       return currentReady;
     }
