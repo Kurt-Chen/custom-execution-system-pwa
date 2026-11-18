@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261118t";
+const CACHE_NAME = "exec-system-pwa-v20261118v";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -39,6 +39,8 @@ const APP_SHELL = [
   "./assets/results-oriented-learning-card.webp",
   "./assets/results-do-most-important-card.webp",
   "./assets/results-input-output-equation-card.webp",
+  "./assets/results-power-law-path-card.png",
+  "./assets/results-pathways-thinking-card.png",
   "./assets/results-isg-wormhole-card.png",
   "./assets/results-do-most-important-card.png",
   "./assets/results-input-output-equation-card.png",
