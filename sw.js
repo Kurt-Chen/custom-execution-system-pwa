@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261119p";
+const CACHE_NAME = "exec-system-pwa-v20261119q";
 /** 导航/HTML：网络超时后立刻回退缓存，避免标签页一直转圈 */
 const HTML_FETCH_TIMEOUT_MS = 7000;
 /** 普通资源超时 */
@@ -36,17 +36,17 @@ const APP_SHELL = [
    * PNG 仍保留在仓库作 fallback；首次命中后由 runtime cache 写入。
    */
   "./assets/hour-day-manifesto-card.webp",
-  "./assets/results-isg-wormhole-card.webp",
+  "./assets/results-isg-wormhole-card@2x-edsr-test.webp",
   "./assets/manifesto-genuine-desire-card.webp",
   "./assets/manifesto-life-winner-card.webp",
   "./assets/manifesto-maniacal-urgency-card.webp",
-  "./assets/manifesto-focus-manage-card.webp",
+  "./assets/manifesto-focus-manage-card@2x-edsr-test.webp",
   "./assets/manifesto-carpe-momentum-card.webp",
   "./assets/results-oriented-learning-card.webp",
   "./assets/results-do-most-important-card.webp",
   "./assets/results-input-output-equation-card.webp",
-  "./assets/results-power-law-path-card.webp",
-  "./assets/results-pathways-thinking-card.webp",
+  "./assets/results-power-law-path-card@2x-edsr-test.webp",
+  "./assets/results-pathways-thinking-card@2x-edsr-test.webp",
   "./icons/fx/fx-power-fireworks.webp",
   "./icons/fx/fx-power-hearts.webp",
   "./icons/fx/fx-power-trophy.webp",
