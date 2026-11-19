@@ -6522,7 +6522,8 @@
     /*
      * 电脑端 · Done 右侧浮动快捷侧栏（Refocus + 训练胶囊镜像入口）
      * - 仅 Desktop（min-width:768 + pointer:fine）；手机/平板 coarse 完全不显示
-     * - 复用原胶囊 class / 同一 ack 逻辑；不另计状态
+     * - 位置由 JS 按主内容区（#dynamicModule / .container）边界计算，不按视口右缘
+     * - 折叠把手与内容壳分离，收起后把手仍可点
      */
     .done-desktop-quick-rail {
       display: none !important;
@@ -6535,13 +6536,15 @@
       }
 
       .done-desktop-quick-rail {
-        --dq-rail-gap-right: 48px;
         display: flex !important;
         flex-direction: row;
         align-items: center;
+        justify-content: flex-start;
+        gap: 0;
         position: fixed;
         top: 50%;
-        right: var(--dq-rail-gap-right);
+        left: auto;
+        right: auto;
         z-index: 39;
         width: max-content;
         max-width: min(280px, calc(100vw - 72px));
@@ -6550,22 +6553,19 @@
         box-sizing: border-box;
         transform: translateY(-50%);
         pointer-events: none;
-        transition: right 0.28s ease;
       }
 
-      .done-desktop-quick-rail.is-collapsed {
-        right: 0;
-      }
-
+      /* 内容壳：暖白圆角 + 彩角；与把手兄弟，折叠时可整体隐藏 */
       .done-desktop-quick-rail__shell {
         position: relative;
         display: flex;
-        flex-direction: row;
-        align-items: stretch;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
         width: max-content;
         max-width: 100%;
         margin: 0;
-        padding: 10px 14px 10px 12px;
+        padding: 10px 12px;
         box-sizing: border-box;
         border-radius: 16px;
         background: #fffbf2;
@@ -6574,14 +6574,9 @@
           0 0 22px rgba(251, 146, 60, 0.22),
           inset 0 1px 0 rgba(255, 255, 255, 0.85);
         pointer-events: auto;
-        transition:
-          transform 0.28s ease,
-          padding 0.28s ease,
-          box-shadow 0.28s ease,
-          background 0.28s ease;
+        transition: opacity 0.2s ease, transform 0.2s ease;
       }
 
-      /* 橙色装饰角线（非完整矩形边框） */
       .done-desktop-quick-rail__shell::before,
       .done-desktop-quick-rail__shell::after {
         content: "";
@@ -6601,7 +6596,7 @@
       }
 
       .done-desktop-quick-rail__shell::after {
-        right: 18px;
+        right: 5px;
         bottom: 5px;
         border-right: 2px solid #f97316;
         border-bottom: 2px solid #f97316;
@@ -6609,45 +6604,28 @@
       }
 
       .done-desktop-quick-rail.is-collapsed .done-desktop-quick-rail__shell {
-        padding: 10px 0;
-        background: transparent;
-        box-shadow: none;
-        transform: translateX(calc(100% - 14px));
-      }
-
-      .done-desktop-quick-rail.is-collapsed .done-desktop-quick-rail__shell::before,
-      .done-desktop-quick-rail.is-collapsed .done-desktop-quick-rail__shell::after {
-        opacity: 0;
+        display: none !important;
       }
 
       .done-desktop-quick-rail__body {
         display: flex;
         flex-direction: column;
-        align-items: stretch;
+        align-items: center;
         justify-content: center;
         gap: 8px;
         width: max-content;
         max-width: 100%;
         min-width: 0;
-        opacity: 1;
-        overflow: visible;
-        transition:
-          opacity 0.2s ease,
-          max-height 0.28s ease,
-          margin 0.28s ease;
-      }
-
-      .done-desktop-quick-rail.is-collapsed .done-desktop-quick-rail__body {
-        opacity: 0;
-        max-height: 0;
         margin: 0;
-        overflow: hidden;
-        pointer-events: none;
+        padding: 0;
       }
 
       .done-desktop-quick-rail__divider {
         flex: 0 0 auto;
-        width: 100%;
+        align-self: center;
+        width: 72%;
+        min-width: 48px;
+        max-width: 120px;
         height: 1px;
         margin: 0;
         border: 0;
@@ -6659,11 +6637,11 @@
         );
       }
 
-      /* 侧栏内胶囊：沿用原配色/字重；自适应宽度，不强制等宽、不竖排 */
+      /* 胶囊各自自适应宽，在壳内水平居中；不强制等宽 */
       .done-desktop-quick-rail .done-refocus-btn,
       .done-desktop-quick-rail .done-move-hourly-slogan {
         flex: 0 0 auto;
-        align-self: flex-start;
+        align-self: center;
         width: max-content;
         max-width: none;
         white-space: nowrap;
@@ -6680,40 +6658,43 @@
         white-space: nowrap;
       }
 
+      /* 把手：与 shell 平级，折叠后仍留在主栏右侧锚点 */
       .done-desktop-quick-rail__toggle {
-        position: absolute;
-        top: 50%;
-        right: -11px;
+        position: relative;
+        flex: 0 0 auto;
         z-index: 2;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 15px;
-        height: 30px;
-        margin: 0;
+        width: 16px;
+        height: 32px;
+        margin: 0 0 0 2px;
         padding: 0;
         border: 1px solid #d1d5db;
-        border-left: 0;
-        border-radius: 0 999px 999px 0;
+        border-radius: 999px;
         background: linear-gradient(180deg, #f3f4f6 0%, #e5e7eb 100%);
-        color: #6b7280;
-        box-shadow: 1px 2px 6px rgba(15, 23, 42, 0.12);
+        color: #4b5563;
+        box-shadow: 1px 2px 6px rgba(15, 23, 42, 0.14);
         cursor: pointer;
-        transform: translateY(-50%);
         -webkit-tap-highlight-color: transparent;
         pointer-events: auto;
       }
 
+      .done-desktop-quick-rail:not(.is-collapsed) .done-desktop-quick-rail__toggle {
+        border-radius: 0 999px 999px 0;
+        margin-left: 0;
+        border-left-color: transparent;
+      }
+
       .done-desktop-quick-rail.is-collapsed .done-desktop-quick-rail__toggle {
-        right: 0;
-        border-left: 1px solid #d1d5db;
+        margin-left: 0;
         border-radius: 999px 0 0 999px;
       }
 
       .done-desktop-quick-rail__toggle:hover,
       .done-desktop-quick-rail__toggle:focus-visible {
         background: linear-gradient(180deg, #e5e7eb 0%, #d1d5db 100%);
-        color: #374151;
+        color: #1f2937;
         outline: none;
       }
 
@@ -6726,11 +6707,6 @@
         font-size: 12px;
         font-weight: 700;
         line-height: 1;
-        transform: translateX(-1px);
-      }
-
-      .done-desktop-quick-rail.is-collapsed .done-desktop-quick-rail__toggle-chevron {
-        transform: translateX(1px);
       }
     }
 
@@ -116426,7 +116402,7 @@
     class="done-desktop-quick-rail"
     aria-label="快捷入口：Refocus 与训练"
   >
-    <div class="done-desktop-quick-rail__shell">
+    <div class="done-desktop-quick-rail__shell" id="doneDesktopQuickRailShell">
       <div id="doneDesktopQuickRailBody" class="done-desktop-quick-rail__body">
         <div
           id="doneDesktopQuickRailRefocusRoot"
@@ -116461,17 +116437,17 @@
           <span class="done-move-hourly-slogan__count is-zero" id="doneDesktopQuickRailMoveCount" aria-hidden="true">0</span>
         </button>
       </div>
-      <button
-        type="button"
-        id="doneDesktopQuickRailToggle"
-        class="done-desktop-quick-rail__toggle"
-        aria-expanded="true"
-        aria-controls="doneDesktopQuickRailBody"
-        aria-label="收起快捷侧栏"
-      >
-        <span class="done-desktop-quick-rail__toggle-chevron" aria-hidden="true">&lt;</span>
-      </button>
     </div>
+    <button
+      type="button"
+      id="doneDesktopQuickRailToggle"
+      class="done-desktop-quick-rail__toggle"
+      aria-expanded="true"
+      aria-controls="doneDesktopQuickRailShell"
+      aria-label="收起快捷侧栏"
+    >
+      <span class="done-desktop-quick-rail__toggle-chevron" aria-hidden="true">&lt;</span>
+    </button>
   </aside>
 
   <div id="appStatusBadgeCluster" class="app-status-badge-cluster" aria-label="云同步状态">
@@ -117177,7 +117153,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261119v";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261119w";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -230019,8 +229995,38 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (!rail || rail.dataset.boundDesktopQuickRail === "1") return;
       rail.dataset.boundDesktopQuickRail = "1";
 
+      const DESKTOP_RAIL_MQ = "(min-width: 768px) and (pointer: fine)";
+      const CONTENT_GAP_CSS = 10; /* 主内容右缘 → 侧栏间距 8–12px */
       const toggleBtn = document.getElementById("doneDesktopQuickRailToggle");
+      const shellEl = document.getElementById("doneDesktopQuickRailShell");
       const chevron = rail.querySelector(".done-desktop-quick-rail__toggle-chevron");
+      let railPosRaf = 0;
+      let lastExpandedShellWidthCss = 0;
+
+      function getDesktopQuickRailZoom() {
+        try {
+          const z = parseFloat(getComputedStyle(document.documentElement).zoom);
+          if (z > 0 && isFinite(z)) return z;
+        } catch (_z) {}
+        try {
+          const z2 = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--app-ui-zoom"));
+          if (z2 > 0 && isFinite(z2)) return z2;
+        } catch (_z2) {}
+        return 1;
+      }
+
+      function getDesktopQuickRailContentEl() {
+        return document.getElementById("dynamicModule") || document.querySelector(".container");
+      }
+
+      function isDesktopQuickRailViewport() {
+        try {
+          return window.matchMedia(DESKTOP_RAIL_MQ).matches;
+        } catch (_m) {
+          return false;
+        }
+      }
+
       function syncRailCollapsedUi() {
         const collapsed = rail.classList.contains("is-collapsed");
         if (toggleBtn) {
@@ -230029,15 +230035,76 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
         if (chevron) chevron.textContent = collapsed ? ">" : "<";
       }
+
+      /** 按主内容区右缘 + 垂直中线定位；折叠时把手留在展开态右缘锚点 */
+      function syncDoneDesktopQuickRailPosition() {
+        if (!isDesktopQuickRailViewport()) {
+          rail.style.left = "";
+          rail.style.top = "";
+          rail.style.right = "";
+          return;
+        }
+        const content = getDesktopQuickRailContentEl();
+        if (!content || typeof content.getBoundingClientRect !== "function") return;
+        const rect = content.getBoundingClientRect();
+        if (!(rect.width > 0) || !(rect.height > 0)) return;
+        const zoom = getDesktopQuickRailZoom();
+        const gap = CONTENT_GAP_CSS;
+        const collapsed = rail.classList.contains("is-collapsed");
+        const topCss = (rect.top + rect.height / 2) / zoom;
+        const contentRightCss = rect.right / zoom;
+
+        if (!collapsed && shellEl) {
+          const shellW = shellEl.getBoundingClientRect().width / zoom;
+          if (shellW > 0) lastExpandedShellWidthCss = shellW;
+        }
+
+        let leftCss = contentRightCss + gap;
+        if (collapsed) {
+          /* 把手停在展开态右侧边缘（壳宽），避免随内容隐藏而消失 */
+          const shellW = lastExpandedShellWidthCss || 0;
+          leftCss = contentRightCss + gap + shellW;
+        }
+
+        rail.style.right = "auto";
+        rail.style.left = Math.round(leftCss) + "px";
+        rail.style.top = Math.round(topCss) + "px";
+      }
+
+      function scheduleDoneDesktopQuickRailPosition() {
+        if (railPosRaf) return;
+        railPosRaf = requestAnimationFrame(function () {
+          railPosRaf = 0;
+          syncDoneDesktopQuickRailPosition();
+        });
+      }
+
       if (toggleBtn) {
         toggleBtn.addEventListener("click", function (ev) {
           ev.preventDefault();
           ev.stopPropagation();
+          /* 收起前先记下壳宽，保证把手锚在原右缘 */
+          if (!rail.classList.contains("is-collapsed") && shellEl) {
+            const zoom = getDesktopQuickRailZoom();
+            const shellW = shellEl.getBoundingClientRect().width / zoom;
+            if (shellW > 0) lastExpandedShellWidthCss = shellW;
+          }
           rail.classList.toggle("is-collapsed");
           syncRailCollapsedUi();
+          scheduleDoneDesktopQuickRailPosition();
         });
       }
       syncRailCollapsedUi();
+
+      window.addEventListener("resize", scheduleDoneDesktopQuickRailPosition);
+      window.addEventListener("scroll", scheduleDoneDesktopQuickRailPosition, true);
+      try {
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener("resize", scheduleDoneDesktopQuickRailPosition);
+          window.visualViewport.addEventListener("scroll", scheduleDoneDesktopQuickRailPosition);
+        }
+      } catch (_vv) {}
+      scheduleDoneDesktopQuickRailPosition();
 
       const railHit = document.getElementById("doneDesktopQuickRailRefocusHit");
       if (railHit) {
@@ -230065,6 +230132,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       }
       if (typeof renderDoneRefocusChrome === "function") renderDoneRefocusChrome();
       if (typeof renderDoneMoveHourlySlogan === "function") renderDoneMoveHourlySlogan();
+      /* 首屏布局稳定后再贴一次主栏 */
+      requestAnimationFrame(scheduleDoneDesktopQuickRailPosition);
     }
     initDoneDesktopQuickRail();
 
