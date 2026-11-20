@@ -1,7 +1,11 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261120o";
-/** 导航/HTML：网络超时后立刻回退缓存，避免标签页一直转圈 */
-const HTML_FETCH_TIMEOUT_MS = 7000;
+const CACHE_NAME = "exec-system-pwa-v20261120p";
+/**
+ * 导航/HTML：网络超时后回退「当前 CACHE_NAME」壳。
+ * index.html ~8–9MB：7s 在弱网/GitHub Pages 上易超时，旧逻辑再经 caches.match 跨桶
+ * 命中更旧壳 → 角标停在旧版、白屏修复 JS 不生效。超时放宽；回退禁止跨版本桶。
+ */
+const HTML_FETCH_TIMEOUT_MS = 45000;
 /** 普通资源超时 */
 const ASSET_FETCH_TIMEOUT_MS = 15000;
 /** install 预缓存其余资源最多等这么久，超时仍 skipWaiting，避免新 SW 永远装不上 */
@@ -100,12 +104,15 @@ function offlineShellResponse() {
   );
 }
 
+/** 仅回退当前 CACHE_NAME 桶，避免超时后命中仍存活的旧版 exec-system-pwa-* 壳 */
 function matchCachedShell(req) {
-  return caches.match(req).then(function (cached) {
-    if (cached) return cached;
-    return caches.match("./index.html").then(function (shell) {
-      if (shell) return shell;
-      return caches.match("./");
+  return caches.open(CACHE_NAME).then(function (cache) {
+    return cache.match(req).then(function (cached) {
+      if (cached) return cached;
+      return cache.match("./index.html").then(function (shell) {
+        if (shell) return shell;
+        return cache.match("./");
+      });
     });
   });
 }
