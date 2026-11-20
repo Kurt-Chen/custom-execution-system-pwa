@@ -6862,10 +6862,9 @@
      */
     /* 与 TODAY_PLAN_TABLET_LANDSCAPE_MQ 对齐；电脑 fine 不进此块 */
     @media (min-width: 1024px) and (orientation: landscape) and (pointer: coarse) {
-      /* 左栏收起 / BLOCK / 非主模块全屏时不显示 */
+      /* 左栏收起 / 非主模块全屏时不显示；BUILD/DOMINATE（is-block-view）仍显示 */
       body:not(.primary-module-fullscreen) .done-desktop-quick-rail,
-      body:has(#todayPlanPanel.is-collapsed) .done-desktop-quick-rail,
-      body:has(#todayPlanPanel.is-block-view) .done-desktop-quick-rail {
+      body:has(#todayPlanPanel.is-collapsed) .done-desktop-quick-rail {
         display: none !important;
       }
 
@@ -6959,7 +6958,7 @@
       }
 
       .done-desktop-quick-rail__motto-text {
-        font-size: clamp(11.5px, 1.1vw, 13.8px);
+        font-size: clamp(12.5px, 1.2vw, 15.2px); /* 相对上一版约 +10% */
         line-height: 1.65;
         letter-spacing: 0.005em;
       }
@@ -6974,64 +6973,64 @@
         align-self: center; /* 独立居中，不强行左对齐同宽 */
         width: max-content;
         max-width: 100%;
-        height: 22px;
-        min-height: 22px;
-        max-height: 22px;
+        height: 24px; /* 22×约1.1 */
+        min-height: 24px;
+        max-height: 24px;
         box-sizing: border-box;
-        border-radius: 6px;
+        border-radius: 7px;
         border-bottom-width: 2px;
         white-space: nowrap;
-        font-size: 9px;
+        font-size: 10px;
       }
 
       .done-desktop-quick-rail .done-refocus-btn {
         gap: 2px;
-        min-height: 22px !important;
+        min-height: 24px !important;
       }
 
       .done-desktop-quick-rail .done-refocus-btn__hit {
-        padding: 0 1px 0 4px;
+        padding: 0 1px 0 5px;
         height: 100%;
-        font-size: 9px;
+        font-size: 10px;
         font-weight: 800;
         line-height: 1;
-        border-radius: 5px 0 0 5px;
+        border-radius: 6px 0 0 6px;
         white-space: nowrap;
       }
 
       .done-desktop-quick-rail .done-refocus-btn__count {
-        width: 1.2em;
-        height: 1.2em;
-        min-width: 1.2em;
-        min-height: 1.2em;
+        width: 1.25em;
+        height: 1.25em;
+        min-width: 1.25em;
+        min-height: 1.25em;
         margin-right: 3px;
-        font-size: 7.5px;
+        font-size: 8px;
         border-radius: 50%;
         aspect-ratio: 1 / 1;
       }
 
       .done-desktop-quick-rail .done-move-hourly-slogan {
-        padding: 0 4px 0 5px;
+        padding: 0 5px 0 6px;
         gap: 3px;
-        font-size: 9px;
+        font-size: 10px;
         font-weight: 800;
         line-height: 1;
         white-space: nowrap;
       }
 
       .done-desktop-quick-rail .done-move-hourly-slogan__count {
-        width: 1.2em;
-        height: 1.2em;
-        min-width: 1.2em;
-        min-height: 1.2em;
-        font-size: 7.5px;
+        width: 1.25em;
+        height: 1.25em;
+        min-width: 1.25em;
+        min-height: 1.25em;
+        font-size: 8px;
         border-radius: 50%;
         aspect-ratio: 1 / 1;
       }
 
       .done-desktop-quick-rail .done-refocus-btn__text,
       .done-desktop-quick-rail .done-move-hourly-slogan__text {
-        font-size: 9px;
+        font-size: 10px;
         line-height: 1;
         white-space: nowrap;
         overflow: visible;
@@ -117560,7 +117559,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261120u";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261120v";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -230664,38 +230663,56 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       /** 平板：缓存展开高度，收起时仍按展开高度算竖直中心，折叠钮不跳 */
       let tabletRailExpandedHeightVisual = 0;
 
-      /** 平板横屏：钉在今日计划左栏右缘；底边以行动标语顶为界（≥12px） */
+      /**
+       * 平板横屏：钉在左侧主页边栏（#todayPlanPanel）右缘。
+       * 今日计划 / BUILD / DOMINATE 共用；不依赖「其他任务」是否可见。
+       * 底边：有行动标语则避让标语顶；否则贴左边栏列底（.container 底）。
+       */
       function getTabletLeftRailAnchor(zoom, railHeightVisualOpt) {
         const panel = document.getElementById("todayPlanPanel");
-        const otherSection = document.getElementById("todayPlanPanelOtherSection");
-        if (!panel || !otherSection) return null;
-        if (panel.classList.contains("is-collapsed") || panel.classList.contains("is-block-view")) {
-          return null;
-        }
+        if (!panel) return null;
+        if (panel.classList.contains("is-collapsed")) return null;
         if (!document.body.classList.contains("primary-module-fullscreen")) return null;
         const panelRect = panel.getBoundingClientRect();
-        const sectionRect = otherSection.getBoundingClientRect();
-        if (!(panelRect.width > 24) || !(sectionRect.height > 24)) return null;
-        const wm = otherSection.querySelector(".today-plan-other-action-wm");
-        let sloganTop = sectionRect.bottom - 8 * zoom;
+        if (!(panelRect.width > 24)) return null;
+        const container = document.querySelector(".container");
+        const colRect =
+          container && container.getBoundingClientRect
+            ? container.getBoundingClientRect()
+            : panelRect;
+        const gapVisual = 14 * zoom;
+        let sloganTopVisual = 0;
+        const otherSection = document.getElementById("todayPlanPanelOtherSection");
+        const wm =
+          otherSection && otherSection.querySelector
+            ? otherSection.querySelector(".today-plan-other-action-wm")
+            : null;
         if (wm && wm.getBoundingClientRect) {
           const wr = wm.getBoundingClientRect();
-          if (wr.height > 2 && wr.width > 2) sloganTop = wr.top;
+          const wmVisible =
+            wr.height > 2 &&
+            wr.width > 2 &&
+            getComputedStyle(wm).display !== "none" &&
+            getComputedStyle(wm).visibility !== "hidden";
+          if (wmVisible) sloganTopVisual = wr.top;
         }
-        const gapVisual = 14 * zoom; /* 卡片底边 ↔ 标语顶：约 12–16px */
-        const maxBottom = sloganTop - gapVisual;
+        /* 列底：container 贴视口底；block 模式 panel 变矮时仍用列底保持粉钮纵坐标稳定 */
+        const colBottom = Math.max(panelRect.bottom, colRect.bottom);
+        let maxBottom = colBottom - 16 * zoom;
+        if (sloganTopVisual > 0) {
+          maxBottom = Math.min(maxBottom, sloganTopVisual - gapVisual);
+        }
         let refH = Number(railHeightVisualOpt) || 0;
-        if (refH < 24 * zoom) refH = tabletRailExpandedHeightVisual || 72 * zoom;
-        if (refH < 24 * zoom) refH = 72 * zoom;
-        /* 中心 = 允许底边 - 半高；收起/展开共用，避免折叠钮上下跳 */
+        if (refH < 24 * zoom) refH = tabletRailExpandedHeightVisual || 80 * zoom;
+        if (refH < 24 * zoom) refH = 80 * zoom;
         let midYVisual = maxBottom - refH / 2;
-        const minY = sectionRect.top + 24 * zoom;
+        const minY = Math.min(panelRect.top, colRect.top) + 24 * zoom;
         const maxY = maxBottom - 12 * zoom;
         midYVisual = Math.min(maxY, Math.max(minY, midYVisual));
         return {
           panelRightVisual: panelRect.right,
           panelLeftVisual: panelRect.left,
-          sloganTopVisual: sloganTop,
+          sloganTopVisual: sloganTopVisual || maxBottom + gapVisual,
           gapVisual: gapVisual,
           midYVisual: midYVisual
         };
