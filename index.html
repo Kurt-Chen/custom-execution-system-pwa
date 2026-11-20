@@ -6520,15 +6520,18 @@
     }
 
     /*
-     * 电脑端 · Done 右侧浮动快捷侧栏（Refocus + 训练胶囊镜像入口）
-     * - 仅 Desktop；功能/定位/互斥逻辑不变
-     * - 视觉：暖白卡片 + 橙色角线 + 小号玫红收起钮 + 不倾斜利落圆角矩形
+     * 电脑端 / 平板横屏 · Done 浮动快捷侧栏（Refocus + 训练胶囊 + 行动提醒）
+     * - Desktop（fine）：右侧轨；胶囊左 / 文案右 / 折叠钮左
+     * - Tablet landscape（coarse）：左侧「其他任务」上悬浮镜像；文案左 / 胶囊右 / 折叠钮右
+     * - 同一 DOM / 同一计数与同步；手机端保持隐藏
+     * - 视觉：暖白卡片 + 角线 + 小号玫红收起钮 + 不倾斜利落圆角矩形
      */
     .done-desktop-quick-rail {
       display: none !important;
     }
 
-    @media (min-width: 768px) and (pointer: fine) {
+    @media ((min-width: 768px) and (pointer: fine)),
+      ((min-width: 1024px) and (orientation: landscape) and (pointer: coarse)) {
       body.app-locked .done-desktop-quick-rail,
       body:has(#loginGate:not(.hidden)) .done-desktop-quick-rail {
         display: none !important;
@@ -6850,6 +6853,67 @@
         white-space: nowrap;
         font-style: normal;
         transform: none !important;
+      }
+    }
+
+    /*
+     * 平板横屏专属：左侧栏镜像布局 + 亮橙金边框。
+     * 不改电脑端 fine 路径；不改手机；不新增第二套计数 DOM。
+     */
+    /* 与 TODAY_PLAN_TABLET_LANDSCAPE_MQ 对齐；电脑 fine 不进此块 */
+    @media (min-width: 1024px) and (orientation: landscape) and (pointer: coarse) {
+      /* 左栏收起 / BLOCK / 非主模块全屏时不显示 */
+      body:not(.primary-module-fullscreen) .done-desktop-quick-rail,
+      body:has(#todayPlanPanel.is-collapsed) .done-desktop-quick-rail,
+      body:has(#todayPlanPanel.is-block-view) .done-desktop-quick-rail {
+        display: none !important;
+      }
+
+      .done-desktop-quick-rail {
+        /* 高于左侧今日计划面板(40)，仍由 JS 钉在左栏右缘，不侵入主内容 */
+        z-index: 45;
+        max-width: min(420px, calc(var(--today-plan-rail, 25vw) - 8px));
+        justify-content: flex-end;
+      }
+
+      /* 折叠钮在右：贴左边栏右缘；收起时只留此钮 */
+      .done-desktop-quick-rail__toggle {
+        order: 2;
+      }
+
+      .done-desktop-quick-rail:not(.is-collapsed) .done-desktop-quick-rail__toggle {
+        margin-right: 0;
+        margin-left: -6px; /* 居中叠在暖白卡片右缘 */
+      }
+
+      .done-desktop-quick-rail.is-collapsed .done-desktop-quick-rail__toggle {
+        border-radius: 0 8px 8px 0;
+      }
+
+      /* 文案左 / 胶囊右：DOM 顺序不变，仅 row-reverse，避免 scaleX 反转文字 */
+      .done-desktop-quick-rail__shell {
+        order: 1;
+        flex-direction: row-reverse;
+        padding: 4px 9px 4px 6px;
+        border: 1.5px solid #ffb347;
+        box-shadow:
+          0 8px 22px rgba(194, 65, 12, 0.12),
+          0 0 16px rgba(255, 179, 71, 0.22),
+          inset 0 1px 0 rgba(255, 255, 255, 0.9);
+      }
+
+      .done-desktop-quick-rail__shell::before {
+        border-top-color: #ffb347;
+        border-left-color: #ffb347;
+      }
+
+      .done-desktop-quick-rail__shell::after {
+        border-right-color: #ffb347;
+        border-bottom-color: #ffb347;
+      }
+
+      .done-desktop-quick-rail__motto {
+        padding: 5px 2px 5px 6px;
       }
     }
 
@@ -116609,7 +116673,7 @@
 
   </div>
 
-  <!-- 电脑端右侧浮动快捷侧栏：与 MANIFESTO/RESULTS 同右轨；默认收起；向右展开；不落盘/不云同步 -->
+  <!-- 电脑右侧 / 平板横屏左侧镜像：同一快捷侧栏；默认收起；不落盘/不云同步（计数走原有 state） -->
   <aside
     id="doneDesktopQuickRail"
     class="done-desktop-quick-rail is-collapsed"
@@ -117374,7 +117438,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261120q";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261120r";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -118735,6 +118799,10 @@
         try {
           paintTodayPlanPanel();
         } catch (_paintErr) {}
+      }
+      /* BLOCK 视图隐藏其他任务区：同步隐藏/重定位平板快捷侧栏 */
+      if (typeof scheduleDoneDesktopQuickRailPosition === "function") {
+        scheduleDoneDesktopQuickRailPosition();
       }
     }
 
@@ -207003,6 +207071,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       } else {
         clearTodayPlanPanelWidthOverride();
       }
+      /* 平板横屏快捷侧栏锚在左栏「其他任务」；展开/收起侧栏后重算位置 */
+      if (typeof scheduleDoneDesktopQuickRailPosition === "function") {
+        scheduleDoneDesktopQuickRailPosition();
+      }
     }
 
     /**
@@ -230352,7 +230424,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
     initDoneMoveHourlyReminder();
 
-    /** 电脑端右侧快捷侧栏：右轨锚点 + 向右展开；与 MANIFESTO/RESULTS 互斥 */
+    /** 电脑右侧 / 平板横屏左侧镜像快捷侧栏：同一套展开态；与 MANIFESTO/RESULTS 互斥 */
     function setDoneDesktopQuickRailExpanded(expanded) {
       const next = !!expanded;
       if (next === doneDesktopQuickRailExpanded) {
@@ -230405,8 +230477,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
       }
 
+      function isTabletQuickRailViewport() {
+        try {
+          if (typeof isTodayPlanTabletLandscapeLayout === "function") {
+            return isTodayPlanTabletLandscapeLayout();
+          }
+          return window.matchMedia(TODAY_PLAN_TABLET_LANDSCAPE_MQ).matches;
+        } catch (_t) {
+          return false;
+        }
+      }
+
       syncDoneDesktopQuickRailDom = function () {
+        /* 与今日计划左栏同一平板横屏判定；命中则镜像，否则电脑右轨 */
+        const tabletUi = isTabletQuickRailViewport();
         rail.classList.toggle("is-collapsed", !doneDesktopQuickRailExpanded);
+        rail.classList.toggle("is-tablet-left", tabletUi);
         if (toggleBtn) {
           toggleBtn.setAttribute("aria-expanded", doneDesktopQuickRailExpanded ? "true" : "false");
           toggleBtn.setAttribute(
@@ -230414,8 +230500,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             doneDesktopQuickRailExpanded ? "收起快捷侧栏" : "展开快捷侧栏"
           );
         }
-        /* 收起：> 提示向右展开；展开：< 收起 */
-        if (chevron) chevron.textContent = doneDesktopQuickRailExpanded ? "<" : ">";
+        /*
+         * 电脑：收起 > 向右展开；展开 < 收起
+         * 平板镜像：收起 < 向左展开；展开 > 向右收起
+         */
+        if (chevron) {
+          if (tabletUi) {
+            chevron.textContent = doneDesktopQuickRailExpanded ? ">" : "<";
+          } else {
+            chevron.textContent = doneDesktopQuickRailExpanded ? "<" : ">";
+          }
+        }
       };
 
       /** 与 MANIFESTO/RESULTS 同右轨：取两入口边钮的左缘与垂直间隙中点 */
@@ -230444,23 +230539,88 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         return null;
       }
 
+      /** 平板横屏：钉在今日计划左栏右缘，竖直锚在「其他任务」底标语上方 */
+      function getTabletLeftRailAnchor(zoom) {
+        const panel = document.getElementById("todayPlanPanel");
+        const otherSection = document.getElementById("todayPlanPanelOtherSection");
+        if (!panel || !otherSection) return null;
+        if (panel.classList.contains("is-collapsed") || panel.classList.contains("is-block-view")) {
+          return null;
+        }
+        if (!document.body.classList.contains("primary-module-fullscreen")) return null;
+        const panelRect = panel.getBoundingClientRect();
+        const sectionRect = otherSection.getBoundingClientRect();
+        if (!(panelRect.width > 24) || !(sectionRect.height > 24)) return null;
+        const wm = otherSection.querySelector(".today-plan-other-action-wm");
+        let wmTop = sectionRect.bottom - 10 * zoom;
+        if (wm && wm.getBoundingClientRect) {
+          const wr = wm.getBoundingClientRect();
+          if (wr.height > 2 && wr.width > 2) wmTop = wr.top;
+        }
+        /* 固定竖直锚点：不随展开高度变化，避免折叠钮上下跳 */
+        const midYVisual = wmTop - 36 * zoom;
+        const minY = sectionRect.top + 28 * zoom;
+        const maxY = sectionRect.bottom - 20 * zoom;
+        return {
+          panelRightVisual: panelRect.right,
+          panelLeftVisual: panelRect.left,
+          midYVisual: Math.min(maxY, Math.max(minY, midYVisual))
+        };
+      }
+
       function syncDoneDesktopQuickRailPosition() {
-        if (!isDesktopQuickRailViewport()) {
+        const tablet = isTabletQuickRailViewport();
+        const desktop = !tablet && isDesktopQuickRailViewport();
+        if (!tablet && !desktop) {
           rail.style.left = "";
           rail.style.top = "";
           rail.style.right = "";
+          rail.classList.remove("is-tablet-left");
           if (shellEl) shellEl.style.maxWidth = "";
           return;
         }
         const zoom = getDesktopQuickRailZoom();
+        const vv = window.visualViewport;
+        const viewW = vv && vv.width ? vv.width : window.innerWidth;
+        const viewLeft = vv && typeof vv.offsetLeft === "number" ? vv.offsetLeft : 0;
+
+        if (tablet) {
+          rail.classList.add("is-tablet-left");
+          const anchor = getTabletLeftRailAnchor(zoom);
+          if (!anchor) {
+            rail.style.left = "";
+            rail.style.top = "";
+            rail.style.right = "";
+            if (shellEl) shellEl.style.maxWidth = "";
+            return;
+          }
+          /* 用 right 钉在左栏右缘；卡片在把手左侧向左展开，不盖主内容 */
+          const rightCss = ((viewLeft + viewW) - anchor.panelRightVisual) / zoom;
+          rail.style.left = "auto";
+          rail.style.right = Math.round(rightCss) + "px";
+          rail.style.top = Math.round(anchor.midYVisual / zoom) + "px";
+
+          if (shellEl && doneDesktopQuickRailExpanded) {
+            let toggleWVisual = 18 * zoom;
+            if (toggleBtn) {
+              const tw = toggleBtn.getBoundingClientRect().width;
+              if (tw > 0) toggleWVisual = tw;
+            }
+            const pad = 10 * zoom;
+            const availVisual = anchor.panelRightVisual - anchor.panelLeftVisual - toggleWVisual - pad;
+            shellEl.style.maxWidth = Math.round(Math.max(72, availVisual / zoom)) + "px";
+          } else if (shellEl) {
+            shellEl.style.maxWidth = "";
+          }
+          return;
+        }
+
+        rail.classList.remove("is-tablet-left");
         const anchor = getDesktopRightRailAnchor(zoom);
         if (!anchor) {
           setTimeout(scheduleDoneDesktopQuickRailPosition, 50);
           return;
         }
-        const vv = window.visualViewport;
-        const viewW = vv && vv.width ? vv.width : window.innerWidth;
-        const viewLeft = vv && typeof vv.offsetLeft === "number" ? vv.offsetLeft : 0;
         const leftCss = anchor.leftVisual / zoom;
         const topCss = anchor.midYVisual / zoom;
         /* 用 left 钉在右轨；卡片在把手右侧，绝不向左盖主内容 */
@@ -230483,11 +230643,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         }
       }
 
+      let lastQuickRailTabletMode = null;
       scheduleDoneDesktopQuickRailPosition = function () {
         if (railPosRaf) return;
         railPosRaf = requestAnimationFrame(function () {
           railPosRaf = 0;
+          const tabletNow = isTabletQuickRailViewport();
           syncDoneDesktopQuickRailPosition();
+          /* 仅端别切换时刷新箭头/镜像 class，避免 scroll 热路径重复写 DOM */
+          if (tabletNow !== lastQuickRailTabletMode) {
+            lastQuickRailTabletMode = tabletNow;
+            syncDoneDesktopQuickRailDom();
+          }
         });
       };
 
@@ -230503,6 +230670,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       syncDoneDesktopQuickRailDom();
 
       window.addEventListener("resize", scheduleDoneDesktopQuickRailPosition);
+      window.addEventListener("orientationchange", scheduleDoneDesktopQuickRailPosition);
       window.addEventListener("scroll", scheduleDoneDesktopQuickRailPosition, true);
       try {
         if (window.visualViewport) {
@@ -230510,6 +230678,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           window.visualViewport.addEventListener("scroll", scheduleDoneDesktopQuickRailPosition);
         }
       } catch (_vv) {}
+      try {
+        const tabletMq = window.matchMedia(
+          typeof TODAY_PLAN_TABLET_LANDSCAPE_MQ === "string"
+            ? TODAY_PLAN_TABLET_LANDSCAPE_MQ
+            : "(min-width: 1024px) and (orientation: landscape) and (pointer: coarse)"
+        );
+        if (tabletMq && tabletMq.addEventListener) {
+          tabletMq.addEventListener("change", scheduleDoneDesktopQuickRailPosition);
+        } else if (tabletMq && tabletMq.addListener) {
+          tabletMq.addListener(scheduleDoneDesktopQuickRailPosition);
+        }
+      } catch (_mqListen) {}
 
       const railHit = document.getElementById("doneDesktopQuickRailRefocusHit");
       if (railHit) {
