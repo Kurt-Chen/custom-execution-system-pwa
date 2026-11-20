@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261120f";
+const CACHE_NAME = "exec-system-pwa-v20261120g";
 /** 导航/HTML：网络超时后立刻回退缓存，避免标签页一直转圈 */
 const HTML_FETCH_TIMEOUT_MS = 7000;
 /** 普通资源超时 */
@@ -51,6 +51,9 @@ const APP_SHELL = [
   "./assets/results-input-output-equation-card.webp",
   "./assets/results-power-law-path-card@2x-edsr-test.webp",
   "./assets/results-pathways-thinking-card@2x-edsr-test.webp",
+  "./assets/results-extreme-agency-action-default-card.webp",
+  "./assets/results-ship-then-polish-card.webp",
+  "./assets/results-execution-rhythm-four-steps-card.webp",
   "./icons/fx/fx-power-fireworks.webp",
   "./icons/fx/fx-power-hearts.webp",
   "./icons/fx/fx-power-trophy.webp",
