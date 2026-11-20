@@ -98061,6 +98061,36 @@
           data-src="./assets/results-execution-rhythm-four-steps-card.webp"
           data-fallback-src="./assets/results-execution-rhythm-four-steps-card.png"
         />
+        <img
+          class="results-panel__img"
+          data-results-index="9"
+          alt="决策力量的五大法则：The Five Laws of Decision Power — Momentality / Eventuality / Pastuality / Asymmetry / Inevitability"
+          width="1199"
+          height="1312"
+          decoding="async"
+          data-src="./assets/results-five-laws-decision-power-card.png"
+          data-fallback-src="./assets/results-five-laws-decision-power-card.png"
+        />
+        <img
+          class="results-panel__img"
+          data-results-index="10"
+          alt="难易悖论：The Easy/Hard Paradox — Choose Easy → Get Hard；Choose Hard → Get Easy"
+          width="577"
+          height="878"
+          decoding="async"
+          data-src="./assets/results-easy-hard-paradox-card.png"
+          data-fallback-src="./assets/results-easy-hard-paradox-card.png"
+        />
+        <img
+          class="results-panel__img"
+          data-results-index="11"
+          alt="艰难选择的四大力量：The 4 Strike Forces of Hard — Absolute Responsibility / Episodic Courage / Routine Discipline / Momentary Discomfort"
+          width="590"
+          height="878"
+          decoding="async"
+          data-src="./assets/results-four-strike-forces-of-hard-card.png"
+          data-fallback-src="./assets/results-four-strike-forces-of-hard-card.png"
+        />
       <div class="results-panel__switcher" role="group" aria-label="结果导向学习图片切换">
         <button
           type="button"
@@ -98068,7 +98098,7 @@
           class="results-panel__switcher-btn"
           aria-label="上一张结果导向学习"
         >&lt;</button>
-        <span id="resultsPanelPager" class="results-panel__switcher-page">1/9</span>
+        <span id="resultsPanelPager" class="results-panel__switcher-page">1/12</span>
         <button
           type="button"
           id="resultsPanelNext"
@@ -117559,7 +117589,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261120v";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261120w";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -206470,6 +206500,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       img.classList.add("is-decoded");
     }
 
+    /** 当前张是否已有可显示像素（is-decoded + naturalWidth），切换前用此判断避免白屏 */
+    function isKineticCarouselImgReady(img) {
+      return !!(
+        img &&
+        img.classList.contains("is-decoded") &&
+        img.complete &&
+        img.naturalWidth > 0
+      );
+    }
+
+    /**
+     * 切换世代：快速连点时只让最新目标 settle 后改 is-active；
+     * 未就绪前保留上一张有效图，失败则回退上一张。
+     */
+    let manifestoCardSwitchToken = 0;
+    let resultsCardSwitchToken = 0;
+
     /** 安卓/平板粗指针：串行邻张，避免同时解码多张高清图占满主线程与内存 */
     function isKineticCarouselCoarseDevice() {
       try {
@@ -206767,11 +206814,47 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function setManifestoCardIndex(idx, opts) {
       const options = opts || {};
+      const prev = manifestoCardIndex;
       const next = clampManifestoCardIndex(idx);
       manifestoCardIndex = next;
       if (options.persist !== false) writeManifestoCardIndex(next);
-      syncManifestoCardDom();
-      if (manifestoPanelExpanded) ensureManifestoPanelImage();
+
+      /* 未展开：只改 index/DOM 记忆，不踢加载 */
+      if (!manifestoPanelExpanded || !manifestoPanelImgs || !manifestoPanelImgs.length) {
+        syncManifestoCardDom();
+        return;
+      }
+
+      const targetImg = manifestoPanelImgs[next];
+      /* 目标已就绪：立即切换并预热邻张 */
+      if (isKineticCarouselImgReady(targetImg)) {
+        syncManifestoCardDom();
+        ensureManifestoPanelImage();
+        return;
+      }
+
+      /*
+       * 防白屏：先加载/解码目标张，成功后再改 is-active；
+       * 期间保留上一张有效图；页码可先反映目标，避免连点无反馈。
+       */
+      if (manifestoPanelPager) {
+        manifestoPanelPager.textContent = next + 1 + "/" + MANIFESTO_CARD_COUNT;
+      }
+      const token = ++manifestoCardSwitchToken;
+      loadManifestoImageDecoded(targetImg, { priority: "high" }).then(function (ok) {
+        if (token !== manifestoCardSwitchToken) return;
+        if (manifestoCardIndex !== next) return;
+        if (ok && isKineticCarouselImgReady(targetImg)) {
+          syncManifestoCardDom();
+          ensureManifestoPanelImage();
+          return;
+        }
+        /* 加载失败：回退上一张有效图，避免轮播卡在空白态 */
+        manifestoCardIndex = prev;
+        if (options.persist !== false) writeManifestoCardIndex(prev);
+        syncManifestoCardDom();
+        ensureManifestoPanelImage();
+      });
     }
 
     function stepManifestoCard(delta) {
@@ -206915,11 +206998,47 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function setResultsCardIndex(idx, opts) {
       const options = opts || {};
+      const prev = resultsCardIndex;
       const next = clampResultsCardIndex(idx);
       resultsCardIndex = next;
       if (options.persist !== false) writeResultsCardIndex(next);
-      syncResultsCardDom();
-      if (resultsPanelExpanded) ensureResultsPanelImage();
+
+      /* 未展开：只改 index/DOM 记忆，不踢加载 */
+      if (!resultsPanelExpanded || !resultsPanelImgs || !resultsPanelImgs.length) {
+        syncResultsCardDom();
+        return;
+      }
+
+      const targetImg = resultsPanelImgs[next];
+      /* 目标已就绪：立即切换并预热邻张 */
+      if (isKineticCarouselImgReady(targetImg)) {
+        syncResultsCardDom();
+        ensureResultsPanelImage();
+        return;
+      }
+
+      /*
+       * 防白屏：先加载/解码目标张，成功后再改 is-active；
+       * 期间保留上一张有效图；页码可先反映目标，避免连点无反馈。
+       */
+      if (resultsPanelPager) {
+        resultsPanelPager.textContent = next + 1 + "/" + RESULTS_CARD_COUNT;
+      }
+      const token = ++resultsCardSwitchToken;
+      loadManifestoImageDecoded(targetImg, { priority: "high" }).then(function (ok) {
+        if (token !== resultsCardSwitchToken) return;
+        if (resultsCardIndex !== next) return;
+        if (ok && isKineticCarouselImgReady(targetImg)) {
+          syncResultsCardDom();
+          ensureResultsPanelImage();
+          return;
+        }
+        /* 加载失败：回退上一张有效图，避免轮播卡在空白态 */
+        resultsCardIndex = prev;
+        if (options.persist !== false) writeResultsCardIndex(prev);
+        syncResultsCardDom();
+        ensureResultsPanelImage();
+      });
     }
 
     function stepResultsCard(delta) {
