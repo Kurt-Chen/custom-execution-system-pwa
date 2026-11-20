@@ -117374,7 +117374,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261120p";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261120q";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -206343,7 +206343,47 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         img._kineticImgLoadPromise &&
         typeof img._kineticImgLoadPromise.then === "function"
       ) {
-        return img._kineticImgLoadPromise;
+        const cachedPromise = img._kineticImgLoadPromise;
+        const curNow = img.getAttribute("src") || "";
+        const srcOk =
+          !curNow ||
+          curNow === primary ||
+          (fallback && curNow === fallback) ||
+          curNow === target;
+        /*
+         * 运行时证据（正式站 RESULTS 4/9）：Promise 已 resolved:true 且曾有像素，
+         * 但 is-decoded 被清掉后仍直接 return 旧 Promise → 永不补标 → opacity:0 白屏。
+         * src 与 key 不一致则丢弃陈旧 Promise；有像素则补挂 is-decoded。
+         */
+        if (curNow && !srcOk) {
+          img._kineticImgLoadPromise = null;
+          img._kineticImgLoadKey = "";
+        } else if (img.naturalWidth > 0) {
+          if (!img.classList.contains("is-decoded")) {
+            markManifestoImageDecoded(img);
+          }
+          return cachedPromise;
+        } else {
+          return cachedPromise.then(function (ok) {
+            const curAfter = img.getAttribute("src") || "";
+            const matchAfter =
+              curAfter === primary ||
+              (fallback && curAfter === fallback) ||
+              curAfter === target;
+            if (ok && matchAfter && img.naturalWidth > 0) {
+              markManifestoImageDecoded(img);
+              return true;
+            }
+            if (!matchAfter || (img.complete && !(img.naturalWidth > 0))) {
+              if (img._kineticImgLoadPromise === cachedPromise) {
+                img._kineticImgLoadPromise = null;
+                img._kineticImgLoadKey = "";
+              }
+              return loadManifestoImageDecoded(img, options);
+            }
+            return !!ok;
+          });
+        }
       }
 
       const promise = new Promise(function (resolve) {
@@ -206378,7 +206418,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             timeoutId = 0;
           }
           unbind();
-          if (ok) markManifestoImageDecoded(img);
+          if (ok) {
+            const nowSrc = img.getAttribute("src") || "";
+            const stillMatches =
+              nowSrc === primary ||
+              (fallback && nowSrc === fallback) ||
+              nowSrc === target;
+            /* 避免旧异步 settle 误标已换 src 的图片 */
+            if (stillMatches && img.naturalWidth > 0) {
+              markManifestoImageDecoded(img);
+            }
+          }
           resolve(!!ok);
         }
 
