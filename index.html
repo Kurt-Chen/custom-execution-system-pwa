@@ -6870,10 +6870,11 @@
       }
 
       .done-desktop-quick-rail {
-        /* 高于左侧今日计划面板(40)，仍由 JS 钉在左栏右缘，不侵入主内容 */
+        /* 高于左侧今日计划面板(40)；JS 用 left 钉右缘，宽度不超过左栏 */
         z-index: 45;
         max-width: min(420px, calc(var(--today-plan-rail, 25vw) - 8px));
-        justify-content: flex-end;
+        justify-content: flex-start; /* shell(order1) + toggle(order2)：向左延伸、右缘固定 */
+        right: auto; /* 覆盖任何残留 right，避免与 left 锚定冲突 */
       }
 
       /* 折叠钮在右：贴左边栏右缘；收起时只留此钮 */
@@ -117438,7 +117439,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261120r";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261120s";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -230594,24 +230595,35 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
             if (shellEl) shellEl.style.maxWidth = "";
             return;
           }
-          /* 用 right 钉在左栏右缘；卡片在把手左侧向左展开，不盖主内容 */
-          const rightCss = ((viewLeft + viewW) - anchor.panelRightVisual) / zoom;
-          rail.style.left = "auto";
-          rail.style.right = Math.round(rightCss) + "px";
-          rail.style.top = Math.round(anchor.midYVisual / zoom) + "px";
-
+          /*
+           * 平板锚定：与电脑端同一套 visual/zoom 换算，用 left 钉「右缘」。
+           * 禁止依赖 visualViewport 反推 right（zoom 下易把整卡推到左栏外侧）。
+           * 禁止 translateX(-100%)；展开变宽时重算 left，折叠钮水平位置不变。
+           */
+          const insetCss = 6;
+          const panelLeftCss = anchor.panelLeftVisual / zoom;
+          const panelRightCss = anchor.panelRightVisual / zoom;
+          let toggleWCss = 12;
+          if (toggleBtn) {
+            const tw = toggleBtn.getBoundingClientRect().width;
+            if (tw > 0) toggleWCss = tw / zoom;
+          }
+          const maxRailCss = Math.max(toggleWCss + 8, panelRightCss - panelLeftCss - insetCss * 2);
           if (shellEl && doneDesktopQuickRailExpanded) {
-            let toggleWVisual = 18 * zoom;
-            if (toggleBtn) {
-              const tw = toggleBtn.getBoundingClientRect().width;
-              if (tw > 0) toggleWVisual = tw;
-            }
-            const pad = 10 * zoom;
-            const availVisual = anchor.panelRightVisual - anchor.panelLeftVisual - toggleWVisual - pad;
-            shellEl.style.maxWidth = Math.round(Math.max(72, availVisual / zoom)) + "px";
+            shellEl.style.maxWidth = Math.round(Math.max(72, maxRailCss - toggleWCss)) + "px";
           } else if (shellEl) {
             shellEl.style.maxWidth = "";
           }
+
+          rail.style.right = "auto";
+          /* 不写 inline transform，保留 CSS translateY(-50%)；禁止 translateX(-100%) */
+          rail.style.top = Math.round(anchor.midYVisual / zoom) + "px";
+          /* 先落到栏内再测宽，避免沿用错误 right 时测到栏外尺寸 */
+          rail.style.left = Math.round(panelLeftCss + insetCss) + "px";
+          const railWCss = Math.max(toggleWCss, rail.getBoundingClientRect().width / zoom);
+          let leftCss = panelRightCss - insetCss - Math.min(railWCss, maxRailCss);
+          if (leftCss < panelLeftCss + insetCss) leftCss = panelLeftCss + insetCss;
+          rail.style.left = Math.round(leftCss) + "px";
           return;
         }
 
