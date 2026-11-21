@@ -6524,7 +6524,7 @@
      * - Desktop（fine）：右侧轨；胶囊左 / 文案右 / 折叠钮左
      * - Tablet landscape（coarse）：左侧「其他任务」上悬浮镜像；文案左 / 胶囊右 / 折叠钮右
      * - 同一 DOM / 同一计数与同步；手机端保持隐藏
-     * - action 与 Floor 互斥切换（底部圆点）；两态不必同宽同高；收起同步
+     * - action / Floor / 承诺专注 互斥切换（底部圆点）；粉钮相对卡片行居中；收起同步
      */
     .done-desktop-quick-rail {
       display: none !important;
@@ -6858,17 +6858,34 @@
 
 
       /*
-       * 互斥双视图：action（原提醒）/ floor（Floor 原图）；底部圆点切换；
-       * 两态不必同宽同高；收起时整块 panel 隐藏。
+       * 互斥三视图：action / floor / commit；底部三圆点；
+       * 展开态 grid：粉钮与 stage（仅卡片）同行居中，dots 第二行，避免粉钮被圆点拉偏。
        */
-      .done-desktop-quick-rail__panel {
+      .done-desktop-quick-rail:not(.is-collapsed) {
+        display: grid !important;
+        grid-template-columns: auto max-content;
+        grid-template-rows: auto auto;
+        align-items: center;
+        justify-content: start;
+        column-gap: 0;
+        row-gap: 0;
+      }
+
+      .done-desktop-quick-rail:not(.is-collapsed) .done-desktop-quick-rail__toggle {
+        grid-column: 1;
+        grid-row: 1;
+        align-self: center;
+        justify-self: end;
+        /* 相对当前卡片行垂直居中；不用写死 top/margin-top */
+        position: relative;
+        top: auto;
+        transform: none;
+      }
+
+      .done-desktop-quick-rail__stage {
         position: relative;
         order: 2;
-        display: flex;
-        flex-direction: column;
-        align-items: stretch;
-        justify-content: flex-start;
-        gap: 0;
+        display: block;
         width: max-content;
         max-width: 100%;
         margin: 0;
@@ -6877,15 +6894,16 @@
         pointer-events: auto;
       }
 
-      .done-desktop-quick-rail.is-collapsed .done-desktop-quick-rail__panel {
-        display: none !important;
+      .done-desktop-quick-rail:not(.is-collapsed) .done-desktop-quick-rail__stage {
+        grid-column: 2;
+        grid-row: 1;
+        align-self: start;
+        justify-self: start;
       }
 
-      /* 原 shell 仍是 order:2 的内容壳；现由 panel 承担 order，shell 铺满当前视图 */
-      .done-desktop-quick-rail__panel > .done-desktop-quick-rail__shell {
-        order: 0;
-        width: max-content;
-        max-width: 100%;
+      .done-desktop-quick-rail.is-collapsed .done-desktop-quick-rail__stage,
+      .done-desktop-quick-rail.is-collapsed .done-desktop-quick-rail__dots {
+        display: none !important;
       }
 
       .done-desktop-quick-rail__view {
@@ -6898,11 +6916,13 @@
       }
 
       .done-desktop-quick-rail[data-view="action"] .done-desktop-quick-rail__view--action,
-      .done-desktop-quick-rail[data-view="floor"] .done-desktop-quick-rail__view--floor {
+      .done-desktop-quick-rail[data-view="floor"] .done-desktop-quick-rail__view--floor,
+      .done-desktop-quick-rail[data-view="commit"] .done-desktop-quick-rail__view--commit {
         display: block;
       }
 
-      .done-desktop-quick-rail__floor {
+      .done-desktop-quick-rail__floor,
+      .done-desktop-quick-rail__commit {
         display: block;
         width: max-content;
         max-width: 100%;
@@ -6916,7 +6936,6 @@
 
       .done-desktop-quick-rail__floor-img {
         display: block;
-        /* 独立于行动卡片宽度；受 panel JS maxWidth 约束 */
         width: 380px;
         max-width: 100%;
         height: auto;
@@ -6928,9 +6947,22 @@
         pointer-events: none;
       }
 
-      /* 底部圆点：小巧居中；不遮挡正文；仅手动切换 */
+      .done-desktop-quick-rail__commit-img {
+        display: block;
+        width: 360px;
+        max-width: 100%;
+        height: auto;
+        aspect-ratio: 2168 / 725;
+        object-fit: contain;
+        object-position: center center;
+        border: 0;
+        vertical-align: top;
+        pointer-events: none;
+      }
+
+      /* 底部圆点：独立第二行；不参与粉钮垂直居中参照 */
       .done-desktop-quick-rail__dots {
-        display: flex;
+        display: none;
         flex: 0 0 auto;
         align-items: center;
         justify-content: center;
@@ -6940,6 +6972,16 @@
         padding: 0;
         box-sizing: border-box;
         pointer-events: auto;
+      }
+
+      .done-desktop-quick-rail:not(.is-collapsed) .done-desktop-quick-rail__dots {
+        display: flex;
+        grid-column: 2;
+        grid-row: 2;
+        justify-self: center;
+        align-self: start;
+        width: auto;
+        min-width: 0;
       }
 
       .done-desktop-quick-rail__dot {
@@ -7148,24 +7190,41 @@
         text-overflow: clip;
       }
 
-      /* 平板：Floor 随左栏可用宽度等比缩小；圆点保持 */
-      .done-desktop-quick-rail__panel {
+      /* 平板：粉钮在右，与 stage 同行居中；Floor/Commit 等比缩小 */
+      .done-desktop-quick-rail:not(.is-collapsed) {
+        grid-template-columns: max-content auto;
+      }
+
+      .done-desktop-quick-rail:not(.is-collapsed) .done-desktop-quick-rail__toggle {
+        grid-column: 2;
+        grid-row: 1;
+        justify-self: start;
+        align-self: center;
+      }
+
+      .done-desktop-quick-rail:not(.is-collapsed) .done-desktop-quick-rail__stage {
+        grid-column: 1;
+        grid-row: 1;
         order: 1;
         width: max-content;
         max-width: 100%;
       }
 
-      .done-desktop-quick-rail__floor {
+      .done-desktop-quick-rail:not(.is-collapsed) .done-desktop-quick-rail__dots {
+        grid-column: 1;
+        grid-row: 2;
+        margin-top: 4px;
+      }
+
+      .done-desktop-quick-rail__floor,
+      .done-desktop-quick-rail__commit {
         max-width: 100%;
       }
 
-      .done-desktop-quick-rail__floor-img {
+      .done-desktop-quick-rail__floor-img,
+      .done-desktop-quick-rail__commit-img {
         width: 100%;
         max-width: min(360px, 100%);
-      }
-
-      .done-desktop-quick-rail__dots {
-        margin-top: 4px;
       }
     }
 
@@ -117085,7 +117144,7 @@
     id="doneDesktopQuickRail"
     class="done-desktop-quick-rail is-collapsed"
     data-view="action"
-    aria-label="快捷入口：Refocus、训练、行动提醒与 Floor"
+    aria-label="快捷入口：行动提醒、Floor 与承诺专注"
   >
     <button
       type="button"
@@ -117097,8 +117156,8 @@
     >
       <span class="done-desktop-quick-rail__toggle-chevron" aria-hidden="true">&gt;</span>
     </button>
-    <!-- action / Floor 互斥切换：底部圆点；两态不必同宽同高 -->
-    <div class="done-desktop-quick-rail__panel" id="doneDesktopQuickRailShell">
+    <!-- stage 仅含当前卡片（粉钮相对此行垂直居中）；dots 独立第二行 -->
+    <div class="done-desktop-quick-rail__stage" id="doneDesktopQuickRailShell">
       <div class="done-desktop-quick-rail__view done-desktop-quick-rail__view--action" data-rail-view="action">
         <div class="done-desktop-quick-rail__shell">
           <div id="doneDesktopQuickRailBody" class="done-desktop-quick-rail__body">
@@ -117158,28 +117217,51 @@
           />
         </div>
       </div>
-      <div class="done-desktop-quick-rail__dots" role="tablist" aria-label="提醒视图切换">
-        <button
-          type="button"
-          class="done-desktop-quick-rail__dot is-active"
-          id="doneDesktopQuickRailDotAction"
-          data-rail-view="action"
-          role="tab"
-          aria-selected="true"
-          aria-label="行动提醒"
-          title="行动提醒"
-        ></button>
-        <button
-          type="button"
-          class="done-desktop-quick-rail__dot"
-          id="doneDesktopQuickRailDotFloor"
-          data-rail-view="floor"
-          role="tab"
-          aria-selected="false"
-          aria-label="Floor 底线提醒"
-          title="Floor 底线提醒"
-        ></button>
+      <div class="done-desktop-quick-rail__view done-desktop-quick-rail__view--commit" data-rail-view="commit">
+        <div class="done-desktop-quick-rail__commit" aria-hidden="true">
+          <img
+            class="done-desktop-quick-rail__commit-img"
+            src="./assets/done-quick-rail-commit-focus-banner.png"
+            alt="承诺等于消除了所有替代选项；专注等于你说不的事情的数量"
+            width="2168"
+            height="725"
+            decoding="async"
+            draggable="false"
+          />
+        </div>
       </div>
+    </div>
+    <div class="done-desktop-quick-rail__dots" role="tablist" aria-label="提醒视图切换">
+      <button
+        type="button"
+        class="done-desktop-quick-rail__dot is-active"
+        id="doneDesktopQuickRailDotAction"
+        data-rail-view="action"
+        role="tab"
+        aria-selected="true"
+        aria-label="行动提醒"
+        title="行动提醒"
+      ></button>
+      <button
+        type="button"
+        class="done-desktop-quick-rail__dot"
+        id="doneDesktopQuickRailDotFloor"
+        data-rail-view="floor"
+        role="tab"
+        aria-selected="false"
+        aria-label="Floor 底线提醒"
+        title="Floor 底线提醒"
+      ></button>
+      <button
+        type="button"
+        class="done-desktop-quick-rail__dot"
+        id="doneDesktopQuickRailDotCommit"
+        data-rail-view="commit"
+        role="tab"
+        aria-selected="false"
+        aria-label="承诺与专注"
+        title="承诺与专注"
+      ></button>
     </div>
   </aside>
 
@@ -117886,7 +117968,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261121d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261121e";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -118648,7 +118730,7 @@
     let manifestoPanelExpanded = false;
     /** 电脑端右侧快捷侧栏展开态（与 MANIFESTO/RESULTS 互斥；仅本页 UI） */
     let doneDesktopQuickRailExpanded = false;
-    /** 快捷侧栏互斥视图：action | floor；仅本页 UI，不落盘 */
+    /** 快捷侧栏互斥视图：action | floor | commit；仅本页 UI，不落盘 */
     let doneDesktopQuickRailView = "action";
     let scheduleDoneDesktopQuickRailPosition = function () {};
     let syncDoneDesktopQuickRailDom = function () {};
@@ -231363,9 +231445,17 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
     initDoneMoveHourlyReminder();
 
-    /** 切换行动提醒 / Floor；不改展开态与定位锚点 */
+    /** 规范化快捷侧栏视图：action | floor | commit */
+    function normalizeDoneDesktopQuickRailView(view) {
+      const v = String(view || "");
+      if (v === "floor") return "floor";
+      if (v === "commit") return "commit";
+      return "action";
+    }
+
+    /** 切换行动提醒 / Floor / 承诺专注；不改展开态与定位锚点 */
     function setDoneDesktopQuickRailView(view) {
-      const next = view === "floor" ? "floor" : "action";
+      const next = normalizeDoneDesktopQuickRailView(view);
       if (next === doneDesktopQuickRailView) {
         syncDoneDesktopQuickRailDom();
         return;
@@ -231442,7 +231532,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       syncDoneDesktopQuickRailDom = function () {
         /* 与今日计划左栏同一平板横屏判定；命中则镜像，否则电脑右轨 */
         const tabletUi = isTabletQuickRailViewport();
-        const view = doneDesktopQuickRailView === "floor" ? "floor" : "action";
+        const view = normalizeDoneDesktopQuickRailView(doneDesktopQuickRailView);
         doneDesktopQuickRailView = view;
         rail.classList.toggle("is-collapsed", !doneDesktopQuickRailExpanded);
         rail.classList.toggle("is-tablet-left", tabletUi);
@@ -231693,14 +231783,14 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           if (!t || !dotsWrap.contains(t)) return;
           ev.preventDefault();
           ev.stopPropagation();
-          const v = t.getAttribute("data-rail-view") === "floor" ? "floor" : "action";
-          setDoneDesktopQuickRailView(v);
+          setDoneDesktopQuickRailView(t.getAttribute("data-rail-view"));
         });
       }
       /* 与 HTML 默认 is-collapsed / data-view 对齐 */
       doneDesktopQuickRailExpanded = !rail.classList.contains("is-collapsed");
-      doneDesktopQuickRailView =
-        rail.getAttribute("data-view") === "floor" ? "floor" : "action";
+      doneDesktopQuickRailView = normalizeDoneDesktopQuickRailView(
+        rail.getAttribute("data-view")
+      );
       syncDoneDesktopQuickRailDom();
 
       window.addEventListener("resize", scheduleDoneDesktopQuickRailPosition);
