@@ -117714,7 +117714,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261121a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261121b";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -118391,9 +118391,13 @@
     const manifestoPanelPager = document.getElementById("manifestoPanelPager");
     const manifestoPanelPrev = document.getElementById("manifestoPanelPrev");
     const manifestoPanelNext = document.getElementById("manifestoPanelNext");
-    const manifestoPanelImgs = manifestoPanelStage
-      ? manifestoPanelStage.querySelectorAll(".manifesto-panel__img")
+    /** DOM 原始顺序（稳定身份）；每日洗牌只改下方 view 数组，不重建/不挪 DOM */
+    const manifestoPanelImgNodes = manifestoPanelStage
+      ? Array.prototype.slice.call(
+          manifestoPanelStage.querySelectorAll(".manifesto-panel__img")
+        )
       : [];
+    let manifestoPanelImgs = manifestoPanelImgNodes.slice();
     const resultsPanel = document.getElementById("resultsPanel");
     const resultsPanelToggle = document.getElementById("resultsPanelToggle");
     const resultsPanelCollapse = document.getElementById("resultsPanelCollapse");
@@ -118404,9 +118408,12 @@
     const resultsPanelPager = document.getElementById("resultsPanelPager");
     const resultsPanelPrev = document.getElementById("resultsPanelPrev");
     const resultsPanelNext = document.getElementById("resultsPanelNext");
-    const resultsPanelImgs = resultsPanelStage
-      ? resultsPanelStage.querySelectorAll(".results-panel__img")
+    const resultsPanelImgNodes = resultsPanelStage
+      ? Array.prototype.slice.call(
+          resultsPanelStage.querySelectorAll(".results-panel__img")
+        )
       : [];
+    let resultsPanelImgs = resultsPanelImgNodes.slice();
     const todayPlanPanelLists = document.getElementById("todayPlanPanelLists");
     const todayPlanPanelClosedMount = document.getElementById("todayPlanPanelClosedMount");
     const todayPlanPanelOtherSection = document.getElementById("todayPlanPanelOtherSection");
@@ -118478,16 +118485,27 @@
     let resultsPanelExpanded = false;
     /** 激励宣言当前卡片：仅 localStorage，不进业务 state / 云同步 */
     const MANIFESTO_CARD_INDEX_KEY = "manifesto-card-index-v1";
+    /** 当前图稳定 ID（data-src 文件名）；跨日洗牌后按 ID 定位，不依赖旧索引 */
+    const MANIFESTO_CARD_ID_KEY = "manifesto-card-id-v1";
     /** 张数跟舞台内 .manifesto-panel__img 数量走，追加图片后页码自动更新 */
     const MANIFESTO_CARD_COUNT =
-      manifestoPanelImgs && manifestoPanelImgs.length ? manifestoPanelImgs.length : 0;
+      manifestoPanelImgNodes && manifestoPanelImgNodes.length
+        ? manifestoPanelImgNodes.length
+        : 0;
     let manifestoCardIndex = 0;
-    /** 结果导向学习当前卡片：仅 localStorage，不进业务 state / 云同步；默认第 1 张 ISG=Wormhole */
+    /** 结果导向学习当前卡片：仅 localStorage，不进业务 state / 云同步；全日随机，无固定首末张 */
     const RESULTS_CARD_INDEX_KEY = "results-card-index-v1";
+    const RESULTS_CARD_ID_KEY = "results-card-id-v1";
     /** 张数跟舞台内 .results-panel__img 数量走，追加图片后页码自动更新 */
     const RESULTS_CARD_COUNT =
-      resultsPanelImgs && resultsPanelImgs.length ? resultsPanelImgs.length : 0;
+      resultsPanelImgNodes && resultsPanelImgNodes.length
+        ? resultsPanelImgNodes.length
+        : 0;
     let resultsCardIndex = 0;
+    /** 当日已应用的北京日 key；跨午夜检测用 */
+    let manifestoShuffleDayKey = "";
+    let resultsShuffleDayKey = "";
+    let kineticCarouselMidnightTimer = 0;
     /**
      * 金钱公式条 ResizeObserver：必须在平板横屏 sync IIFE / setTodayPlanPanelExpanded
      * 首次调用之前完成初始化，否则 TDZ（Cannot access before initialization）会中断整段主脚本。
@@ -119919,8 +119937,13 @@
         setManifestoPanelExpanded(false);
       });
     }
-    /* 激励宣言卡片：本地记忆 index；仅手动切换，无自动轮播 */
+    /* 激励宣言卡片：先套当日确定性洗牌，再按图 ID/index 恢复；仅手动切换 */
+    applyKineticCarouselGroupShuffle("manifesto", {
+      preserveCurrent: false,
+      force: true
+    });
     manifestoCardIndex = readManifestoCardIndex();
+    writeManifestoCardIndex(manifestoCardIndex);
     syncManifestoCardDom();
     /* 启动即优先预热 MANIFESTO 首图；首图就绪后再邻张（安卓不并行抢解码） */
     try {
@@ -119980,8 +120003,13 @@
         setResultsPanelExpanded(false);
       });
     }
-    /* RESULTS 卡片：本地记忆 index；仅手动切换，无自动轮播；交互对齐 MANIFESTO */
+    /* RESULTS 卡片：当日确定性洗牌（全部参与）；按图 ID 恢复；交互对齐 MANIFESTO */
+    applyKineticCarouselGroupShuffle("results", {
+      preserveCurrent: false,
+      force: true
+    });
     resultsCardIndex = readResultsCardIndex();
+    writeResultsCardIndex(resultsCardIndex);
     syncResultsCardDom();
     /* 启动即优先预热 RESULTS 首图；首图就绪后再邻张（与 MANIFESTO 错开，减轻安卓并发） */
     try {
@@ -120044,6 +120072,27 @@
         stepResultsCard(1);
       });
     }
+    /* 跨午夜自动换日序；页签回前台再校验一次（不整页刷新） */
+    try {
+      armKineticCarouselMidnightShuffle();
+      document.addEventListener(
+        "visibilitychange",
+        function () {
+          if (document.visibilityState === "visible") {
+            syncKineticCarouselDailyShuffleIfNeeded("visibility");
+            armKineticCarouselMidnightShuffle();
+          }
+        },
+        false
+      );
+      window.addEventListener(
+        "focus",
+        function () {
+          syncKineticCarouselDailyShuffleIfNeeded("focus");
+        },
+        false
+      );
+    } catch (_shuffleArmErr) {}
     const doneList = document.getElementById("doneList");
     const memoCount = document.getElementById("memoCount");
     const doneListTitleCount = document.getElementById("doneListTitleCount");
@@ -206570,6 +206619,302 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       todayPlanPanelBackdrop.setAttribute("aria-hidden", show ? "false" : "true");
     }
 
+    /**
+     * MANIFESTO / RESULTS · 每日自动随机排序（Daily Shuffle）
+     * - 种子：北京日 YYYY-MM-DD + 分组标识（跨设备一致）
+     * - 算法：xorshift32 + Fisher–Yates；禁止渲染路径 Math.random()
+     * - 只重排 view 数组，不改 DOM / 不重载图源，避免白屏与重复请求
+     */
+    function getKineticCarouselCardId(img) {
+      if (!img) return "";
+      const raw =
+        String(img.getAttribute("data-src") || "").trim() ||
+        String(img.getAttribute("data-fallback-src") || "").trim() ||
+        String(img.getAttribute("src") || "").trim();
+      if (!raw) return "";
+      const noQuery = raw.split("?")[0].split("#")[0];
+      const parts = noQuery.split("/");
+      return String(parts[parts.length - 1] || noQuery).trim();
+    }
+
+    function hashKineticCarouselSeed(str) {
+      let h = 2166136261 >>> 0;
+      const s = String(str || "");
+      for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+      }
+      return h >>> 0;
+    }
+
+    function makeKineticCarouselRng(seed) {
+      let x = (seed >>> 0) || 1;
+      return function next() {
+        x ^= x << 13;
+        x >>>= 0;
+        x ^= x >>> 17;
+        x >>>= 0;
+        x ^= x << 5;
+        x >>>= 0;
+        return (x >>> 0) / 4294967296;
+      };
+    }
+
+    function seededFisherYatesShuffle(list, seed) {
+      const arr = list.slice();
+      const rnd = makeKineticCarouselRng(seed);
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(rnd() * (i + 1));
+        const tmp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = tmp;
+      }
+      return arr;
+    }
+
+    function addBeijingDateKeyDays(dateKey, deltaDays) {
+      const key = String(dateKey || "").trim();
+      const delta = Math.floor(Number(deltaDays) || 0);
+      const ms = Date.parse(key + "T12:00:00+08:00");
+      if (!Number.isFinite(ms)) {
+        return typeof getBeijingDateKey === "function"
+          ? getBeijingDateKey(new Date())
+          : key;
+      }
+      return getBeijingDateKey(new Date(ms + delta * 86400000));
+    }
+
+    function kineticCarouselIdsEqual(a, b) {
+      if (!a || !b || a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return false;
+      }
+      return true;
+    }
+
+    /**
+     * 回溯若干日逐日定盐，保证相邻两日最终序不同，且跨设备同一天一致。
+     */
+    function computeKineticCarouselDailyOrder(ids, groupKey, dateKey) {
+      const idsStable = (ids || []).map(String);
+      if (idsStable.length <= 1) return idsStable.slice();
+      const LOOKBACK = 14;
+      let prev = null;
+      let last = idsStable.slice();
+      for (let back = LOOKBACK; back >= 0; back--) {
+        const dKey = addBeijingDateKeyDays(dateKey, -back);
+        let salt = 0;
+        let order;
+        do {
+          const seed = hashKineticCarouselSeed(
+            dKey + "|" + groupKey + "|s" + salt
+          );
+          order = seededFisherYatesShuffle(idsStable, seed);
+          salt += 1;
+        } while (prev && kineticCarouselIdsEqual(order, prev) && salt < 64);
+        prev = order;
+        last = order;
+      }
+      return last;
+    }
+
+    function findKineticCarouselIndexById(imgs, cardId) {
+      const id = String(cardId || "").trim();
+      if (!id || !imgs || !imgs.length) return -1;
+      for (let i = 0; i < imgs.length; i++) {
+        if (getKineticCarouselCardId(imgs[i]) === id) return i;
+      }
+      return -1;
+    }
+
+    function applyKineticCarouselGroupShuffle(groupKey, opts) {
+      const options = opts || {};
+      const isManifesto = groupKey === "manifesto";
+      const base = isManifesto ? manifestoPanelImgNodes : resultsPanelImgNodes;
+      if (!base || !base.length) return false;
+      const dateKey = String(
+        options.dateKey ||
+          (typeof getBeijingDateKey === "function"
+            ? getBeijingDateKey(new Date())
+            : "")
+      ).trim();
+      if (!dateKey) return false;
+      const dayRef = isManifesto ? manifestoShuffleDayKey : resultsShuffleDayKey;
+      if (dayRef === dateKey && !options.force) return false;
+
+      let keepId = "";
+      if (options.preserveCurrent !== false) {
+        const curImgs = isManifesto ? manifestoPanelImgs : resultsPanelImgs;
+        const curIdx = isManifesto ? manifestoCardIndex : resultsCardIndex;
+        if (curImgs && curImgs[curIdx]) {
+          keepId = getKineticCarouselCardId(curImgs[curIdx]);
+        }
+      }
+      if (!keepId) {
+        try {
+          keepId = String(
+            localStorage.getItem(
+              isManifesto ? MANIFESTO_CARD_ID_KEY : RESULTS_CARD_ID_KEY
+            ) || ""
+          ).trim();
+        } catch (_idReadErr) {
+          keepId = "";
+        }
+      }
+
+      const ids = base.map(getKineticCarouselCardId);
+      const orderIds = computeKineticCarouselDailyOrder(ids, groupKey, dateKey);
+      const byId = Object.create(null);
+      for (let i = 0; i < base.length; i++) {
+        const id = getKineticCarouselCardId(base[i]);
+        if (id) byId[id] = base[i];
+      }
+      const ordered = [];
+      const used = Object.create(null);
+      for (let i = 0; i < orderIds.length; i++) {
+        const id = orderIds[i];
+        const img = byId[id];
+        if (img && !used[id]) {
+          ordered.push(img);
+          used[id] = true;
+        }
+      }
+      for (let i = 0; i < base.length; i++) {
+        const id = getKineticCarouselCardId(base[i]);
+        if (!used[id]) ordered.push(base[i]);
+      }
+
+      if (isManifesto) {
+        manifestoPanelImgs = ordered;
+        manifestoShuffleDayKey = dateKey;
+        if (keepId) {
+          const idx = findKineticCarouselIndexById(manifestoPanelImgs, keepId);
+          if (idx >= 0) manifestoCardIndex = idx;
+        }
+        manifestoCardIndex = clampManifestoCardIndex(manifestoCardIndex);
+      } else {
+        resultsPanelImgs = ordered;
+        resultsShuffleDayKey = dateKey;
+        if (keepId) {
+          const idx = findKineticCarouselIndexById(resultsPanelImgs, keepId);
+          if (idx >= 0) resultsCardIndex = idx;
+        }
+        resultsCardIndex = clampResultsCardIndex(resultsCardIndex);
+      }
+      return true;
+    }
+
+    function applyKineticCarouselDailyShuffles(opts) {
+      const options = opts || {};
+      const mChanged = applyKineticCarouselGroupShuffle("manifesto", options);
+      const rChanged = applyKineticCarouselGroupShuffle("results", options);
+      return !!(mChanged || rChanged);
+    }
+
+    function getMsUntilNextBeijingMidnight() {
+      try {
+        const now = Date.now();
+        const today =
+          typeof getBeijingDateKey === "function"
+            ? getBeijingDateKey(new Date(now))
+            : "";
+        if (!today) return 60000;
+        const nextKey = addBeijingDateKeyDays(today, 1);
+        const nextMs = Date.parse(nextKey + "T00:00:00+08:00");
+        if (!Number.isFinite(nextMs)) return 60000;
+        return Math.max(1000, nextMs - now + 50);
+      } catch (_msErr) {
+        return 60000;
+      }
+    }
+
+    function syncKineticCarouselDailyShuffleIfNeeded(reason) {
+      const today =
+        typeof getBeijingDateKey === "function"
+          ? getBeijingDateKey(new Date())
+          : "";
+      if (
+        !today ||
+        (manifestoShuffleDayKey === today && resultsShuffleDayKey === today)
+      ) {
+        return false;
+      }
+      const changed = applyKineticCarouselDailyShuffles({
+        preserveCurrent: true,
+        force: false
+      });
+      if (!changed) return false;
+      syncManifestoCardDom();
+      syncResultsCardDom();
+      if (manifestoPanelExpanded) ensureManifestoPanelImage();
+      if (resultsPanelExpanded) ensureResultsPanelImage();
+      try {
+        writeManifestoCardIndex(manifestoCardIndex);
+        writeResultsCardIndex(resultsCardIndex);
+      } catch (_persistErr) {}
+      return true;
+    }
+
+    function armKineticCarouselMidnightShuffle() {
+      if (kineticCarouselMidnightTimer) {
+        try {
+          clearTimeout(kineticCarouselMidnightTimer);
+        } catch (_clrErr) {}
+        kineticCarouselMidnightTimer = 0;
+      }
+      const delay = getMsUntilNextBeijingMidnight();
+      kineticCarouselMidnightTimer = setTimeout(function () {
+        kineticCarouselMidnightTimer = 0;
+        syncKineticCarouselDailyShuffleIfNeeded("midnight");
+        armKineticCarouselMidnightShuffle();
+      }, delay);
+    }
+
+    try {
+      window.__getKineticCarouselDailyShuffleDebug = function () {
+        return {
+          manifestoDay: manifestoShuffleDayKey,
+          resultsDay: resultsShuffleDayKey,
+          manifestoOrder: (manifestoPanelImgs || []).map(getKineticCarouselCardId),
+          resultsOrder: (resultsPanelImgs || []).map(getKineticCarouselCardId),
+          beijingDay:
+            typeof getBeijingDateKey === "function"
+              ? getBeijingDateKey(new Date())
+              : ""
+        };
+      };
+      /** 测试用：切到指定北京日（默认「明天」）并保留当前图 ID */
+      window.__simulateKineticCarouselDayRolloverForTest = function (targetDateKey) {
+        const today =
+          typeof getBeijingDateKey === "function"
+            ? getBeijingDateKey(new Date())
+            : "";
+        const target = String(
+          targetDateKey || addBeijingDateKeyDays(today, 1) || ""
+        ).trim();
+        if (!target) return false;
+        const m = applyKineticCarouselGroupShuffle("manifesto", {
+          preserveCurrent: true,
+          force: true,
+          dateKey: target
+        });
+        const r = applyKineticCarouselGroupShuffle("results", {
+          preserveCurrent: true,
+          force: true,
+          dateKey: target
+        });
+        syncManifestoCardDom();
+        syncResultsCardDom();
+        if (manifestoPanelExpanded) ensureManifestoPanelImage();
+        if (resultsPanelExpanded) ensureResultsPanelImage();
+        try {
+          writeManifestoCardIndex(manifestoCardIndex);
+          writeResultsCardIndex(resultsCardIndex);
+        } catch (_e) {}
+        return !!(m || r);
+      };
+    } catch (_dbgErr) {}
+
     function clampManifestoCardIndex(idx) {
       const n = Math.floor(Number(idx));
       if (!Number.isFinite(n)) return 0;
@@ -206579,6 +206924,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function readManifestoCardIndex() {
       try {
+        const id = String(localStorage.getItem(MANIFESTO_CARD_ID_KEY) || "").trim();
+        if (id) {
+          const byId = findKineticCarouselIndexById(manifestoPanelImgs, id);
+          if (byId >= 0) return byId;
+        }
         const raw = localStorage.getItem(MANIFESTO_CARD_INDEX_KEY);
         if (raw == null || raw === "") return 0;
         return clampManifestoCardIndex(raw);
@@ -206589,7 +206939,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function writeManifestoCardIndex(idx) {
       try {
-        localStorage.setItem(MANIFESTO_CARD_INDEX_KEY, String(clampManifestoCardIndex(idx)));
+        const safe = clampManifestoCardIndex(idx);
+        localStorage.setItem(MANIFESTO_CARD_INDEX_KEY, String(safe));
+        const img = manifestoPanelImgs && manifestoPanelImgs[safe];
+        const id = getKineticCarouselCardId(img);
+        if (id) localStorage.setItem(MANIFESTO_CARD_ID_KEY, id);
       } catch (_e) {}
     }
 
@@ -207083,6 +207437,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function readResultsCardIndex() {
       try {
+        const id = String(localStorage.getItem(RESULTS_CARD_ID_KEY) || "").trim();
+        if (id) {
+          const byId = findKineticCarouselIndexById(resultsPanelImgs, id);
+          if (byId >= 0) return byId;
+        }
         const raw = localStorage.getItem(RESULTS_CARD_INDEX_KEY);
         if (raw == null || raw === "") return 0;
         return clampResultsCardIndex(raw);
@@ -207093,7 +207452,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     function writeResultsCardIndex(idx) {
       try {
-        localStorage.setItem(RESULTS_CARD_INDEX_KEY, String(clampResultsCardIndex(idx)));
+        const safe = clampResultsCardIndex(idx);
+        localStorage.setItem(RESULTS_CARD_INDEX_KEY, String(safe));
+        const img = resultsPanelImgs && resultsPanelImgs[safe];
+        const id = getKineticCarouselCardId(img);
+        if (id) localStorage.setItem(RESULTS_CARD_ID_KEY, id);
       } catch (_e) {}
     }
 
