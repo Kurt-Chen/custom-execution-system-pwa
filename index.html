@@ -6520,11 +6520,11 @@
     }
 
     /*
-     * 电脑端 / 平板横屏 · Done 浮动快捷侧栏（Refocus + 训练胶囊 + 行动提醒）
+     * 电脑端 / 平板横屏 · Done 浮动快捷侧栏（Refocus + 训练胶囊 + 行动提醒 / Floor）
      * - Desktop（fine）：右侧轨；胶囊左 / 文案右 / 折叠钮左
      * - Tablet landscape（coarse）：左侧「其他任务」上悬浮镜像；文案左 / 胶囊右 / 折叠钮右
      * - 同一 DOM / 同一计数与同步；手机端保持隐藏
-     * - 视觉：暖白卡片 + 角线 + 小号玫红收起钮 + 不倾斜利落圆角矩形
+     * - action 与 Floor 互斥切换（底部圆点）；两态不必同宽同高；收起同步
      */
     .done-desktop-quick-rail {
       display: none !important;
@@ -6856,6 +6856,117 @@
       }
     }
 
+
+      /*
+       * 互斥双视图：action（原提醒）/ floor（Floor 原图）；底部圆点切换；
+       * 两态不必同宽同高；收起时整块 panel 隐藏。
+       */
+      .done-desktop-quick-rail__panel {
+        position: relative;
+        order: 2;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        justify-content: flex-start;
+        gap: 0;
+        width: max-content;
+        max-width: 100%;
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        pointer-events: auto;
+      }
+
+      .done-desktop-quick-rail.is-collapsed .done-desktop-quick-rail__panel {
+        display: none !important;
+      }
+
+      /* 原 shell 仍是 order:2 的内容壳；现由 panel 承担 order，shell 铺满当前视图 */
+      .done-desktop-quick-rail__panel > .done-desktop-quick-rail__shell {
+        order: 0;
+        width: max-content;
+        max-width: 100%;
+      }
+
+      .done-desktop-quick-rail__view {
+        display: none;
+        width: max-content;
+        max-width: 100%;
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      .done-desktop-quick-rail[data-view="action"] .done-desktop-quick-rail__view--action,
+      .done-desktop-quick-rail[data-view="floor"] .done-desktop-quick-rail__view--floor {
+        display: block;
+      }
+
+      .done-desktop-quick-rail__floor {
+        display: block;
+        width: max-content;
+        max-width: 100%;
+        margin: 0;
+        padding: 0;
+        line-height: 0;
+        border: 0;
+        pointer-events: none;
+        user-select: none;
+      }
+
+      .done-desktop-quick-rail__floor-img {
+        display: block;
+        /* 独立于行动卡片宽度；受 panel JS maxWidth 约束 */
+        width: 380px;
+        max-width: 100%;
+        height: auto;
+        aspect-ratio: 1412 / 337;
+        object-fit: contain;
+        object-position: center center;
+        border: 0;
+        vertical-align: top;
+        pointer-events: none;
+      }
+
+      /* 底部圆点：小巧居中；不遮挡正文；仅手动切换 */
+      .done-desktop-quick-rail__dots {
+        display: flex;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        width: 100%;
+        margin: 5px 0 0;
+        padding: 0;
+        box-sizing: border-box;
+        pointer-events: auto;
+      }
+
+      .done-desktop-quick-rail__dot {
+        width: 7px;
+        height: 7px;
+        min-width: 7px;
+        min-height: 7px;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        border-radius: 50%;
+        background: #d1d5db;
+        box-shadow: none;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+        appearance: none;
+      }
+
+      .done-desktop-quick-rail__dot.is-active {
+        background: #f97316;
+      }
+
+      .done-desktop-quick-rail__dot:focus-visible {
+        outline: 2px solid rgba(249, 115, 22, 0.55);
+        outline-offset: 2px;
+      }
+
     /*
      * 平板横屏专属：左侧栏镜像布局 + 亮橙金边框。
      * 不改电脑端 fine 路径；不改手机；不新增第二套计数 DOM。
@@ -7035,6 +7146,26 @@
         white-space: nowrap;
         overflow: visible;
         text-overflow: clip;
+      }
+
+      /* 平板：Floor 随左栏可用宽度等比缩小；圆点保持 */
+      .done-desktop-quick-rail__panel {
+        order: 1;
+        width: max-content;
+        max-width: 100%;
+      }
+
+      .done-desktop-quick-rail__floor {
+        max-width: 100%;
+      }
+
+      .done-desktop-quick-rail__floor-img {
+        width: 100%;
+        max-width: min(360px, 100%);
+      }
+
+      .done-desktop-quick-rail__dots {
+        margin-top: 4px;
       }
     }
 
@@ -116953,7 +117084,8 @@
   <aside
     id="doneDesktopQuickRail"
     class="done-desktop-quick-rail is-collapsed"
-    aria-label="快捷入口：Refocus、训练与行动提醒"
+    data-view="action"
+    aria-label="快捷入口：Refocus、训练、行动提醒与 Floor"
   >
     <button
       type="button"
@@ -116965,48 +117097,88 @@
     >
       <span class="done-desktop-quick-rail__toggle-chevron" aria-hidden="true">&gt;</span>
     </button>
-    <div class="done-desktop-quick-rail__shell" id="doneDesktopQuickRailShell">
-      <div id="doneDesktopQuickRailBody" class="done-desktop-quick-rail__body">
-        <div
-          id="doneDesktopQuickRailRefocusRoot"
-          class="done-refocus-btn"
-          role="group"
-          aria-label="分心觉察与 Refocus 计数"
-        >
-          <button
-            type="button"
-            id="doneDesktopQuickRailRefocusHit"
-            class="done-refocus-btn__hit"
-            title="觉察分心后点击一次：今日 +1，并切换分心觉察 / Refocus 标签"
-          >
-            <span class="done-refocus-btn__text" id="doneDesktopQuickRailRefocusLabel">分心觉察</span>
-          </button>
-          <button
-            type="button"
-            id="doneDesktopQuickRailRefocusCount"
-            class="done-refocus-btn__count is-zero"
-            title="查看 Refocus 近七日趋势"
-          >0</button>
+    <!-- action / Floor 互斥切换：底部圆点；两态不必同宽同高 -->
+    <div class="done-desktop-quick-rail__panel" id="doneDesktopQuickRailShell">
+      <div class="done-desktop-quick-rail__view done-desktop-quick-rail__view--action" data-rail-view="action">
+        <div class="done-desktop-quick-rail__shell">
+          <div id="doneDesktopQuickRailBody" class="done-desktop-quick-rail__body">
+            <div
+              id="doneDesktopQuickRailRefocusRoot"
+              class="done-refocus-btn"
+              role="group"
+              aria-label="分心觉察与 Refocus 计数"
+            >
+              <button
+                type="button"
+                id="doneDesktopQuickRailRefocusHit"
+                class="done-refocus-btn__hit"
+                title="觉察分心后点击一次：今日 +1，并切换分心觉察 / Refocus 标签"
+              >
+                <span class="done-refocus-btn__text" id="doneDesktopQuickRailRefocusLabel">分心觉察</span>
+              </button>
+              <button
+                type="button"
+                id="doneDesktopQuickRailRefocusCount"
+                class="done-refocus-btn__count is-zero"
+                title="查看 Refocus 近七日趋势"
+              >0</button>
+            </div>
+            <div class="done-desktop-quick-rail__divider" aria-hidden="true"></div>
+            <button
+              type="button"
+              id="doneDesktopQuickRailMove"
+              class="done-move-hourly-slogan"
+              title="5–22 点整点轮换：Mind / Body / Sex Training；点击确认后本类今日 +1"
+              aria-label="Mind Training，5至22点整点轮换提醒"
+            >
+              <span class="done-move-hourly-slogan__text">Mind Training</span>
+              <span class="done-move-hourly-slogan__count is-zero" id="doneDesktopQuickRailMoveCount" aria-hidden="true">0</span>
+            </button>
+          </div>
+          <div class="done-desktop-quick-rail__vsep" aria-hidden="true"></div>
+          <div class="done-desktop-quick-rail__motto" role="note" aria-label="行动提醒：不要整天学习，去解决真实问题，直接与现实碰撞">
+            <p class="done-desktop-quick-rail__motto-text">
+              <span class="done-desktop-quick-rail__motto-line done-desktop-quick-rail__motto-line--lead">不要整天‘<span class="done-desktop-quick-rail__motto-em--learn">学习</span>’</span>
+              <span class="done-desktop-quick-rail__motto-line">去<span class="done-desktop-quick-rail__motto-em--problem">解决真实问题</span></span>
+              <span class="done-desktop-quick-rail__motto-line">直接与<span class="done-desktop-quick-rail__motto-em--reality">现实</span>碰撞</span>
+            </p>
+          </div>
         </div>
-        <div class="done-desktop-quick-rail__divider" aria-hidden="true"></div>
+      </div>
+      <div class="done-desktop-quick-rail__view done-desktop-quick-rail__view--floor" data-rail-view="floor">
+        <div class="done-desktop-quick-rail__floor" aria-hidden="true">
+          <img
+            class="done-desktop-quick-rail__floor-img"
+            src="./assets/done-quick-rail-floor-banner.png"
+            alt="让底线 Floor 成为真正的底线（最低标准）"
+            width="1412"
+            height="337"
+            decoding="async"
+            draggable="false"
+          />
+        </div>
+      </div>
+      <div class="done-desktop-quick-rail__dots" role="tablist" aria-label="提醒视图切换">
         <button
           type="button"
-          id="doneDesktopQuickRailMove"
-          class="done-move-hourly-slogan"
-          title="5–22 点整点轮换：Mind / Body / Sex Training；点击确认后本类今日 +1"
-          aria-label="Mind Training，5至22点整点轮换提醒"
-        >
-          <span class="done-move-hourly-slogan__text">Mind Training</span>
-          <span class="done-move-hourly-slogan__count is-zero" id="doneDesktopQuickRailMoveCount" aria-hidden="true">0</span>
-        </button>
-      </div>
-      <div class="done-desktop-quick-rail__vsep" aria-hidden="true"></div>
-      <div class="done-desktop-quick-rail__motto" role="note" aria-label="行动提醒：不要整天学习，去解决真实问题，直接与现实碰撞">
-        <p class="done-desktop-quick-rail__motto-text">
-          <span class="done-desktop-quick-rail__motto-line done-desktop-quick-rail__motto-line--lead">不要整天‘<span class="done-desktop-quick-rail__motto-em--learn">学习</span>’</span>
-          <span class="done-desktop-quick-rail__motto-line">去<span class="done-desktop-quick-rail__motto-em--problem">解决真实问题</span></span>
-          <span class="done-desktop-quick-rail__motto-line">直接与<span class="done-desktop-quick-rail__motto-em--reality">现实</span>碰撞</span>
-        </p>
+          class="done-desktop-quick-rail__dot is-active"
+          id="doneDesktopQuickRailDotAction"
+          data-rail-view="action"
+          role="tab"
+          aria-selected="true"
+          aria-label="行动提醒"
+          title="行动提醒"
+        ></button>
+        <button
+          type="button"
+          class="done-desktop-quick-rail__dot"
+          id="doneDesktopQuickRailDotFloor"
+          data-rail-view="floor"
+          role="tab"
+          aria-selected="false"
+          aria-label="Floor 底线提醒"
+          title="Floor 底线提醒"
+        ></button>
       </div>
     </div>
   </aside>
@@ -117714,7 +117886,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261121b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261121d";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -118476,6 +118648,8 @@
     let manifestoPanelExpanded = false;
     /** 电脑端右侧快捷侧栏展开态（与 MANIFESTO/RESULTS 互斥；仅本页 UI） */
     let doneDesktopQuickRailExpanded = false;
+    /** 快捷侧栏互斥视图：action | floor；仅本页 UI，不落盘 */
+    let doneDesktopQuickRailView = "action";
     let scheduleDoneDesktopQuickRailPosition = function () {};
     let syncDoneDesktopQuickRailDom = function () {};
     /**
@@ -231189,6 +231363,18 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
     initDoneMoveHourlyReminder();
 
+    /** 切换行动提醒 / Floor；不改展开态与定位锚点 */
+    function setDoneDesktopQuickRailView(view) {
+      const next = view === "floor" ? "floor" : "action";
+      if (next === doneDesktopQuickRailView) {
+        syncDoneDesktopQuickRailDom();
+        return;
+      }
+      doneDesktopQuickRailView = next;
+      syncDoneDesktopQuickRailDom();
+      scheduleDoneDesktopQuickRailPosition();
+    }
+
     /** 电脑右侧 / 平板横屏左侧镜像快捷侧栏：同一套展开态；与 MANIFESTO/RESULTS 互斥 */
     function setDoneDesktopQuickRailExpanded(expanded) {
       const next = !!expanded;
@@ -231256,8 +231442,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       syncDoneDesktopQuickRailDom = function () {
         /* 与今日计划左栏同一平板横屏判定；命中则镜像，否则电脑右轨 */
         const tabletUi = isTabletQuickRailViewport();
+        const view = doneDesktopQuickRailView === "floor" ? "floor" : "action";
+        doneDesktopQuickRailView = view;
         rail.classList.toggle("is-collapsed", !doneDesktopQuickRailExpanded);
         rail.classList.toggle("is-tablet-left", tabletUi);
+        rail.setAttribute("data-view", view);
         if (toggleBtn) {
           toggleBtn.setAttribute("aria-expanded", doneDesktopQuickRailExpanded ? "true" : "false");
           toggleBtn.setAttribute(
@@ -231275,6 +231464,15 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           } else {
             chevron.textContent = doneDesktopQuickRailExpanded ? "<" : ">";
           }
+        }
+        /* 底部圆点：当前视图橙色，另一枚浅灰 */
+        const dots = rail.querySelectorAll(".done-desktop-quick-rail__dot");
+        for (let i = 0; i < dots.length; i++) {
+          const dot = dots[i];
+          const isOn = (dot.getAttribute("data-rail-view") || "") === view;
+          dot.classList.toggle("is-active", isOn);
+          dot.setAttribute("aria-selected", isOn ? "true" : "false");
+          dot.tabIndex = isOn ? 0 : -1;
         }
       };
 
@@ -231487,8 +231685,22 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           setDoneDesktopQuickRailExpanded(!doneDesktopQuickRailExpanded);
         });
       }
-      /* 与 HTML 默认 is-collapsed 对齐 */
+      const dotsWrap = rail.querySelector(".done-desktop-quick-rail__dots");
+      if (dotsWrap && dotsWrap.dataset.boundRailDots !== "1") {
+        dotsWrap.dataset.boundRailDots = "1";
+        dotsWrap.addEventListener("click", function (ev) {
+          const t = ev.target && ev.target.closest ? ev.target.closest(".done-desktop-quick-rail__dot") : null;
+          if (!t || !dotsWrap.contains(t)) return;
+          ev.preventDefault();
+          ev.stopPropagation();
+          const v = t.getAttribute("data-rail-view") === "floor" ? "floor" : "action";
+          setDoneDesktopQuickRailView(v);
+        });
+      }
+      /* 与 HTML 默认 is-collapsed / data-view 对齐 */
       doneDesktopQuickRailExpanded = !rail.classList.contains("is-collapsed");
+      doneDesktopQuickRailView =
+        rail.getAttribute("data-view") === "floor" ? "floor" : "action";
       syncDoneDesktopQuickRailDom();
 
       window.addEventListener("resize", scheduleDoneDesktopQuickRailPosition);
