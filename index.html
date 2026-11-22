@@ -22261,6 +22261,10 @@
        * 展开：复用快捷侧栏 grid——绿钮与 stage 同行居中，dots 第二行。
        * 绿钮不参与 stage 高度；不写死 top / translateY 居中。
        */
+      /*
+       * 展开外层：FOCUS/MIND 同款机制（fixed + top=稳定中心 + translateY(-50%)）；
+       * 中心取 Body Training 入口，图高只向上下伸展，不改锚点。
+       */
       #vdPanel:not(.is-collapsed) {
         position: fixed !important;
         display: grid !important;
@@ -22278,7 +22282,7 @@
         height: auto;
         max-height: none;
         z-index: 46;
-        transform: none;
+        transform: translateY(-50%);
         pointer-events: none;
         background: transparent;
         border: 0;
@@ -118767,7 +118771,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261122k";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261122l";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -208982,7 +208986,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const prev = vdPanelImgs[(idx - 1 + count) % count];
       const currentReady = loadManifestoImageDecoded(current, { priority: "high" });
       currentReady.then(function () {
-        /* 解码后图高可能变化：再钉绿钮到图本体中心 */
+        /* 解码后仅刷新 stage 宽；外层 midY 锚点已锁定，不因图高改 top */
         if (vdPanelExpanded && typeof scheduleVdPanelRailSync === "function") {
           scheduleVdPanelRailSync();
         }
@@ -209106,8 +209110,31 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     }
 
     /**
-     * 展开：#vdPanel 复用快捷侧栏 grid（绿钮|stage / dots）。
-     * left/top 首次锁定后不再因切图/图高/绿钮居中而改写；绿钮纯 CSS align-self:center。
+     * V/D 展开外层竖直锚点（视觉 Y）：收起入口中心 = Body Training 行中心。
+     * 机制对齐 FOCUS/MIND（稳定中心 + translateY(-50%)），但中心取上半区入口，
+     * 不用玫红轨 midY，避免高图顶对齐下坠、也避免与玫红把手重叠。
+     */
+    function getVdDesktopFloatCenterVisual() {
+      const slogan = document.getElementById("doneMoveHourlySlogan");
+      if (slogan && typeof slogan.getBoundingClientRect === "function") {
+        const sr = slogan.getBoundingClientRect();
+        if (sr.height > 2) return sr.top + sr.height / 2;
+      }
+      if (vdPanelToggle && typeof vdPanelToggle.getBoundingClientRect === "function") {
+        const er = vdPanelToggle.getBoundingClientRect();
+        if (er.height > 2) return er.top + er.height / 2;
+      }
+      const container = document.querySelector(".container");
+      if (container && typeof container.getBoundingClientRect === "function") {
+        const cr = container.getBoundingClientRect();
+        if (cr.height > 40) return cr.top + Math.min(220, cr.height * 0.28);
+      }
+      return 220;
+    }
+
+    /**
+     * 展开：外层 = 稳定中心（入口）+ translateY(-50%) + grid（绿钮|stage / dots）。
+     * left/center 首次锁定后，切图/图高/绿钮居中不得改写；绿钮纯 CSS align-self:center。
      */
     function syncVdPanelToMainColumnRail() {
       if (!vdPanel) return;
@@ -209124,7 +209151,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const viewW = vv && vv.width ? vv.width : window.innerWidth;
       const viewLeft = vv && typeof vv.offsetLeft === "number" ? vv.offsetLeft : 0;
       let railLeftVisual = viewLeft + safe;
-      if (container && typeof container.getBoundingClientRect === "function") {
+      /* 水平：贴主栏右缘外（同原先）；若有 MANIFESTO 边钮则与其左缘对齐 */
+      const mEdge = document.getElementById("manifestoPanelToggle");
+      const m = mEdge && mEdge.getBoundingClientRect ? mEdge.getBoundingClientRect() : null;
+      if (m && m.width > 2) {
+        railLeftVisual = m.left;
+      } else if (container && typeof container.getBoundingClientRect === "function") {
         const cr = container.getBoundingClientRect();
         if (cr.width > 40) railLeftVisual = cr.right + gap;
       }
@@ -209135,30 +209167,16 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const widthVisual = Math.min(desiredWidthVisual, availVisual) * 0.87;
       const widthCss = widthVisual / zoom;
       const leftCss =
-        vdFloatStableLeftCss != null
-          ? vdFloatStableLeftCss
-          : railLeftVisual / zoom;
-      if (vdFloatStableLeftCss == null) {
-        vdFloatStableLeftCss = leftCss;
-      }
-      /* 垂直：锁定入口 top（相对视口）；禁止按图高回推 / clamp */
+        vdFloatStableLeftCss != null ? vdFloatStableLeftCss : railLeftVisual / zoom;
+      if (vdFloatStableLeftCss == null) vdFloatStableLeftCss = leftCss;
+      /*
+       * 垂直：锁定「收起入口中心」（Body Training），配 translateY(-50%)。
+       * 图高只向上下对称伸展；禁止 slogan.top 顶对齐（高图只往下长→掉到下方）；
+       * 禁止绿钮/图 rect 反推 panel.top。
+       */
       let topCss = vdFloatStableTopCss;
       if (topCss == null) {
-        const slogan = document.getElementById("doneMoveHourlySlogan");
-        if (slogan && typeof slogan.getBoundingClientRect === "function") {
-          const sr = slogan.getBoundingClientRect();
-          if (sr.height > 2) topCss = sr.top / zoom;
-        }
-        if (topCss == null || !(topCss >= 0)) {
-          /* 回退：收起态已写入的 #vdPanel.top（相对 .container）转视口 */
-          const raw = parseFloat(vdPanel.style.top);
-          if (isFinite(raw) && container) {
-            const cr = container.getBoundingClientRect();
-            topCss = (cr.top + raw * zoom) / zoom;
-          } else {
-            topCss = safe;
-          }
-        }
+        topCss = getVdDesktopFloatCenterVisual() / zoom;
         vdFloatStableTopCss = topCss;
       }
       vdPanel.style.left = Math.round(leftCss) + "px";
@@ -209166,12 +209184,12 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       vdPanel.style.top = Math.round(topCss) + "px";
       vdPanel.style.bottom = "auto";
       vdPanel.style.margin = "0";
-      vdPanel.style.transform = "none";
+      vdPanel.style.transform = "translateY(-50%)";
       if (vdPanelStage) {
         vdPanelStage.style.width = Math.round(widthCss) + "px";
         vdPanelStage.style.maxWidth = Math.round(widthCss) + "px";
       }
-      /* 绿钮不写 top/left——grid align-self:center 相对 stage 行 */
+      /* 绿钮不写 top/left——不得反推浮窗外层；grid align-self:center 相对 stage */
       if (vdPanelToggle) {
         vdPanelToggle.style.position = "";
         vdPanelToggle.style.top = "";
