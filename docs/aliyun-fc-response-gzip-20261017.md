@@ -88,19 +88,26 @@
 
 ## 5. 部署与回退
 
-1. WebIDE / 控制台部署 `alicloud-fc-smoke-a/app.py`  
-2. `bash alicloud-fc-smoke-a/_verify_prod_gzip.sh`  
-3. 手机+电脑：同步中快速 Forge / 子任务 / Done  
-4. 回退：环境变量 **`RESPONSE_GZIP=0`** → 重启实例（无需回滚 Git）
+完整清单：`docs/aliyun-fc-gzip-deploy-checklist-20261017.md`。
+
+1. **备份** WebIDE 当前 `app.py`；基线见 `docs/fc-gzip-baseline-20261017/`  
+2. **首次必须**环境变量 `RESPONSE_GZIP=0` + 部署新 `app.py` → `EXPECT_MODE=off bash _verify_prod_gzip.sh`  
+3. 通过后再 `RESPONSE_GZIP=1` + 部署/重启 → `EXPECT_MODE=on bash _verify_prod_gzip.sh`  
+4. 手机+电脑人工验收  
+5. 回退：优先 `RESPONSE_GZIP=0`；无效则恢复备份代码  
+
+**环境变量**：本函数 import 时读取；改 env 后须 **部署或重启实例**。
 
 ---
 
-## 6. Go / No-Go
+## 6. Go / No-Go / 上线状态
 
 | 范围 | 结论 |
 |------|------|
 | **实现 + 本地正确性** | **Go**（可合并本 PR） |
-| **生产开启压缩** | **No-Go until FC 部署 + `_verify_prod_gzip.sh` 通过 + 双端手测无卡顿** |
-| 若部署后卡顿/变慢/数据异常 | **立即 `RESPONSE_GZIP=0`** |
+| **生产开启压缩** | **No-Go / 待验证** — 须按 `docs/aliyun-fc-gzip-deploy-checklist-20261017.md` 两阶段部署 |
+| 若部署后卡顿/变慢/数据异常 | **立即 `RESPONSE_GZIP=0`**；无效则恢复备份 `app.py` |
+
+**上线状态：待验证。** 在双端人工验收完成前，**不宣称**已保证流畅或已实现账单降幅。
 
 **影响端别**：Both（仅 FC；前端无改）。
