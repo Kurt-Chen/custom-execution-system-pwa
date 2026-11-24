@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261125a";
+const CACHE_NAME = "exec-system-pwa-v20261125b";
 /**
  * 导航/HTML：网络超时后回退「当前 CACHE_NAME」壳。
  * index.html ~8–9MB：7s 在弱网/GitHub Pages 上易超时，旧逻辑再经 caches.match 跨桶

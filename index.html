@@ -119337,7 +119337,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261125a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261125b";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -212342,8 +212342,42 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       const pop = todaySikaoSchedulePopoverEl;
       if (!pop || pop.hidden) return;
       const t = ev && ev.target;
-      if (pop.contains(t)) return;
-      if (todaySikaoSchedulePopoverTriggerEl && todaySikaoSchedulePopoverTriggerEl.contains(t)) {
+      if (t && pop.contains(t)) return;
+      if (
+        todaySikaoSchedulePopoverTriggerEl &&
+        t &&
+        todaySikaoSchedulePopoverTriggerEl.contains(t)
+      ) {
+        return;
+      }
+      /* composedPath：原生 time 控件弹出层可能不在 pop 子树，但仍关联到 input */
+      if (ev && typeof ev.composedPath === "function") {
+        try {
+          const path = ev.composedPath();
+          for (let i = 0; i < path.length; i++) {
+            const n = path[i];
+            if (n === pop) return;
+            if (n && n.nodeType === 1 && pop.contains(n)) return;
+            if (
+              todaySikaoSchedulePopoverTriggerEl &&
+              n &&
+              n.nodeType === 1 &&
+              todaySikaoSchedulePopoverTriggerEl.contains(n)
+            ) {
+              return;
+            }
+          }
+        } catch (_pathErr) {}
+      }
+      /* 焦点仍在浮层内的 time input：视为与原生选择器交互，不关闭 */
+      const ae = document.activeElement;
+      if (
+        ae &&
+        pop.contains(ae) &&
+        (ae.matches("input[type='time']") ||
+          ae.getAttribute("data-sikao-start") ||
+          ae.getAttribute("data-sikao-end"))
+      ) {
         return;
       }
       closeTodaySikaoSchedulePopover();
@@ -212379,6 +212413,76 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       if (top < pad) top = pad;
       pop.style.left = Math.round(left) + "px";
       pop.style.top = Math.round(top) + "px";
+    }
+
+    function isTodaySikaoSchedulePopoverOpen() {
+      return !!(
+        todaySikaoSchedulePopoverEl &&
+        !todaySikaoSchedulePopoverEl.hidden &&
+        todaySikaoSchedulePopoverItemId
+      );
+    }
+
+    /**
+     * paint 重建列表后：浮层挂在 body，不销毁；仅按任务 id 重绑触发钮并重定位。
+     * 不改写用户正在输入的 time 值；任务已删/不可见才关闭。
+     */
+    function retainTodaySikaoSchedulePopoverAfterPaint() {
+      if (!isTodaySikaoSchedulePopoverOpen()) return;
+      const tid = String(todaySikaoSchedulePopoverItemId || "");
+      if (!tid || !Array.isArray(state.closedList)) {
+        closeTodaySikaoSchedulePopover();
+        return;
+      }
+      const item = state.closedList.find(function (x) {
+        return x && String(x.id) === tid;
+      });
+      if (!item) {
+        closeTodaySikaoSchedulePopover();
+        return;
+      }
+      let stillVisible = true;
+      try {
+        const todayKey =
+          typeof formatDateInputValue === "function"
+            ? formatDateInputValue(new Date())
+            : "";
+        if (todayKey && typeof getClosedListItemsVisibleForViewDate === "function") {
+          const vis = getClosedListItemsVisibleForViewDate(todayKey);
+          stillVisible = vis.some(function (x) {
+            return x && String(x.id) === tid;
+          });
+        }
+      } catch (_visErr) {
+        stillVisible = true;
+      }
+      if (!stillVisible) {
+        closeTodaySikaoSchedulePopover();
+        return;
+      }
+      const mount = todayPlanPanelClosedMount;
+      const li = mount
+        ? mount.querySelector(
+            '.today-plan-panel__item--sikao-compact[data-today-plan-closed-id="' +
+              tid +
+              '"]'
+          )
+        : null;
+      const slotBtn = li ? li.querySelector(".today-plan-panel__sikao-slot") : null;
+      if (slotBtn) {
+        if (
+          todaySikaoSchedulePopoverTriggerEl &&
+          todaySikaoSchedulePopoverTriggerEl !== slotBtn
+        ) {
+          try {
+            todaySikaoSchedulePopoverTriggerEl.setAttribute("aria-expanded", "false");
+          } catch (_oldTrig) {}
+        }
+        todaySikaoSchedulePopoverTriggerEl = slotBtn;
+        slotBtn.setAttribute("aria-expanded", "true");
+        positionTodaySikaoSchedulePopover(slotBtn);
+      }
+      /* 无 slotBtn（如 WIN 收起）：保持浮层与已填时间，不强制关闭 */
     }
 
     function ensureTodaySikaoSchedulePopover() {
@@ -213186,11 +213290,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
      */
     function paintTodayPlanPanel(opts) {
       if (!todayPlanPanelClosedMount || !todayPlanPanelOtherMount) return;
-      if (typeof closeTodaySikaoSchedulePopover === "function") {
-        try {
-          closeTodaySikaoSchedulePopover();
-        } catch (_sikaoClose) {}
-      }
+      /* 浮层挂 body：paint 不得关闭；结束时按任务 id 重绑定位 */
       updateTodayPlanPanelDateCard();
       syncTodayPlanStaticCueCheckinColors();
       opts = opts && typeof opts === "object" ? opts : {};
@@ -213295,6 +213395,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         limit: otherSorted.length
       });
       if (todayPlanPanelExpanded) syncTodayPlanPanelWidthToTagline();
+      if (typeof retainTodaySikaoSchedulePopoverAfterPaint === "function") {
+        try {
+          retainTodaySikaoSchedulePopoverAfterPaint();
+        } catch (_sikaoRetain) {}
+      }
     }
 
     /** 仅刷新封闭清单面板（不含全页 render） */
