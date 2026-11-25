@@ -119861,7 +119861,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261125n";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261125o";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -120738,12 +120738,13 @@
      * - todayPlanOtherSmartExpanded：当前展开态
      * - todayPlanOtherWasClosedAllDone：边沿检测（未全完成→全完成才自动展开；全完成→未全完成强制回折叠）
      * - todayPlanOtherManualExpandWhilePending：未全完成时用户手动展开，普通 repaint 不覆盖
-     * - todayPlanOtherLastKnownTotal：标题重绘用数量缓存
+     * - todayPlanOtherLastKnownTotal / Done：标题重绘用（总数 / 已完成）缓存
      */
     let todayPlanOtherSmartExpanded = false;
     let todayPlanOtherWasClosedAllDone = false;
     let todayPlanOtherManualExpandWhilePending = false;
     let todayPlanOtherLastKnownTotal = 0;
+    let todayPlanOtherLastKnownDone = 0;
     /** 仅内存：快速添加防连点；不落盘 */
     let todayPlanOtherAddBusy = false;
     /**
@@ -212075,7 +212076,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
     /**
      * 今日计划分区标题：名称 + 弱化数量。
      * opts.sikaoLabel：今天死磕用渐变/绿色小圆角标签，数量仍在标签外。
-     * opts.progress + opts.doneCount：今天死磕显示（done/total）分色进度。
+     * opts.progress + opts.doneCount：今天死磕 / 其他任务显示（done/total）分色进度。
      */
     function fillTodayPlanSectionHeading(heading, title, total, opts) {
       if (!heading) return null;
@@ -212156,13 +212157,23 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
         todayPlanOtherManualExpandWhilePending = false;
       }
       applyTodayPlanOtherSmartCollapseUi();
-      paintTodayPlanOtherSectionHead(todayPlanOtherLastKnownTotal);
+      paintTodayPlanOtherSectionHead(
+        todayPlanOtherLastKnownTotal,
+        todayPlanOtherLastKnownDone
+      );
     }
 
     /** 其他任务分区标题（可随数量重绘；不含 composer）；智能折叠箭头 + 整行可点 */
-    function paintTodayPlanOtherSectionHead(total) {
+    function paintTodayPlanOtherSectionHead(total, doneCountOpt) {
       if (!todayPlanOtherSectionHeadMount) return;
       todayPlanOtherLastKnownTotal = Math.max(0, Number(total) || 0);
+      todayPlanOtherLastKnownDone = Math.max(
+        0,
+        Math.min(
+          todayPlanOtherLastKnownTotal,
+          Number(doneCountOpt != null ? doneCountOpt : todayPlanOtherLastKnownDone) || 0
+        )
+      );
       todayPlanOtherSectionHeadMount.textContent = "";
       const head = document.createElement("div");
       head.className =
@@ -212183,7 +212194,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       icon.innerHTML = TODAY_PLAN_SECTION_ICON_OTHER;
       const heading = document.createElement("h3");
       heading.className = "today-plan-panel__section-title";
-      fillTodayPlanSectionHeading(heading, "其他任务", todayPlanOtherLastKnownTotal);
+      fillTodayPlanSectionHeading(heading, "其他任务", todayPlanOtherLastKnownTotal, {
+        progress: true,
+        doneCount: todayPlanOtherLastKnownDone
+      });
       const chevron = document.createElement("span");
       chevron.className = "today-plan-panel__other-chevron";
       chevron.setAttribute("aria-hidden", "true");
@@ -212756,27 +212770,37 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return {
         doneCount: closedDone + otherDone,
         totalCount: closedTotal + otherSorted.length,
+        otherDone: otherDone,
         otherSorted: otherSorted
       };
     }
 
-    /** 只改 Other 标题数量文案，不重建 head DOM */
-    function updateTodayPlanOtherSectionHeadCount(total) {
+    /** 只改 Other 标题进度文案（done/total），不重建 head DOM */
+    function updateTodayPlanOtherSectionHeadCount(total, doneCountOpt) {
       if (!todayPlanOtherSectionHeadMount) return;
+      const totalN = Math.max(0, Number(total) || 0);
+      const doneN = Math.max(
+        0,
+        Math.min(totalN, Number(doneCountOpt) || 0)
+      );
+      todayPlanOtherLastKnownTotal = totalN;
+      todayPlanOtherLastKnownDone = doneN;
       const heading = todayPlanOtherSectionHeadMount.querySelector(
         ".today-plan-panel__section-title"
       );
       if (heading) {
         const countEl = heading.querySelector(".today-plan-panel__section-count");
         if (countEl) {
-          countEl.textContent =
-            "（" + Math.max(0, Number(total) || 0) + "）";
+          fillTodayPlanSectionProgressCount(countEl, doneN, totalN);
           return;
         }
-        fillTodayPlanSectionHeading(heading, "其他任务", total);
+        fillTodayPlanSectionHeading(heading, "其他任务", totalN, {
+          progress: true,
+          doneCount: doneN
+        });
         return;
       }
-      paintTodayPlanOtherSectionHead(total);
+      paintTodayPlanOtherSectionHead(totalN, doneN);
     }
 
     /** 构建单条「其他任务」行（含 data-today-plan-other-id） */
@@ -212858,7 +212882,7 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
       const snap = getTodayPlanUiSnapshot();
       const total = snap.otherSorted.length;
-      updateTodayPlanOtherSectionHeadCount(total);
+      updateTodayPlanOtherSectionHeadCount(total, snap.otherDone);
       updateTodayPlanPanelProgress(snap.doneCount, snap.totalCount);
 
       if (total === 0) {
@@ -214014,7 +214038,11 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       });
       /* 先按今天死磕完成边沿同步折叠态，再画标题（箭头/Attention）与列表正文 */
       syncTodayPlanOtherSmartCollapse(closedWinReady);
-      paintTodayPlanOtherSectionHead(otherSorted.length);
+      let otherDoneCount = 0;
+      for (let od = 0; od < otherSorted.length; od++) {
+        if (otherSorted[od] && otherSorted[od].done) otherDoneCount += 1;
+      }
+      paintTodayPlanOtherSectionHead(otherSorted.length, otherDoneCount);
       todayPlanPanelOtherMount.textContent = "";
       /* 其他任务：列表数据始终写入；可见性由 is-smart-collapsed 控制，无折叠上限 */
       appendTodayPlanSection(todayPlanPanelOtherMount, "其他任务", otherSorted, {
