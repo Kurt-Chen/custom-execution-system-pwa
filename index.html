@@ -119861,7 +119861,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261125o";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261125p";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -133409,6 +133409,39 @@
           await aliyunSyncPrimaryEnsureHabitPullIfIndepMetaSaysSo(pullIdSet, changedDomains);
         } catch (_habitOvPartial) {}
       }
+      /*
+       * P0：本机域级 flush 互斥——从 pullIdSet 剔除冲突域，不推进其 meta lastSeen。
+       * near-realtime 传入 skipDomainsBlockedByLocalFlush；boot/manual 默认 false（首拉门闩下通常无 flush）。
+       */
+      const localFlushBlocked = Object.create(null);
+      if (pullOpts.skipDomainsBlockedByLocalFlush) {
+        let blockedMap = Object.create(null);
+        try {
+          blockedMap =
+            typeof aliyunSyncPrimaryDomainsBlockedByLocalFlush === "function"
+              ? aliyunSyncPrimaryDomainsBlockedByLocalFlush()
+              : Object.create(null);
+        } catch (_blkMap) {
+          blockedMap = Object.create(null);
+        }
+        const blockedIds = Object.keys(blockedMap || {}).filter(function (id) {
+          return blockedMap[id] && pullIdSet[id];
+        });
+        for (let bi = 0; bi < blockedIds.length; bi++) {
+          const bid = blockedIds[bi];
+          delete pullIdSet[bid];
+          localFlushBlocked[bid] = true;
+          const cix = changedDomains.indexOf(bid);
+          if (cix >= 0) changedDomains.splice(cix, 1);
+        }
+        if (blockedIds.length) {
+          try {
+            console.log(
+              "[aliyun-sync-primary] skip body pull local-flush-busy: " + blockedIds.join(",")
+            );
+          } catch (_blkLog) {}
+        }
+      }
       if (!forceAllBodies && domainsGate && Array.isArray(domainsGate.skipIds)) {
         const effectiveSkipIds = domainsGate.skipIds.filter(function (id) {
           return !pullIdSet[id];
@@ -133453,6 +133486,10 @@
         }
         const d = domains[i];
         if (!pullIdSet[d.id]) {
+          if (localFlushBlocked[d.id]) {
+            results[d.id] = { ok: true, skipped: true, reason: "local-flush-busy" };
+            continue;
+          }
           results[d.id] = { ok: true, skippedMeta: true, reason: "domains-meta-unchanged" };
           /*
            * Habit 正文被 domains-meta 跳过时，仍可能本机已有 habitCheckins、Done 镜像却缺
@@ -133535,6 +133572,22 @@
             Number(packed.skippedMissing) > 0 &&
             !(pullGen && !isAliyunSyncPrimaryPullGenerationCurrent(pullGen))
           ) {
+            /*
+             * 同轮 catchup 亦受域级 flush 互斥：Sprint 本机上传中禁止再 pull Sprint，
+             * 改为 arm 延迟 catchup，保留 skippedMissing 语义与防 12 分钟卡死。
+             */
+            if (localFlushBlocked.sprint || localFlushBlocked.todayPlan) {
+              try {
+                console.warn(
+                  "[aliyun-sync-primary] todayPlan skippedMissing=" +
+                    packed.skippedMissing +
+                    " → defer catchup (local-flush-busy sprint/todayPlan)"
+                );
+              } catch (_cSmBusy) {}
+              if (typeof aliyunSyncPrimaryArmTodayPlanMissingCatchup === "function") {
+                aliyunSyncPrimaryArmTodayPlanMissingCatchup(packed.skippedMissing);
+              }
+            } else {
             try {
               console.warn(
                 "[aliyun-sync-primary] todayPlan skippedMissing=" +
@@ -133591,6 +133644,7 @@
             ) {
               aliyunSyncPrimaryClearTodayPlanMissingCatchup();
             }
+            } /* end else: same-round catchup when not local-flush-busy */
           }
           const kbFromResult = Number(packed.payloadKB) || Number(packed.bodyKB) || 0;
           if (kbFromResult > 0 && typeof aliyunDomainsMetaNoteBodyKB === "function") {
@@ -133953,44 +134007,110 @@
      * 各域是否仍有实际上传/待刷队列。
      * 注意：不得把 *SuppressPush（合并中禁止推送）当成 busy——否则角标「同步中」无法收尾，
      * 且 Open List 保留守卫会被误拉长。
+     * 角标 / Open List 保留仍用「任一域 busy」；正文拉取改走域级互斥（见
+     * aliyunSyncPrimaryDomainsBlockedByLocalFlush），避免 Done/Habit/Forge 上传挡住今日计划。
      */
-    function aliyunSyncPrimaryAnyDomainFlushBusy() {
+    const ALIYUN_SYNC_PRIMARY_DOMAIN_IDS_FOR_FLUSH = [
+      "done",
+      "habit",
+      "forge",
+      "anniv",
+      "sprint",
+      "todayPlan",
+      "amb",
+      "rule100",
+      "lists",
+      "goals"
+    ];
+
+    /** 单域是否正在 flush 或队列非空；异常时 fail-closed 视为 busy */
+    function aliyunSyncPrimaryDomainFlushBusy(domainId) {
+      const id = String(domainId || "");
       try {
-        if (aliyunDoneRealFlushing || (aliyunDoneRealQueue && aliyunDoneRealQueue.length)) return true;
-      } catch (_d) {}
-      try {
-        if (aliyunHabitRealFlushing || (aliyunHabitRealQueue && aliyunHabitRealQueue.length)) return true;
-      } catch (_h) {}
-      try {
-        if (aliyunForgeRealFlushing || (aliyunForgeRealQueue && aliyunForgeRealQueue.length)) return true;
-      } catch (_f) {}
-      try {
-        if (aliyunAnnivRealFlushing || (aliyunAnnivRealQueue && aliyunAnnivRealQueue.length)) return true;
-      } catch (_a) {}
-      try {
-        if (aliyunSprintRealFlushing || (aliyunSprintRealQueue && aliyunSprintRealQueue.length)) return true;
-      } catch (_s) {}
-      try {
-        if (
-          aliyunTodayPlanRealFlushing ||
-          (aliyunTodayPlanRealQueue && aliyunTodayPlanRealQueue.length)
-        )
-          return true;
-      } catch (_t) {}
-      try {
-        if (aliyunAmbRealFlushing || aliyunAmbRealPendingReason) return true;
-      } catch (_amb) {}
-      try {
-        if (aliyunRule100RealFlushing || aliyunRule100RealPendingReason) return true;
-      } catch (_r100) {}
-      try {
-        if (aliyunListsRealFlushing || aliyunListsRealPendingReason) return true;
-      } catch (_lists) {}
-      try {
-        if (aliyunGoalsRealFlushing || aliyunGoalsRealPendingReason) return true;
-      } catch (_goals) {}
+        if (id === "done") {
+          return !!(aliyunDoneRealFlushing || (aliyunDoneRealQueue && aliyunDoneRealQueue.length));
+        }
+        if (id === "habit") {
+          return !!(
+            aliyunHabitRealFlushing ||
+            (aliyunHabitRealQueue && aliyunHabitRealQueue.length)
+          );
+        }
+        if (id === "forge") {
+          return !!(
+            aliyunForgeRealFlushing ||
+            (aliyunForgeRealQueue && aliyunForgeRealQueue.length)
+          );
+        }
+        if (id === "anniv") {
+          return !!(
+            aliyunAnnivRealFlushing ||
+            (aliyunAnnivRealQueue && aliyunAnnivRealQueue.length)
+          );
+        }
+        if (id === "sprint") {
+          return !!(
+            aliyunSprintRealFlushing ||
+            (aliyunSprintRealQueue && aliyunSprintRealQueue.length)
+          );
+        }
+        if (id === "todayPlan") {
+          return !!(
+            aliyunTodayPlanRealFlushing ||
+            (aliyunTodayPlanRealQueue && aliyunTodayPlanRealQueue.length)
+          );
+        }
+        if (id === "amb") {
+          return !!(aliyunAmbRealFlushing || aliyunAmbRealPendingReason);
+        }
+        if (id === "rule100") {
+          return !!(aliyunRule100RealFlushing || aliyunRule100RealPendingReason);
+        }
+        if (id === "lists") {
+          return !!(aliyunListsRealFlushing || aliyunListsRealPendingReason);
+        }
+        if (id === "goals") {
+          return !!(aliyunGoalsRealFlushing || aliyunGoalsRealPendingReason);
+        }
+      } catch (_busyErr) {
+        return true;
+      }
       return false;
     }
+
+    function aliyunSyncPrimaryAnyDomainFlushBusy() {
+      for (let i = 0; i < ALIYUN_SYNC_PRIMARY_DOMAIN_IDS_FOR_FLUSH.length; i++) {
+        if (aliyunSyncPrimaryDomainFlushBusy(ALIYUN_SYNC_PRIMARY_DOMAIN_IDS_FOR_FLUSH[i])) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    /**
+     * 本机 flush 期间禁止拉取正文的域（含耦合）。
+     * Sprint ↔ todayPlan：共享 weeklyPlan.todayPlanDate；同端 RMW 上传与 pull/merge 并发会互踩，
+     * 故任一侧 busy 时两侧正文都跳过（不推进 meta lastSeen，flush 结束后下一轮再拉）。
+     * Done/Habit/Forge/Anniv/AMB/Rule100/Goals/Lists 仅自阻，不挡今日计划相关域。
+     */
+    function aliyunSyncPrimaryDomainsBlockedByLocalFlush() {
+      const blocked = Object.create(null);
+      for (let i = 0; i < ALIYUN_SYNC_PRIMARY_DOMAIN_IDS_FOR_FLUSH.length; i++) {
+        const id = ALIYUN_SYNC_PRIMARY_DOMAIN_IDS_FOR_FLUSH[i];
+        if (aliyunSyncPrimaryDomainFlushBusy(id)) blocked[id] = true;
+      }
+      if (blocked.sprint || blocked.todayPlan) {
+        blocked.sprint = true;
+        blocked.todayPlan = true;
+      }
+      return blocked;
+    }
+
+    try {
+      window.aliyunSyncPrimaryDomainFlushBusy = aliyunSyncPrimaryDomainFlushBusy;
+      window.aliyunSyncPrimaryDomainsBlockedByLocalFlush =
+        aliyunSyncPrimaryDomainsBlockedByLocalFlush;
+    } catch (_flushBusyWin) {}
 
     /**
      * 右上角角标 · 阿里云主路径三态（只改展示，不改拉取/上传逻辑、不加网络）。
@@ -134240,7 +134360,11 @@
     }
 
     let aliyunSyncPrimaryLastPullReason = "";
-    /** P0-A / P1b：flush-busy 旁路只读拉取节流（与前台 poll 同档，不另开更高频） */
+    /**
+     * 旧路径：全局 flush-busy 时仅只读 Done/Habit（保留供诊断别名调用）。
+     * near-realtime 主路径已改为域级 skip（BootPull.skipDomainsBlockedByLocalFlush），
+     * 不再因无关域上传整轮跳过 Sprint/todayPlan。
+     */
     let aliyunSyncPrimaryReadonlyDuringFlushLastAt = 0;
     const ALIYUN_SYNC_PRIMARY_READONLY_DURING_FLUSH_MIN_MS = 5000;
     /** 兼容旧名（Habit 专用节流变量） */
@@ -134513,9 +134637,11 @@
           return { ok: false, skipped: true, reason: "hidden" };
         }
       } catch (_vis) {}
-      if (aliyunSyncPrimaryAnyDomainFlushBusy()) {
-        return await runAliyunSyncPrimaryReadonlyPullDuringFlushBusy(reason || "poll");
-      }
+      /*
+       * P0 域级互斥：不再因 Done/Habit/Forge 等无关域 flush 而整轮退化为只读 Done/Habit。
+       * 改为走 BootPull，并由 skipDomainsBlockedByLocalFlush 跳过本机冲突域正文
+       *（Sprint↔todayPlan 耦合自阻）；角标仍用 AnyDomainFlushBusy。
+       */
       const pullGen = beginAliyunSyncPrimaryPullInFlight();
       /*
        * 静默轮询：已是「已同步」时不切到「同步中…」，避免绿↔蓝闪烁伤流畅性。
@@ -134544,7 +134670,8 @@
         /* 复用启动串行拉取；Phase 1b domains meta 未变则跳过正文；域内指纹未变再跳过 merge/render */
         const report = await runAliyunSyncPrimaryBootPull({
           reason: pullReason,
-          pullGen: pullGen
+          pullGen: pullGen,
+          skipDomainsBlockedByLocalFlush: true
         });
         /* 本轮已被清僵尸/新轮取代：不写角标、不打开门闩，避免过期响应覆盖 */
         if (!isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
@@ -141424,6 +141551,8 @@
     let aliyunSprintRealFlushTimer = null;
     let aliyunSprintRealFlushRetryTimer = null;
     let aliyunSprintRealFlushFailStreak = 0;
+    /** 自动退避重试上限；超出后保留队列，等下一次本地 schedule 再武装（避免永久 busy 饿死对端拉取） */
+    const ALIYUN_SPRINT_REAL_FLUSH_MAX_AUTO_RETRIES = 8;
     let aliyunSprintRealFlushing = false;
     let aliyunSprintRealLastReport = null;
     let aliyunSprintRealSuppressPush = false;
@@ -142250,6 +142379,14 @@
           " queueLen=" +
           aliyunSprintRealQueue.length
       );
+      /* 新本地调度接手：取消退避定时器，并在达上限后重置 streak 以便再次武装 */
+      if (aliyunSprintRealFlushRetryTimer) {
+        clearTimeout(aliyunSprintRealFlushRetryTimer);
+        aliyunSprintRealFlushRetryTimer = null;
+      }
+      if (aliyunSprintRealFlushFailStreak >= ALIYUN_SPRINT_REAL_FLUSH_MAX_AUTO_RETRIES) {
+        aliyunSprintRealFlushFailStreak = 0;
+      }
       if (aliyunSprintRealFlushTimer) clearTimeout(aliyunSprintRealFlushTimer);
       aliyunSprintRealFlushTimer = setTimeout(function () {
         aliyunSprintRealFlushTimer = null;
@@ -142601,29 +142738,45 @@
         if (!ok && batch.length) {
           aliyunSprintRealQueue = batch.concat(aliyunSprintRealQueue);
           aliyunSprintRealFlushFailStreak += 1;
-          const retryMs = Math.min(
-            30000,
-            1000 * Math.pow(2, Math.min(aliyunSprintRealFlushFailStreak - 1, 4))
-          );
-          aliyunSprintRealAppendLog(
-            "flush fail requeue: batch=" +
-              batch.length +
-              " queueLen=" +
-              aliyunSprintRealQueue.length +
-              " retryMs=" +
-              retryMs +
-              " err=" +
-              (errMsg || "")
-          );
-          if (aliyunSprintRealFlushRetryTimer) clearTimeout(aliyunSprintRealFlushRetryTimer);
-          aliyunSprintRealFlushRetryTimer = setTimeout(function () {
-            aliyunSprintRealFlushRetryTimer = null;
-            Promise.resolve(flushAliyunSprintRealQueue()).catch(function (err2) {
-              aliyunSprintRealAppendLog(
-                "flush retry reject: " + (err2 && err2.message ? err2.message : String(err2))
-              );
-            });
-          }, retryMs);
+          const streak = aliyunSprintRealFlushFailStreak;
+          if (streak <= ALIYUN_SPRINT_REAL_FLUSH_MAX_AUTO_RETRIES) {
+            const retryMs = Math.min(
+              30000,
+              1000 * Math.pow(2, Math.min(streak - 1, 4))
+            );
+            aliyunSprintRealAppendLog(
+              "flush fail requeue: batch=" +
+                batch.length +
+                " queueLen=" +
+                aliyunSprintRealQueue.length +
+                " retryMs=" +
+                retryMs +
+                " streak=" +
+                streak +
+                " err=" +
+                (errMsg || "")
+            );
+            if (aliyunSprintRealFlushRetryTimer) clearTimeout(aliyunSprintRealFlushRetryTimer);
+            aliyunSprintRealFlushRetryTimer = setTimeout(function () {
+              aliyunSprintRealFlushRetryTimer = null;
+              Promise.resolve(flushAliyunSprintRealQueue()).catch(function (err2) {
+                aliyunSprintRealAppendLog(
+                  "flush retry reject: " + (err2 && err2.message ? err2.message : String(err2))
+                );
+              });
+            }, retryMs);
+          } else {
+            aliyunSprintRealAppendLog(
+              "flush fail requeue paused: batch=" +
+                batch.length +
+                " queueLen=" +
+                aliyunSprintRealQueue.length +
+                " streak=" +
+                streak +
+                " (await next local sprint schedule) err=" +
+                (errMsg || "")
+            );
+          }
         } else {
           if (ok) aliyunSprintRealFlushFailStreak = 0;
           if (aliyunSprintRealQueue.length) {
@@ -143798,10 +143951,15 @@
     async function flushAliyunTodayPlanRealQueue() {
       if (aliyunTodayPlanRealFlushing) return;
       if (!aliyunTodayPlanRealQueue.length) return;
-      if (!isAliyunTodayPlanRealSyncEnabled() || aliyunTodayPlanRealSuppressPush) {
+      if (!isAliyunTodayPlanRealSyncEnabled()) {
         aliyunTodayPlanRealQueue = [];
         return;
       }
+      /*
+       * 合并中 suppressPush：必须保留队列（含 tombstone / 挂牌 upsert）。
+       * 旧逻辑 Queue=[] 会在 merge 高峰吞掉待上传 marks，对端表现为「今日计划不同步」。
+       */
+      if (aliyunTodayPlanRealSuppressPush) return;
       /*
        * 首拉未完成：非空/upsert 挂牌推迟；tombstone（摘牌删除标记）可单独上云，
        * 避免门闩期间删除无法生效。
@@ -144210,6 +144368,12 @@
         } finally {
           aliyunTodayPlanRealSuppressPush = false;
         }
+        /* suppress 期间保留的队列：合并结束后立刻冲刷，避免 marks 卡死在本机 */
+        try {
+          if (aliyunTodayPlanRealQueue && aliyunTodayPlanRealQueue.length) {
+            Promise.resolve(flushAliyunTodayPlanRealQueue()).catch(function () {});
+          }
+        } catch (_tpKick) {}
         for (let hi = 0; hi < healTombIds.length; hi++) {
           try {
             if (typeof notifyAliyunTodayPlanRealMarkTombstone === "function") {
