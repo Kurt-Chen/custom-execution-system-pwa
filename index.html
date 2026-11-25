@@ -119383,7 +119383,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261125f";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261125g";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -210458,6 +210458,45 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       return out;
     }
 
+    /**
+     * 今天死磕展示排序（仅 UI；不改 closedList 存储序、不 saveState）。
+     * 有时段：开始升序 → 结束升序；起止皆同保持原相对序。
+     * 无时段：一律垫后，保持原相对序。稳定排序。
+     */
+    function sortTodayPlanClosedRowsByScheduledTime(rows) {
+      const list = Array.isArray(rows) ? rows : [];
+      const decorated = [];
+      for (let i = 0; i < list.length; i++) {
+        const row = list[i];
+        const st = normalizeClosedListScheduledTime(row && row.scheduledTime);
+        let startMin = null;
+        let endMin = null;
+        if (st) {
+          startMin = parseClosedListHmToMinutes(st.start);
+          endMin = parseClosedListHmToMinutes(st.end);
+        }
+        const has = startMin != null && endMin != null;
+        decorated.push({
+          row: row,
+          index: i,
+          has: has,
+          startMin: has ? startMin : 0,
+          endMin: has ? endMin : 0
+        });
+      }
+      decorated.sort(function (a, b) {
+        if (a.has !== b.has) return a.has ? -1 : 1;
+        if (a.has) {
+          if (a.startMin !== b.startMin) return a.startMin - b.startMin;
+          if (a.endMin !== b.endMin) return a.endMin - b.endMin;
+        }
+        return a.index - b.index;
+      });
+      const out = [];
+      for (let j = 0; j < decorated.length; j++) out.push(decorated[j].row);
+      return out;
+    }
+
     function partitionTodayPlanPendingFirst(items, isDone) {
       const pending = [];
       const done = [];
@@ -212745,7 +212784,8 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
 
     /**
      * 写入 / 清除今天死磕执行时段；显式 null 表示已清除。
-     * 局部刷新胶囊，不走全页 render。
+     * 展开时走 paintTodayPlanPanel 以按时段重排展示序（不改存储序）；
+     * 浮层由 retainTodaySikaoSchedulePopoverAfterPaint 重绑，不强制关闭。
      */
     function setClosedListItemScheduledTime(itemId, scheduledTimeOpt) {
       const tid = String(itemId || "");
@@ -212767,10 +212807,10 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
       else item.scheduledTime = null;
       if (typeof stampEntityRevision === "function") stampEntityRevision(item);
       saveState({ lists: ["closedList"], skipUiPaintDirty: true });
-      if (!patchTodayPlanClosedItemScheduleUi(tid, next)) {
-        if (typeof paintTodayPlanPanel === "function" && todayPlanPanelExpanded) {
-          paintTodayPlanPanel();
-        }
+      if (typeof paintTodayPlanPanel === "function" && todayPlanPanelExpanded) {
+        paintTodayPlanPanel();
+      } else {
+        patchTodayPlanClosedItemScheduleUi(tid, next);
       }
       return true;
     }
@@ -213384,7 +213424,9 @@ const SPRINT_FINISH_CLOSE_LOOP_TITLE = "不断地「闭合任务回路」 ➫ �
           parentTaskId: parentId || ""
         });
       }
-      const closedSorted = partitionTodayPlanPendingFirst(closedRows, function (row) {
+      /* 先按时段展示排序，再 pending 优先（分区保持组内相对序） */
+      const closedBySchedule = sortTodayPlanClosedRowsByScheduledTime(closedRows);
+      const closedSorted = partitionTodayPlanPendingFirst(closedBySchedule, function (row) {
         return row.done;
       });
       const otherSorted = partitionTodayPlanPendingFirst(otherRows, function (row) {
