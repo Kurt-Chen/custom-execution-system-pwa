@@ -1,5 +1,5 @@
 /* bump 时请同步修改 index.html 内 APP_CACHE_NAME_FOR_BADGE */
-const CACHE_NAME = "exec-system-pwa-v20261125d";
+const CACHE_NAME = "exec-system-pwa-v20261125e";
 /**
  * 导航/HTML：网络超时后回退「当前 CACHE_NAME」壳。
  * index.html ~8–9MB：7s 在弱网/GitHub Pages 上易超时，旧逻辑再经 caches.match 跨桶
@@ -35,6 +35,7 @@ const APP_SHELL = [
   "./assets/attention-calibrate-card.png",
   "./assets/maniacal-urgency-card.png",
   "./assets/today-plan-win-banner.png",
+  "./fonts/barlow-condensed-700-italic-latin.woff2",
   /*
    * MANIFESTO / RESULTS：仅预缓存 WebP（优先首图），去掉大体积 PNG 以免安卓安装预算内抢带宽。
    * PNG 仍保留在仓库作 fallback；首次命中后由 runtime cache 写入。
@@ -119,6 +120,9 @@ function matchCachedShell(req) {
 
 /** 静态图片：cache-first，安卓弱网下避免每次展开都等网络 */
 function isCacheFirstImageRequest(url) {
+  if (/\.(?:woff2)$/i.test(url.pathname) && url.pathname.indexOf("/fonts/") !== -1) {
+    return true;
+  }
   if (!/\.(?:webp|png|jpe?g|gif|svg)$/i.test(url.pathname)) return false;
   return (
     url.pathname.indexOf("/assets/") !== -1 ||
