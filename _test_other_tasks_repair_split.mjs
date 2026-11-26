@@ -16,7 +16,7 @@ const sw = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");
 const badge = html.match(/APP_CACHE_NAME_FOR_BADGE\s*=\s*"([^"]+)"/);
 const swCache = sw.match(/CACHE_NAME\s*=\s*"([^"]+)"/);
 assert.equal(badge[1], swCache[1]);
-assert.match(badge[1], /v20261126g$/);
+assert.match(badge[1], /v20261126h$/);
 
 assert.match(html, /aliyunSyncPrimaryListsRepairLeft/);
 assert.match(html, /aliyunSyncPrimaryOtherTasksRepairLeft/);

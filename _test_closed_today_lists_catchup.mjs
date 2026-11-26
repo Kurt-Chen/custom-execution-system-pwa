@@ -14,7 +14,7 @@ const sw = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");
 const badge = html.match(/APP_CACHE_NAME_FOR_BADGE\s*=\s*"([^"]+)"/);
 const swCache = sw.match(/CACHE_NAME\s*=\s*"([^"]+)"/);
 assert.equal(badge[1], swCache[1]);
-assert.match(badge[1], /v20261126g$/);
+assert.match(badge[1], /v20261126h$/);
 
 /* 不得再按「今天死磕为空」武装循环 */
 assert.doesNotMatch(html, /closed-today-catchup/);

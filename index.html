@@ -98843,7 +98843,7 @@
         var hint = document.createElement("div");
         hint.id = "earlyBootDiagHint";
         hint.textContent =
-          "平板请点「复制今日计划同步诊断」；正常设备也复制一份后对比。不改数据、不清缓存、不改房间。";
+          "请两端都点「含云端只读探测并复制」发回 JSON。核对 versions.isExpectedBuild；用 e2eTrace.firstGap 定位丢失环节。不改数据/房间/缓存。";
         hint.style.cssText = "font-size:12px;color:#64748b;margin-bottom:10px;";
         var pre = document.createElement("pre");
         pre.id = "earlyBootDiagPre";
@@ -98858,13 +98858,13 @@
         var copyTodayBtn = document.createElement("button");
         copyTodayBtn.type = "button";
         copyTodayBtn.id = "earlyBootDiagCopyTodayPlanBtn";
-        copyTodayBtn.textContent = "复制今日计划同步诊断";
+        copyTodayBtn.textContent = "复制本机今日计划诊断";
         copyTodayBtn.style.cssText =
           "min-height:40px;padding:8px 14px;border:1px solid #93c5fd;border-radius:8px;background:#eff6ff;font-weight:700;color:#1d4ed8;";
         var copyCloudBtn = document.createElement("button");
         copyCloudBtn.type = "button";
         copyCloudBtn.id = "earlyBootDiagCopyTodayPlanCloudBtn";
-        copyCloudBtn.textContent = "含云端只读探测并复制";
+        copyCloudBtn.textContent = "完整端到端诊断（含云端只读）";
         copyCloudBtn.style.cssText =
           "min-height:40px;padding:8px 14px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;font-weight:600;";
         var closeBtn = document.createElement("button");
@@ -120020,7 +120020,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126g";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126h";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -149578,15 +149578,29 @@
       };
     }
 
-    function todayPlanSyncDiagSummarizeTask(id, text, done) {
+    function todayPlanSyncDiagSummarizeTask(id, text, done, extra) {
       const t = String(text || "").trim();
-      return {
+      const out = {
         id: todayPlanSyncDiagSafeStr(id, 80),
         done: !!done,
         text24: todayPlanSyncDiagSafeStr(t, 24),
         textHash: todayPlanSyncDiagTextHash(t),
         textLen: t.length
       };
+      if (extra && typeof extra === "object") {
+        if (extra.todayPlanDate != null) {
+          out.todayPlanDate = todayPlanSyncDiagSafeStr(extra.todayPlanDate, 16);
+        }
+        if (extra.updatedAt != null && Number.isFinite(Number(extra.updatedAt))) {
+          out.updatedAt = Number(extra.updatedAt);
+        }
+        if (extra.weekKey != null) out.weekKey = todayPlanSyncDiagSafeStr(extra.weekKey, 16);
+        if (extra.source != null) out.source = todayPlanSyncDiagSafeStr(extra.source, 40);
+        if (extra.markTs != null && Number.isFinite(Number(extra.markTs))) {
+          out.markTs = Number(extra.markTs);
+        }
+      }
+      return out;
     }
 
     function todayPlanSyncDiagCollectLocalSurface(todayKey) {
@@ -149638,7 +149652,16 @@
           } catch (_nm) {
             name = String(task.text || "");
           }
-          otherItems.push(todayPlanSyncDiagSummarizeTask(task.id, name, done));
+          const extra = {
+            todayPlanDate:
+              typeof normalizeWeeklyPlanTodayPlanDate === "function"
+                ? normalizeWeeklyPlanTodayPlanDate(task.todayPlanDate)
+                : String(task.todayPlanDate || ""),
+            updatedAt: Number(task.updatedAt) || Number(task.todayPlanDateUpdatedAt) || 0,
+            weekKey: task.weekKey != null ? String(task.weekKey) : "",
+            source: task._todayPlanKind || "weeklyPlan"
+          };
+          otherItems.push(todayPlanSyncDiagSummarizeTask(task.id, name, done, extra));
         }
       } catch (_ot) {}
 
@@ -149785,6 +149808,81 @@
         lastSeen = Object.assign({}, aliyunDomainsMetaLastSeen);
       } catch (_ls) {}
       const started = Number(aliyunSyncPrimaryPullStartedAt) || 0;
+      const activeFlush = {};
+      for (let ai = 0; ai < ids.length; ai++) {
+        const aid = ids[ai];
+        try {
+          activeFlush[aid] =
+            typeof aliyunSyncPrimaryDomainActivelyFlushing === "function"
+              ? !!aliyunSyncPrimaryDomainActivelyFlushing(aid)
+              : null;
+        } catch (_af) {
+          activeFlush[aid] = null;
+        }
+      }
+      let queueLens = { sprint: null, todayPlan: null, lists: null };
+      try {
+        queueLens.sprint =
+          typeof aliyunSprintRealQueue !== "undefined" && Array.isArray(aliyunSprintRealQueue)
+            ? aliyunSprintRealQueue.length
+            : null;
+        queueLens.todayPlan =
+          typeof aliyunTodayPlanRealQueue !== "undefined" && Array.isArray(aliyunTodayPlanRealQueue)
+            ? aliyunTodayPlanRealQueue.length
+            : null;
+        queueLens.lists =
+          typeof aliyunListsRealPendingReason !== "undefined" && aliyunListsRealPendingReason
+            ? 1
+            : 0;
+      } catch (_ql) {}
+      let pullFp = null;
+      try {
+        pullFp = {
+          lists: aliyunSyncPrimaryLastPullFp && aliyunSyncPrimaryLastPullFp.lists != null
+            ? String(aliyunSyncPrimaryLastPullFp.lists)
+            : null,
+          sprint: aliyunSyncPrimaryLastPullFp && aliyunSyncPrimaryLastPullFp.sprint != null
+            ? String(aliyunSyncPrimaryLastPullFp.sprint)
+            : null,
+          todayPlan:
+            aliyunSyncPrimaryLastPullFp && aliyunSyncPrimaryLastPullFp.todayPlan != null
+              ? String(aliyunSyncPrimaryLastPullFp.todayPlan)
+              : null
+        };
+      } catch (_fp) {}
+      let repair = null;
+      try {
+        repair = {
+          ids: Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds || {}),
+          listsLeft: Number(aliyunSyncPrimaryListsRepairLeft) || 0,
+          otherLeft: Number(aliyunSyncPrimaryOtherTasksRepairLeft) || 0,
+          missingCatchupLeft: Number(aliyunSyncPrimaryTodayPlanMissingCatchupLeft) || 0
+        };
+      } catch (_rep) {}
+      let bootResults = null;
+      try {
+        const br = window.__aliyunSyncPrimaryBootPullReport;
+        if (br && br.results && typeof br.results === "object") {
+          bootResults = {};
+          ["lists", "sprint", "todayPlan"].forEach(function (did) {
+            const p = br.results[did];
+            if (!p) {
+              bootResults[did] = { missing: true };
+              return;
+            }
+            bootResults[did] = {
+              ok: p.ok !== false,
+              skipped: !!p.skipped,
+              skippedMeta: !!p.skippedMeta,
+              reason: todayPlanSyncDiagSafeStr(p.reason, 80),
+              unchanged: !!p.unchanged,
+              skippedMissing: Number(p.skippedMissing) || 0,
+              empty: !!p.empty,
+              notFound: !!p.notFound
+            };
+          });
+        }
+      } catch (_br) {}
       return {
         machineStatus: String(cloudSyncMachineStatus || ""),
         badgeText:
@@ -149813,8 +149911,14 @@
             ? !!isAliyunSyncPrimaryLocalDataSparse()
             : null,
         flushBusy: flushBusy,
+        activelyFlushing: activeFlush,
+        queueLens: queueLens,
         domainsBlockedByFlush: blocked,
         domainsLastSeen: lastSeen,
+        pullFingerprints: pullFp,
+        repair: repair,
+        sprintEverLoadedOk:
+          typeof aliyunSprintRealEverLoadedOk !== "undefined" ? !!aliyunSprintRealEverLoadedOk : null,
         bootPullReport:
           typeof window !== "undefined" && window.__aliyunSyncPrimaryBootPullReport
             ? {
@@ -149830,9 +149934,203 @@
                   window.__aliyunSyncPrimaryBootPullReport.changedDomains
                 )
                   ? window.__aliyunSyncPrimaryBootPullReport.changedDomains.slice(0, 12)
-                  : []
+                  : [],
+                domainResults: bootResults
               }
             : null
+      };
+    }
+
+    function todayPlanSyncDiagIdSet(rows) {
+      const set = Object.create(null);
+      const list = Array.isArray(rows) ? rows : [];
+      for (let i = 0; i < list.length; i++) {
+        const id = list[i] && list[i].id != null ? String(list[i].id) : "";
+        if (id) set[id] = list[i];
+      }
+      return set;
+    }
+
+    function todayPlanSyncDiagDiffIds(localRows, cloudRows) {
+      const loc = todayPlanSyncDiagIdSet(localRows);
+      const cloud = todayPlanSyncDiagIdSet(cloudRows);
+      const onlyLocal = [];
+      const onlyCloud = [];
+      const both = [];
+      Object.keys(loc).forEach(function (id) {
+        if (cloud[id]) both.push(id);
+        else onlyLocal.push(id);
+      });
+      Object.keys(cloud).forEach(function (id) {
+        if (!loc[id]) onlyCloud.push(id);
+      });
+      const contentMismatch = [];
+      for (let i = 0; i < both.length; i++) {
+        const id = both[i];
+        const L = loc[id];
+        const C = cloud[id];
+        if (!L || !C) continue;
+        if (!!L.done !== !!C.done || String(L.textHash || "") !== String(C.textHash || "")) {
+          contentMismatch.push({
+            id: id,
+            localDone: !!L.done,
+            cloudDone: !!C.done,
+            localHash: L.textHash || "",
+            cloudHash: C.textHash || "",
+            local24: L.text24 || "",
+            cloud24: C.text24 || ""
+          });
+        }
+      }
+      return {
+        onlyLocalIds: onlyLocal.slice(0, 40),
+        onlyCloudIds: onlyCloud.slice(0, 40),
+        bothCount: both.length,
+        contentMismatch: contentMismatch.slice(0, 20)
+      };
+    }
+
+    /**
+     * 端到端追踪卡：以「云端 marks 今日 id ∪ 本机其他任务 id」为线索，
+     * 标明首次可能丢失环节（本机缺正文 / 本机缺挂牌 / 云端有本机无 / 完成态不一致）。
+     */
+    function todayPlanSyncDiagBuildE2eTrace(localSurf, cloudPeek) {
+      const todayKey = localSurf && localSurf.todayKey ? String(localSurf.todayKey) : "";
+      const localOther = (localSurf && localSurf.otherToday && localSurf.otherToday.items) || [];
+      const localMarks = (localSurf && localSurf.todayPlanMarksForToday) || [];
+      const cloudMarks =
+        cloudPeek && cloudPeek.todayPlan && Array.isArray(cloudPeek.todayPlan.marksForToday)
+          ? cloudPeek.todayPlan.marksForToday
+          : [];
+      const cloudSprintItems =
+        cloudPeek && cloudPeek.sprint && Array.isArray(cloudPeek.sprint.items)
+          ? cloudPeek.sprint.items
+          : [];
+      const locOtherById = todayPlanSyncDiagIdSet(localOther);
+      const locMarkById = todayPlanSyncDiagIdSet(localMarks);
+      const cloudMarkById = todayPlanSyncDiagIdSet(cloudMarks);
+      const cloudSprintById = todayPlanSyncDiagIdSet(cloudSprintItems);
+      const allIds = Object.create(null);
+      [locOtherById, locMarkById, cloudMarkById, cloudSprintById].forEach(function (m) {
+        Object.keys(m).forEach(function (id) {
+          allIds[id] = true;
+        });
+      });
+      const traces = [];
+      Object.keys(allIds)
+        .slice(0, 60)
+        .forEach(function (id) {
+          const hasLocalBody = !!locOtherById[id];
+          const hasLocalMark = !!locMarkById[id];
+          const hasCloudMark = !!cloudMarkById[id];
+          const hasCloudSprint = !!cloudSprintById[id];
+          let firstGap = "aligned";
+          if (hasCloudMark && !hasLocalBody) firstGap = "cloud-mark-present-local-body-missing";
+          else if (hasCloudMark && !hasLocalMark) firstGap = "cloud-mark-present-local-mark-missing";
+          else if (hasCloudSprint && !hasLocalBody) firstGap = "cloud-sprint-present-local-body-missing";
+          else if (hasLocalBody && !hasCloudMark && cloudPeek && cloudPeek.todayPlan && cloudPeek.todayPlan.ok) {
+            firstGap = "local-body-present-cloud-mark-missing";
+          } else if (hasLocalBody && hasCloudSprint) {
+            const L = locOtherById[id];
+            const C = cloudSprintById[id];
+            if (L && C && (!!L.done !== !!C.done || String(L.textHash) !== String(C.textHash))) {
+              firstGap = "body-present-but-content-or-done-mismatch";
+            }
+          } else if (!cloudPeek) {
+            firstGap = "local-only-no-cloud-peek";
+          }
+          traces.push({
+            id: id,
+            hasLocalBody: hasLocalBody,
+            hasLocalMark: hasLocalMark,
+            hasCloudMark: hasCloudMark,
+            hasCloudSprintToday: hasCloudSprint,
+            local24: hasLocalBody ? locOtherById[id].text24 : "",
+            cloud24: hasCloudSprint ? cloudSprintById[id].text24 : "",
+            localDone: hasLocalBody ? !!locOtherById[id].done : null,
+            cloudDone: hasCloudSprint ? !!cloudSprintById[id].done : null,
+            firstGap: firstGap
+          });
+        });
+      const gapCounts = Object.create(null);
+      traces.forEach(function (t) {
+        gapCounts[t.firstGap] = (gapCounts[t.firstGap] || 0) + 1;
+      });
+      return {
+        todayKey: todayKey,
+        taskCount: traces.length,
+        gapCounts: gapCounts,
+        tasks: traces,
+        howToRead:
+          "找 firstGap!=aligned 的任务 id；优先看 cloud-mark-present-local-body-missing（marks 到了 Sprint 正文未合）"
+      };
+    }
+
+    function todayPlanSyncDiagBuildDomainCards(sync, localSurf, cloudPeek, lastReports) {
+      function card(domainId, localBlock, cloudBlock) {
+        const lastSeen =
+          sync && sync.domainsLastSeen && sync.domainsLastSeen[domainId] != null
+            ? Number(sync.domainsLastSeen[domainId])
+            : null;
+        const boot =
+          sync &&
+          sync.bootPullReport &&
+          sync.bootPullReport.domainResults &&
+          sync.bootPullReport.domainResults[domainId]
+            ? sync.bootPullReport.domainResults[domainId]
+            : null;
+        let skipReason = null;
+        if (boot) {
+          if (boot.missing) skipReason = "no-result-in-last-boot-report";
+          else if (boot.skipped && boot.reason) skipReason = boot.reason;
+          else if (boot.skippedMeta) skipReason = "domains-meta-unchanged";
+          else if (boot.unchanged) skipReason = "payload-fingerprint-unchanged";
+          else if (Number(boot.skippedMissing) > 0) {
+            skipReason = "skippedMissing=" + boot.skippedMissing;
+          }
+        }
+        return {
+          domain: domainId,
+          lastSeenMeta: lastSeen,
+          flushBusy: sync && sync.flushBusy ? !!sync.flushBusy[domainId] : null,
+          activelyFlushing:
+            sync && sync.activelyFlushing ? !!sync.activelyFlushing[domainId] : null,
+          queueLen:
+            sync && sync.queueLens && sync.queueLens[domainId] != null
+              ? sync.queueLens[domainId]
+              : null,
+          pullFp:
+            sync && sync.pullFingerprints ? sync.pullFingerprints[domainId] || null : null,
+          lastReport: lastReports ? lastReports[domainId] || null : null,
+          bootResult: boot,
+          skipOrGapReason: skipReason,
+          local: localBlock || null,
+          cloud: cloudBlock || null
+        };
+      }
+      const local = localSurf || {};
+      const cloud = cloudPeek || {};
+      return {
+        lists: card(
+          "lists",
+          local.closedToday || null,
+          cloud.lists || null
+        ),
+        sprint: card(
+          "sprint",
+          local.otherToday || null,
+          cloud.sprint || null
+        ),
+        todayPlan: card(
+          "todayPlan",
+          {
+            marksForTodayCount: Array.isArray(local.todayPlanMarksForToday)
+              ? local.todayPlanMarksForToday.length
+              : 0,
+            marksForToday: local.todayPlanMarksForToday || []
+          },
+          cloud.todayPlan || null
+        )
       };
     }
 
@@ -149869,8 +150167,22 @@
       } catch (_fd) {
         firebaseCachedDone = null;
       }
+      const sync = todayPlanSyncDiagCollectSyncMachine();
+      const lastReports = {
+        lists: todayPlanSyncDiagSanitizeReport(
+          typeof aliyunListsRealLastReport !== "undefined" ? aliyunListsRealLastReport : null
+        ),
+        sprint: todayPlanSyncDiagSanitizeReport(
+          typeof aliyunSprintRealLastReport !== "undefined" ? aliyunSprintRealLastReport : null
+        ),
+        todayPlan: todayPlanSyncDiagSanitizeReport(
+          typeof aliyunTodayPlanRealLastReport !== "undefined"
+            ? aliyunTodayPlanRealLastReport
+            : null
+        )
+      };
       return {
-        diag: "today-plan-sync-v1",
+        diag: "today-plan-sync-v2-e2e",
         at: Date.now(),
         privacy: "no-secrets; task text truncated to 24 chars; no tokens",
         device: todayPlanSyncDiagDeviceClass(),
@@ -149895,26 +150207,18 @@
           firebasePulseOmitsTodayPlanWhenPrimary: !!(aliyunPrimaryOn && !dualWrite),
           firebaseV2ShardingAffectsTodayPlan: false
         },
-        sync: todayPlanSyncDiagCollectSyncMachine(),
+        sync: sync,
         local: local,
         ui: ui,
-        lastReports: {
-          lists: todayPlanSyncDiagSanitizeReport(
-            typeof aliyunListsRealLastReport !== "undefined" ? aliyunListsRealLastReport : null
-          ),
-          sprint: todayPlanSyncDiagSanitizeReport(
-            typeof aliyunSprintRealLastReport !== "undefined" ? aliyunSprintRealLastReport : null
-          ),
-          todayPlan: todayPlanSyncDiagSanitizeReport(
-            typeof aliyunTodayPlanRealLastReport !== "undefined"
-              ? aliyunTodayPlanRealLastReport
-              : null
-          )
-        },
+        lastReports: lastReports,
+        domains: todayPlanSyncDiagBuildDomainCards(sync, local, null, lastReports),
+        e2eTrace: todayPlanSyncDiagBuildE2eTrace(local, null),
         cloudPeek: null,
         notes: [
-          "本快照只读；复制对比正常设备与平板的 roomId / todayKey / closedToday / otherToday / flushBusy / uploadGateOpen",
-          "其他任务标题旁若显示数量但列表空白，可能是 is-smart-collapsed（看 ui.otherSmartCollapsed）"
+          "端到端：请两端都点「含云端只读探测并复制」，对比 e2eTrace / domains / versions",
+          "versions.badgeCache 必须等于 versions.swScriptCacheName 且含 v20261126h，否则平板未真正跑到新码",
+          "e2eTrace.tasks[].firstGap 标出该任务 id 首次差异环节（非猜测）",
+          "其他任务标题旁有数但列表空白：看 ui.otherSmartCollapsed"
         ]
       };
     }
@@ -150102,7 +150406,22 @@
                 ? normalizeWeeklyPlanTodayPlanDate(date)
                 : String(date || "");
             if (date === want) {
-              forToday.push({ id: todayPlanSyncDiagSafeStr(mid, 80), date: date });
+              let markTs = 0;
+              try {
+                if (m && typeof m === "object") {
+                  markTs =
+                    typeof aliyunTodayPlanRealMarkTs === "function"
+                      ? aliyunTodayPlanRealMarkTs(m)
+                      : Number(m.updatedAt || m.todayPlanDateUpdatedAt) || 0;
+                }
+              } catch (_mts) {
+                markTs = 0;
+              }
+              forToday.push({
+                id: todayPlanSyncDiagSafeStr(mid, 80),
+                date: date,
+                markTs: markTs
+              });
             }
           }
           result.todayPlan = {
@@ -150153,9 +150472,14 @@
                 ? normalizeWeeklyPlanTodayPlanDate(task.todayPlanDate)
                 : String(task.todayPlanDate || "");
             if (date !== want) return;
-            const done = !!(task.mainDone || task.done);
+            const done = !!(task.mainDone || task.done || task.completed);
             collected.push(
-              todayPlanSyncDiagSummarizeTask(task.id, task.text, done)
+              todayPlanSyncDiagSummarizeTask(task.id, task.text, done, {
+                todayPlanDate: date,
+                updatedAt: Number(task.updatedAt) || 0,
+                weekKey: task.weekKey != null ? String(task.weekKey) : "",
+                source: "cloud-sprint"
+              })
             );
           }
           if (itemsMap) {
@@ -150188,6 +150512,26 @@
         };
       }
 
+      /* 房间 domains meta：只读 GET，对比 lastSeen 水位 */
+      try {
+        if (typeof aliyunDomainsMetaFetch === "function") {
+          const meta = await aliyunDomainsMetaFetch();
+          result.domainsMeta = {
+            ok: !!meta.ok,
+            missing: !!meta.missing,
+            parseError: !!meta.parseError,
+            metaId: todayPlanSyncDiagSafeStr(meta.metaId, 120),
+            versions: meta.versions || null,
+            error: todayPlanSyncDiagSafeStr(meta.error, 120)
+          };
+        }
+      } catch (errMeta) {
+        result.domainsMeta = {
+          ok: false,
+          error: todayPlanSyncDiagSafeStr(errMeta && errMeta.message, 160)
+        };
+      }
+
       return result;
     }
 
@@ -150196,6 +150540,13 @@
       const snap = __todayPlanSyncDiagSnapshotSync();
       try {
         snap.versions = await todayPlanSyncDiagCollectRuntimeVersions();
+        snap.versions.codeMatchesCaches =
+          !!snap.versions.badgeCache &&
+          snap.versions.badgeCache === snap.versions.swScriptCacheName;
+        snap.versions.expectedBadge = "exec-system-pwa-v20261126h";
+        snap.versions.isExpectedBuild =
+          snap.versions.badgeCache === snap.versions.expectedBadge &&
+          snap.versions.swScriptCacheName === snap.versions.expectedBadge;
       } catch (_ver) {
         snap.versions = snap.versions || {};
         snap.versions.runtimeError = todayPlanSyncDiagSafeStr(_ver && _ver.message, 80);
@@ -150206,8 +150557,65 @@
         } catch (errPeek) {
           snap.cloudPeek = {
             ok: false,
-            error: todayPlanSyncDiagSafeStr(errPeek && errPeek.message, 160)
+            error: todayPlanSyncDiagSafeStr(errPeek && errPeek.message, 160),
+            mode: "GET-only-no-apply"
           };
+        }
+        try {
+          snap.domains = todayPlanSyncDiagBuildDomainCards(
+            snap.sync,
+            snap.local,
+            snap.cloudPeek,
+            snap.lastReports
+          );
+          snap.e2eTrace = todayPlanSyncDiagBuildE2eTrace(snap.local, snap.cloudPeek);
+          snap.idDiff = {
+            closed: todayPlanSyncDiagDiffIds(
+              snap.local && snap.local.closedToday && snap.local.closedToday.items,
+              snap.cloudPeek && snap.cloudPeek.lists && snap.cloudPeek.lists.items
+            ),
+            other: todayPlanSyncDiagDiffIds(
+              snap.local && snap.local.otherToday && snap.local.otherToday.items,
+              snap.cloudPeek && snap.cloudPeek.sprint && snap.cloudPeek.sprint.items
+            ),
+            marks: todayPlanSyncDiagDiffIds(
+              snap.local && snap.local.todayPlanMarksForToday,
+              snap.cloudPeek &&
+                snap.cloudPeek.todayPlan &&
+                snap.cloudPeek.todayPlan.marksForToday
+            )
+          };
+          /* lastSeen vs 云端 meta 版本差：定位是否 meta 门闩跳过正文 */
+          if (
+            snap.cloudPeek &&
+            snap.cloudPeek.domainsMeta &&
+            snap.cloudPeek.domainsMeta.versions &&
+            snap.sync &&
+            snap.sync.domainsLastSeen
+          ) {
+            const rv = snap.cloudPeek.domainsMeta.versions;
+            const ls = snap.sync.domainsLastSeen;
+            snap.metaLag = {};
+            ["lists", "sprint", "todayPlan"].forEach(function (d) {
+              const remote = Number(rv[d]);
+              const local = ls[d] != null ? Number(ls[d]) : null;
+              snap.metaLag[d] = {
+                remote: Number.isFinite(remote) ? remote : null,
+                lastSeen: local,
+                lag:
+                  Number.isFinite(remote) && local != null && Number.isFinite(local)
+                    ? remote - local
+                    : null,
+                wouldSkipBody:
+                  local != null &&
+                  Number.isFinite(local) &&
+                  Number.isFinite(remote) &&
+                  remote === local
+              };
+            });
+          }
+        } catch (_e2e) {
+          snap.e2eBuildError = todayPlanSyncDiagSafeStr(_e2e && _e2e.message, 120);
         }
       }
       return snap;
