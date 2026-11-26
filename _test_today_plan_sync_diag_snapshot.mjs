@@ -15,7 +15,7 @@ const badge = html.match(/APP_CACHE_NAME_FOR_BADGE\s*=\s*"([^"]+)"/);
 const swCache = sw.match(/CACHE_NAME\s*=\s*"([^"]+)"/);
 assert.ok(badge && swCache, "cache name markers present");
 assert.equal(badge[1], swCache[1], "index.html badge cache must match sw.js CACHE_NAME");
-assert.match(badge[1], /^exec-system-pwa-v20261126i$/);
+assert.match(badge[1], /^exec-system-pwa-v20261126j$/);
 
 assert.match(html, /function __todayPlanSyncDiagSnapshotSync\s*\(/);
 assert.match(html, /async function buildTodayPlanSyncDiagSnapshot\s*\(/);
