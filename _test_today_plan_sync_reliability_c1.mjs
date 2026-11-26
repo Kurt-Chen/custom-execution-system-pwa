@@ -12,8 +12,11 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 const sw = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");
 
-assert.match(html, /APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261125p"/);
-assert.match(sw, /CACHE_NAME = "exec-system-pwa-v20261125p"/);
+const badge = html.match(/APP_CACHE_NAME_FOR_BADGE\s*=\s*"([^"]+)"/);
+const swCache = sw.match(/CACHE_NAME\s*=\s*"([^"]+)"/);
+assert.ok(badge && swCache, "cache markers");
+assert.equal(badge[1], swCache[1], "html badge must match sw CACHE_NAME");
+assert.match(badge[1], /^exec-system-pwa-v/);
 
 assert.doesNotMatch(
   html,
