@@ -120020,7 +120020,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126d";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126e";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -132706,13 +132706,13 @@
     let aliyunSyncPrimaryTodayPlanMissingCatchupLeft = 0;
     let aliyunSyncPrimaryTodayPlanMissingRetryScheduled = false;
     /**
-     * 今天死磕（当日 closedList）为空，但其他任务/Done 非空时：
-     * todaySurfaceEmpty=false，不会 forceAllBodies；若 lists meta 被误判未变，
-     * 会长期跳过 lists 正文 → 平板「其他任务有数、死磕（0）」分叉。
-     * 会话内最多武装几次强制拉 lists（不抬 poll、不改房间）。
+     * 今日计划相关域（lists/sprint/todayPlan）内容修复拉取配额。
+     * 仅在「meta 要求拉某域但本轮被 flush 挡住」或「手动强制重拉」时武装；
+     * 成功拉完对应域或配额耗尽即退出，禁止按「分组是否为空」循环拉取。
      */
-    let aliyunSyncPrimaryClosedTodayCatchupLeft = 0;
-    let aliyunSyncPrimaryClosedTodayRetryScheduled = false;
+    let aliyunSyncPrimaryTodayPlanDomainRepairLeft = 0;
+    let aliyunSyncPrimaryTodayPlanDomainRepairScheduled = false;
+    let aliyunSyncPrimaryTodayPlanDomainRepairIds = Object.create(null);
 
     function aliyunSyncPrimaryArmTodayPlanMissingCatchup(skippedN) {
       const n = Number(skippedN) || 0;
@@ -133228,52 +133228,97 @@
       }
     }
 
-    /** 当日「今天死磕」可见条数是否为 0（可与其他任务并存） */
-    function isAliyunSyncPrimaryClosedTodayEmpty() {
-      try {
-        const todayKey =
-          typeof formatDateInputValue === "function" ? formatDateInputValue(new Date()) : "";
-        if (!todayKey) return false;
-        if (typeof getClosedListItemsVisibleForViewDate !== "function") return false;
-        return getClosedListItemsVisibleForViewDate(todayKey).length === 0;
-      } catch (_e) {
-        return false;
+    /** 将 skipAll 早退改为「并入」若干域，禁止用单域覆盖掉其它已需拉取的域 */
+    function aliyunSyncPrimaryUnionPullIdsOntoGate(domainsGate, domainIds, addIds, reasonTag) {
+      const pullSet = Object.create(null);
+      const prev = domainsGate && Array.isArray(domainsGate.pullIds) ? domainsGate.pullIds : [];
+      for (let i = 0; i < prev.length; i++) pullSet[String(prev[i])] = true;
+      const add = Array.isArray(addIds) ? addIds : [];
+      for (let j = 0; j < add.length; j++) {
+        const id = String(add[j] || "");
+        if (id) pullSet[id] = true;
       }
+      const pullIds = Object.keys(pullSet);
+      const ids = Array.isArray(domainIds) ? domainIds : [];
+      const skipIds = ids.filter(function (id) {
+        return !pullSet[String(id)];
+      });
+      return Object.assign({}, domainsGate || {}, {
+        skipAll: false,
+        pullIds: pullIds,
+        skipIds: skipIds,
+        reason: String(reasonTag || (domainsGate && domainsGate.reason) || "union-pull")
+      });
     }
 
-    function aliyunSyncPrimaryArmClosedTodayCatchup(why) {
-      aliyunSyncPrimaryClosedTodayCatchupLeft = Math.max(
-        aliyunSyncPrimaryClosedTodayCatchupLeft,
-        3
-      );
-      if (aliyunSyncPrimaryClosedTodayRetryScheduled) return false;
-      aliyunSyncPrimaryClosedTodayRetryScheduled = true;
+    function aliyunSyncPrimaryClearTodayPlanDomainRepair(why) {
+      aliyunSyncPrimaryTodayPlanDomainRepairLeft = 0;
+      aliyunSyncPrimaryTodayPlanDomainRepairScheduled = false;
+      aliyunSyncPrimaryTodayPlanDomainRepairIds = Object.create(null);
       try {
-        noteBootHealth("closed-today-catchup-armed", { why: String(why || "") });
+        noteBootHealth("today-plan-domain-repair-cleared", { why: String(why || "") });
+      } catch (_n) {}
+    }
+
+    /**
+     * 武装今日计划三域修复拉取（明确触发）。
+     * 退出：对应域成功正文拉取后从 repairIds 剔除；全清或 left<=0 停止。
+     */
+    function aliyunSyncPrimaryArmTodayPlanDomainRepair(domainIds, why) {
+      const add = Array.isArray(domainIds) ? domainIds : [];
+      let added = 0;
+      for (let i = 0; i < add.length; i++) {
+        const id = String(add[i] || "");
+        if (id !== "lists" && id !== "sprint" && id !== "todayPlan") continue;
+        if (!aliyunSyncPrimaryTodayPlanDomainRepairIds[id]) {
+          aliyunSyncPrimaryTodayPlanDomainRepairIds[id] = true;
+          added += 1;
+        }
+      }
+      if (!added && aliyunSyncPrimaryTodayPlanDomainRepairLeft <= 0) return false;
+      /* 配额只在从 0 启动时给 3，flush 反复挡住不得把 left 重置回 3（防同步环） */
+      if (aliyunSyncPrimaryTodayPlanDomainRepairLeft <= 0) {
+        aliyunSyncPrimaryTodayPlanDomainRepairLeft = 3;
+      }
+      if (aliyunSyncPrimaryTodayPlanDomainRepairScheduled) return true;
+      aliyunSyncPrimaryTodayPlanDomainRepairScheduled = true;
+      try {
+        noteBootHealth("today-plan-domain-repair-armed", {
+          why: String(why || ""),
+          domains: Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds)
+        });
       } catch (_n) {}
       try {
-        console.warn(
-          "[aliyun-sync-primary] closed-today empty → arm lists catchup why=" + String(why || "")
-        );
-      } catch (_c) {}
-      try {
         window.setTimeout(function () {
-          aliyunSyncPrimaryClosedTodayRetryScheduled = false;
+          aliyunSyncPrimaryTodayPlanDomainRepairScheduled = false;
+          if (aliyunSyncPrimaryTodayPlanDomainRepairLeft <= 0) return;
           if (typeof scheduleAliyunSyncPrimaryNearRealtimePull === "function") {
-            scheduleAliyunSyncPrimaryNearRealtimePull("closed-today-catchup");
+            scheduleAliyunSyncPrimaryNearRealtimePull("today-plan-domain-repair");
           } else if (typeof runAliyunSyncPrimaryNearRealtimePull === "function") {
             Promise.resolve(
-              runAliyunSyncPrimaryNearRealtimePull("closed-today-catchup")
+              runAliyunSyncPrimaryNearRealtimePull("today-plan-domain-repair")
             ).catch(function () {});
           }
-        }, 400);
+        }, 500);
       } catch (_sch) {
-        aliyunSyncPrimaryClosedTodayRetryScheduled = false;
+        aliyunSyncPrimaryTodayPlanDomainRepairScheduled = false;
       }
       return true;
     }
 
-    /** 诊断/恢复：只清 lists/sprint/todayPlan 指纹与 meta lastSeen，强制重拉（不改房间、不清 IDB、不 POST） */
+    function aliyunSyncPrimaryNoteTodayPlanDomainRepaired(domainId) {
+      const id = String(domainId || "");
+      if (!id || !aliyunSyncPrimaryTodayPlanDomainRepairIds[id]) return;
+      delete aliyunSyncPrimaryTodayPlanDomainRepairIds[id];
+      if (!Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds).length) {
+        aliyunSyncPrimaryClearTodayPlanDomainRepair("all-domains-ok");
+      }
+    }
+
+    /**
+     * 诊断/恢复：只清 lists/sprint/todayPlan 的 meta lastSeen + 指纹，让下一轮按版本门闩拉正文。
+     * 不改房间、不清 IDB、不 POST；靠 meta 版本而非「是否为空」判断。
+     */
     function aliyunSyncPrimaryForceRepullTodayPlanDomains(why) {
       const reason = String(why || "diag-force-repull");
       try {
@@ -133290,14 +133335,7 @@
           delete aliyunDomainsMetaLastSeen.todayPlan;
         }
       } catch (_ls) {}
-      aliyunSyncPrimaryClosedTodayCatchupLeft = Math.max(
-        aliyunSyncPrimaryClosedTodayCatchupLeft,
-        3
-      );
-      aliyunSyncPrimaryTodayPlanMissingCatchupLeft = Math.max(
-        aliyunSyncPrimaryTodayPlanMissingCatchupLeft,
-        3
-      );
+      aliyunSyncPrimaryArmTodayPlanDomainRepair(["lists", "sprint", "todayPlan"], reason);
       try {
         noteBootHealth("diag-force-repull-today-plan-domains", { why: reason });
       } catch (_n) {}
@@ -133314,10 +133352,10 @@
       try {
         if (typeof runAliyunSyncPrimaryNearRealtimePull === "function") {
           Promise.resolve(
-            runAliyunSyncPrimaryNearRealtimePull("closed-today-catchup")
+            runAliyunSyncPrimaryNearRealtimePull("today-plan-domain-repair")
           ).catch(function () {});
         } else if (typeof scheduleAliyunSyncPrimaryNearRealtimePull === "function") {
-          scheduleAliyunSyncPrimaryNearRealtimePull("closed-today-catchup");
+          scheduleAliyunSyncPrimaryNearRealtimePull("today-plan-domain-repair");
         }
       } catch (_pull) {}
       return { ok: true, reason: reason };
@@ -133478,28 +133516,16 @@
       const todaySurfaceEmpty =
         typeof isAliyunSyncPrimaryTodaySurfaceEmpty === "function" &&
         isAliyunSyncPrimaryTodaySurfaceEmpty();
-      const closedTodayEmpty =
-        typeof isAliyunSyncPrimaryClosedTodayEmpty === "function" &&
-        isAliyunSyncPrimaryClosedTodayEmpty();
+      /*
+       * 今日面全空：仅 boot / 手动全量 / 会话内一次 today-surface-retry 强制正文。
+       * 不把「某一个分组非空」当成另一分组已对齐；日常仍靠 domains meta 版本逐域判断。
+       * visible 不因今日空打满 10 域（交给已有 today-surface-retry 一次）。
+       */
       const forceTodaySurface =
         !!todaySurfaceEmpty &&
         (pullReason === "boot" ||
-          pullReason === "visible" ||
           pullReason === "manual-full" ||
           pullReason === "today-surface-retry");
-      const forceClosedTodayLists =
-        !!closedTodayEmpty &&
-        (pullReason === "boot" ||
-          pullReason === "visible" ||
-          pullReason === "manual-full" ||
-          pullReason === "today-surface-retry" ||
-          pullReason === "closed-today-catchup");
-      if (forceClosedTodayLists) {
-        aliyunSyncPrimaryClosedTodayCatchupLeft = Math.max(
-          aliyunSyncPrimaryClosedTodayCatchupLeft,
-          1
-        );
-      }
       const forceAllBodies =
         pullReason === "boot" ||
         pullReason === "manual-full" ||
@@ -133565,15 +133591,13 @@
                */
               if (aliyunSyncPrimaryTodayPlanMissingCatchupLeft > 0) {
                 skippedFullPull = false;
-                changedDomains = ["sprint", "todayPlan"];
-                domainsGate = Object.assign({}, domainsGate, {
-                  skipAll: false,
-                  pullIds: ["sprint", "todayPlan"],
-                  skipIds: domainIds.filter(function (id) {
-                    return id !== "sprint" && id !== "todayPlan";
-                  }),
-                  reason: "today-plan-missing-catchup"
-                });
+                domainsGate = aliyunSyncPrimaryUnionPullIdsOntoGate(
+                  domainsGate,
+                  domainIds,
+                  ["sprint", "todayPlan"],
+                  "today-plan-missing-catchup"
+                );
+                changedDomains = domainsGate.pullIds.slice();
                 try {
                   console.log(
                     "[aliyun-sync-primary] skipAll overridden by today-plan-missing-catchup left=" +
@@ -133581,25 +133605,25 @@
                   );
                 } catch (_cSkipOv) {}
               } else if (
-                aliyunSyncPrimaryClosedTodayCatchupLeft > 0 ||
-                forceClosedTodayLists
+                aliyunSyncPrimaryTodayPlanDomainRepairLeft > 0 &&
+                Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds).length
               ) {
                 skippedFullPull = false;
-                changedDomains = ["lists"];
-                domainsGate = Object.assign({}, domainsGate, {
-                  skipAll: false,
-                  pullIds: ["lists"],
-                  skipIds: domainIds.filter(function (id) {
-                    return id !== "lists";
-                  }),
-                  reason: "closed-today-catchup"
-                });
+                domainsGate = aliyunSyncPrimaryUnionPullIdsOntoGate(
+                  domainsGate,
+                  domainIds,
+                  Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds),
+                  "today-plan-domain-repair"
+                );
+                changedDomains = domainsGate.pullIds.slice();
                 try {
                   console.log(
-                    "[aliyun-sync-primary] skipAll overridden by closed-today-catchup left=" +
-                      aliyunSyncPrimaryClosedTodayCatchupLeft
+                    "[aliyun-sync-primary] skipAll overridden by today-plan-domain-repair left=" +
+                      aliyunSyncPrimaryTodayPlanDomainRepairLeft +
+                      " ids=" +
+                      Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds).join(",")
                   );
-                } catch (_cSkipCl) {}
+                } catch (_cSkipRep) {}
               } else {
                 skippedFullPull = true;
                 savedEstimatedKB =
@@ -133719,25 +133743,29 @@
       }
       if (
         !forceAllBodies &&
-        (aliyunSyncPrimaryClosedTodayCatchupLeft > 0 || forceClosedTodayLists)
+        aliyunSyncPrimaryTodayPlanDomainRepairLeft > 0 &&
+        Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds).length
       ) {
-        pullIdSet.lists = true;
-        if (changedDomains.indexOf("lists") < 0) changedDomains.push("lists");
-        try {
-          if (typeof aliyunSyncPrimaryLastPullFp === "object" && aliyunSyncPrimaryLastPullFp) {
-            delete aliyunSyncPrimaryLastPullFp.lists;
-          }
-        } catch (_fpLists) {}
-        if (aliyunSyncPrimaryClosedTodayCatchupLeft > 0) {
-          aliyunSyncPrimaryClosedTodayCatchupLeft -= 1;
+        const repairIds = Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds);
+        for (let ri = 0; ri < repairIds.length; ri++) {
+          const rid = repairIds[ri];
+          pullIdSet[rid] = true;
+          if (changedDomains.indexOf(rid) < 0) changedDomains.push(rid);
+          try {
+            if (typeof aliyunSyncPrimaryLastPullFp === "object" && aliyunSyncPrimaryLastPullFp) {
+              delete aliyunSyncPrimaryLastPullFp[rid];
+            }
+          } catch (_fpRep) {}
         }
+        aliyunSyncPrimaryTodayPlanDomainRepairLeft -= 1;
         try {
           console.log(
-            "[aliyun-sync-primary] force lists body (closed-today-catchup left=" +
-              aliyunSyncPrimaryClosedTodayCatchupLeft +
-              ")"
+            "[aliyun-sync-primary] force today-plan domain bodies repair left=" +
+              aliyunSyncPrimaryTodayPlanDomainRepairLeft +
+              " ids=" +
+              repairIds.join(",")
           );
-        } catch (_cForceLi) {}
+        } catch (_cForceRep) {}
       }
       /*
        * P0-B：domains 只跳过 Habit（其它域仍拉）时，同样用 Habit 独立 meta 纠偏。
@@ -133779,6 +133807,21 @@
               "[aliyun-sync-primary] skip body pull local-flush-busy: " + blockedIds.join(",")
             );
           } catch (_blkLog) {}
+          /*
+           * meta 已要求拉正文，但本机 flush 挡住：武装有限次域修复，
+           * 不得因其它域（如 Done）忙而永久饿死今日计划三域。
+           */
+          const repairBlocked = blockedIds.filter(function (id) {
+            return id === "lists" || id === "sprint" || id === "todayPlan";
+          });
+          if (repairBlocked.length && typeof aliyunSyncPrimaryArmTodayPlanDomainRepair === "function") {
+            try {
+              aliyunSyncPrimaryArmTodayPlanDomainRepair(
+                repairBlocked,
+                "local-flush-busy:" + pullReason
+              );
+            } catch (_armBlk) {}
+          }
         }
       }
       if (!forceAllBodies && domainsGate && Array.isArray(domainsGate.skipIds)) {
@@ -134004,6 +134047,11 @@
             !(Number(packed && packed.skippedMissing) > 0)
           ) {
             aliyunDomainsMetaMarkDomainPulled(d.id, domainsGate.remoteVersions[d.id]);
+            try {
+              if (typeof aliyunSyncPrimaryNoteTodayPlanDomainRepaired === "function") {
+                aliyunSyncPrimaryNoteTodayPlanDomainRepaired(d.id);
+              }
+            } catch (_noteRep) {}
           }
         } catch (err) {
           allOk = false;
@@ -134022,6 +134070,17 @@
 
       if (pullGen && !isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
         superseded = true;
+      }
+
+      /* 修复配额耗尽：明确退出，避免角标长期「同步中」+ 重复武装 */
+      if (
+        !superseded &&
+        aliyunSyncPrimaryTodayPlanDomainRepairLeft <= 0 &&
+        Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds).length
+      ) {
+        try {
+          aliyunSyncPrimaryClearTodayPlanDomainRepair("quota-exhausted:" + pullReason);
+        } catch (_qEx) {}
       }
 
       if (
@@ -134544,9 +134603,36 @@
                 "[aliyun-sync-primary] badge syncing watchdog skip synced: boot incomplete"
               );
             } catch (_bootInc) {}
+            /*
+             * 首拉门闩超时仍未 settle：强制打开，避免平板永久「同步中…」。
+             * 不 POST、不改房间；仅解除角标/上传门闩死锁。
+             */
+            if (
+              lived >= ALIYUN_SYNC_PRIMARY_UPLOAD_GATE_FALLBACK_MS &&
+              typeof markAliyunSyncPrimaryInitialPullSettled === "function"
+            ) {
+              try {
+                markAliyunSyncPrimaryInitialPullSettled("badge-watchdog-force-settle");
+              } catch (_forceSettle) {}
+              clearAliyunSyncPrimaryBadgeSyncingWatchdog();
+              if (
+                typeof aliyunSyncPrimaryAnyDomainFlushBusy === "function" &&
+                aliyunSyncPrimaryAnyDomainFlushBusy()
+              ) {
+                setCloudSyncStatus("同步中…", "status-syncing");
+                armAliyunSyncPrimaryBadgeSyncingWatchdog();
+                return;
+              }
+              cloudSyncLastErrorMsg = "";
+              if (typeof markCloudSyncSuccess === "function") markCloudSyncSuccess();
+              setCloudSyncStatus(buildCloudSyncConnectedBadgeText(), "status-connected");
+              return;
+            }
             clearAliyunSyncPrimaryBadgeSyncingWatchdog();
             /* 保持「同步中…」，不 markCloudSyncSuccess、不改 connected */
             setCloudSyncStatus("同步中…", "status-syncing");
+            /* 未到 fallback：短后再看一眼，避免清掉 watchdog 后永远不收尾 */
+            armAliyunSyncPrimaryBadgeSyncingWatchdog();
             return;
           }
           try {
@@ -134994,9 +135080,6 @@
       const todayEmptyBefore =
         typeof isAliyunSyncPrimaryTodaySurfaceEmpty === "function" &&
         isAliyunSyncPrimaryTodaySurfaceEmpty();
-      const closedTodayEmptyBefore =
-        typeof isAliyunSyncPrimaryClosedTodayEmpty === "function" &&
-        isAliyunSyncPrimaryClosedTodayEmpty();
       const quietPoll =
         pullReason === "poll" &&
         cloudSyncMachineStatus === "synced" &&
@@ -135036,9 +135119,6 @@
         let todayEmptyAfter =
           typeof isAliyunSyncPrimaryTodaySurfaceEmpty === "function" &&
           isAliyunSyncPrimaryTodaySurfaceEmpty();
-        let closedTodayEmptyAfter =
-          typeof isAliyunSyncPrimaryClosedTodayEmpty === "function" &&
-          isAliyunSyncPrimaryClosedTodayEmpty();
         if (report && report.ok) {
           /*
            * boot / 回前台：强制回补本机已有「每天三赢」Done → 阿里云（修历史漏传，无需重填）。
@@ -135071,44 +135151,22 @@
             pullReason === "visible" ||
             pullReason === "manual-full" ||
             pullReason === "today-surface-retry" ||
-            pullReason === "closed-today-catchup" ||
+            pullReason === "today-plan-domain-repair" ||
             !!report.forceAllBodies;
           if (todayEmptyBefore && hydrateGatePull) {
             aliyunSyncPrimaryPaintTodaySurfaceAfterPull();
             todayEmptyAfter =
               typeof isAliyunSyncPrimaryTodaySurfaceEmpty === "function" &&
               isAliyunSyncPrimaryTodaySurfaceEmpty();
-            closedTodayEmptyAfter =
-              typeof isAliyunSyncPrimaryClosedTodayEmpty === "function" &&
-              isAliyunSyncPrimaryClosedTodayEmpty();
           }
-          /*
-           * 死磕当日为空、但其他任务可能非空：todaySurfaceEmpty=false，不会走上面分支。
-           * boot/回前台/手动/closed-today-catchup：强制 paint；仍空则武装 lists 重拉。
-           */
-          const closedHydrateGate =
-            pullReason === "boot" ||
-            pullReason === "visible" ||
-            pullReason === "manual-full" ||
-            pullReason === "today-surface-retry" ||
-            pullReason === "closed-today-catchup";
-          if (closedTodayEmptyBefore && closedHydrateGate) {
+          /* 域修复拉取后：轻量刷新今日计划侧栏（不按空态循环武装） */
+          if (pullReason === "today-plan-domain-repair") {
             try {
               if (typeof paintTodayPlanPanel === "function") paintTodayPlanPanel();
             } catch (_ptp) {}
             try {
               if (typeof refreshClosedListLocalUi === "function") refreshClosedListLocalUi();
             } catch (_rcl) {}
-            closedTodayEmptyAfter =
-              typeof isAliyunSyncPrimaryClosedTodayEmpty === "function" &&
-              isAliyunSyncPrimaryClosedTodayEmpty();
-            if (closedTodayEmptyAfter && pullReason !== "closed-today-catchup") {
-              try {
-                if (typeof aliyunSyncPrimaryArmClosedTodayCatchup === "function") {
-                  aliyunSyncPrimaryArmClosedTodayCatchup(pullReason);
-                }
-              } catch (_armCl) {}
-            }
           }
           const shellStillEmpty =
             (sparseBefore && sparseAfter) || (todayEmptyBefore && todayEmptyAfter);
@@ -135119,7 +135177,7 @@
                 pullReason === "visible" ||
                 pullReason === "manual-full" ||
                 pullReason === "today-surface-retry" ||
-                pullReason === "closed-today-catchup") &&
+                pullReason === "today-plan-domain-repair") &&
               typeof markAliyunSyncPrimaryInitialPullSettled === "function"
             ) {
               /* 仍打开上传门闩，避免合法编辑永久卡死；但不宣称已对齐 */
@@ -135141,7 +135199,7 @@
                 pullReason === "visible" ||
                 pullReason === "manual-full" ||
                 pullReason === "today-surface-retry" ||
-                pullReason === "closed-today-catchup") &&
+                pullReason === "today-plan-domain-repair") &&
               typeof markAliyunSyncPrimaryInitialPullSettled === "function"
             ) {
               markAliyunSyncPrimaryInitialPullSettled(
@@ -135174,7 +135232,7 @@
                 pullReason === "visible" ||
                 pullReason === "manual-full" ||
                 pullReason === "today-surface-retry" ||
-                pullReason === "closed-today-catchup") &&
+                pullReason === "today-plan-domain-repair") &&
               typeof markAliyunSyncPrimaryInitialPullSettled === "function"
             ) {
               markAliyunSyncPrimaryInitialPullSettled("pull-ok:" + pullReason);
@@ -135191,8 +135249,6 @@
           report.pullGen = pullGen;
           report.todaySurfaceEmptyBefore = !!todayEmptyBefore;
           report.todaySurfaceEmptyAfter = !!todayEmptyAfter;
-          report.closedTodayEmptyBefore = !!closedTodayEmptyBefore;
-          report.closedTodayEmptyAfter = !!closedTodayEmptyAfter;
         }
         try {
           if (
@@ -135717,7 +135773,8 @@
       window.healAliyunPrimaryLegacyKurtMainRoom = healAliyunPrimaryLegacyKurtMainRoom;
       window.__aliyunSyncPrimaryForceRepullTodayPlanDomains =
         aliyunSyncPrimaryForceRepullTodayPlanDomains;
-      window.isAliyunSyncPrimaryClosedTodayEmpty = isAliyunSyncPrimaryClosedTodayEmpty;
+      window.__aliyunSyncPrimaryArmTodayPlanDomainRepair =
+        aliyunSyncPrimaryArmTodayPlanDomainRepair;
       if (isAliyunSyncPrimaryEnabled()) {
         try {
           window.__ALIYUN_SYNC_PRIMARY_ENABLED = true;
@@ -143343,45 +143400,67 @@
         const cloudCounts = countAliyunSprintEnvelopeItems(env);
         const sprintPullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
         if (aliyunSyncPrimaryIsUnchangedPull("sprint", sprintPullFp)) {
-          const wasLoaded = aliyunSprintRealEverLoadedOk;
-          aliyunSprintRealEverLoadedOk = true;
-          ok = true;
-          logSyncNoDataChangeSkipRender("sprint");
-          aliyunSprintRealAppendLog("拉取无变化，跳过 merge/render");
-          logOpenListSyncDiag("pull-unchanged", {
-            pullSeq: pullSeq,
-            weekKey: viewWeekKey,
-            localOpen: localOpenBefore,
-            cloudOpen: cloudCounts.open,
-            cloudTotal: cloudCounts.total
-          });
-          /* 首次确认加载完成：补刷一次，解除「同步中抑制空态」 */
-          if (!wasLoaded) {
-            try {
-              if (typeof markSprintTaskShellsDirty === "function") markSprintTaskShellsDirty();
-              if (
-                typeof getWeeklyPlanShell === "function" &&
-                typeof isWeeklyPlanTaskShell === "function" &&
-                isWeeklyPlanTaskShell(getWeeklyPlanShell())
-              ) {
-                if (
-                  (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) ||
-                  (typeof isAppUiBusyForBackgroundRefresh === "function" &&
-                    isAppUiBusyForBackgroundRefresh())
-                ) {
-                  renderDeferredWhileEditing = true;
-                  if (typeof scheduleRenderWhenEditingEnds === "function") {
-                    scheduleRenderWhenEditingEnds();
-                  }
-                } else if (typeof refreshWeeklyPlanListAfterStructureChange === "function") {
-                  refreshWeeklyPlanListAfterStructureChange();
-                } else if (typeof renderWeeklyPlanList === "function") {
-                  renderWeeklyPlanList();
-                }
-              }
-            } catch (_firstLoadUi) {}
+          let sprintGap = { localMiss: 0, tombPending: 0, contentStale: 0 };
+          try {
+            if (typeof aliyunSprintRealProbeUnchangedContentGap === "function") {
+              sprintGap = aliyunSprintRealProbeUnchangedContentGap(env) || sprintGap;
+            }
+          } catch (_sg) {
+            sprintGap = { localMiss: 0, tombPending: 0, contentStale: 0 };
           }
-          return { ok: true, unchanged: true, docId: docId, pullSeq: pullSeq };
+          const sprintNeedMerge =
+            (Number(sprintGap.localMiss) || 0) > 0 ||
+            (Number(sprintGap.tombPending) || 0) > 0 ||
+            (Number(sprintGap.contentStale) || 0) > 0;
+          if (!sprintNeedMerge) {
+            const wasLoaded = aliyunSprintRealEverLoadedOk;
+            aliyunSprintRealEverLoadedOk = true;
+            ok = true;
+            logSyncNoDataChangeSkipRender("sprint");
+            aliyunSprintRealAppendLog("拉取无变化，跳过 merge/render");
+            logOpenListSyncDiag("pull-unchanged", {
+              pullSeq: pullSeq,
+              weekKey: viewWeekKey,
+              localOpen: localOpenBefore,
+              cloudOpen: cloudCounts.open,
+              cloudTotal: cloudCounts.total
+            });
+            if (!wasLoaded) {
+              try {
+                if (typeof markSprintTaskShellsDirty === "function") markSprintTaskShellsDirty();
+                if (
+                  typeof getWeeklyPlanShell === "function" &&
+                  typeof isWeeklyPlanTaskShell === "function" &&
+                  isWeeklyPlanTaskShell(getWeeklyPlanShell())
+                ) {
+                  if (
+                    (typeof taskTitleIxIsBusy === "function" && taskTitleIxIsBusy()) ||
+                    (typeof isAppUiBusyForBackgroundRefresh === "function" &&
+                      isAppUiBusyForBackgroundRefresh())
+                  ) {
+                    renderDeferredWhileEditing = true;
+                    if (typeof scheduleRenderWhenEditingEnds === "function") {
+                      scheduleRenderWhenEditingEnds();
+                    }
+                  } else if (typeof refreshWeeklyPlanListAfterStructureChange === "function") {
+                    refreshWeeklyPlanListAfterStructureChange();
+                  } else if (typeof renderWeeklyPlanList === "function") {
+                    renderWeeklyPlanList();
+                  }
+                }
+              } catch (_firstLoadUi) {}
+            }
+            return { ok: true, unchanged: true, docId: docId, pullSeq: pullSeq };
+          }
+          aliyunSprintRealAppendLog(
+            "拉取指纹未变但本机缺口：missing=" +
+              (Number(sprintGap.localMiss) || 0) +
+              " tombPending=" +
+              (Number(sprintGap.tombPending) || 0) +
+              " contentStale=" +
+              (Number(sprintGap.contentStale) || 0) +
+              " → 继续 merge"
+          );
         }
         if (pullSeq !== aliyunSprintRealPullSeq) {
           staleSkipped = true;
@@ -144655,7 +144734,8 @@
         const todayPullFp = aliyunSyncPrimaryPayloadFingerprint(payloadStr);
         if (aliyunSyncPrimaryIsUnchangedPull("todayPlan", todayPullFp)) {
           /*
-           * 云端指纹未变仍可能本机被启动结转抬了日期：按已有 tomb 剥牌，勿整段跳过。
+           * 云端指纹未变仍可能：本机 tomb 剥牌、挂牌日期/修订落后、缺 mark。
+           * 先剥牌；再探测 marks 缺口——有缺口则继续 merge（不靠任务数量是否为空）。
            */
           let localStrip = false;
           try {
@@ -144679,10 +144759,34 @@
             aliyunTodayPlanRealAppendLog("拉取无变化，但本机 tomb 剥牌已生效");
             return { ok: true, unchanged: true, localTombStrip: true, docId: docId };
           }
-          ok = true;
-          logSyncNoDataChangeSkipRender("todayPlan");
-          aliyunTodayPlanRealAppendLog("拉取无变化，跳过 merge/render");
-          return { ok: true, unchanged: true, docId: docId };
+          let todayGap = { markMiss: 0, markStale: 0, tombPending: 0 };
+          try {
+            const envProbe = aliyunTodayPlanRealParseEnvelope(payloadRaw);
+            if (typeof aliyunTodayPlanRealProbeUnchangedContentGap === "function") {
+              todayGap = aliyunTodayPlanRealProbeUnchangedContentGap(envProbe) || todayGap;
+            }
+          } catch (_tg) {
+            todayGap = { markMiss: 0, markStale: 0, tombPending: 0 };
+          }
+          const todayNeedMerge =
+            (Number(todayGap.markMiss) || 0) > 0 ||
+            (Number(todayGap.markStale) || 0) > 0 ||
+            (Number(todayGap.tombPending) || 0) > 0;
+          if (!todayNeedMerge) {
+            ok = true;
+            logSyncNoDataChangeSkipRender("todayPlan");
+            aliyunTodayPlanRealAppendLog("拉取无变化，跳过 merge/render");
+            return { ok: true, unchanged: true, docId: docId };
+          }
+          aliyunTodayPlanRealAppendLog(
+            "拉取指纹未变但本机挂牌缺口：miss=" +
+              (Number(todayGap.markMiss) || 0) +
+              " stale=" +
+              (Number(todayGap.markStale) || 0) +
+              " tombPending=" +
+              (Number(todayGap.tombPending) || 0) +
+              " → 继续 merge"
+          );
         }
         const env = aliyunTodayPlanRealParseEnvelope(payloadRaw);
         parseMs = Date.now() - tParse0;
@@ -146466,6 +146570,281 @@
         : String(s.length);
     }
 
+    /**
+     * Lists 指纹未变时的内容缺口：缺 id / 待 tomb / 修订落后 / 正文·完成态·归属日·时段不一致。
+     * 尊重云端 tombstone 与本机 syncTombstones，避免把用户删除当成「缺失」复活。
+     */
+    function aliyunListsRealClosedItemContentDiverges(local, remote) {
+      if (!remote || remote.id == null) return false;
+      if (!local) return true;
+      const rTs = Math.max(
+        Number(remote.updatedAt) || 0,
+        Number(remote.completedAt) || 0,
+        Number(remote.deadlineUpdatedAt) || 0,
+        Number(remote.createdAt) || 0
+      );
+      const lTs = Math.max(
+        Number(local.updatedAt) || 0,
+        Number(local.completedAt) || 0,
+        Number(local.deadlineUpdatedAt) || 0,
+        Number(local.createdAt) || 0
+      );
+      if (rTs > lTs) return true;
+      if (String(local.text || "") !== String(remote.text || "")) return true;
+      if (!!local.completed !== !!remote.completed) return true;
+      try {
+        const lDay =
+          typeof getClosedListItemAssignmentDateKey === "function"
+            ? getClosedListItemAssignmentDateKey(local)
+            : null;
+        const rDay =
+          typeof getClosedListItemAssignmentDateKey === "function"
+            ? getClosedListItemAssignmentDateKey(remote)
+            : null;
+        if (String(lDay || "") !== String(rDay || "")) return true;
+      } catch (_day) {}
+      try {
+        const lSt = JSON.stringify(
+          local && Object.prototype.hasOwnProperty.call(local, "scheduledTime")
+            ? local.scheduledTime
+            : null
+        );
+        const rSt = JSON.stringify(
+          remote && Object.prototype.hasOwnProperty.call(remote, "scheduledTime")
+            ? remote.scheduledTime
+            : null
+        );
+        if (lSt !== rSt) return true;
+      } catch (_st) {}
+      return false;
+    }
+
+    function aliyunListsRealProbeUnchangedContentGap(envEarly) {
+      let localMiss = 0;
+      let tombPending = 0;
+      let contentStale = 0;
+      const locClosed = Object.create(null);
+      const locClosedItem = Object.create(null);
+      const locMemo = Object.create(null);
+      const locHaters = Object.create(null);
+      const locTrash = Object.create(null);
+      (Array.isArray(state.closedList) ? state.closedList : []).forEach(function (it) {
+        if (it && it.id != null) {
+          const id = String(it.id);
+          locClosed[id] = true;
+          locClosedItem[id] = it;
+        }
+      });
+      (Array.isArray(state.memo) ? state.memo : []).forEach(function (it) {
+        if (it && it.id != null) locMemo[String(it.id)] = true;
+      });
+      (Array.isArray(state.hatersDoubtersLog) ? state.hatersDoubtersLog : []).forEach(function (it) {
+        if (it && it.id != null) locHaters[String(it.id)] = true;
+      });
+      (Array.isArray(state.trash) ? state.trash : []).forEach(function (it) {
+        if (it && it.id != null) locTrash[String(it.id)] = true;
+      });
+      const rTombs = (envEarly && envEarly.tombstones) || {};
+      const localTombs =
+        state.syncTombstones && typeof state.syncTombstones === "object"
+          ? state.syncTombstones
+          : {};
+      function localTombBlocksRemote(id) {
+        const locT = Number(localTombs[id]) || 0;
+        if (!(locT > 0)) return false;
+        const remT = rTombs[id];
+        const remTAt =
+          remT && typeof remT === "object"
+            ? Number(remT.deletedAt || remT.at || remT.updatedAt) || 0
+            : Number(remT) || 0;
+        return locT >= remTAt;
+      }
+      function countMissing(arr, locMap) {
+        const src = Array.isArray(arr) ? arr : [];
+        for (let i = 0; i < src.length; i++) {
+          const it = src[i];
+          if (!it || it.id == null) continue;
+          const id = String(it.id);
+          if (rTombs[id]) continue;
+          if (localTombBlocksRemote(id)) continue;
+          if (!locMap[id]) localMiss += 1;
+        }
+      }
+      countMissing(envEarly && envEarly.closedList, locClosed);
+      countMissing(envEarly && envEarly.memo, locMemo);
+      countMissing(envEarly && envEarly.hatersDoubtersLog, locHaters);
+      countMissing(envEarly && envEarly.trash, locTrash);
+      const closedArr = Array.isArray(envEarly && envEarly.closedList) ? envEarly.closedList : [];
+      for (let ci = 0; ci < closedArr.length; ci++) {
+        const rem = closedArr[ci];
+        if (!rem || rem.id == null) continue;
+        const id = String(rem.id);
+        if (rTombs[id]) continue;
+        if (localTombBlocksRemote(id)) continue;
+        const loc = locClosedItem[id];
+        if (loc && aliyunListsRealClosedItemContentDiverges(loc, rem)) contentStale += 1;
+      }
+      Object.keys(rTombs).forEach(function (tid) {
+        if (locClosed[tid] || locMemo[tid] || locHaters[tid] || locTrash[tid]) {
+          tombPending += 1;
+        }
+      });
+      return {
+        localMiss: localMiss,
+        tombPending: tombPending,
+        contentStale: contentStale
+      };
+    }
+
+    function aliyunSprintRealProbeUnchangedContentGap(env) {
+      let localMiss = 0;
+      let tombPending = 0;
+      let contentStale = 0;
+      const remoteItems = (env && env.items) || {};
+      const remoteTombs = (env && env.tombstones) || {};
+      const localById = Object.create(null);
+      const weeks = state.weeklyPlan && typeof state.weeklyPlan === "object" ? state.weeklyPlan : {};
+      Object.keys(weeks).forEach(function (wk) {
+        const arr = Array.isArray(weeks[wk]) ? weeks[wk] : [];
+        for (let i = 0; i < arr.length; i++) {
+          const t = arr[i];
+          if (t && t.id != null) localById[String(t.id)] = t;
+        }
+      });
+      const localTombs =
+        state.syncTombstones && typeof state.syncTombstones === "object"
+          ? state.syncTombstones
+          : {};
+      Object.keys(remoteItems).forEach(function (rid) {
+        const remote = remoteItems[rid];
+        if (!remote || remote.deleted) return;
+        const rTomb = remoteTombs[rid];
+        const rTombTs = rTomb
+          ? Number(rTomb.deletedAt || rTomb.at || rTomb.updatedAt) || 0
+          : 0;
+        const rItemTs =
+          typeof aliyunSprintRealItemTs === "function"
+            ? aliyunSprintRealItemTs(remote)
+            : Number(remote.updatedAt) || 0;
+        if (rTombTs > rItemTs) return;
+        const locT = Number(localTombs[rid]) || 0;
+        if (locT > 0 && locT >= rItemTs && locT >= rTombTs) return;
+        const local = localById[rid];
+        if (!local) {
+          localMiss += 1;
+          return;
+        }
+        const lTs =
+          typeof aliyunSprintRealItemTs === "function"
+            ? aliyunSprintRealItemTs(local)
+            : Number(local.updatedAt) || 0;
+        if (rItemTs > lTs) {
+          contentStale += 1;
+          return;
+        }
+        if (String(local.text || "") !== String(remote.text || "")) {
+          contentStale += 1;
+          return;
+        }
+        const lDone = !!(local.completed || local.status === "done" || local.done);
+        const rDone = !!(remote.completed || remote.status === "done" || remote.done);
+        if (lDone !== rDone) {
+          contentStale += 1;
+          return;
+        }
+        const lDate =
+          typeof normalizeWeeklyPlanTodayPlanDate === "function"
+            ? normalizeWeeklyPlanTodayPlanDate(local.todayPlanDate)
+            : String(local.todayPlanDate || "");
+        const rDate =
+          typeof normalizeWeeklyPlanTodayPlanDate === "function"
+            ? normalizeWeeklyPlanTodayPlanDate(remote.todayPlanDate)
+            : String(remote.todayPlanDate || "");
+        if (lDate !== rDate) {
+          contentStale += 1;
+          return;
+        }
+        try {
+          const lSt = JSON.stringify(local.scheduledTime || null);
+          const rSt = JSON.stringify(remote.scheduledTime || null);
+          if (lSt !== rSt) contentStale += 1;
+        } catch (_st) {}
+      });
+      Object.keys(remoteTombs).forEach(function (tid) {
+        if (localById[tid]) tombPending += 1;
+      });
+      return {
+        localMiss: localMiss,
+        tombPending: tombPending,
+        contentStale: contentStale
+      };
+    }
+
+    function aliyunTodayPlanRealProbeUnchangedContentGap(env) {
+      let markMiss = 0;
+      let markStale = 0;
+      let tombPending = 0;
+      const marks = (env && env.marks) || {};
+      const remoteTombs =
+        env && env.tombstones && typeof env.tombstones === "object" ? env.tombstones : {};
+      const localById = Object.create(null);
+      const weeks = state.weeklyPlan && typeof state.weeklyPlan === "object" ? state.weeklyPlan : {};
+      Object.keys(weeks).forEach(function (wk) {
+        const arr = Array.isArray(weeks[wk]) ? weeks[wk] : [];
+        for (let i = 0; i < arr.length; i++) {
+          const t = arr[i];
+          if (t && t.id != null) localById[String(t.id)] = t;
+        }
+      });
+      Object.keys(marks).forEach(function (tid) {
+        const mark = marks[tid];
+        if (!mark) return;
+        const remDate =
+          typeof aliyunTodayPlanRealNormalizeDate === "function"
+            ? aliyunTodayPlanRealNormalizeDate(
+                mark.date != null ? mark.date : mark.todayPlanDate
+              )
+            : String(mark.date || mark.todayPlanDate || "");
+        const remU =
+          Number(mark.updatedAt || mark.todayPlanDateUpdatedAt) || 0;
+        const rTombAt =
+          typeof aliyunTodayPlanRealTombAt === "function"
+            ? aliyunTodayPlanRealTombAt(remoteTombs[tid])
+            : 0;
+        if (rTombAt > remU) return;
+        const locTombAt =
+          typeof getTodayPlanMarkTombstoneAt === "function"
+            ? getTodayPlanMarkTombstoneAt(tid)
+            : 0;
+        if (locTombAt > remU && locTombAt >= rTombAt) return;
+        const local = localById[tid];
+        if (!local) {
+          markMiss += 1;
+          return;
+        }
+        const locHas = Object.prototype.hasOwnProperty.call(local, "todayPlanDate");
+        const locDate = locHas
+          ? typeof aliyunTodayPlanRealNormalizeDate === "function"
+            ? aliyunTodayPlanRealNormalizeDate(local.todayPlanDate)
+            : String(local.todayPlanDate || "")
+          : "";
+        const locU = Number(local.todayPlanDateUpdatedAt) || 0;
+        if (remU > locU || locDate !== remDate) markStale += 1;
+      });
+      Object.keys(remoteTombs).forEach(function (tid) {
+        const local = localById[tid];
+        if (!local) return;
+        const locHas = Object.prototype.hasOwnProperty.call(local, "todayPlanDate");
+        const locDate = locHas
+          ? typeof aliyunTodayPlanRealNormalizeDate === "function"
+            ? aliyunTodayPlanRealNormalizeDate(local.todayPlanDate)
+            : String(local.todayPlanDate || "")
+          : "";
+        if (locDate) tombPending += 1;
+      });
+      return { markMiss: markMiss, markStale: markStale, tombPending: tombPending };
+    }
+
     function aliyunListsRealBuildMergedSlice(localSlice, remoteSlice) {
       const loc = localSlice && typeof localSlice === "object" ? localSlice : {};
       const rem = remoteSlice && typeof remoteSlice === "object" ? remoteSlice : {};
@@ -146984,59 +147363,30 @@
         const envEarly = parsedEarly.env;
         if (aliyunSyncPrimaryIsUnchangedPull("lists", pullFp)) {
           /*
-           * 指纹未变仍可能本机缺云端封闭清单/备忘录（上次 merge 被跳过或被空信封冲掉后未再合）：
-           * 已下载正文，做轻量缺 id / 未应用 tombstone 检查，有缺口则继续 merge。
+           * 指纹未变仍可能本机缺条 / 待 tomb / 正文·完成态·归属日·时段落后于云端修订。
+           * 已下载正文：轻量探测后决定是否继续 merge（不依赖「今日是否为空」）。
            */
           let localMiss = 0;
           let tombPending = 0;
+          let contentStale = 0;
           try {
-            const locClosed = Object.create(null);
-            const locMemo = Object.create(null);
-            const locHaters = Object.create(null);
-            const locTrash = Object.create(null);
-            (Array.isArray(state.closedList) ? state.closedList : []).forEach(function (it) {
-              if (it && it.id != null) locClosed[String(it.id)] = true;
-            });
-            (Array.isArray(state.memo) ? state.memo : []).forEach(function (it) {
-              if (it && it.id != null) locMemo[String(it.id)] = true;
-            });
-            (Array.isArray(state.hatersDoubtersLog) ? state.hatersDoubtersLog : []).forEach(
-              function (it) {
-                if (it && it.id != null) locHaters[String(it.id)] = true;
-              }
-            );
-            (Array.isArray(state.trash) ? state.trash : []).forEach(function (it) {
-              if (it && it.id != null) locTrash[String(it.id)] = true;
-            });
-            const rTombs = (envEarly && envEarly.tombstones) || {};
-            function countMissing(arr, locMap) {
-              const src = Array.isArray(arr) ? arr : [];
-              for (let i = 0; i < src.length; i++) {
-                const it = src[i];
-                if (!it || it.id == null) continue;
-                const id = String(it.id);
-                if (rTombs[id]) continue;
-                if (!locMap[id]) localMiss += 1;
-              }
-            }
-            countMissing(envEarly.closedList, locClosed);
-            countMissing(envEarly.memo, locMemo);
-            countMissing(envEarly.hatersDoubtersLog, locHaters);
-            countMissing(envEarly.trash, locTrash);
-            Object.keys(rTombs).forEach(function (tid) {
-              if (locClosed[tid] || locMemo[tid] || locHaters[tid] || locTrash[tid]) {
-                tombPending += 1;
-              }
-            });
+            const gap =
+              typeof aliyunListsRealProbeUnchangedContentGap === "function"
+                ? aliyunListsRealProbeUnchangedContentGap(envEarly)
+                : { localMiss: 0, tombPending: 0, contentStale: 0 };
+            localMiss = Number(gap.localMiss) || 0;
+            tombPending = Number(gap.tombPending) || 0;
+            contentStale = Number(gap.contentStale) || 0;
           } catch (_gap) {
             localMiss = 0;
             tombPending = 0;
+            contentStale = 0;
           }
           const remTsBloated =
             envEarly.tombstones &&
             typeof envEarly.tombstones === "object" &&
             Object.keys(envEarly.tombstones).length > ALIYUN_LISTS_ENVELOPE_TOMBSTONE_MAX + 100;
-          if (!localMiss && !tombPending && !remTsBloated) {
+          if (!localMiss && !tombPending && !contentStale && !remTsBloated) {
             ok = true;
             logSyncNoDataChangeSkipRender("lists");
             aliyunListsRealAppendLog("拉取无变化，跳过 merge/render");
@@ -147062,6 +147412,8 @@
                 localMiss +
                 " tombPending=" +
                 tombPending +
+                " contentStale=" +
+                contentStale +
                 " → 继续 merge"
             );
           }
