@@ -98808,7 +98808,17 @@
           business: state.business,
           notes: state.notes.slice(-16),
           businessSnapshot: bizSnap,
-          privacy: "无任务正文/无密钥"
+          todayPlanSync:
+            typeof window.__todayPlanSyncDiagSnapshotSync === "function"
+              ? (function () {
+                  try {
+                    return window.__todayPlanSyncDiagSnapshotSync();
+                  } catch (_tps) {
+                    return { error: "today-plan-sync-snapshot-failed" };
+                  }
+                })()
+              : null,
+          privacy: "无密钥；任务正文最多截断 24 字"
         };
         try {
           return JSON.stringify(out, null, 2);
@@ -98828,11 +98838,12 @@
         var panel = document.createElement("div");
         panel.id = "earlyBootDiagPanel";
         var title = document.createElement("div");
-        title.textContent = "启动诊断（无任务正文）";
+        title.textContent = "同步诊断（只读·无密钥）";
         title.style.cssText = "font-weight:700;font-size:16px;margin-bottom:6px;color:#0f172a;";
         var hint = document.createElement("div");
         hint.id = "earlyBootDiagHint";
-        hint.textContent = "可点「复制摘要」；失败时可直接选中下方文本或截图。";
+        hint.textContent =
+          "平板请点「复制今日计划同步诊断」；正常设备也复制一份后对比。不改数据、不清缓存、不改房间。";
         hint.style.cssText = "font-size:12px;color:#64748b;margin-bottom:10px;";
         var pre = document.createElement("pre");
         pre.id = "earlyBootDiagPre";
@@ -98841,23 +98852,38 @@
         var copyBtn = document.createElement("button");
         copyBtn.type = "button";
         copyBtn.id = "earlyBootDiagCopyBtn";
-        copyBtn.textContent = "复制摘要";
+        copyBtn.textContent = "复制启动摘要";
         copyBtn.style.cssText =
+          "min-height:40px;padding:8px 14px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;font-weight:600;";
+        var copyTodayBtn = document.createElement("button");
+        copyTodayBtn.type = "button";
+        copyTodayBtn.id = "earlyBootDiagCopyTodayPlanBtn";
+        copyTodayBtn.textContent = "复制今日计划同步诊断";
+        copyTodayBtn.style.cssText =
+          "min-height:40px;padding:8px 14px;border:1px solid #93c5fd;border-radius:8px;background:#eff6ff;font-weight:700;color:#1d4ed8;";
+        var copyCloudBtn = document.createElement("button");
+        copyCloudBtn.type = "button";
+        copyCloudBtn.id = "earlyBootDiagCopyTodayPlanCloudBtn";
+        copyCloudBtn.textContent = "含云端只读探测并复制";
+        copyCloudBtn.style.cssText =
           "min-height:40px;padding:8px 14px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;font-weight:600;";
         var closeBtn = document.createElement("button");
         closeBtn.type = "button";
         closeBtn.textContent = "关闭";
         closeBtn.style.cssText =
           "min-height:40px;padding:8px 14px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-weight:600;";
-        copyBtn.addEventListener("click", function () {
-          var body = (document.getElementById("earlyBootDiagPre") || {}).textContent || "";
+        function copyTextToClipboard(body, btn, okLabel) {
           var hintEl = document.getElementById("earlyBootDiagHint");
+          var restoreLabel = btn ? String(btn.textContent || "") : "";
           function ok() {
-            copyBtn.textContent = "已复制";
-            if (hintEl) hintEl.textContent = "已复制到剪贴板。";
+            if (btn) btn.textContent = okLabel || "已复制";
+            if (hintEl) {
+              hintEl.style.color = "#047857";
+              hintEl.textContent = "已复制到剪贴板。请在正常设备与平板各复制一份后发回对比。";
+            }
             window.setTimeout(function () {
-              copyBtn.textContent = "复制摘要";
-            }, 1200);
+              if (btn) btn.textContent = restoreLabel;
+            }, 1600);
           }
           function fail() {
             if (hintEl) {
@@ -98895,6 +98921,112 @@
           } catch (_c1) {
             fail();
           }
+        }
+        copyBtn.addEventListener("click", function () {
+          var body = (document.getElementById("earlyBootDiagPre") || {}).textContent || "";
+          copyTextToClipboard(body, copyBtn, "已复制");
+        });
+        copyTodayBtn.addEventListener("click", function () {
+          var hintEl = document.getElementById("earlyBootDiagHint");
+          function runCopy(text) {
+            var preEl = document.getElementById("earlyBootDiagPre");
+            if (preEl) preEl.textContent = text;
+            copyTextToClipboard(text, copyTodayBtn, "已复制");
+          }
+          try {
+            if (typeof window.__copyTodayPlanSyncDiag === "function") {
+              var ret = window.__copyTodayPlanSyncDiag({ cloudPeek: false, writeClipboard: false });
+              if (ret && typeof ret.then === "function") {
+                if (hintEl) {
+                  hintEl.style.color = "#64748b";
+                  hintEl.textContent = "正在生成今日计划同步诊断…";
+                }
+                ret
+                  .then(function (pack) {
+                    runCopy((pack && pack.text) || JSON.stringify(pack, null, 2));
+                  })
+                  .catch(function (err) {
+                    runCopy(
+                      JSON.stringify(
+                        {
+                          diag: "today-plan-sync-v1",
+                          error: String((err && err.message) || err || "copy-failed")
+                        },
+                        null,
+                        2
+                      )
+                    );
+                  });
+                return;
+              }
+              if (ret && ret.text) {
+                runCopy(ret.text);
+                return;
+              }
+            }
+          } catch (_tp) {}
+          runCopy(
+            JSON.stringify(
+              {
+                diag: "today-plan-sync-v1",
+                error: "business-diag-unavailable",
+                hint: "请硬刷新后再连点版本×5"
+              },
+              null,
+              2
+            )
+          );
+        });
+        copyCloudBtn.addEventListener("click", function () {
+          var hintEl = document.getElementById("earlyBootDiagHint");
+          function runCopy(text) {
+            var preEl = document.getElementById("earlyBootDiagPre");
+            if (preEl) preEl.textContent = text;
+            copyTextToClipboard(text, copyCloudBtn, "已复制");
+          }
+          try {
+            if (typeof window.__copyTodayPlanSyncDiag === "function") {
+              if (hintEl) {
+                hintEl.style.color = "#64748b";
+                hintEl.textContent = "只读探测云端（GET，不写本机、不上传）…";
+              }
+              var ret = window.__copyTodayPlanSyncDiag({ cloudPeek: true, writeClipboard: false });
+              if (ret && typeof ret.then === "function") {
+                ret
+                  .then(function (pack) {
+                    runCopy((pack && pack.text) || JSON.stringify(pack, null, 2));
+                  })
+                  .catch(function (err) {
+                    runCopy(
+                      JSON.stringify(
+                        {
+                          diag: "today-plan-sync-v1",
+                          error: String((err && err.message) || err || "cloud-peek-failed")
+                        },
+                        null,
+                        2
+                      )
+                    );
+                  });
+                return;
+              }
+              if (ret && ret.text) {
+                runCopy(ret.text);
+                return;
+              }
+            }
+          } catch (_tc) {}
+          runCopy(
+            JSON.stringify(
+              {
+                diag: "today-plan-sync-v1",
+                error: "business-diag-unavailable",
+                hint: "请硬刷新后再试"
+              },
+              null,
+              2
+            )
+          );
         });
         closeBtn.addEventListener("click", function () {
           overlay.classList.remove("is-open");
@@ -98906,6 +99038,8 @@
             overlay.style.display = "none";
           }
         });
+        row.appendChild(copyTodayBtn);
+        row.appendChild(copyCloudBtn);
         row.appendChild(copyBtn);
         row.appendChild(closeBtn);
         panel.appendChild(title);
@@ -98923,11 +99057,22 @@
           note("diag-panel-opened-early");
           var overlay = ensureOverlay();
           var pre = document.getElementById("earlyBootDiagPre");
-          if (pre) pre.textContent = buildText();
+          if (pre) {
+            var shown = null;
+            try {
+              if (typeof window.__todayPlanSyncDiagSnapshotSync === "function") {
+                shown = JSON.stringify(window.__todayPlanSyncDiagSnapshotSync(), null, 2);
+              }
+            } catch (_tpsOpen) {
+              shown = null;
+            }
+            pre.textContent = shown || buildText();
+          }
           var hintEl = document.getElementById("earlyBootDiagHint");
           if (hintEl) {
             hintEl.style.color = "#64748b";
-            hintEl.textContent = "可点「复制摘要」；失败时可直接选中下方文本或截图。";
+            hintEl.textContent =
+              "优先点「复制今日计划同步诊断」；失败时可长按选中文本或截图。不清缓存、不改房间。";
           }
           overlay.classList.add("is-open");
           overlay.style.display = "flex";
@@ -119875,7 +120020,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126a";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126b";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -148537,6 +148682,690 @@
       };
     } catch (_ssdWin) {}
 
+
+
+    /**
+     * 今日计划跨设备只读同步诊断（平板无 DevTools：版本连点×5 → 复制按钮）。
+     * - 不写 state / 不 POST / 不改房间 / 不清缓存 / 不注销 SW
+     * - 日常路径零开销；仅按需构建快照
+     * - 可选 cloudPeek：仅 GET 解析 id/完成态，绝不 apply/merge
+     */
+    function todayPlanSyncDiagSafeStr(v, n) {
+      try {
+        return String(v == null ? "" : v).slice(0, n || 120);
+      } catch (_e) {
+        return "";
+      }
+    }
+
+    function todayPlanSyncDiagTextHash(text) {
+      const s = String(text || "");
+      let h = 2166136261;
+      for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return (h >>> 0).toString(16);
+    }
+
+    function todayPlanSyncDiagDeviceClass() {
+      let w = 0;
+      let h = 0;
+      let coarse = false;
+      try {
+        w = Math.round(Number(window.innerWidth) || 0);
+        h = Math.round(Number(window.innerHeight) || 0);
+      } catch (_wh) {}
+      try {
+        coarse =
+          typeof window.matchMedia === "function" &&
+          !!window.matchMedia("(pointer: coarse)").matches;
+      } catch (_c) {}
+      let kind = "desktop";
+      if (coarse && w > 0 && w <= 767) kind = "phone";
+      else if (coarse && w > 767) kind = "tablet";
+      else if (!coarse && w > 0 && w <= 900) kind = "narrow-desktop";
+      return {
+        kind: kind,
+        pointerCoarse: coarse,
+        innerWidth: w,
+        innerHeight: h,
+        visibility: typeof document !== "undefined" ? String(document.visibilityState || "") : ""
+      };
+    }
+
+    function todayPlanSyncDiagSummarizeTask(id, text, done) {
+      const t = String(text || "").trim();
+      return {
+        id: todayPlanSyncDiagSafeStr(id, 80),
+        done: !!done,
+        text24: todayPlanSyncDiagSafeStr(t, 24),
+        textHash: todayPlanSyncDiagTextHash(t),
+        textLen: t.length
+      };
+    }
+
+    function todayPlanSyncDiagCollectLocalSurface(todayKey) {
+      const want = String(todayKey || "");
+      const closedItems = [];
+      let closedDone = 0;
+      try {
+        const src =
+          typeof getClosedListItemsVisibleForViewDate === "function"
+            ? getClosedListItemsVisibleForViewDate(want)
+            : [];
+        const max =
+          typeof CLOSED_LIST_DAY_MAX_ITEMS === "number" ? CLOSED_LIST_DAY_MAX_ITEMS : 4;
+        const list = Array.isArray(src) ? src.slice(0, max) : [];
+        for (let i = 0; i < list.length; i++) {
+          const it = list[i];
+          if (!it) continue;
+          const done = !!it.completed;
+          if (done) closedDone += 1;
+          closedItems.push(
+            todayPlanSyncDiagSummarizeTask(it.id, it.text, done)
+          );
+        }
+      } catch (_cl) {}
+
+      const otherItems = [];
+      let otherDone = 0;
+      try {
+        const src =
+          typeof collectRawWeeklyPlanTasksForTodayPlan === "function"
+            ? collectRawWeeklyPlanTasksForTodayPlan(want)
+            : [];
+        const list = Array.isArray(src) ? src : [];
+        for (let j = 0; j < list.length; j++) {
+          const task = list[j];
+          if (!task) continue;
+          const done =
+            typeof isTodayPlanOtherRowDone === "function"
+              ? !!isTodayPlanOtherRowDone(task)
+              : !!(task.mainDone || task.done);
+          if (done) otherDone += 1;
+          let name = "";
+          try {
+            if (typeof buildTodayPlanOtherHierarchyParts === "function") {
+              name = buildTodayPlanOtherHierarchyParts(task).flat || "";
+            } else {
+              name = String(task.text || "");
+            }
+          } catch (_nm) {
+            name = String(task.text || "");
+          }
+          otherItems.push(todayPlanSyncDiagSummarizeTask(task.id, name, done));
+        }
+      } catch (_ot) {}
+
+      let marksToday = [];
+      let marksTotal = 0;
+      try {
+        const marks =
+          state && state.todayPlanMarks && typeof state.todayPlanMarks === "object"
+            ? state.todayPlanMarks
+            : null;
+        if (marks) {
+          const keys = Object.keys(marks);
+          marksTotal = keys.length;
+          for (let k = 0; k < keys.length; k++) {
+            const id = keys[k];
+            const row = marks[id];
+            let date = "";
+            if (row == null) date = "";
+            else if (typeof row === "string") date = row;
+            else if (typeof row === "object") date = String(row.date || row.todayPlanDate || "");
+            date =
+              typeof normalizeWeeklyPlanTodayPlanDate === "function"
+                ? normalizeWeeklyPlanTodayPlanDate(date)
+                : String(date || "");
+            if (date === want) {
+              marksToday.push({ id: todayPlanSyncDiagSafeStr(id, 80), date: date });
+            }
+          }
+        }
+      } catch (_mk) {}
+
+      let closedTotal = -1;
+      let weeklyPlanTaskTotal = -1;
+      try {
+        closedTotal = Array.isArray(state.closedList) ? state.closedList.length : -1;
+      } catch (_ct) {}
+      try {
+        weeklyPlanTaskTotal = 0;
+        if (state.weeklyPlan && typeof state.weeklyPlan === "object") {
+          const wkeys = Object.keys(state.weeklyPlan);
+          for (let wi = 0; wi < wkeys.length; wi++) {
+            const arr = state.weeklyPlan[wkeys[wi]];
+            if (Array.isArray(arr)) weeklyPlanTaskTotal += arr.length;
+          }
+        }
+      } catch (_wp) {
+        weeklyPlanTaskTotal = -1;
+      }
+
+      return {
+        todayKey: want,
+        closedToday: {
+          count: closedItems.length,
+          done: closedDone,
+          items: closedItems
+        },
+        otherToday: {
+          count: otherItems.length,
+          done: otherDone,
+          items: otherItems
+        },
+        closedListTotal: closedTotal,
+        weeklyPlanTaskTotal: weeklyPlanTaskTotal,
+        todayPlanMarksTotal: marksTotal,
+        todayPlanMarksForToday: marksToday.slice(0, 40)
+      };
+    }
+
+    function todayPlanSyncDiagCollectUiSurface(localSurf) {
+      const closed = localSurf && localSurf.closedToday ? localSurf.closedToday : { count: 0, done: 0 };
+      const other = localSurf && localSurf.otherToday ? localSurf.otherToday : { count: 0, done: 0 };
+      let closedLabel = "（0）";
+      if (closed.count > 0) closedLabel = "（" + closed.done + "/" + closed.count + "）";
+      let otherLabel = "（0）";
+      if (other.count > 0) otherLabel = "（" + other.done + "/" + other.count + "）";
+      return {
+        closedCountLabel: closedLabel,
+        otherCountLabel: otherLabel,
+        otherSmartCollapsed: !todayPlanOtherSmartExpanded,
+        otherSmartExpanded: !!todayPlanOtherSmartExpanded,
+        closedWinExpanded: !!closedListWinExpanded,
+        closedRows: (closed.items || []).slice(0, 12),
+        otherRows: (other.items || []).slice(0, 20)
+      };
+    }
+
+    function todayPlanSyncDiagSanitizeReport(report) {
+      if (!report || typeof report !== "object") return null;
+      const out = {
+        ok: report.ok,
+        empty: report.empty,
+        notFound: report.notFound,
+        unchanged: report.unchanged,
+        changed: report.changed,
+        skippedMissing: report.skippedMissing,
+        docId: todayPlanSyncDiagSafeStr(report.docId, 120),
+        error: todayPlanSyncDiagSafeStr(report.error, 160),
+        httpStatus: report.httpStatus != null ? report.httpStatus : null,
+        payloadKB: typeof report.payloadKB === "number" ? report.payloadKB : null,
+        uploadMs: typeof report.uploadMs === "number" ? report.uploadMs : null,
+        downloadMs: typeof report.downloadMs === "number" ? report.downloadMs : null,
+        parseMs: typeof report.parseMs === "number" ? report.parseMs : null,
+        mergeMs: typeof report.mergeMs === "number" ? report.mergeMs : null,
+        renderMs: typeof report.renderMs === "number" ? report.renderMs : null,
+        reason: todayPlanSyncDiagSafeStr(report.reason, 80),
+        at: report.at != null ? Number(report.at) || null : null
+      };
+      return out;
+    }
+
+    function todayPlanSyncDiagCollectSyncMachine() {
+      let blocked = null;
+      try {
+        if (typeof aliyunSyncPrimaryDomainsBlockedByLocalFlush === "function") {
+          blocked = aliyunSyncPrimaryDomainsBlockedByLocalFlush();
+        }
+      } catch (_b) {}
+      const flushBusy = {};
+      const ids = [
+        "done",
+        "habit",
+        "forge",
+        "anniv",
+        "sprint",
+        "todayPlan",
+        "amb",
+        "rule100",
+        "lists",
+        "goals"
+      ];
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        try {
+          flushBusy[id] =
+            typeof aliyunSyncPrimaryDomainFlushBusy === "function"
+              ? !!aliyunSyncPrimaryDomainFlushBusy(id)
+              : null;
+        } catch (_fb) {
+          flushBusy[id] = null;
+        }
+      }
+      let lastSeen = null;
+      try {
+        lastSeen = Object.assign({}, aliyunDomainsMetaLastSeen);
+      } catch (_ls) {}
+      const started = Number(aliyunSyncPrimaryPullStartedAt) || 0;
+      return {
+        machineStatus: String(cloudSyncMachineStatus || ""),
+        badgeText:
+          cloudSyncStatusSnapshot && cloudSyncStatusSnapshot.text
+            ? String(cloudSyncStatusSnapshot.text)
+            : "",
+        lastSuccessAt:
+          typeof getCloudSyncLastSuccessAt === "function" ? getCloudSyncLastSuccessAt() : 0,
+        lastError: todayPlanSyncDiagSafeStr(cloudSyncLastErrorMsg, 160),
+        pullInFlight: !!aliyunSyncPrimaryPullInFlight,
+        pullGen: Number(aliyunSyncPrimaryPullGen) || 0,
+        pullStartedAt: started,
+        pullAgeMs: started > 0 ? Date.now() - started : 0,
+        lastPullReason: String(aliyunSyncPrimaryLastPullReason || ""),
+        uploadGateOpen:
+          typeof isAliyunSyncPrimaryUploadGateOpen === "function"
+            ? !!isAliyunSyncPrimaryUploadGateOpen()
+            : null,
+        initialPullSettled: !!aliyunSyncPrimaryInitialPullSettled,
+        todaySurfaceEmpty:
+          typeof isAliyunSyncPrimaryTodaySurfaceEmpty === "function"
+            ? !!isAliyunSyncPrimaryTodaySurfaceEmpty()
+            : null,
+        localSparse:
+          typeof isAliyunSyncPrimaryLocalDataSparse === "function"
+            ? !!isAliyunSyncPrimaryLocalDataSparse()
+            : null,
+        flushBusy: flushBusy,
+        domainsBlockedByFlush: blocked,
+        domainsLastSeen: lastSeen,
+        bootPullReport:
+          typeof window !== "undefined" && window.__aliyunSyncPrimaryBootPullReport
+            ? {
+                ok: !!window.__aliyunSyncPrimaryBootPullReport.ok,
+                skipped: !!window.__aliyunSyncPrimaryBootPullReport.skipped,
+                skippedAll: !!window.__aliyunSyncPrimaryBootPullReport.skippedAll,
+                skippedFullPull: !!window.__aliyunSyncPrimaryBootPullReport.skippedFullPull,
+                reason: todayPlanSyncDiagSafeStr(
+                  window.__aliyunSyncPrimaryBootPullReport.reason,
+                  80
+                ),
+                changedDomains: Array.isArray(
+                  window.__aliyunSyncPrimaryBootPullReport.changedDomains
+                )
+                  ? window.__aliyunSyncPrimaryBootPullReport.changedDomains.slice(0, 12)
+                  : []
+              }
+            : null
+      };
+    }
+
+    function __todayPlanSyncDiagSnapshotSync() {
+      const todayKey =
+        typeof formatDateInputValue === "function" ? formatDateInputValue(new Date()) : "";
+      const local = todayPlanSyncDiagCollectLocalSurface(todayKey);
+      const ui = todayPlanSyncDiagCollectUiSurface(local);
+      let roomId = "";
+      try {
+        roomId =
+          typeof getAliyunSyncRoomIdForDocs === "function"
+            ? String(getAliyunSyncRoomIdForDocs() || "")
+            : "";
+      } catch (_r) {}
+      return {
+        diag: "today-plan-sync-v1",
+        at: Date.now(),
+        privacy: "no-secrets; task text truncated to 24 chars; no tokens",
+        device: todayPlanSyncDiagDeviceClass(),
+        versions: {
+          badgeCache:
+            typeof APP_CACHE_NAME_FOR_BADGE !== "undefined" ? String(APP_CACHE_NAME_FOR_BADGE) : "",
+          swCachePending: true
+        },
+        roomId: roomId,
+        todayKey: todayKey,
+        sync: todayPlanSyncDiagCollectSyncMachine(),
+        local: local,
+        ui: ui,
+        lastReports: {
+          lists: todayPlanSyncDiagSanitizeReport(
+            typeof aliyunListsRealLastReport !== "undefined" ? aliyunListsRealLastReport : null
+          ),
+          sprint: todayPlanSyncDiagSanitizeReport(
+            typeof aliyunSprintRealLastReport !== "undefined" ? aliyunSprintRealLastReport : null
+          ),
+          todayPlan: todayPlanSyncDiagSanitizeReport(
+            typeof aliyunTodayPlanRealLastReport !== "undefined"
+              ? aliyunTodayPlanRealLastReport
+              : null
+          )
+        },
+        cloudPeek: null,
+        notes: [
+          "本快照只读；复制对比正常设备与平板的 roomId / todayKey / closedToday / otherToday / flushBusy / uploadGateOpen",
+          "其他任务标题旁若显示数量但列表空白，可能是 is-smart-collapsed（看 ui.otherSmartCollapsed）"
+        ]
+      };
+    }
+
+    async function todayPlanSyncDiagCollectRuntimeVersions() {
+      const out = {
+        badgeCache:
+          typeof APP_CACHE_NAME_FOR_BADGE !== "undefined" ? String(APP_CACHE_NAME_FOR_BADGE) : "",
+        swScriptCacheName: null,
+        cacheKeys: [],
+        controllerScriptURL: "",
+        registering: null
+      };
+      try {
+        if (navigator.serviceWorker) {
+          const reg = await navigator.serviceWorker.getRegistration();
+          if (reg) {
+            out.registering = !!(reg.installing || reg.waiting);
+            const worker = reg.active || reg.waiting || reg.installing;
+            if (worker && worker.scriptURL) {
+              out.controllerScriptURL = todayPlanSyncDiagSafeStr(worker.scriptURL, 200);
+            }
+          }
+        }
+      } catch (_sw) {}
+      try {
+        if (typeof caches !== "undefined" && caches.keys) {
+          const keys = await caches.keys();
+          out.cacheKeys = (keys || [])
+            .map(function (k) {
+              return String(k || "");
+            })
+            .filter(function (k) {
+              return k.indexOf("exec-system-pwa") >= 0;
+            })
+            .slice(0, 16);
+        }
+      } catch (_ck) {}
+      try {
+        if (out.controllerScriptURL) {
+          const res = await fetch(out.controllerScriptURL, { cache: "no-store" });
+          const txt = await res.text();
+          const m = String(txt || "").match(/const\s+CACHE_NAME\s*=\s*["']([^"']+)["']/);
+          if (m && m[1]) out.swScriptCacheName = m[1];
+        }
+      } catch (_fc) {}
+      return out;
+    }
+
+    async function todayPlanSyncDiagCloudPeekReadonly(todayKey) {
+      const want = String(todayKey || "");
+      const result = {
+        fetchedAt: Date.now(),
+        mode: "GET-only-no-apply",
+        lists: null,
+        sprint: null,
+        todayPlan: null
+      };
+      let base = "";
+      try {
+        if (typeof aliyunListsRealBaseUrl === "function") base = String(aliyunListsRealBaseUrl() || "");
+        else if (typeof aliyunTodayPlanRealBaseUrl === "function")
+          base = String(aliyunTodayPlanRealBaseUrl() || "");
+      } catch (_b) {
+        base = "";
+      }
+      if (!base) {
+        result.error = "missing-base-url";
+        return result;
+      }
+      try {
+        if (typeof aliyunExpHasForbiddenSecret === "function" && aliyunExpHasForbiddenSecret(base)) {
+          result.error = "base-url-forbidden";
+          return result;
+        }
+      } catch (_sec) {}
+
+      async function getDoc(docId) {
+        const getRes = await aliyunExpFetchJson(
+          "GET",
+          base + "/smoke/" + encodeURIComponent(docId),
+          null
+        );
+        return getRes;
+      }
+
+      try {
+        const docId =
+          typeof aliyunListsRealDocId === "function" ? aliyunListsRealDocId() : "";
+        const getRes = await getDoc(docId);
+        if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+          result.lists = { ok: true, notFound: true, docId: docId, closedTodayCount: 0, items: [] };
+        } else if (!getRes.ok) {
+          result.lists = {
+            ok: false,
+            docId: docId,
+            httpStatus: getRes.status,
+            error: "GET HTTP " + getRes.status
+          };
+        } else {
+          const row = getRes.data && getRes.data.data;
+          const attrs = (row && (row.attrs || row)) || {};
+          const parsed =
+            typeof aliyunListsRealTryParseEnvelope === "function"
+              ? aliyunListsRealTryParseEnvelope(attrs.payload != null ? attrs.payload : attrs)
+              : { ok: false };
+          if (!parsed.ok) {
+            result.lists = {
+              ok: false,
+              docId: docId,
+              error: "parse-failed:" + todayPlanSyncDiagSafeStr(parsed.reason, 40)
+            };
+          } else {
+            const env = parsed.env || {};
+            const arr = Array.isArray(env.closedList) ? env.closedList : [];
+            const items = [];
+            let doneN = 0;
+            for (let i = 0; i < arr.length; i++) {
+              const it = arr[i];
+              if (!it) continue;
+              let visible = true;
+              try {
+                if (typeof isClosedListItemVisibleForViewDate === "function") {
+                  visible = !!isClosedListItemVisibleForViewDate(it, want);
+                }
+              } catch (_vis) {
+                visible = true;
+              }
+              if (!visible) continue;
+              const done = !!it.completed;
+              if (done) doneN += 1;
+              items.push(todayPlanSyncDiagSummarizeTask(it.id, it.text, done));
+              if (items.length >= 12) break;
+            }
+            result.lists = {
+              ok: true,
+              docId: docId,
+              closedListTotal: arr.length,
+              closedTodayCount: items.length,
+              closedTodayDone: doneN,
+              items: items,
+              envelopeUpdatedAt: Number(env.envelopeUpdatedAt) || null,
+              roomIdInEnvelope: todayPlanSyncDiagSafeStr(env.roomId, 64)
+            };
+          }
+        }
+      } catch (errLists) {
+        result.lists = {
+          ok: false,
+          error: todayPlanSyncDiagSafeStr(errLists && errLists.message, 160)
+        };
+      }
+
+      try {
+        const docId =
+          typeof aliyunTodayPlanRealDocId === "function" ? aliyunTodayPlanRealDocId() : "";
+        const getRes = await getDoc(docId);
+        if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+          result.todayPlan = { ok: true, notFound: true, docId: docId, marksForToday: [] };
+        } else if (!getRes.ok) {
+          result.todayPlan = {
+            ok: false,
+            docId: docId,
+            httpStatus: getRes.status,
+            error: "GET HTTP " + getRes.status
+          };
+        } else {
+          const row = getRes.data && getRes.data.data;
+          const attrs = (row && (row.attrs || row)) || {};
+          const env =
+            typeof aliyunTodayPlanRealParseEnvelope === "function"
+              ? aliyunTodayPlanRealParseEnvelope(attrs.payload != null ? attrs.payload : attrs)
+              : {};
+          const marks = env && env.marks && typeof env.marks === "object" ? env.marks : {};
+          const markKeys = Object.keys(marks);
+          const forToday = [];
+          for (let mi = 0; mi < markKeys.length; mi++) {
+            const mid = markKeys[mi];
+            const m = marks[mid];
+            let date = "";
+            if (typeof m === "string") date = m;
+            else if (m && typeof m === "object") date = String(m.date || "");
+            date =
+              typeof normalizeWeeklyPlanTodayPlanDate === "function"
+                ? normalizeWeeklyPlanTodayPlanDate(date)
+                : String(date || "");
+            if (date === want) {
+              forToday.push({ id: todayPlanSyncDiagSafeStr(mid, 80), date: date });
+            }
+          }
+          result.todayPlan = {
+            ok: true,
+            docId: docId,
+            marksTotal: markKeys.length,
+            marksForTodayCount: forToday.length,
+            marksForToday: forToday.slice(0, 40),
+            envelopeUpdatedAt: Number(env.envelopeUpdatedAt) || null,
+            roomIdInEnvelope: todayPlanSyncDiagSafeStr(env.roomId, 64)
+          };
+        }
+      } catch (errTp) {
+        result.todayPlan = {
+          ok: false,
+          error: todayPlanSyncDiagSafeStr(errTp && errTp.message, 160)
+        };
+      }
+
+      try {
+        const docId =
+          typeof aliyunSprintRealDocId === "function" ? aliyunSprintRealDocId() : "";
+        const getRes = await getDoc(docId);
+        if (getRes.status === 404 || (getRes.data && getRes.data.error === "not_found")) {
+          result.sprint = { ok: true, notFound: true, docId: docId, otherTodayCount: 0, items: [] };
+        } else if (!getRes.ok) {
+          result.sprint = {
+            ok: false,
+            docId: docId,
+            httpStatus: getRes.status,
+            error: "GET HTTP " + getRes.status
+          };
+        } else {
+          const row = getRes.data && getRes.data.data;
+          const attrs = (row && (row.attrs || row)) || {};
+          const env =
+            typeof aliyunSprintRealParseEnvelope === "function"
+              ? aliyunSprintRealParseEnvelope(attrs.payload != null ? attrs.payload : attrs)
+              : {};
+          /* 从 Sprint 信封扫 todayPlanDate===today 的任务（只读摘要） */
+          const itemsMap = env && env.items && typeof env.items === "object" ? env.items : null;
+          const weeks = env && env.weeks && typeof env.weeks === "object" ? env.weeks : null;
+          const collected = [];
+          function pushTask(task) {
+            if (!task || collected.length >= 20) return;
+            const date =
+              typeof normalizeWeeklyPlanTodayPlanDate === "function"
+                ? normalizeWeeklyPlanTodayPlanDate(task.todayPlanDate)
+                : String(task.todayPlanDate || "");
+            if (date !== want) return;
+            const done = !!(task.mainDone || task.done);
+            collected.push(
+              todayPlanSyncDiagSummarizeTask(task.id, task.text, done)
+            );
+          }
+          if (itemsMap) {
+            const ids = Object.keys(itemsMap);
+            for (let i = 0; i < ids.length; i++) pushTask(itemsMap[ids[i]]);
+          } else if (weeks) {
+            const wkeys = Object.keys(weeks);
+            for (let wi = 0; wi < wkeys.length; wi++) {
+              const arr = weeks[wkeys[wi]];
+              if (!Array.isArray(arr)) continue;
+              for (let j = 0; j < arr.length; j++) pushTask(arr[j]);
+            }
+          }
+          let doneN = 0;
+          for (let d = 0; d < collected.length; d++) if (collected[d].done) doneN += 1;
+          result.sprint = {
+            ok: true,
+            docId: docId,
+            otherTodayCount: collected.length,
+            otherTodayDone: doneN,
+            items: collected,
+            envelopeUpdatedAt: Number(env.envelopeUpdatedAt) || null,
+            roomIdInEnvelope: todayPlanSyncDiagSafeStr(env.roomId, 64)
+          };
+        }
+      } catch (errSp) {
+        result.sprint = {
+          ok: false,
+          error: todayPlanSyncDiagSafeStr(errSp && errSp.message, 160)
+        };
+      }
+
+      return result;
+    }
+
+    async function buildTodayPlanSyncDiagSnapshot(opts) {
+      opts = opts && typeof opts === "object" ? opts : {};
+      const snap = __todayPlanSyncDiagSnapshotSync();
+      try {
+        snap.versions = await todayPlanSyncDiagCollectRuntimeVersions();
+      } catch (_ver) {
+        snap.versions = snap.versions || {};
+        snap.versions.runtimeError = todayPlanSyncDiagSafeStr(_ver && _ver.message, 80);
+      }
+      if (opts.cloudPeek) {
+        try {
+          snap.cloudPeek = await todayPlanSyncDiagCloudPeekReadonly(snap.todayKey);
+        } catch (errPeek) {
+          snap.cloudPeek = {
+            ok: false,
+            error: todayPlanSyncDiagSafeStr(errPeek && errPeek.message, 160)
+          };
+        }
+      }
+      return snap;
+    }
+
+    async function copyTodayPlanSyncDiag(opts) {
+      opts = opts && typeof opts === "object" ? opts : {};
+      const snap = await buildTodayPlanSyncDiagSnapshot(opts);
+      let text = "";
+      try {
+        text = JSON.stringify(snap, null, 2);
+      } catch (_j) {
+        text = String(snap);
+      }
+      const writeClipboard = opts.writeClipboard !== false;
+      let clipboard = "skip";
+      if (writeClipboard) {
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+            clipboard = "ok";
+          } else {
+            clipboard = "no-api";
+          }
+        } catch (_c) {
+          clipboard = "fail";
+        }
+      }
+      return { ok: true, clipboard: clipboard, text: text, snapshot: snap };
+    }
+
+    try {
+      window.__todayPlanSyncDiagSnapshotSync = __todayPlanSyncDiagSnapshotSync;
+      window.__todayPlanSyncDiagSnapshot = buildTodayPlanSyncDiagSnapshot;
+      window.__copyTodayPlanSyncDiag = copyTodayPlanSyncDiag;
+      window.copyTodayPlanSyncDiag = copyTodayPlanSyncDiag;
+    } catch (_tpWin) {}
 
     async function aliyunExpFetchJson(method, url, bodyObj) {
       const opts = {
