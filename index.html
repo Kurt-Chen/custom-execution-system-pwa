@@ -98631,6 +98631,59 @@
       -webkit-user-select: text;
       user-select: text;
     }
+    /* 压掉全局 button{color:#fff}：浅底按钮否则白字不可见，像「灰掉不可点」 */
+    #earlyBootDiagPanel button {
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+    #earlyBootDiagPanel button.early-boot-diag-btn-primary {
+      min-height: 44px;
+      padding: 10px 16px;
+      border: 0;
+      border-radius: 8px;
+      background: #2563eb;
+      color: #fff !important;
+      font-weight: 700;
+      box-shadow: 0 1px 2px rgba(37, 99, 235, 0.35);
+    }
+    #earlyBootDiagPanel button.early-boot-diag-btn-primary:active {
+      background: #1d4ed8;
+    }
+    #earlyBootDiagPanel button.early-boot-diag-btn-primary.is-busy,
+    #earlyBootDiagPanel button.early-boot-diag-btn-primary:disabled {
+      background: #93c5fd;
+      color: #fff !important;
+      cursor: wait;
+      opacity: 1;
+    }
+    #earlyBootDiagPanel button.early-boot-diag-btn-secondary {
+      min-height: 40px;
+      padding: 8px 14px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: #f8fafc;
+      color: #0f172a !important;
+      font-weight: 600;
+    }
+    #earlyBootDiagPanel button.early-boot-diag-btn-ghost {
+      min-height: 40px;
+      padding: 8px 14px;
+      border: 1px solid #93c5fd;
+      border-radius: 8px;
+      background: #eff6ff;
+      color: #1d4ed8 !important;
+      font-weight: 700;
+    }
+    #earlyBootDiagPanel button.early-boot-diag-btn-close {
+      min-height: 40px;
+      padding: 8px 14px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: #fff;
+      color: #334155 !important;
+      font-weight: 600;
+    }
   </style>
   <script>
     /* 启动诊断早期壳：不依赖 lodash/Firebase/IDB/主业务脚本 */
@@ -98843,7 +98896,7 @@
         var hint = document.createElement("div");
         hint.id = "earlyBootDiagHint";
         hint.textContent =
-          "请两端都点「含云端只读探测并复制」发回 JSON。核对 versions.isExpectedBuild；用 e2eTrace.firstGap 定位丢失环节。不改数据/房间/缓存。";
+          "请两端都点蓝色「完整端到端诊断」发回 JSON（须 e2eComplete=true）。核对 versions.isExpectedBuild；用 e2eTrace.firstGap 定位。不改数据/房间/缓存。";
         hint.style.cssText = "font-size:12px;color:#64748b;margin-bottom:10px;";
         var pre = document.createElement("pre");
         pre.id = "earlyBootDiagPre";
@@ -98852,29 +98905,30 @@
         var copyBtn = document.createElement("button");
         copyBtn.type = "button";
         copyBtn.id = "earlyBootDiagCopyBtn";
+        copyBtn.className = "early-boot-diag-btn-secondary";
         copyBtn.textContent = "复制启动摘要";
-        copyBtn.style.cssText =
-          "min-height:40px;padding:8px 14px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;font-weight:600;";
         var copyTodayBtn = document.createElement("button");
         copyTodayBtn.type = "button";
         copyTodayBtn.id = "earlyBootDiagCopyTodayPlanBtn";
+        copyTodayBtn.className = "early-boot-diag-btn-ghost";
         copyTodayBtn.textContent = "复制本机今日计划诊断";
-        copyTodayBtn.style.cssText =
-          "min-height:40px;padding:8px 14px;border:1px solid #93c5fd;border-radius:8px;background:#eff6ff;font-weight:700;color:#1d4ed8;";
+        copyTodayBtn.title = "仅本机快照；cloudPeek 为 null，不能当作端到端报告";
         var copyCloudBtn = document.createElement("button");
         copyCloudBtn.type = "button";
         copyCloudBtn.id = "earlyBootDiagCopyTodayPlanCloudBtn";
+        copyCloudBtn.className = "early-boot-diag-btn-primary";
         copyCloudBtn.textContent = "完整端到端诊断（含云端只读）";
-        copyCloudBtn.style.cssText =
-          "min-height:40px;padding:8px 14px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;font-weight:600;";
+        copyCloudBtn.title =
+          "主操作：只读 GET 三域+meta；不写本机、不上传、不依赖同步门闩；完成后自动复制";
+        copyCloudBtn.setAttribute("aria-busy", "false");
         var closeBtn = document.createElement("button");
         closeBtn.type = "button";
+        closeBtn.className = "early-boot-diag-btn-close";
         closeBtn.textContent = "关闭";
-        closeBtn.style.cssText =
-          "min-height:40px;padding:8px 14px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-weight:600;";
+        var e2eDiagBusy = false;
         function copyTextToClipboard(body, btn, okLabel) {
           var hintEl = document.getElementById("earlyBootDiagHint");
-          var restoreLabel = btn ? String(btn.textContent || "") : "";
+          var restoreLabel = btn ? String(btn.getAttribute("data-label") || btn.textContent || "") : "";
           function ok() {
             if (btn) btn.textContent = okLabel || "已复制";
             if (hintEl) {
@@ -98883,7 +98937,7 @@
             }
             window.setTimeout(function () {
               if (btn) btn.textContent = restoreLabel;
-            }, 1600);
+            }, 1800);
           }
           function fail() {
             if (hintEl) {
@@ -98922,6 +98976,9 @@
             fail();
           }
         }
+        copyBtn.setAttribute("data-label", copyBtn.textContent);
+        copyTodayBtn.setAttribute("data-label", copyTodayBtn.textContent);
+        copyCloudBtn.setAttribute("data-label", copyCloudBtn.textContent);
         copyBtn.addEventListener("click", function () {
           var body = (document.getElementById("earlyBootDiagPre") || {}).textContent || "";
           copyTextToClipboard(body, copyBtn, "已复制");
@@ -98931,7 +98988,12 @@
           function runCopy(text) {
             var preEl = document.getElementById("earlyBootDiagPre");
             if (preEl) preEl.textContent = text;
-            copyTextToClipboard(text, copyTodayBtn, "已复制");
+            if (hintEl) {
+              hintEl.style.color = "#b45309";
+              hintEl.textContent =
+                "这是本机诊断（cloudPeek=null），不是完整端到端报告。请点蓝色主按钮「完整端到端诊断」。";
+            }
+            copyTextToClipboard(text, copyTodayBtn, "已复制本机");
           }
           try {
             if (typeof window.__copyTodayPlanSyncDiag === "function") {
@@ -98939,7 +99001,7 @@
               if (ret && typeof ret.then === "function") {
                 if (hintEl) {
                   hintEl.style.color = "#64748b";
-                  hintEl.textContent = "正在生成今日计划同步诊断…";
+                  hintEl.textContent = "正在生成本机今日计划诊断（不含云端）…";
                 }
                 ret
                   .then(function (pack) {
@@ -98949,7 +99011,9 @@
                     runCopy(
                       JSON.stringify(
                         {
-                          diag: "today-plan-sync-v1",
+                          diag: "today-plan-sync-v2-e2e",
+                          reportKind: "local-only-error",
+                          e2eComplete: false,
                           error: String((err && err.message) || err || "copy-failed")
                         },
                         null,
@@ -98968,7 +99032,9 @@
           runCopy(
             JSON.stringify(
               {
-                diag: "today-plan-sync-v1",
+                diag: "today-plan-sync-v2-e2e",
+                reportKind: "local-only-unavailable",
+                e2eComplete: false,
                 error: "business-diag-unavailable",
                 hint: "请硬刷新后再连点版本×5"
               },
@@ -98979,54 +99045,155 @@
         });
         copyCloudBtn.addEventListener("click", function () {
           var hintEl = document.getElementById("earlyBootDiagHint");
-          function runCopy(text) {
+          var label = copyCloudBtn.getAttribute("data-label") || "完整端到端诊断（含云端只读）";
+          if (e2eDiagBusy) {
+            if (hintEl) {
+              hintEl.style.color = "#64748b";
+              hintEl.textContent = "端到端探测进行中，请稍候…（不依赖同步状态，请勿重复点击）";
+            }
+            return;
+          }
+          function setBusy(on, progressText) {
+            e2eDiagBusy = !!on;
+            copyCloudBtn.disabled = !!on;
+            copyCloudBtn.classList.toggle("is-busy", !!on);
+            copyCloudBtn.setAttribute("aria-busy", on ? "true" : "false");
+            if (on) {
+              copyCloudBtn.textContent = progressText || "探测中…";
+            } else {
+              copyCloudBtn.textContent = label;
+            }
+          }
+          function failShow(errText, jsonObj) {
+            setBusy(false);
+            var text =
+              typeof jsonObj === "string"
+                ? jsonObj
+                : JSON.stringify(
+                    jsonObj || {
+                      diag: "today-plan-sync-v2-e2e",
+                      reportKind: "e2e-failed",
+                      e2eComplete: false,
+                      error: String(errText || "unknown")
+                    },
+                    null,
+                    2
+                  );
             var preEl = document.getElementById("earlyBootDiagPre");
             if (preEl) preEl.textContent = text;
-            copyTextToClipboard(text, copyCloudBtn, "已复制");
+            if (hintEl) {
+              hintEl.style.color = "#b91c1c";
+              hintEl.textContent =
+                "端到端诊断失败：" + String(errText || "未知错误") + "。下方为错误报告，可长按复制。";
+            }
+          }
+          function successShow(pack) {
+            var snap = pack && pack.snapshot;
+            var complete = !!(snap && snap.e2eComplete);
+            var text = (pack && pack.text) || JSON.stringify(pack, null, 2);
+            var preEl = document.getElementById("earlyBootDiagPre");
+            if (preEl) preEl.textContent = text;
+            if (!complete) {
+              var reason =
+                (snap && (snap.incompleteReason || (snap.cloudPeek && snap.cloudPeek.error))) ||
+                "cloudPeek-incomplete";
+              setBusy(false);
+              if (hintEl) {
+                hintEl.style.color = "#b45309";
+                hintEl.textContent =
+                  "未生成完整端到端报告（" +
+                  String(reason) +
+                  "）。cloudPeek 无效时不能当作完整报告。已展示详情，可长按复制。";
+              }
+              copyTextToClipboard(text, copyCloudBtn, "已复制（不完整）");
+              return;
+            }
+            setBusy(false);
+            if (hintEl) {
+              hintEl.style.color = "#047857";
+              hintEl.textContent = "端到端探测完成，正在复制完整 JSON…";
+            }
+            copyTextToClipboard(text, copyCloudBtn, "复制成功");
+            window.setTimeout(function () {
+              if (hintEl && hintEl.textContent.indexOf("已复制") < 0) {
+                hintEl.style.color = "#047857";
+                hintEl.textContent =
+                  "完整端到端诊断已复制。请电脑与平板各一份发回；看 e2eTrace.firstGap。";
+              }
+            }, 50);
           }
           try {
-            if (typeof window.__copyTodayPlanSyncDiag === "function") {
-              if (hintEl) {
-                hintEl.style.color = "#64748b";
-                hintEl.textContent = "只读探测云端（GET，不写本机、不上传）…";
-              }
-              var ret = window.__copyTodayPlanSyncDiag({ cloudPeek: true, writeClipboard: false });
-              if (ret && typeof ret.then === "function") {
-                ret
-                  .then(function (pack) {
-                    runCopy((pack && pack.text) || JSON.stringify(pack, null, 2));
-                  })
-                  .catch(function (err) {
-                    runCopy(
-                      JSON.stringify(
-                        {
-                          diag: "today-plan-sync-v1",
-                          error: String((err && err.message) || err || "cloud-peek-failed")
-                        },
-                        null,
-                        2
-                      )
-                    );
-                  });
-                return;
-              }
-              if (ret && ret.text) {
-                runCopy(ret.text);
-                return;
-              }
-            }
-          } catch (_tc) {}
-          runCopy(
-            JSON.stringify(
-              {
-                diag: "today-plan-sync-v1",
+            if (typeof window.__copyTodayPlanSyncDiag !== "function") {
+              failShow("business-diag-unavailable", {
+                diag: "today-plan-sync-v2-e2e",
+                reportKind: "e2e-unavailable",
+                e2eComplete: false,
                 error: "business-diag-unavailable",
-                hint: "请硬刷新后再试"
-              },
-              null,
-              2
-            )
-          );
+                hint: "主脚本未就绪：请硬刷新后再试（诊断不依赖同步门闩）"
+              });
+              return;
+            }
+            setBusy(true, "只读探测中 1/3…");
+            if (hintEl) {
+              hintEl.style.color = "#1d4ed8";
+              hintEl.textContent =
+                "正在只读 GET lists / sprint / todayPlan / meta（不写本机、不上传、不等待同步锁）…";
+            }
+            var progressTimer = window.setInterval(function () {
+              if (!e2eDiagBusy) return;
+              var step = copyCloudBtn.getAttribute("data-step") || "1";
+              var n = Number(step) || 1;
+              n = n >= 3 ? 1 : n + 1;
+              copyCloudBtn.setAttribute("data-step", String(n));
+              copyCloudBtn.textContent = "只读探测中 " + n + "/3…";
+            }, 1200);
+            var ret = window.__copyTodayPlanSyncDiag({
+              cloudPeek: true,
+              writeClipboard: false,
+              requireCloudPeek: true
+            });
+            function clearProgress() {
+              try {
+                window.clearInterval(progressTimer);
+              } catch (_c) {}
+              copyCloudBtn.removeAttribute("data-step");
+            }
+            if (ret && typeof ret.then === "function") {
+              ret
+                .then(function (pack) {
+                  clearProgress();
+                  successShow(pack);
+                })
+                .catch(function (err) {
+                  clearProgress();
+                  failShow(String((err && err.message) || err || "cloud-peek-failed"), {
+                    diag: "today-plan-sync-v2-e2e",
+                    reportKind: "e2e-failed",
+                    e2eComplete: false,
+                    error: String((err && err.message) || err || "cloud-peek-failed")
+                  });
+                });
+              return;
+            }
+            clearProgress();
+            if (ret && ret.text) {
+              successShow(ret);
+              return;
+            }
+            failShow("empty-return", {
+              diag: "today-plan-sync-v2-e2e",
+              reportKind: "e2e-failed",
+              e2eComplete: false,
+              error: "empty-return"
+            });
+          } catch (_tc) {
+            failShow(String((_tc && _tc.message) || _tc || "exception"), {
+              diag: "today-plan-sync-v2-e2e",
+              reportKind: "e2e-failed",
+              e2eComplete: false,
+              error: String((_tc && _tc.message) || _tc || "exception")
+            });
+          }
         });
         closeBtn.addEventListener("click", function () {
           overlay.classList.remove("is-open");
@@ -99038,8 +99205,9 @@
             overlay.style.display = "none";
           }
         });
-        row.appendChild(copyTodayBtn);
+        /* 主按钮置前：完整端到端 > 本机 > 启动摘要 > 关闭 */
         row.appendChild(copyCloudBtn);
+        row.appendChild(copyTodayBtn);
         row.appendChild(copyBtn);
         row.appendChild(closeBtn);
         panel.appendChild(title);
@@ -99072,7 +99240,7 @@
           if (hintEl) {
             hintEl.style.color = "#64748b";
             hintEl.textContent =
-              "优先点「完整端到端诊断（含云端只读）」；失败时可长按选中文本或截图。不清缓存、不改房间。";
+              "请点蓝色主按钮「完整端到端诊断」。下方预览若 cloudPeek=null 只是本机草稿，不是完整报告。不清缓存、不改房间。";
           }
           overlay.classList.add("is-open");
           overlay.style.display = "flex";
@@ -120020,7 +120188,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126h";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126i";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -150214,9 +150382,12 @@
         domains: todayPlanSyncDiagBuildDomainCards(sync, local, null, lastReports),
         e2eTrace: todayPlanSyncDiagBuildE2eTrace(local, null),
         cloudPeek: null,
+        reportKind: "local-only",
+        e2eComplete: false,
+        incompleteReason: "cloudPeek-not-requested",
         notes: [
-          "端到端：请两端都点「含云端只读探测并复制」，对比 e2eTrace / domains / versions",
-          "versions.badgeCache 必须等于 versions.swScriptCacheName 且含 v20261126h，否则平板未真正跑到新码",
+          "本机预览 reportKind=local-only：cloudPeek=null，不是完整端到端报告；请点蓝色主按钮",
+          "versions.badgeCache 必须等于 versions.swScriptCacheName 且含 v20261126i，否则平板未真正跑到新码",
           "e2eTrace.tasks[].firstGap 标出该任务 id 首次差异环节（非猜测）",
           "其他任务标题旁有数但列表空白：看 ui.otherSmartCollapsed"
         ]
@@ -150268,6 +150439,45 @@
       return out;
     }
 
+    function todayPlanSyncDiagWithTimeout(promise, ms, label) {
+      const wait = Math.max(1000, Number(ms) || 12000);
+      const tag = String(label || "diag-timeout");
+      let timer = null;
+      const timeoutPromise = new Promise(function (_resolve, reject) {
+        timer = setTimeout(function () {
+          reject(new Error(tag + "-timeout-" + wait + "ms"));
+        }, wait);
+      });
+      return Promise.race([promise, timeoutPromise]).finally(function () {
+        if (timer) clearTimeout(timer);
+      });
+    }
+
+    function todayPlanSyncDiagAssessE2eComplete(cloudPeek) {
+      if (!cloudPeek || typeof cloudPeek !== "object") {
+        return { e2eComplete: false, incompleteReason: "cloudPeek-null" };
+      }
+      if (cloudPeek.error && !cloudPeek.lists && !cloudPeek.sprint && !cloudPeek.todayPlan) {
+        return {
+          e2eComplete: false,
+          incompleteReason: "cloudPeek-error:" + String(cloudPeek.error).slice(0, 80)
+        };
+      }
+      const domains = ["lists", "sprint", "todayPlan"];
+      const missing = [];
+      for (let i = 0; i < domains.length; i++) {
+        const d = domains[i];
+        if (cloudPeek[d] == null) missing.push(d);
+      }
+      if (missing.length) {
+        return {
+          e2eComplete: false,
+          incompleteReason: "cloudPeek-missing-domains:" + missing.join(",")
+        };
+      }
+      return { e2eComplete: true, incompleteReason: null };
+    }
+
     async function todayPlanSyncDiagCloudPeekReadonly(todayKey) {
       const want = String(todayKey || "");
       const result = {
@@ -150297,10 +150507,14 @@
       } catch (_sec) {}
 
       async function getDoc(docId) {
-        const getRes = await aliyunExpFetchJson(
-          "GET",
-          base + "/smoke/" + encodeURIComponent(docId),
-          null
+        const getRes = await todayPlanSyncDiagWithTimeout(
+          aliyunExpFetchJson(
+            "GET",
+            base + "/smoke/" + encodeURIComponent(docId),
+            null
+          ),
+          12000,
+          "diag-get-" + String(docId || "doc").slice(0, 40)
         );
         return getRes;
       }
@@ -150515,7 +150729,11 @@
       /* 房间 domains meta：只读 GET，对比 lastSeen 水位 */
       try {
         if (typeof aliyunDomainsMetaFetch === "function") {
-          const meta = await aliyunDomainsMetaFetch();
+          const meta = await todayPlanSyncDiagWithTimeout(
+            aliyunDomainsMetaFetch(),
+            12000,
+            "diag-domains-meta"
+          );
           result.domainsMeta = {
             ok: !!meta.ok,
             missing: !!meta.missing,
@@ -150532,6 +150750,12 @@
         };
       }
 
+      try {
+        result.ok = !!(result.lists && result.sprint && result.todayPlan);
+        result.timedOut = false;
+      } catch (_ok) {
+        result.ok = false;
+      }
       return result;
     }
 
@@ -150543,7 +150767,7 @@
         snap.versions.codeMatchesCaches =
           !!snap.versions.badgeCache &&
           snap.versions.badgeCache === snap.versions.swScriptCacheName;
-        snap.versions.expectedBadge = "exec-system-pwa-v20261126h";
+        snap.versions.expectedBadge = "exec-system-pwa-v20261126i";
         snap.versions.isExpectedBuild =
           snap.versions.badgeCache === snap.versions.expectedBadge &&
           snap.versions.swScriptCacheName === snap.versions.expectedBadge;
@@ -150551,13 +150775,27 @@
         snap.versions = snap.versions || {};
         snap.versions.runtimeError = todayPlanSyncDiagSafeStr(_ver && _ver.message, 80);
       }
+      /* 默认可读字段：未做云端探测时明确标为非完整端到端 */
+      if (!opts.cloudPeek) {
+        snap.reportKind = "local-only";
+        snap.e2eComplete = false;
+        snap.incompleteReason = "cloudPeek-not-requested";
+        snap.cloudPeek = null;
+      }
       if (opts.cloudPeek) {
+        snap.reportKind = "e2e-cloud-peek";
         try {
-          snap.cloudPeek = await todayPlanSyncDiagCloudPeekReadonly(snap.todayKey);
+          snap.cloudPeek = await todayPlanSyncDiagWithTimeout(
+            todayPlanSyncDiagCloudPeekReadonly(snap.todayKey),
+            45000,
+            "diag-cloud-peek-overall"
+          );
         } catch (errPeek) {
+          const msg = todayPlanSyncDiagSafeStr(errPeek && errPeek.message, 160);
           snap.cloudPeek = {
             ok: false,
-            error: todayPlanSyncDiagSafeStr(errPeek && errPeek.message, 160),
+            error: msg,
+            timedOut: /timeout/i.test(msg),
             mode: "GET-only-no-apply"
           };
         }
@@ -150617,6 +150855,12 @@
         } catch (_e2e) {
           snap.e2eBuildError = todayPlanSyncDiagSafeStr(_e2e && _e2e.message, 120);
         }
+        const assess = todayPlanSyncDiagAssessE2eComplete(snap.cloudPeek);
+        snap.e2eComplete = !!assess.e2eComplete;
+        snap.incompleteReason = assess.incompleteReason;
+        if (!snap.e2eComplete && opts.requireCloudPeek) {
+          snap.reportKind = "e2e-incomplete";
+        }
       }
       return snap;
     }
@@ -150644,7 +150888,15 @@
           clipboard = "fail";
         }
       }
-      return { ok: true, clipboard: clipboard, text: text, snapshot: snap };
+      const e2eOk = opts.cloudPeek ? !!snap.e2eComplete : true;
+      return {
+        ok: e2eOk,
+        e2eComplete: !!snap.e2eComplete,
+        reportKind: snap.reportKind || null,
+        clipboard: clipboard,
+        text: text,
+        snapshot: snap
+      };
     }
 
     try {

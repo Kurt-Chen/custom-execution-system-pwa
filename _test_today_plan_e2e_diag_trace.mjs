@@ -16,7 +16,7 @@ const sw = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");
 const badge = html.match(/APP_CACHE_NAME_FOR_BADGE\s*=\s*"([^"]+)"/);
 const swCache = sw.match(/CACHE_NAME\s*=\s*"([^"]+)"/);
 assert.equal(badge[1], swCache[1]);
-assert.match(badge[1], /v20261126h$/);
+assert.match(badge[1], /v20261126i$/);
 
 assert.match(html, /diag:\s*"today-plan-sync-v2-e2e"/);
 assert.match(html, /function todayPlanSyncDiagBuildE2eTrace\s*\(/);
@@ -28,6 +28,10 @@ assert.match(html, /isExpectedBuild/);
 assert.match(html, /domainsMeta/);
 assert.match(html, /activelyFlushing/);
 assert.match(html, /cloud-mark-present-local-body-missing/);
+assert.match(html, /todayPlanSyncDiagWithTimeout/);
+assert.match(html, /e2eComplete/);
+assert.match(html, /early-boot-diag-btn-primary/);
+assert.match(html, /diag-cloud-peek-overall/);
 
 const peekStart = html.indexOf("async function todayPlanSyncDiagCloudPeekReadonly");
 const peekEnd = html.indexOf("async function buildTodayPlanSyncDiagSnapshot", peekStart);
@@ -86,5 +90,30 @@ const out = JSON.parse(run.stdout.trim());
 assert.equal(out.gaps["cloud-mark-1"], "cloud-mark-present-local-body-missing");
 assert.equal(out.gaps["mismatch-1"], "body-present-but-content-or-done-mismatch");
 assert.equal(out.gaps["local-only"], "local-body-present-cloud-mark-missing");
+
+
+const assessStart = html.indexOf("function todayPlanSyncDiagAssessE2eComplete");
+const assessEnd = html.indexOf("async function todayPlanSyncDiagCloudPeekReadonly", assessStart);
+assert.ok(assessStart > 0 && assessEnd > assessStart);
+const assessTmp = path.join(ROOT, "_tmp_e2e_assess.mjs");
+writeFileSync(
+  assessTmp,
+  `import assert from "node:assert/strict";
+` +
+    html.slice(assessStart, assessEnd) +
+    `
+const a = todayPlanSyncDiagAssessE2eComplete(null);
+assert.equal(a.e2eComplete, false);
+assert.equal(a.incompleteReason, "cloudPeek-null");
+const b = todayPlanSyncDiagAssessE2eComplete({ lists: {}, sprint: {}, todayPlan: {} });
+assert.equal(b.e2eComplete, true);
+const c = todayPlanSyncDiagAssessE2eComplete({ lists: {}, todayPlan: {} });
+assert.equal(c.e2eComplete, false);
+console.log("ok assess");
+`
+);
+const assessRun = spawnSync(process.execPath, [assessTmp], { encoding: "utf8" });
+unlinkSync(assessTmp);
+assert.equal(assessRun.status, 0, assessRun.stderr || assessRun.stdout);
 
 console.log("ok: today-plan e2e diag trace");
