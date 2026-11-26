@@ -16,6 +16,8 @@ assert.match(html, /function loadTodayPlanOtherCollapseUiState\s*\(/);
 assert.match(html, /function persistTodayPlanOtherCollapseUiPrefs\s*\(/);
 assert.match(html, /today-plan-panel__closed-chevron/);
 assert.match(html, /is-manual-collapsed/);
+assert.match(html, /button\.today-plan-panel__closed-chevron/);
+assert.equal(html.includes("section-head--closed-toggle"), false);
 assert.match(html, /function syncTodayPlanOtherSmartCollapse\s*\(/);
 
 const start = html.indexOf("function getTodayPlanClosedCollapseDayKey");
