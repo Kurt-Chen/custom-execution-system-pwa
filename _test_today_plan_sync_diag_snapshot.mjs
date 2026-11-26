@@ -15,7 +15,7 @@ const badge = html.match(/APP_CACHE_NAME_FOR_BADGE\s*=\s*"([^"]+)"/);
 const swCache = sw.match(/CACHE_NAME\s*=\s*"([^"]+)"/);
 assert.ok(badge && swCache, "cache name markers present");
 assert.equal(badge[1], swCache[1], "index.html badge cache must match sw.js CACHE_NAME");
-assert.match(badge[1], /^exec-system-pwa-v20261126h$/);
+assert.match(badge[1], /^exec-system-pwa-v20261126i$/);
 
 assert.match(html, /function __todayPlanSyncDiagSnapshotSync\s*\(/);
 assert.match(html, /async function buildTodayPlanSyncDiagSnapshot\s*\(/);
@@ -44,5 +44,17 @@ assert.match(peekBody, /aliyunExpFetchJson\(\s*"GET"/);
 /* 诊断面板提示禁止清缓存/改房间 */
 assert.match(html, /不清缓存、不改房间/);
 assert.match(html, /同步诊断（只读·无密钥）/);
+
+
+assert.match(html, /early-boot-diag-btn-primary/);
+assert.match(html, /e2eComplete/);
+assert.match(html, /incompleteReason/);
+assert.match(html, /todayPlanSyncDiagWithTimeout/);
+assert.match(html, /todayPlanSyncDiagAssessE2eComplete/);
+assert.match(html, /reportKind/);
+assert.match(html, /requireCloudPeek:\s*true/);
+/* 主按钮显式白字+蓝底，避免全局 button{color:#fff} 叠浅底导致「灰白不可点」 */
+assert.match(html, /early-boot-diag-btn-primary[\s\S]*?color:\s*#fff\s*!important/);
+assert.match(html, /压掉全局 button\{color:#fff\}/);
 
 console.log("ok: today-plan sync diag snapshot contracts");
