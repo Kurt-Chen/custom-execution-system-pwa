@@ -72,4 +72,15 @@ assert.equal(edgeExpand(false, true, false), true);
 assert.equal(edgeExpand(true, true, false), false); // 保留手动折叠
 assert.equal(edgeExpand(true, false, true), false);
 
+
+/* 今天死磕进度仅视觉隐藏；其他任务进度选择器仍存在 */
+assert.match(
+  html,
+  /\.today-plan-panel__section--closed[\s\S]*?\.today-plan-panel__section-count[\s\S]*?display:\s*none\s*!important/
+);
+assert.match(html, /fillTodayPlanSectionHeading\([\s\S]*?progress:\s*kind === "closed"/);
+assert.match(html, /paintTodayPlanOtherSectionHead/);
+assert.match(html, /syncTodayPlanOtherSmartCollapse/);
+
 console.log("ok: sikao + other collapse day prefs + smart-edge isolation");
+
