@@ -120020,7 +120020,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126e";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126f";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -132706,13 +132706,15 @@
     let aliyunSyncPrimaryTodayPlanMissingCatchupLeft = 0;
     let aliyunSyncPrimaryTodayPlanMissingRetryScheduled = false;
     /**
-     * 今日计划相关域（lists/sprint/todayPlan）内容修复拉取配额。
-     * 仅在「meta 要求拉某域但本轮被 flush 挡住」或「手动强制重拉」时武装；
-     * 成功拉完对应域或配额耗尽即退出，禁止按「分组是否为空」循环拉取。
+     * 今日计划域修复：lists 与「其他任务」(sprint+todayPlan) 配额分离。
+     * 死磕 lists 恢复后不得因共享 left 耗尽而清掉 sprint/todayPlan 修复
+     *（flush 互斥时常先挡住其他任务双域，却仍给 lists 扣配额）。
+     * 触发：meta 应拉却被 flush 挡 / 诊断强制重拉；退出：域拉成功剔除 / 该组配额耗尽。
      */
-    let aliyunSyncPrimaryTodayPlanDomainRepairLeft = 0;
     let aliyunSyncPrimaryTodayPlanDomainRepairScheduled = false;
     let aliyunSyncPrimaryTodayPlanDomainRepairIds = Object.create(null);
+    let aliyunSyncPrimaryListsRepairLeft = 0;
+    let aliyunSyncPrimaryOtherTasksRepairLeft = 0;
 
     function aliyunSyncPrimaryArmTodayPlanMissingCatchup(skippedN) {
       const n = Number(skippedN) || 0;
@@ -133251,8 +133253,21 @@
       });
     }
 
+    function aliyunSyncPrimaryTodayPlanRepairHasPending() {
+      return Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds).length > 0;
+    }
+
+    function aliyunSyncPrimaryTodayPlanRepairGroupLeft(domainId) {
+      if (domainId === "lists") return aliyunSyncPrimaryListsRepairLeft;
+      if (domainId === "sprint" || domainId === "todayPlan") {
+        return aliyunSyncPrimaryOtherTasksRepairLeft;
+      }
+      return 0;
+    }
+
     function aliyunSyncPrimaryClearTodayPlanDomainRepair(why) {
-      aliyunSyncPrimaryTodayPlanDomainRepairLeft = 0;
+      aliyunSyncPrimaryListsRepairLeft = 0;
+      aliyunSyncPrimaryOtherTasksRepairLeft = 0;
       aliyunSyncPrimaryTodayPlanDomainRepairScheduled = false;
       aliyunSyncPrimaryTodayPlanDomainRepairIds = Object.create(null);
       try {
@@ -133260,38 +133275,82 @@
       } catch (_n) {}
     }
 
+    /** 只清 lists 组，保留其他任务修复（死磕已恢复时不得连带退出 sprint/todayPlan） */
+    function aliyunSyncPrimaryClearListsRepairOnly(why) {
+      aliyunSyncPrimaryListsRepairLeft = 0;
+      delete aliyunSyncPrimaryTodayPlanDomainRepairIds.lists;
+      try {
+        noteBootHealth("lists-repair-cleared", { why: String(why || "") });
+      } catch (_n) {}
+      if (!aliyunSyncPrimaryTodayPlanRepairHasPending()) {
+        aliyunSyncPrimaryTodayPlanDomainRepairScheduled = false;
+      }
+    }
+
+    /** 只清其他任务组 */
+    function aliyunSyncPrimaryClearOtherTasksRepairOnly(why) {
+      aliyunSyncPrimaryOtherTasksRepairLeft = 0;
+      delete aliyunSyncPrimaryTodayPlanDomainRepairIds.sprint;
+      delete aliyunSyncPrimaryTodayPlanDomainRepairIds.todayPlan;
+      try {
+        noteBootHealth("other-tasks-repair-cleared", { why: String(why || "") });
+      } catch (_n) {}
+      if (!aliyunSyncPrimaryTodayPlanRepairHasPending()) {
+        aliyunSyncPrimaryTodayPlanDomainRepairScheduled = false;
+      }
+    }
+
     /**
-     * 武装今日计划三域修复拉取（明确触发）。
-     * 退出：对应域成功正文拉取后从 repairIds 剔除；全清或 left<=0 停止。
+     * 武装今日计划域修复（lists 与其他任务配额分离）。
+     * 退出：域拉成功剔除；该组配额在「实际仍拉到该组域」后耗尽才清该组。
      */
     function aliyunSyncPrimaryArmTodayPlanDomainRepair(domainIds, why) {
       const add = Array.isArray(domainIds) ? domainIds : [];
-      let added = 0;
+      let addedLists = 0;
+      let addedOther = 0;
       for (let i = 0; i < add.length; i++) {
         const id = String(add[i] || "");
         if (id !== "lists" && id !== "sprint" && id !== "todayPlan") continue;
         if (!aliyunSyncPrimaryTodayPlanDomainRepairIds[id]) {
           aliyunSyncPrimaryTodayPlanDomainRepairIds[id] = true;
-          added += 1;
+          if (id === "lists") addedLists += 1;
+          else addedOther += 1;
+        } else if (id === "lists") {
+          addedLists += 0;
+        } else {
+          addedOther += 0;
         }
       }
-      if (!added && aliyunSyncPrimaryTodayPlanDomainRepairLeft <= 0) return false;
-      /* 配额只在从 0 启动时给 3，flush 反复挡住不得把 left 重置回 3（防同步环） */
-      if (aliyunSyncPrimaryTodayPlanDomainRepairLeft <= 0) {
-        aliyunSyncPrimaryTodayPlanDomainRepairLeft = 3;
+      const needLists = !!aliyunSyncPrimaryTodayPlanDomainRepairIds.lists;
+      const needOther =
+        !!aliyunSyncPrimaryTodayPlanDomainRepairIds.sprint ||
+        !!aliyunSyncPrimaryTodayPlanDomainRepairIds.todayPlan;
+      if (!needLists && !needOther) return false;
+      if (needLists && aliyunSyncPrimaryListsRepairLeft <= 0) {
+        aliyunSyncPrimaryListsRepairLeft = 3;
+      }
+      if (needOther && aliyunSyncPrimaryOtherTasksRepairLeft <= 0) {
+        aliyunSyncPrimaryOtherTasksRepairLeft = 3;
       }
       if (aliyunSyncPrimaryTodayPlanDomainRepairScheduled) return true;
       aliyunSyncPrimaryTodayPlanDomainRepairScheduled = true;
       try {
         noteBootHealth("today-plan-domain-repair-armed", {
           why: String(why || ""),
-          domains: Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds)
+          domains: Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds),
+          listsLeft: aliyunSyncPrimaryListsRepairLeft,
+          otherLeft: aliyunSyncPrimaryOtherTasksRepairLeft
         });
       } catch (_n) {}
       try {
         window.setTimeout(function () {
           aliyunSyncPrimaryTodayPlanDomainRepairScheduled = false;
-          if (aliyunSyncPrimaryTodayPlanDomainRepairLeft <= 0) return;
+          if (
+            aliyunSyncPrimaryListsRepairLeft <= 0 &&
+            aliyunSyncPrimaryOtherTasksRepairLeft <= 0
+          ) {
+            return;
+          }
           if (typeof scheduleAliyunSyncPrimaryNearRealtimePull === "function") {
             scheduleAliyunSyncPrimaryNearRealtimePull("today-plan-domain-repair");
           } else if (typeof runAliyunSyncPrimaryNearRealtimePull === "function") {
@@ -133310,9 +133369,29 @@
       const id = String(domainId || "");
       if (!id || !aliyunSyncPrimaryTodayPlanDomainRepairIds[id]) return;
       delete aliyunSyncPrimaryTodayPlanDomainRepairIds[id];
-      if (!Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds).length) {
+      if (id === "lists") {
+        if (!aliyunSyncPrimaryTodayPlanDomainRepairIds.lists) {
+          aliyunSyncPrimaryListsRepairLeft = 0;
+        }
+      } else if (id === "sprint" || id === "todayPlan") {
+        if (
+          !aliyunSyncPrimaryTodayPlanDomainRepairIds.sprint &&
+          !aliyunSyncPrimaryTodayPlanDomainRepairIds.todayPlan
+        ) {
+          aliyunSyncPrimaryOtherTasksRepairLeft = 0;
+        }
+      }
+      if (!aliyunSyncPrimaryTodayPlanRepairHasPending()) {
         aliyunSyncPrimaryClearTodayPlanDomainRepair("all-domains-ok");
       }
+    }
+
+    /** 其他任务修复进行中：推迟 sprint/todayPlan 上传，避免 flush 互斥饿死拉取 */
+    function aliyunSyncPrimaryShouldDeferOtherTasksFlushForRepair(domainId) {
+      const id = String(domainId || "");
+      if (id !== "sprint" && id !== "todayPlan") return false;
+      if (!aliyunSyncPrimaryTodayPlanDomainRepairIds[id]) return false;
+      return aliyunSyncPrimaryOtherTasksRepairLeft > 0;
     }
 
     /**
@@ -133605,23 +133684,48 @@
                   );
                 } catch (_cSkipOv) {}
               } else if (
-                aliyunSyncPrimaryTodayPlanDomainRepairLeft > 0 &&
-                Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds).length
+                aliyunSyncPrimaryTodayPlanRepairHasPending() &&
+                ((aliyunSyncPrimaryTodayPlanDomainRepairIds.lists &&
+                  aliyunSyncPrimaryListsRepairLeft > 0) ||
+                  ((aliyunSyncPrimaryTodayPlanDomainRepairIds.sprint ||
+                    aliyunSyncPrimaryTodayPlanDomainRepairIds.todayPlan) &&
+                    aliyunSyncPrimaryOtherTasksRepairLeft > 0))
               ) {
+                const repairPull = [];
+                if (
+                  aliyunSyncPrimaryTodayPlanDomainRepairIds.lists &&
+                  aliyunSyncPrimaryListsRepairLeft > 0
+                ) {
+                  repairPull.push("lists");
+                }
+                if (
+                  aliyunSyncPrimaryOtherTasksRepairLeft > 0 &&
+                  aliyunSyncPrimaryTodayPlanDomainRepairIds.sprint
+                ) {
+                  repairPull.push("sprint");
+                }
+                if (
+                  aliyunSyncPrimaryOtherTasksRepairLeft > 0 &&
+                  aliyunSyncPrimaryTodayPlanDomainRepairIds.todayPlan
+                ) {
+                  repairPull.push("todayPlan");
+                }
                 skippedFullPull = false;
                 domainsGate = aliyunSyncPrimaryUnionPullIdsOntoGate(
                   domainsGate,
                   domainIds,
-                  Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds),
+                  repairPull,
                   "today-plan-domain-repair"
                 );
                 changedDomains = domainsGate.pullIds.slice();
                 try {
                   console.log(
-                    "[aliyun-sync-primary] skipAll overridden by today-plan-domain-repair left=" +
-                      aliyunSyncPrimaryTodayPlanDomainRepairLeft +
+                    "[aliyun-sync-primary] skipAll overridden by today-plan-domain-repair listsLeft=" +
+                      aliyunSyncPrimaryListsRepairLeft +
+                      " otherLeft=" +
+                      aliyunSyncPrimaryOtherTasksRepairLeft +
                       " ids=" +
-                      Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds).join(",")
+                      repairPull.join(",")
                   );
                 } catch (_cSkipRep) {}
               } else {
@@ -133741,12 +133845,20 @@
           );
         } catch (_cForce) {}
       }
-      if (
-        !forceAllBodies &&
-        aliyunSyncPrimaryTodayPlanDomainRepairLeft > 0 &&
-        Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds).length
-      ) {
-        const repairIds = Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds);
+      if (!forceAllBodies && aliyunSyncPrimaryTodayPlanRepairHasPending()) {
+        const repairIds = [];
+        if (
+          aliyunSyncPrimaryTodayPlanDomainRepairIds.lists &&
+          aliyunSyncPrimaryListsRepairLeft > 0
+        ) {
+          repairIds.push("lists");
+        }
+        if (aliyunSyncPrimaryOtherTasksRepairLeft > 0) {
+          if (aliyunSyncPrimaryTodayPlanDomainRepairIds.sprint) repairIds.push("sprint");
+          if (aliyunSyncPrimaryTodayPlanDomainRepairIds.todayPlan) {
+            repairIds.push("todayPlan");
+          }
+        }
         for (let ri = 0; ri < repairIds.length; ri++) {
           const rid = repairIds[ri];
           pullIdSet[rid] = true;
@@ -133757,13 +133869,15 @@
             }
           } catch (_fpRep) {}
         }
-        aliyunSyncPrimaryTodayPlanDomainRepairLeft -= 1;
+        /* 配额在 flush 过滤后再扣：仅当该组域仍留在 pullIdSet 时扣减 */
         try {
           console.log(
-            "[aliyun-sync-primary] force today-plan domain bodies repair left=" +
-              aliyunSyncPrimaryTodayPlanDomainRepairLeft +
-              " ids=" +
-              repairIds.join(",")
+            "[aliyun-sync-primary] force today-plan domain bodies repair pending ids=" +
+              repairIds.join(",") +
+              " listsLeft=" +
+              aliyunSyncPrimaryListsRepairLeft +
+              " otherLeft=" +
+              aliyunSyncPrimaryOtherTasksRepairLeft
           );
         } catch (_cForceRep) {}
       }
@@ -133808,8 +133922,8 @@
             );
           } catch (_blkLog) {}
           /*
-           * meta 已要求拉正文，但本机 flush 挡住：武装有限次域修复，
-           * 不得因其它域（如 Done）忙而永久饿死今日计划三域。
+           * meta 已要求拉正文，但本机 flush 挡住：武装有限次域修复。
+           * lists 与其他任务分计；死磕恢复不得清掉 sprint/todayPlan 修复。
            */
           const repairBlocked = blockedIds.filter(function (id) {
             return id === "lists" || id === "sprint" || id === "todayPlan";
@@ -133822,6 +133936,23 @@
               );
             } catch (_armBlk) {}
           }
+        }
+      }
+      /* 修复配额：仅当该组至少一域本轮仍实际拉取时扣减；flush 全挡不扣 */
+      if (!forceAllBodies && aliyunSyncPrimaryTodayPlanRepairHasPending()) {
+        if (
+          aliyunSyncPrimaryTodayPlanDomainRepairIds.lists &&
+          pullIdSet.lists &&
+          aliyunSyncPrimaryListsRepairLeft > 0
+        ) {
+          aliyunSyncPrimaryListsRepairLeft -= 1;
+        }
+        if (
+          aliyunSyncPrimaryOtherTasksRepairLeft > 0 &&
+          ((aliyunSyncPrimaryTodayPlanDomainRepairIds.sprint && pullIdSet.sprint) ||
+            (aliyunSyncPrimaryTodayPlanDomainRepairIds.todayPlan && pullIdSet.todayPlan))
+        ) {
+          aliyunSyncPrimaryOtherTasksRepairLeft -= 1;
         }
       }
       if (!forceAllBodies && domainsGate && Array.isArray(domainsGate.skipIds)) {
@@ -134020,6 +134151,15 @@
               if (typeof aliyunSyncPrimaryArmTodayPlanMissingCatchup === "function") {
                 aliyunSyncPrimaryArmTodayPlanMissingCatchup(results.todayPlan.skippedMissing);
               }
+              /* 独立武装其他任务双域修复，不依赖 lists、不因死磕已恢复而退出 */
+              if (typeof aliyunSyncPrimaryArmTodayPlanDomainRepair === "function") {
+                try {
+                  aliyunSyncPrimaryArmTodayPlanDomainRepair(
+                    ["sprint", "todayPlan"],
+                    "skippedMissing-other-tasks"
+                  );
+                } catch (_armOt) {}
+              }
             } else if (
               !superseded &&
               typeof aliyunSyncPrimaryClearTodayPlanMissingCatchup === "function"
@@ -134072,15 +134212,27 @@
         superseded = true;
       }
 
-      /* 修复配额耗尽：明确退出，避免角标长期「同步中」+ 重复武装 */
-      if (
-        !superseded &&
-        aliyunSyncPrimaryTodayPlanDomainRepairLeft <= 0 &&
-        Object.keys(aliyunSyncPrimaryTodayPlanDomainRepairIds).length
-      ) {
-        try {
-          aliyunSyncPrimaryClearTodayPlanDomainRepair("quota-exhausted:" + pullReason);
-        } catch (_qEx) {}
+      /* 修复配额耗尽：分组退出，lists 耗尽不得清其他任务 */
+      if (!superseded && aliyunSyncPrimaryTodayPlanRepairHasPending()) {
+        if (
+          aliyunSyncPrimaryListsRepairLeft <= 0 &&
+          aliyunSyncPrimaryTodayPlanDomainRepairIds.lists
+        ) {
+          try {
+            aliyunSyncPrimaryClearListsRepairOnly("quota-exhausted-lists:" + pullReason);
+          } catch (_qLi) {}
+        }
+        if (
+          aliyunSyncPrimaryOtherTasksRepairLeft <= 0 &&
+          (aliyunSyncPrimaryTodayPlanDomainRepairIds.sprint ||
+            aliyunSyncPrimaryTodayPlanDomainRepairIds.todayPlan)
+        ) {
+          try {
+            aliyunSyncPrimaryClearOtherTasksRepairOnly(
+              "quota-exhausted-other:" + pullReason
+            );
+          } catch (_qOt) {}
+        }
       }
 
       if (
@@ -142969,14 +143121,17 @@
        */
       if (aliyunSprintRealSuppressPush) return;
       /*
-       * 首拉未完成：禁止 upsert 正文回写；tombstone 可单独冲刷，
-       * 否则本机删除在门闩期间无法上云，会被云端偏高 updatedAt 立刻复活。
+       * 首拉未完成 / 其他任务修复中：禁止 upsert 正文回写；tombstone 可单独冲刷。
+       * 修复中推迟 upsert，避免 sprint flush 互斥饿死其他任务正文拉取（不动 lists）。
        */
       let batch;
-      if (
+      const deferOtherRepair =
+        typeof aliyunSyncPrimaryShouldDeferOtherTasksFlushForRepair === "function" &&
+        aliyunSyncPrimaryShouldDeferOtherTasksFlushForRepair("sprint");
+      const gateClosed =
         typeof isAliyunSyncPrimaryUploadGateOpen === "function" &&
-        !isAliyunSyncPrimaryUploadGateOpen()
-      ) {
+        !isAliyunSyncPrimaryUploadGateOpen();
+      if (deferOtherRepair || gateClosed) {
         const tombs = [];
         const rest = [];
         for (let qi = 0; qi < aliyunSprintRealQueue.length; qi++) {
@@ -142985,6 +143140,12 @@
           else rest.push(q);
         }
         if (!tombs.length) {
+          if (deferOtherRepair) {
+            try {
+              console.log("[aliyun-sprint-real] defer upsert flush: other-tasks repair");
+            } catch (_cDefSp) {}
+            return;
+          }
           if (
             typeof aliyunSyncPrimaryDeferFlushUntilBootPull === "function" &&
             aliyunSyncPrimaryDeferFlushUntilBootPull("sprint")
@@ -144449,14 +144610,17 @@
        */
       if (aliyunTodayPlanRealSuppressPush) return;
       /*
-       * 首拉未完成：非空/upsert 挂牌推迟；tombstone（摘牌删除标记）可单独上云，
-       * 避免门闩期间删除无法生效。
+       * 首拉未完成 / 其他任务修复中：非空挂牌推迟；tombstone 可单独上云。
+       * 修复中推迟 marks upsert，避免与 sprint 耦合 flush 饿死其他任务拉取。
        */
       let batch;
-      if (
+      const deferOtherRepairTp =
+        typeof aliyunSyncPrimaryShouldDeferOtherTasksFlushForRepair === "function" &&
+        aliyunSyncPrimaryShouldDeferOtherTasksFlushForRepair("todayPlan");
+      const gateClosedTp =
         typeof isAliyunSyncPrimaryUploadGateOpen === "function" &&
-        !isAliyunSyncPrimaryUploadGateOpen()
-      ) {
+        !isAliyunSyncPrimaryUploadGateOpen();
+      if (deferOtherRepairTp || gateClosedTp) {
         const tombs = [];
         const rest = [];
         for (let qi = 0; qi < aliyunTodayPlanRealQueue.length; qi++) {
@@ -144465,6 +144629,14 @@
           else rest.push(q);
         }
         if (!tombs.length) {
+          if (deferOtherRepairTp) {
+            try {
+              console.log(
+                "[aliyun-today-plan-real] defer upsert flush: other-tasks repair"
+              );
+            } catch (_cDefTp) {}
+            return;
+          }
           if (
             typeof aliyunSyncPrimaryDeferFlushUntilBootPull === "function" &&
             aliyunSyncPrimaryDeferFlushUntilBootPull("todayPlan")
