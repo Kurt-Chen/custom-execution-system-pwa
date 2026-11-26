@@ -23,7 +23,7 @@ assert.match(html, /async function copyTodayPlanSyncDiag\s*\(/);
 assert.match(html, /async function todayPlanSyncDiagCloudPeekReadonly\s*\(/);
 assert.match(html, /window\.__copyTodayPlanSyncDiag\s*=\s*copyTodayPlanSyncDiag/);
 assert.match(html, /earlyBootDiagCopyTodayPlanBtn/);
-assert.match(html, /复制今日计划同步诊断/);
+assert.match(html, /复制本机今日计划诊断/);
 assert.match(html, /完整端到端诊断/);
 assert.match(html, /diag:\s*"today-plan-sync-v2-e2e"/);
 assert.match(html, /mode:\s*"GET-only-no-apply"/);
