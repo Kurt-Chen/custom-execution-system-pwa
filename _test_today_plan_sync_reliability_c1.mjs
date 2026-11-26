@@ -22,7 +22,8 @@ assert.doesNotMatch(
   html,
   /if \(aliyunSyncPrimaryAnyDomainFlushBusy\(\)\) \{\s*return await runAliyunSyncPrimaryReadonlyPullDuringFlushBusy/
 );
-assert.match(html, /skipDomainsBlockedByLocalFlush:\s*true/);
+assert.match(html, /skipDomainsBlockedByLocalFlush:\s*skipFlushBlock/);
+assert.match(html, /function aliyunSyncPrimaryDomainActivelyFlushing/);
 assert.match(html, /function aliyunSyncPrimaryDomainsBlockedByLocalFlush/);
 assert.match(html, /function aliyunSyncPrimaryDomainFlushBusy/);
 assert.match(html, /reason:\s*"local-flush-busy"/);

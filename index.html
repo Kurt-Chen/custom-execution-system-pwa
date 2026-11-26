@@ -120020,7 +120020,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126f";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126g";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -132769,6 +132769,18 @@
     function aliyunSyncPrimaryKickDeferredFlushesAfterGateOpen() {
       /* flush* 内部对空队列 / 未启用会早退；此处不读尚未初始化的 let 队列（避免 TDZ） */
       try {
+        if (
+          typeof aliyunSprintRealEverLoadedOk !== "undefined" &&
+          !aliyunSprintRealEverLoadedOk &&
+          typeof aliyunSyncPrimaryArmTodayPlanDomainRepair === "function"
+        ) {
+          aliyunSyncPrimaryArmTodayPlanDomainRepair(
+            ["sprint", "todayPlan"],
+            "gate-open-before-sprint-loaded"
+          );
+        }
+      } catch (_armBeforeKick) {}
+      try {
         if (typeof flushAliyunTodayPlanRealQueue === "function") {
           Promise.resolve(flushAliyunTodayPlanRealQueue()).catch(function () {});
         }
@@ -134311,6 +134323,39 @@
           console.log("[aliyun-sync-primary] boot pull done", report);
         }
       } catch (_w) {}
+      /*
+       * 其他任务独立验收：本轮未成功拿到 sprint/todayPlan 时武装双域修复。
+       * 不因 lists 成功而判定今日计划整面已对齐。
+       */
+      try {
+        if (
+          !superseded &&
+          report &&
+          report.ok &&
+          (pullReason === "boot" ||
+            pullReason === "visible" ||
+            pullReason === "manual-full" ||
+            pullReason === "today-plan-domain-repair" ||
+            pullReason === "today-plan-missing-catchup")
+        ) {
+          const res = report.results || {};
+          function domainPullOk(id) {
+            const p = res[id];
+            if (!p || p.ok === false) return false;
+            if (p.skipped && String(p.reason || "") === "local-flush-busy") return false;
+            return true;
+          }
+          const need = [];
+          if (!domainPullOk("sprint")) need.push("sprint");
+          if (!domainPullOk("todayPlan")) need.push("todayPlan");
+          if (need.length && typeof aliyunSyncPrimaryArmTodayPlanDomainRepair === "function") {
+            aliyunSyncPrimaryArmTodayPlanDomainRepair(
+              need,
+              "other-tasks-incomplete:" + pullReason
+            );
+          }
+        }
+      } catch (_otArm) {}
       return report;
     }
 
@@ -134638,16 +134683,35 @@
     }
 
     /**
-     * 本机 flush 期间禁止拉取正文的域（含耦合）。
-     * Sprint ↔ todayPlan：共享 weeklyPlan.todayPlanDate；同端 RMW 上传与 pull/merge 并发会互踩，
-     * 故任一侧 busy 时两侧正文都跳过（不推进 meta lastSeen，flush 结束后下一轮再拉）。
-     * Done/Habit/Forge/Anniv/AMB/Rule100/Goals/Lists 仅自阻，不挡今日计划相关域。
+     * 本机「正在 POST」才禁止同域拉取（含 sprint↔todayPlan 耦合）。
+     * 仅队列非空但未 Flushing：门闩下常见——若也算 busy，boot 会跳过 sprint/todayPlan，
+     * 却仍拉 lists → 平板「死磕已同步、其他任务永不拉」。此时应先拉再 RMW 上传。
+     * 角标仍用 DomainFlushBusy（含队列），与拉取互斥解耦。
      */
+    function aliyunSyncPrimaryDomainActivelyFlushing(domainId) {
+      const id = String(domainId || "");
+      try {
+        if (id === "done") return !!aliyunDoneRealFlushing;
+        if (id === "habit") return !!aliyunHabitRealFlushing;
+        if (id === "forge") return !!aliyunForgeRealFlushing;
+        if (id === "anniv") return !!aliyunAnnivRealFlushing;
+        if (id === "sprint") return !!aliyunSprintRealFlushing;
+        if (id === "todayPlan") return !!aliyunTodayPlanRealFlushing;
+        if (id === "amb") return !!aliyunAmbRealFlushing;
+        if (id === "rule100") return !!aliyunRule100RealFlushing;
+        if (id === "lists") return !!aliyunListsRealFlushing;
+        if (id === "goals") return !!aliyunGoalsRealFlushing;
+      } catch (_af) {
+        return true;
+      }
+      return false;
+    }
+
     function aliyunSyncPrimaryDomainsBlockedByLocalFlush() {
       const blocked = Object.create(null);
       for (let i = 0; i < ALIYUN_SYNC_PRIMARY_DOMAIN_IDS_FOR_FLUSH.length; i++) {
         const id = ALIYUN_SYNC_PRIMARY_DOMAIN_IDS_FOR_FLUSH[i];
-        if (aliyunSyncPrimaryDomainFlushBusy(id)) blocked[id] = true;
+        if (aliyunSyncPrimaryDomainActivelyFlushing(id)) blocked[id] = true;
       }
       if (blocked.sprint || blocked.todayPlan) {
         blocked.sprint = true;
@@ -135245,10 +135309,16 @@
           } catch (_c) {}
         }
         /* 复用启动串行拉取；Phase 1b domains meta 未变则跳过正文；域内指纹未变再跳过 merge/render */
+        const skipFlushBlock =
+          pullReason !== "boot" &&
+          pullReason !== "manual-full" &&
+          pullReason !== "today-plan-domain-repair" &&
+          pullReason !== "today-plan-missing-catchup" &&
+          pullReason !== "today-surface-retry";
         const report = await runAliyunSyncPrimaryBootPull({
           reason: pullReason,
           pullGen: pullGen,
-          skipDomainsBlockedByLocalFlush: true
+          skipDomainsBlockedByLocalFlush: skipFlushBlock
         });
         /* 本轮已被清僵尸/新轮取代：不写角标、不打开门闩，避免过期响应覆盖 */
         if (!isAliyunSyncPrimaryPullGenerationCurrent(pullGen)) {
