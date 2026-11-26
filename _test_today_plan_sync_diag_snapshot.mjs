@@ -15,7 +15,7 @@ const badge = html.match(/APP_CACHE_NAME_FOR_BADGE\s*=\s*"([^"]+)"/);
 const swCache = sw.match(/CACHE_NAME\s*=\s*"([^"]+)"/);
 assert.ok(badge && swCache, "cache name markers present");
 assert.equal(badge[1], swCache[1], "index.html badge cache must match sw.js CACHE_NAME");
-assert.match(badge[1], /^exec-system-pwa-v20261126b$/);
+assert.match(badge[1], /^exec-system-pwa-v20261126c$/);
 
 assert.match(html, /function __todayPlanSyncDiagSnapshotSync\s*\(/);
 assert.match(html, /async function buildTodayPlanSyncDiagSnapshot\s*\(/);
@@ -27,6 +27,9 @@ assert.match(html, /复制今日计划同步诊断/);
 assert.match(html, /含云端只读探测并复制/);
 assert.match(html, /diag:\s*"today-plan-sync-v1"/);
 assert.match(html, /mode:\s*"GET-only-no-apply"/);
+assert.match(html, /firebaseV2ShardingAffectsTodayPlan:\s*false/);
+assert.match(html, /expected-under-aliyun-primary-not-empty-cloud/);
+assert.match(html, /阿里云主路径下 Firebase 启动默认跳过/);
 
 /* 云端探测必须只读：函数体内不得出现 POST/PUT apply/merge 写回 */
 const peekStart = html.indexOf("async function todayPlanSyncDiagCloudPeekReadonly");

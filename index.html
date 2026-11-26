@@ -120020,7 +120020,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126b";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126c";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -132141,6 +132141,11 @@
       const lastHist = getCloudSyncLastHistoryMergeAt();
       const aliyunRoom =
         typeof getAliyunSyncRoomIdForDocs === "function" ? getAliyunSyncRoomIdForDocs() : room;
+      const aliyunPrimaryOn =
+        typeof isAliyunSyncPrimaryEnabled === "function" && !!isAliyunSyncPrimaryEnabled();
+      const skipFirebaseBoot =
+        typeof shouldSkipFirebaseCloudSyncBootForAliyunPrimary === "function" &&
+        !!shouldSkipFirebaseCloudSyncBootForAliyunPrimary();
       const syncDiag =
         "\n同步水位 cursor: " +
         (cursorAt || 0) +
@@ -132152,6 +132157,19 @@
         "（始终向后衡量文档 aliyun-amb-real-v1-" +
         aliyunRoom +
         "）";
+      let remoteDoneNote = "";
+      let uploadHintEffective = uploadHint;
+      if (aliyunPrimaryOn && skipFirebaseBoot) {
+        remoteDoneNote =
+          remoteDoneN === 0
+            ? "（阿里云主路径下 Firebase 启动默认跳过，此「云端快照 Done」常为 0，不代表阿里云 Done 为空）"
+            : "（Firebase 缓存口径；正式 Done 以阿里云 done 域为准）";
+        uploadHintEffective =
+          "\n主同步：阿里云分域（Done/Habit/Forge/Anniv/Sprint/todayPlan marks/Lists…）；" +
+          "今日计划不依赖 Firebase pulse/v2 全量。" +
+          "\n下方「预估全量上传 / v2 分片」仅描述 Firebase 备用路径，日常不会用它推今日计划。" +
+          uploadHint;
+      }
       cloudSyncPanelMeta.textContent =
         statusLabel +
         "\n当前 roomId: " +
@@ -132161,8 +132179,9 @@
         " 条；云端快照 Done: " +
         remoteDoneN +
         " 条" +
+        remoteDoneNote +
         syncDiag +
-        uploadHint +
+        uploadHintEffective +
         errorLabel;
       cloudSyncPanelOverlay.classList.remove("hidden");
       cloudSyncPanelOverlay.setAttribute("aria-hidden", "false");
@@ -149004,6 +149023,27 @@
             ? String(getAliyunSyncRoomIdForDocs() || "")
             : "";
       } catch (_r) {}
+      let aliyunPrimaryOn = false;
+      let skipFirebaseBoot = false;
+      let dualWrite = null;
+      try {
+        aliyunPrimaryOn =
+          typeof isAliyunSyncPrimaryEnabled === "function" && !!isAliyunSyncPrimaryEnabled();
+        skipFirebaseBoot =
+          typeof shouldSkipFirebaseCloudSyncBootForAliyunPrimary === "function" &&
+          !!shouldSkipFirebaseCloudSyncBootForAliyunPrimary();
+        dualWrite =
+          typeof isAliyunSyncPrimaryDualWriteFirebaseEnabled === "function"
+            ? !!isAliyunSyncPrimaryDualWriteFirebaseEnabled()
+            : null;
+      } catch (_path) {}
+      let firebaseCachedDone = null;
+      try {
+        firebaseCachedDone =
+          typeof getCachedRemoteDoneCount === "function" ? getCachedRemoteDoneCount() : null;
+      } catch (_fd) {
+        firebaseCachedDone = null;
+      }
       return {
         diag: "today-plan-sync-v1",
         at: Date.now(),
@@ -149016,6 +149056,20 @@
         },
         roomId: roomId,
         todayKey: todayKey,
+        syncPath: {
+          aliyunPrimaryOn: aliyunPrimaryOn,
+          skipFirebaseBoot: skipFirebaseBoot,
+          dualWriteFirebase: dualWrite,
+          firebaseCachedDoneCount: firebaseCachedDone,
+          firebaseCachedDoneZeroMeans:
+            aliyunPrimaryOn && skipFirebaseBoot && firebaseCachedDone === 0
+              ? "expected-under-aliyun-primary-not-empty-cloud"
+              : "check-firebase-cache-or-dual-write",
+          todayPlanAuthority:
+            "aliyun domains: lists(closedList) + sprint(weeklyPlan) + todayPlan(marks)",
+          firebasePulseOmitsTodayPlanWhenPrimary: !!(aliyunPrimaryOn && !dualWrite),
+          firebaseV2ShardingAffectsTodayPlan: false
+        },
         sync: todayPlanSyncDiagCollectSyncMachine(),
         local: local,
         ui: ui,
