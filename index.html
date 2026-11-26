@@ -120020,7 +120020,7 @@
     }
 
     /** 须与 sw.js 内 CACHE_NAME 一致；部分浏览器 fetch sw.js 失败时角标仍显示版本号 */
-    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126c";
+    const APP_CACHE_NAME_FOR_BADGE = "exec-system-pwa-v20261126d";
     try {
       window.__APP_CACHE_NAME_FOR_BADGE = APP_CACHE_NAME_FOR_BADGE;
     } catch (_badgeWinErr) {}
@@ -132705,6 +132705,14 @@
      */
     let aliyunSyncPrimaryTodayPlanMissingCatchupLeft = 0;
     let aliyunSyncPrimaryTodayPlanMissingRetryScheduled = false;
+    /**
+     * 今天死磕（当日 closedList）为空，但其他任务/Done 非空时：
+     * todaySurfaceEmpty=false，不会 forceAllBodies；若 lists meta 被误判未变，
+     * 会长期跳过 lists 正文 → 平板「其他任务有数、死磕（0）」分叉。
+     * 会话内最多武装几次强制拉 lists（不抬 poll、不改房间）。
+     */
+    let aliyunSyncPrimaryClosedTodayCatchupLeft = 0;
+    let aliyunSyncPrimaryClosedTodayRetryScheduled = false;
 
     function aliyunSyncPrimaryArmTodayPlanMissingCatchup(skippedN) {
       const n = Number(skippedN) || 0;
@@ -133220,6 +133228,101 @@
       }
     }
 
+    /** 当日「今天死磕」可见条数是否为 0（可与其他任务并存） */
+    function isAliyunSyncPrimaryClosedTodayEmpty() {
+      try {
+        const todayKey =
+          typeof formatDateInputValue === "function" ? formatDateInputValue(new Date()) : "";
+        if (!todayKey) return false;
+        if (typeof getClosedListItemsVisibleForViewDate !== "function") return false;
+        return getClosedListItemsVisibleForViewDate(todayKey).length === 0;
+      } catch (_e) {
+        return false;
+      }
+    }
+
+    function aliyunSyncPrimaryArmClosedTodayCatchup(why) {
+      aliyunSyncPrimaryClosedTodayCatchupLeft = Math.max(
+        aliyunSyncPrimaryClosedTodayCatchupLeft,
+        3
+      );
+      if (aliyunSyncPrimaryClosedTodayRetryScheduled) return false;
+      aliyunSyncPrimaryClosedTodayRetryScheduled = true;
+      try {
+        noteBootHealth("closed-today-catchup-armed", { why: String(why || "") });
+      } catch (_n) {}
+      try {
+        console.warn(
+          "[aliyun-sync-primary] closed-today empty → arm lists catchup why=" + String(why || "")
+        );
+      } catch (_c) {}
+      try {
+        window.setTimeout(function () {
+          aliyunSyncPrimaryClosedTodayRetryScheduled = false;
+          if (typeof scheduleAliyunSyncPrimaryNearRealtimePull === "function") {
+            scheduleAliyunSyncPrimaryNearRealtimePull("closed-today-catchup");
+          } else if (typeof runAliyunSyncPrimaryNearRealtimePull === "function") {
+            Promise.resolve(
+              runAliyunSyncPrimaryNearRealtimePull("closed-today-catchup")
+            ).catch(function () {});
+          }
+        }, 400);
+      } catch (_sch) {
+        aliyunSyncPrimaryClosedTodayRetryScheduled = false;
+      }
+      return true;
+    }
+
+    /** 诊断/恢复：只清 lists/sprint/todayPlan 指纹与 meta lastSeen，强制重拉（不改房间、不清 IDB、不 POST） */
+    function aliyunSyncPrimaryForceRepullTodayPlanDomains(why) {
+      const reason = String(why || "diag-force-repull");
+      try {
+        if (typeof aliyunSyncPrimaryLastPullFp === "object" && aliyunSyncPrimaryLastPullFp) {
+          delete aliyunSyncPrimaryLastPullFp.lists;
+          delete aliyunSyncPrimaryLastPullFp.sprint;
+          delete aliyunSyncPrimaryLastPullFp.todayPlan;
+        }
+      } catch (_fp) {}
+      try {
+        if (typeof aliyunDomainsMetaLastSeen === "object" && aliyunDomainsMetaLastSeen) {
+          delete aliyunDomainsMetaLastSeen.lists;
+          delete aliyunDomainsMetaLastSeen.sprint;
+          delete aliyunDomainsMetaLastSeen.todayPlan;
+        }
+      } catch (_ls) {}
+      aliyunSyncPrimaryClosedTodayCatchupLeft = Math.max(
+        aliyunSyncPrimaryClosedTodayCatchupLeft,
+        3
+      );
+      aliyunSyncPrimaryTodayPlanMissingCatchupLeft = Math.max(
+        aliyunSyncPrimaryTodayPlanMissingCatchupLeft,
+        3
+      );
+      try {
+        noteBootHealth("diag-force-repull-today-plan-domains", { why: reason });
+      } catch (_n) {}
+      try {
+        if (typeof clearAliyunSyncPrimaryStalePullInFlight === "function") {
+          clearAliyunSyncPrimaryStalePullInFlight("diag-force-repull");
+        }
+      } catch (_stale) {}
+      try {
+        if (typeof paintAliyunSyncPrimaryBadgeSyncing === "function") {
+          paintAliyunSyncPrimaryBadgeSyncing();
+        }
+      } catch (_badge) {}
+      try {
+        if (typeof runAliyunSyncPrimaryNearRealtimePull === "function") {
+          Promise.resolve(
+            runAliyunSyncPrimaryNearRealtimePull("closed-today-catchup")
+          ).catch(function () {});
+        } else if (typeof scheduleAliyunSyncPrimaryNearRealtimePull === "function") {
+          scheduleAliyunSyncPrimaryNearRealtimePull("closed-today-catchup");
+        }
+      } catch (_pull) {}
+      return { ok: true, reason: reason };
+    }
+
     /** 拉完后若今日面仍空：强制重绘今天死磕/其他任务/Done，避免 merge 已写入但侧栏未 paint */
     function aliyunSyncPrimaryPaintTodaySurfaceAfterPull() {
       try {
@@ -133375,12 +133478,28 @@
       const todaySurfaceEmpty =
         typeof isAliyunSyncPrimaryTodaySurfaceEmpty === "function" &&
         isAliyunSyncPrimaryTodaySurfaceEmpty();
+      const closedTodayEmpty =
+        typeof isAliyunSyncPrimaryClosedTodayEmpty === "function" &&
+        isAliyunSyncPrimaryClosedTodayEmpty();
       const forceTodaySurface =
         !!todaySurfaceEmpty &&
         (pullReason === "boot" ||
           pullReason === "visible" ||
           pullReason === "manual-full" ||
           pullReason === "today-surface-retry");
+      const forceClosedTodayLists =
+        !!closedTodayEmpty &&
+        (pullReason === "boot" ||
+          pullReason === "visible" ||
+          pullReason === "manual-full" ||
+          pullReason === "today-surface-retry" ||
+          pullReason === "closed-today-catchup");
+      if (forceClosedTodayLists) {
+        aliyunSyncPrimaryClosedTodayCatchupLeft = Math.max(
+          aliyunSyncPrimaryClosedTodayCatchupLeft,
+          1
+        );
+      }
       const forceAllBodies =
         pullReason === "boot" ||
         pullReason === "manual-full" ||
@@ -133461,6 +133580,26 @@
                       aliyunSyncPrimaryTodayPlanMissingCatchupLeft
                   );
                 } catch (_cSkipOv) {}
+              } else if (
+                aliyunSyncPrimaryClosedTodayCatchupLeft > 0 ||
+                forceClosedTodayLists
+              ) {
+                skippedFullPull = false;
+                changedDomains = ["lists"];
+                domainsGate = Object.assign({}, domainsGate, {
+                  skipAll: false,
+                  pullIds: ["lists"],
+                  skipIds: domainIds.filter(function (id) {
+                    return id !== "lists";
+                  }),
+                  reason: "closed-today-catchup"
+                });
+                try {
+                  console.log(
+                    "[aliyun-sync-primary] skipAll overridden by closed-today-catchup left=" +
+                      aliyunSyncPrimaryClosedTodayCatchupLeft
+                  );
+                } catch (_cSkipCl) {}
               } else {
                 skippedFullPull = true;
                 savedEstimatedKB =
@@ -133577,6 +133716,28 @@
               ")"
           );
         } catch (_cForce) {}
+      }
+      if (
+        !forceAllBodies &&
+        (aliyunSyncPrimaryClosedTodayCatchupLeft > 0 || forceClosedTodayLists)
+      ) {
+        pullIdSet.lists = true;
+        if (changedDomains.indexOf("lists") < 0) changedDomains.push("lists");
+        try {
+          if (typeof aliyunSyncPrimaryLastPullFp === "object" && aliyunSyncPrimaryLastPullFp) {
+            delete aliyunSyncPrimaryLastPullFp.lists;
+          }
+        } catch (_fpLists) {}
+        if (aliyunSyncPrimaryClosedTodayCatchupLeft > 0) {
+          aliyunSyncPrimaryClosedTodayCatchupLeft -= 1;
+        }
+        try {
+          console.log(
+            "[aliyun-sync-primary] force lists body (closed-today-catchup left=" +
+              aliyunSyncPrimaryClosedTodayCatchupLeft +
+              ")"
+          );
+        } catch (_cForceLi) {}
       }
       /*
        * P0-B：domains 只跳过 Habit（其它域仍拉）时，同样用 Habit 独立 meta 纠偏。
@@ -134833,6 +134994,9 @@
       const todayEmptyBefore =
         typeof isAliyunSyncPrimaryTodaySurfaceEmpty === "function" &&
         isAliyunSyncPrimaryTodaySurfaceEmpty();
+      const closedTodayEmptyBefore =
+        typeof isAliyunSyncPrimaryClosedTodayEmpty === "function" &&
+        isAliyunSyncPrimaryClosedTodayEmpty();
       const quietPoll =
         pullReason === "poll" &&
         cloudSyncMachineStatus === "synced" &&
@@ -134872,6 +135036,9 @@
         let todayEmptyAfter =
           typeof isAliyunSyncPrimaryTodaySurfaceEmpty === "function" &&
           isAliyunSyncPrimaryTodaySurfaceEmpty();
+        let closedTodayEmptyAfter =
+          typeof isAliyunSyncPrimaryClosedTodayEmpty === "function" &&
+          isAliyunSyncPrimaryClosedTodayEmpty();
         if (report && report.ok) {
           /*
            * boot / 回前台：强制回补本机已有「每天三赢」Done → 阿里云（修历史漏传，无需重填）。
@@ -134904,12 +135071,44 @@
             pullReason === "visible" ||
             pullReason === "manual-full" ||
             pullReason === "today-surface-retry" ||
+            pullReason === "closed-today-catchup" ||
             !!report.forceAllBodies;
           if (todayEmptyBefore && hydrateGatePull) {
             aliyunSyncPrimaryPaintTodaySurfaceAfterPull();
             todayEmptyAfter =
               typeof isAliyunSyncPrimaryTodaySurfaceEmpty === "function" &&
               isAliyunSyncPrimaryTodaySurfaceEmpty();
+            closedTodayEmptyAfter =
+              typeof isAliyunSyncPrimaryClosedTodayEmpty === "function" &&
+              isAliyunSyncPrimaryClosedTodayEmpty();
+          }
+          /*
+           * 死磕当日为空、但其他任务可能非空：todaySurfaceEmpty=false，不会走上面分支。
+           * boot/回前台/手动/closed-today-catchup：强制 paint；仍空则武装 lists 重拉。
+           */
+          const closedHydrateGate =
+            pullReason === "boot" ||
+            pullReason === "visible" ||
+            pullReason === "manual-full" ||
+            pullReason === "today-surface-retry" ||
+            pullReason === "closed-today-catchup";
+          if (closedTodayEmptyBefore && closedHydrateGate) {
+            try {
+              if (typeof paintTodayPlanPanel === "function") paintTodayPlanPanel();
+            } catch (_ptp) {}
+            try {
+              if (typeof refreshClosedListLocalUi === "function") refreshClosedListLocalUi();
+            } catch (_rcl) {}
+            closedTodayEmptyAfter =
+              typeof isAliyunSyncPrimaryClosedTodayEmpty === "function" &&
+              isAliyunSyncPrimaryClosedTodayEmpty();
+            if (closedTodayEmptyAfter && pullReason !== "closed-today-catchup") {
+              try {
+                if (typeof aliyunSyncPrimaryArmClosedTodayCatchup === "function") {
+                  aliyunSyncPrimaryArmClosedTodayCatchup(pullReason);
+                }
+              } catch (_armCl) {}
+            }
           }
           const shellStillEmpty =
             (sparseBefore && sparseAfter) || (todayEmptyBefore && todayEmptyAfter);
@@ -134919,7 +135118,8 @@
               (pullReason === "boot" ||
                 pullReason === "visible" ||
                 pullReason === "manual-full" ||
-                pullReason === "today-surface-retry") &&
+                pullReason === "today-surface-retry" ||
+                pullReason === "closed-today-catchup") &&
               typeof markAliyunSyncPrimaryInitialPullSettled === "function"
             ) {
               /* 仍打开上传门闩，避免合法编辑永久卡死；但不宣称已对齐 */
@@ -134940,7 +135140,8 @@
               (pullReason === "boot" ||
                 pullReason === "visible" ||
                 pullReason === "manual-full" ||
-                pullReason === "today-surface-retry") &&
+                pullReason === "today-surface-retry" ||
+                pullReason === "closed-today-catchup") &&
               typeof markAliyunSyncPrimaryInitialPullSettled === "function"
             ) {
               markAliyunSyncPrimaryInitialPullSettled(
@@ -134972,7 +135173,8 @@
               (pullReason === "boot" ||
                 pullReason === "visible" ||
                 pullReason === "manual-full" ||
-                pullReason === "today-surface-retry") &&
+                pullReason === "today-surface-retry" ||
+                pullReason === "closed-today-catchup") &&
               typeof markAliyunSyncPrimaryInitialPullSettled === "function"
             ) {
               markAliyunSyncPrimaryInitialPullSettled("pull-ok:" + pullReason);
@@ -134989,6 +135191,8 @@
           report.pullGen = pullGen;
           report.todaySurfaceEmptyBefore = !!todayEmptyBefore;
           report.todaySurfaceEmptyAfter = !!todayEmptyAfter;
+          report.closedTodayEmptyBefore = !!closedTodayEmptyBefore;
+          report.closedTodayEmptyAfter = !!closedTodayEmptyAfter;
         }
         try {
           if (
@@ -135204,6 +135408,30 @@
           /* 业务可用时，在早期面板下方追加「改房间」快捷（不替代早期壳） */
           try {
             const panel = document.getElementById("earlyBootDiagPanel");
+            if (panel && !document.getElementById("bootHealthForceTodayPlanBtn")) {
+              const forceBtn = document.createElement("button");
+              forceBtn.type = "button";
+              forceBtn.id = "bootHealthForceTodayPlanBtn";
+              forceBtn.textContent = "强制重拉今日计划三域";
+              forceBtn.style.cssText =
+                "min-height:40px;padding:8px 14px;margin-right:8px;border:1px solid #86efac;border-radius:8px;background:#ecfdf5;font-weight:700;color:#047857;";
+              forceBtn.title =
+                "只 GET+合并 lists/sprint/todayPlan；不改房间、不清缓存、不上传本机空数据";
+              forceBtn.addEventListener("click", function () {
+                try {
+                  if (typeof aliyunSyncPrimaryForceRepullTodayPlanDomains === "function") {
+                    aliyunSyncPrimaryForceRepullTodayPlanDomains("diag-panel");
+                    forceBtn.textContent = "已触发重拉…";
+                    window.setTimeout(function () {
+                      forceBtn.textContent = "强制重拉今日计划三域";
+                      if (typeof showBootHealthPanel === "function") showBootHealthPanel();
+                    }, 2500);
+                  }
+                } catch (_fb) {}
+              });
+              const row = panel.lastElementChild;
+              if (row) row.insertBefore(forceBtn, row.firstChild);
+            }
             if (panel && !document.getElementById("bootHealthResetRoomBtn")) {
               const roomBtn = document.createElement("button");
               roomBtn.type = "button";
@@ -135211,7 +135439,7 @@
               roomBtn.textContent = "改用 default-room 并重拉";
               roomBtn.style.cssText =
                 "min-height:40px;padding:8px 14px;margin-right:8px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;font-weight:600;";
-              roomBtn.title = "平板房间键常与手机不一致时用；不删本机业务数据";
+              roomBtn.title = "仅当确认房间分裂时用；本轮诊断请优先用「强制重拉今日计划三域」";
               roomBtn.addEventListener("click", function () {
                 try {
                   if (typeof aliyunSyncPrimaryResetRoomToDefaultAndRepull === "function") {
@@ -135487,6 +135715,9 @@
         recoverAliyunPrimaryAfterLegacyFirebaseMisclick;
       window.getAliyunSyncRoomIdForDocs = getAliyunSyncRoomIdForDocs;
       window.healAliyunPrimaryLegacyKurtMainRoom = healAliyunPrimaryLegacyKurtMainRoom;
+      window.__aliyunSyncPrimaryForceRepullTodayPlanDomains =
+        aliyunSyncPrimaryForceRepullTodayPlanDomains;
+      window.isAliyunSyncPrimaryClosedTodayEmpty = isAliyunSyncPrimaryClosedTodayEmpty;
       if (isAliyunSyncPrimaryEnabled()) {
         try {
           window.__ALIYUN_SYNC_PRIMARY_ENABLED = true;
